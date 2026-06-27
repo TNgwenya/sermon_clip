@@ -65,4 +65,23 @@ describe("ready media resolution", () => {
       estimatedBytes: null,
     });
   });
+
+  it("can trust exported path metadata without reading Mac-local files", async () => {
+    const missingPath = join(tempDir, "mac-only.mp4");
+
+    const media = await resolveReadyMedia(
+      {
+        exportFormat: "VERTICAL_9_16",
+        exportedFilePath: missingPath,
+        exportPath: null,
+      },
+      { trustMetadata: true },
+    );
+
+    expect(media).toEqual({
+      mediaReady: true,
+      outputPath: missingPath,
+      estimatedBytes: null,
+    });
+  });
 });

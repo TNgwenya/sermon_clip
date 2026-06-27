@@ -802,8 +802,10 @@ export function ReadyQueueExperience({
                 ) : null}
               </div>
               <div className="ready-mobile-action-bar" aria-label="Selected clip actions">
-                {selectedClip.mediaReady ? (
+                {selectedClip.mediaReady && !controlPanelMode ? (
                   <a className="button primary" href={selectedReadyPackage.downloadHref}>Download</a>
+                ) : selectedClip.mediaReady ? (
+                  <SchedulePostButton clipId={selectedClip.id} onDraftCreated={addDraft} />
                 ) : (
                   <ClipAssetRecoveryButton
                     clipId={selectedClip.id}
@@ -954,7 +956,11 @@ export function ReadyQueueExperience({
                 return (
                   <article key={clip.id} className={`asset-tray-card ${isBatchSelected ? "is-selected" : ""} ${isFocused ? "is-focused" : ""}`}>
                     <button type="button" className="asset-tray-thumb" onClick={() => focusClip(clip.id)} aria-label={`Preview ${clip.title}`}>
-                      <Image src={`/api/clips/${clip.id}/thumbnail`} alt="" width={72} height={128} />
+                      {controlPanelMode ? (
+                        <strong className="asset-tray-thumb-placeholder" aria-hidden="true">SC</strong>
+                      ) : (
+                        <Image src={`/api/clips/${clip.id}/thumbnail`} alt="" width={72} height={128} />
+                      )}
                       <span>{isFocused ? "Previewing" : "Preview"}</span>
                     </button>
                     <div className="asset-tray-main">
@@ -982,9 +988,9 @@ export function ReadyQueueExperience({
                     </div>
                     {qualityIssues[0] ? <p className="muted small">{qualityIssues[0]}</p> : null}
                     <div className="selected-asset-actions compact-actions">
-                      {clip.mediaReady ? (
+                      {clip.mediaReady && !controlPanelMode ? (
                         <a className="button secondary" href={readyPackage.downloadHref}>Download</a>
-                      ) : (
+                      ) : clip.mediaReady ? null : (
                         <ClipAssetRecoveryButton
                           clipId={clip.id}
                           label="Rebuild media"

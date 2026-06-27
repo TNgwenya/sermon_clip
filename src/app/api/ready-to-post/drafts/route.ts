@@ -18,6 +18,7 @@ export async function GET(): Promise<NextResponse> {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
+  const controlPanelMode = process.env.VERCEL === "1" || process.env.CONTROL_PANEL_MODE === "true";
   const body = await request.json().catch(() => null);
   const clipIds = normalizeClipIds(body?.clipIds);
   const platforms = normalizePostingPlatforms(body?.platforms);
@@ -75,7 +76,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const mediaChecks = await Promise.all(
     readyClips.map(async (clip) => ({
       id: clip.id,
-      media: await resolveReadyMedia(clip),
+      media: await resolveReadyMedia(clip, { trustMetadata: controlPanelMode }),
     })),
   );
   const missingMediaClipIds = mediaChecks

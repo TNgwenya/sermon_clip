@@ -4040,6 +4040,16 @@ textarea::placeholder {
   object-fit: cover;
 }
 
+.asset-tray-thumb-placeholder {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: #f8fafc;
+  font-size: 1.05rem;
+  letter-spacing: 0;
+}
+
 .asset-tray-thumb span {
   position: absolute;
   inset: auto 0 0;

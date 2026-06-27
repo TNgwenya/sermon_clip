@@ -232,7 +232,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
   ]);
   const clips = await Promise.all(
     clipRecords.map(async (clip) => {
-      const media = await resolveReadyMedia(clip);
+      const media = await resolveReadyMedia(clip, { trustMetadata: controlPanelMode });
       return {
         id: clip.id,
         title: clip.title,
@@ -326,7 +326,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           <Link href="/" className="button tertiary">Dashboard</Link>
           <a href="/settings/branding" className="button secondary">Brand Kit</a>
           {scopeIsActive ? <Link href="/ready-to-post" className="button secondary">All ready clips</Link> : null}
-          {clips.length > 0 ? <a href={downloadAllHref} className="button primary">Download all</a> : null}
+          {!controlPanelMode && downloadableClipCount > 0 ? <a href={downloadAllHref} className="button primary">Download all</a> : null}
         </nav>
       </header>
 

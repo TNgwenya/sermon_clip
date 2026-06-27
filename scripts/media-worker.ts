@@ -33,6 +33,139 @@ function log(message: string, data?: unknown): void {
   console.log(`[media-worker] ${new Date().toISOString()} ${message}${suffix}`);
 }
 
+async function runCaptionBurnJob(sermonId: string): Promise<string> {
+  const clips = await prisma.clipCandidate.findMany({
+    where: {
+      sermonId,
+      status: { in: ["APPROVED", "EXPORTED"] },
+      renderStatus: "COMPLETED",
+      captionStatus: "GENERATED",
+      OR: [
+        { captionBurnStatus: { not: "COMPLETED" } },
+        { captionBurnFreshness: { not: "UP_TO_DATE" } },
+      ],
+    },
+    orderBy: [{ overallPostScore: "desc" }, { score: "desc" }, { createdAt: "asc" }],
+    select: { id: true },
+  });
+
+  if (clips.length === 0) {
+    return "No caption burn assets need work.";
+  }
+
+  const { burnCaptionsIntoRenderedClip } = await import("../src/server/agents/captionBurnService");
+  let completed = 0;
+  const failures: string[] = [];
+
+  for (const clip of clips) {
+    try {
+      await burnCaptionsIntoRenderedClip(clip.id, {
+        allowReburn: true,
+        force: true,
+      });
+      completed += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(`${clip.id}: ${message}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`Caption burn completed ${completed}/${clips.length}; failures: ${failures.slice(0, 3).join(" | ")}`);
+  }
+
+  return `Caption burn completed for ${completed} clip(s).`;
+}
+
+async function runOverlayAndExportJob(sermonId: string): Promise<string> {
+  const clips = await prisma.clipCandidate.findMany({
+    where: {
+      sermonId,
+      status: { in: ["APPROVED", "EXPORTED"] },
+      renderStatus: "COMPLETED",
+      OR: [
+        { overlayStatus: { not: "COMPLETED" } },
+        { overlayFreshness: { not: "UP_TO_DATE" } },
+        { exportStatus: { not: "COMPLETED" } },
+        { exportFreshness: { not: "UP_TO_DATE" } },
+      ],
+    },
+    orderBy: [{ overallPostScore: "desc" }, { score: "desc" }, { createdAt: "asc" }],
+    select: {
+      id: true,
+      overlayStatus: true,
+      overlayFreshness: true,
+      exportStatus: true,
+      exportFreshness: true,
+      exportLayoutStrategy: true,
+    },
+  });
+
+  if (clips.length === 0) {
+    return "No overlay or export assets need work.";
+  }
+
+  const { renderClipOverlay } = await import("../src/server/agents/clipOverlayService");
+  const { exportVerticalClip } = await import("../src/server/agents/clipExportService");
+  let overlaysCompleted = 0;
+  let exportsCompleted = 0;
+  const failures: string[] = [];
+
+  for (const clip of clips) {
+    const needsOverlay = clip.overlayStatus !== "COMPLETED" || clip.overlayFreshness !== "UP_TO_DATE";
+    const needsExport = clip.exportStatus !== "COMPLETED" || clip.exportFreshness !== "UP_TO_DATE";
+
+    try {
+      if (needsOverlay) {
+        await renderClipOverlay(clip.id, {
+          allowRerender: true,
+          force: true,
+        });
+        overlaysCompleted += 1;
+      }
+
+      if (needsExport) {
+        const layoutStrategy = clip.exportLayoutStrategy ?? "SMART_CROP";
+        try {
+          await exportVerticalClip(clip.id, {
+            allowReexport: true,
+            force: true,
+            layoutStrategy,
+          });
+        } catch (error) {
+          if (layoutStrategy !== "SMART_CROP") {
+            throw error;
+          }
+
+          await prisma.clipCandidate.update({
+            where: { id: clip.id },
+            data: {
+              exportLayoutStrategy: "FIT_BLURRED_BACKGROUND",
+              exportStatus: "NOT_EXPORTED",
+              exportError: null,
+            },
+          });
+          await exportVerticalClip(clip.id, {
+            allowReexport: true,
+            force: true,
+            layoutStrategy: "FIT_BLURRED_BACKGROUND",
+          });
+        }
+        exportsCompleted += 1;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(`${clip.id}: ${message}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`Overlay/export completed with ${failures.length} failure(s): ${failures.slice(0, 3).join(" | ")}`);
+  }
+
+  return `Overlay/export completed: ${overlaysCompleted} overlay(s), ${exportsCompleted} export(s).`;
+}
+
 async function claimNextJob(): Promise<ProcessingJob | null> {
   const next = await prisma.processingJob.findFirst({
     where: {
@@ -115,20 +248,10 @@ async function runJob(type: ProcessingJobType, sermonId: string): Promise<string
     }
     case "BURN_SUBTITLES":
     {
-      const { regenerateAllOutdatedCaptionsAction } = await import("../src/server/actions/sermons");
-      const result = await regenerateAllOutdatedCaptionsAction(sermonId);
-      if (!result.success) {
-        throw new Error(result.message);
-      }
-      return `Caption assets refreshed: ${result.completed} updated, ${result.skipped} skipped.`;
+      return runCaptionBurnJob(sermonId);
     }
     case "RENDER_OVERLAY": {
-      const { regenerateAllOutdatedAssetsAction } = await import("../src/server/actions/sermons");
-      const result = await regenerateAllOutdatedAssetsAction(sermonId);
-      if (!result.success) {
-        throw new Error(result.message);
-      }
-      return `Branding/export assets refreshed: ${result.completed} rebuilt, ${result.skipped} skipped.`;
+      return runOverlayAndExportJob(sermonId);
     }
     default:
       throw new Error(`Unsupported processing job type: ${type}`);

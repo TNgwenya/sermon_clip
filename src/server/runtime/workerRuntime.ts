@@ -2,12 +2,16 @@ export function isVercelRuntime(): boolean {
   return Boolean(process.env.VERCEL);
 }
 
+export function isControlPanelRuntime(): boolean {
+  return isVercelRuntime() || process.env.CONTROL_PANEL_MODE === "true";
+}
+
 export function canRunLocalMediaProcessing(): boolean {
-  if (isVercelRuntime()) {
+  if (isControlPanelRuntime()) {
     return false;
   }
 
-  return process.env.WORKER_ENABLED === "true" || !isVercelRuntime();
+  return process.env.WORKER_ENABLED === "true" || !isControlPanelRuntime();
 }
 
 export function localMediaProcessingUnavailableMessage(action: string): string {
