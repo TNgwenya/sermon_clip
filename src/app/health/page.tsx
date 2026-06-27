@@ -4,18 +4,17 @@ import path from "node:path";
 import Link from "next/link";
 
 import { prisma } from "@/lib/prisma";
-import { checkYtDlpInstalled } from "@/server/agents/videoDownloadAgent";
 import {
   ensureLocalStorageDirs,
   ensureSermonFolders,
   getSermonStoragePath,
   getStorageRoot,
 } from "@/server/agents/storage";
-import { checkFfmpegInstalled } from "@/server/media/ffmpeg";
 import { getDataConsistencySummary, getOperationalMetrics } from "@/server/workflow/operationsDiagnostics";
-import { getClipThumbnailReadiness } from "@/server/agents/clipThumbnailService";
+import type { ClipThumbnailReadiness } from "@/server/agents/clipThumbnailService";
 import { HealthRecoveryPanel } from "@/app/health/health-recovery-panel";
 import { buildWorkspaceHealthIssueBreakdown } from "@/lib/healthRecovery";
+import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +41,7 @@ function statusClass(status: HealthStatus): string {
 
 async function runHealthChecks(): Promise<HealthCheckResult[]> {
   const checks: HealthCheckResult[] = [];
+  const localMediaAvailable = canRunLocalMediaProcessing();
 
   checks.push({
     name: "Node app",
@@ -78,65 +78,98 @@ async function runHealthChecks(): Promise<HealthCheckResult[]> {
 
   const storageRoot = getStorageRoot();
 
-  try {
-    await access(storageRoot);
+  if (!localMediaAvailable) {
     checks.push({
-      name: "Storage root exists",
-      status: "OK",
-      message: `Storage root is available at ${storageRoot}.`,
-    });
-  } catch {
-    checks.push({
-      name: "Storage root exists",
+      name: "Local media worker",
       status: "Missing",
-      message: `Storage root is missing at ${storageRoot}.`,
-      fix: "mkdir -p storage/sermons",
+      message: "This deployment is web-only. Run media checks on the local worker with WORKER_ENABLED=true.",
+      fix: "Run the local app or worker on your laptop for ffmpeg, yt-dlp, storage, and clip rendering.",
     });
-  }
+  } else {
+    try {
+      await access(storageRoot);
+      checks.push({
+        name: "Storage root exists",
+        status: "OK",
+        message: `Storage root is available at ${storageRoot}.`,
+      });
+    } catch {
+      checks.push({
+        name: "Storage root exists",
+        status: "Missing",
+        message: `Storage root is missing at ${storageRoot}.`,
+        fix: "mkdir -p storage/sermons",
+      });
+    }
 
-  const writeProbePath = path.join(storageRoot, ".health-write-test");
-  try {
-    await mkdir(storageRoot, { recursive: true });
-    await writeFile(writeProbePath, "ok", "utf8");
-    await rm(writeProbePath, { force: true });
+    const writeProbePath = path.join(storageRoot, ".health-write-test");
+    try {
+      await mkdir(storageRoot, { recursive: true });
+      await writeFile(writeProbePath, "ok", "utf8");
+      await rm(writeProbePath, { force: true });
 
-    checks.push({
-      name: "Storage root writable",
-      status: "OK",
-      message: "Storage root accepts write operations.",
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown storage write error.";
-    checks.push({
-      name: "Storage root writable",
-      status: "Failed",
-      message,
-      fix: "chmod -R u+rw storage",
-    });
-  }
+      checks.push({
+        name: "Storage root writable",
+        status: "OK",
+        message: "Storage root accepts write operations.",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown storage write error.";
+      checks.push({
+        name: "Storage root writable",
+        status: "Failed",
+        message,
+        fix: "chmod -R u+rw storage",
+      });
+    }
 
-  const ffmpegInstalled = await checkFfmpegInstalled();
-  checks.push({
-    name: "FFmpeg",
-    status: ffmpegInstalled ? "OK" : "Missing",
-    message: ffmpegInstalled ? "FFmpeg is installed." : "FFmpeg command not found.",
-    fix: ffmpegInstalled ? undefined : "brew install ffmpeg",
-  });
+    const { checkFfmpegInstalled } = await import(/* turbopackIgnore: true */ "@/server/media/ffmpeg");
+    const ffmpegInstalled = await checkFfmpegInstalled();
+    checks.push({
+      name: "FFmpeg",
+      status: ffmpegInstalled ? "OK" : "Missing",
+      message: ffmpegInstalled ? "FFmpeg is installed." : "FFmpeg command not found.",
+      fix: ffmpegInstalled ? undefined : "brew install ffmpeg",
+    });
 
-  try {
-    await checkYtDlpInstalled();
-    checks.push({
-      name: "yt-dlp",
-      status: "OK",
-      message: "yt-dlp is installed.",
-    });
-  } catch {
-    checks.push({
-      name: "yt-dlp",
-      status: "Missing",
-      message: "yt-dlp command not found.",
-      fix: "brew install yt-dlp",
-    });
+    const healthSermonId = `health-${Date.now()}`;
+    const healthSermonPath = getSermonStoragePath(healthSermonId);
+    try {
+      await ensureLocalStorageDirs();
+      await ensureSermonFolders(healthSermonId);
+      await rm(healthSermonPath, { recursive: true, force: true });
+
+      checks.push({
+        name: "Sermon folder creation",
+        status: "OK",
+        message: "Per-sermon local folders can be created and cleaned up.",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown folder creation error.";
+      checks.push({
+        name: "Sermon folder creation",
+        status: "Failed",
+        message,
+        fix: "mkdir -p storage/sermons && chmod -R u+rw storage",
+      });
+    }
+
+    try {
+      const { checkYtDlpInstalled } = await import(/* turbopackIgnore: true */ "@/server/agents/videoDownloadAgent");
+      await checkYtDlpInstalled();
+      checks.push({
+        name: "yt-dlp",
+        status: "OK",
+        message: "yt-dlp is installed.",
+      });
+    } catch {
+      checks.push({
+        name: "yt-dlp",
+        status: "Missing",
+        message: "yt-dlp command not found.",
+        fix: "brew install yt-dlp",
+      });
+    }
   }
 
   const apiKeyExists = Boolean(process.env.OPENAI_API_KEY?.trim());
@@ -146,28 +179,6 @@ async function runHealthChecks(): Promise<HealthCheckResult[]> {
     message: apiKeyExists ? "OPENAI_API_KEY is configured." : "OPENAI_API_KEY is not set.",
     fix: apiKeyExists ? undefined : "Add OPENAI_API_KEY to .env",
   });
-
-  const healthSermonId = `health-${Date.now()}`;
-  const healthSermonPath = getSermonStoragePath(healthSermonId);
-  try {
-    await ensureLocalStorageDirs();
-    await ensureSermonFolders(healthSermonId);
-    await rm(healthSermonPath, { recursive: true, force: true });
-
-    checks.push({
-      name: "Sermon folder creation",
-      status: "OK",
-      message: "Per-sermon local folders can be created and cleaned up.",
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown folder creation error.";
-    checks.push({
-      name: "Sermon folder creation",
-      status: "Failed",
-      message,
-      fix: "mkdir -p storage/sermons && chmod -R u+rw storage",
-    });
-  }
 
   const databaseUrl = process.env.DATABASE_URL?.trim() ?? "";
   const isPostgresUrl = databaseUrl.startsWith("postgresql://") || databaseUrl.startsWith("postgres://");
@@ -183,11 +194,26 @@ async function runHealthChecks(): Promise<HealthCheckResult[]> {
   return checks;
 }
 
+async function getHealthThumbnailReadiness(): Promise<ClipThumbnailReadiness> {
+  if (!canRunLocalMediaProcessing()) {
+    return {
+      preparedClipCount: 0,
+      readyPosterCount: 0,
+      optimizedPosterCount: 0,
+      missingPosterCount: 0,
+      failedPosterCount: 0,
+    };
+  }
+
+  const { getClipThumbnailReadiness } = await import(/* turbopackIgnore: true */ "@/server/agents/clipThumbnailService");
+  return getClipThumbnailReadiness();
+}
+
 export default async function HealthPage() {
   const [checks, consistency, thumbnailReadiness, operationalMetrics] = await Promise.all([
     runHealthChecks(),
     getDataConsistencySummary(),
-    getClipThumbnailReadiness(),
+    getHealthThumbnailReadiness(),
     getOperationalMetrics(),
   ]);
   const okCount = checks.filter((check) => check.status === "OK").length;

@@ -4,15 +4,11 @@ import { revalidatePath } from "next/cache";
 
 import { buildPostingClipAssetRecoveryWhere } from "@/lib/healthRecovery";
 import { prisma } from "@/lib/prisma";
-import { backfillClipThumbnails } from "@/server/agents/clipThumbnailService";
-import {
-  regenerateClipOutdatedAssetsAction,
-  retryFailedProcessingJobById,
-} from "@/server/actions/sermons";
 import {
   repairMissingLocalAssetReferences,
   selectUnresolvedFailedProcessingJobRetries,
 } from "@/server/workflow/operationsDiagnostics";
+import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
 export type HealthActionResult = {
   success: boolean;
@@ -20,6 +16,28 @@ export type HealthActionResult = {
 };
 
 const HEALTH_RECOVERY_FAILED_JOB_LIMIT = 6;
+const LOCAL_WORKER_ONLY_MESSAGE = "This recovery action must run from the local worker because it needs local media files, ffmpeg, or sharp.";
+
+async function backfillClipThumbnails(
+  ...args: Parameters<typeof import("@/server/agents/clipThumbnailService").backfillClipThumbnails>
+): ReturnType<typeof import("@/server/agents/clipThumbnailService").backfillClipThumbnails> {
+  const { backfillClipThumbnails: run } = await import(/* turbopackIgnore: true */ "@/server/agents/clipThumbnailService");
+  return run(...args);
+}
+
+async function regenerateClipOutdatedAssetsAction(
+  ...args: Parameters<typeof import("@/server/actions/sermons").regenerateClipOutdatedAssetsAction>
+): ReturnType<typeof import("@/server/actions/sermons").regenerateClipOutdatedAssetsAction> {
+  const { regenerateClipOutdatedAssetsAction: run } = await import(/* turbopackIgnore: true */ "@/server/actions/sermons");
+  return run(...args);
+}
+
+async function retryFailedProcessingJobById(
+  ...args: Parameters<typeof import("@/server/actions/sermons").retryFailedProcessingJobById>
+): ReturnType<typeof import("@/server/actions/sermons").retryFailedProcessingJobById> {
+  const { retryFailedProcessingJobById: run } = await import(/* turbopackIgnore: true */ "@/server/actions/sermons");
+  return run(...args);
+}
 
 function revalidateHealthRecoveryPaths(): void {
   revalidatePath("/health");
@@ -29,6 +47,10 @@ function revalidateHealthRecoveryPaths(): void {
 }
 
 export async function prepareMissingPostersAction(): Promise<HealthActionResult> {
+  if (!canRunLocalMediaProcessing()) {
+    return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
+  }
+
   const result = await backfillClipThumbnails({ limit: 50 });
   revalidateHealthRecoveryPaths();
 
@@ -42,6 +64,10 @@ export async function prepareMissingPostersAction(): Promise<HealthActionResult>
 }
 
 export async function repairLocalLibraryAction(): Promise<HealthActionResult> {
+  if (!canRunLocalMediaProcessing()) {
+    return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
+  }
+
   const result = await repairMissingLocalAssetReferences();
   revalidateHealthRecoveryPaths();
 
@@ -55,6 +81,10 @@ export async function repairLocalLibraryAction(): Promise<HealthActionResult> {
 }
 
 export async function rebuildPriorityLibraryAssetsAction(): Promise<HealthActionResult> {
+  if (!canRunLocalMediaProcessing()) {
+    return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
+  }
+
   const clips = await prisma.clipCandidate.findMany({
     where: buildPostingClipAssetRecoveryWhere(),
     select: {
@@ -100,6 +130,10 @@ export async function rebuildPriorityLibraryAssetsAction(): Promise<HealthAction
 }
 
 export async function retryLatestFailedProcessingJobsAction(): Promise<HealthActionResult> {
+  if (!canRunLocalMediaProcessing()) {
+    return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
+  }
+
   const jobs = await prisma.processingJob.findMany({
     select: {
       id: true,
@@ -156,6 +190,10 @@ export async function retryLatestFailedProcessingJobsAction(): Promise<HealthAct
 }
 
 export async function repairAndRebuildLibraryAction(): Promise<HealthActionResult> {
+  if (!canRunLocalMediaProcessing()) {
+    return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
+  }
+
   const repair = await repairMissingLocalAssetReferences();
   const retries = await retryLatestFailedProcessingJobsAction();
   const rebuild = await rebuildPriorityLibraryAssetsAction();

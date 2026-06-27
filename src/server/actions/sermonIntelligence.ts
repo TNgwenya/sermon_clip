@@ -4,14 +4,12 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
-import {
-  generateSermonIntelligence,
-  regenerateSermonIntelligence,
-} from "@/server/agents/sermonIntelligenceService";
-import { regenerateMinistryMoments } from "@/server/agents/ministryMomentService";
-import { refreshSubjectSpeakerTracking } from "@/server/agents/subjectSpeakerTrackingService";
-import { generateClipSuggestions } from "@/server/agents/clipIntelligenceAgent";
+import { createProcessingJob } from "@/server/agents/processing";
 import { SMART_CLIP_CATEGORIES, type SmartClipCategory } from "@/server/ai/ministryMomentSchema";
+import {
+  canRunLocalMediaProcessing,
+  localMediaProcessingUnavailableMessage,
+} from "@/server/runtime/workerRuntime";
 
 // ─── Shared response type ──────────────────────────────────────────────────────
 
@@ -21,6 +19,62 @@ export type IntelligenceActionState = {
 };
 
 export type RegenerationActionState = IntelligenceActionState;
+
+function assertLocalMediaProcessing(action: string): void {
+  if (!canRunLocalMediaProcessing()) {
+    throw new Error(localMediaProcessingUnavailableMessage(action));
+  }
+}
+
+function generateSermonIntelligence(
+  ...args: Parameters<typeof import("@/server/agents/sermonIntelligenceService").generateSermonIntelligence>
+): ReturnType<typeof import("@/server/agents/sermonIntelligenceService").generateSermonIntelligence> {
+  assertLocalMediaProcessing("Sermon intelligence generation");
+  return import(/* turbopackIgnore: true */ "@/server/agents/sermonIntelligenceService").then((module) => module.generateSermonIntelligence(...args));
+}
+
+function regenerateSermonIntelligence(
+  ...args: Parameters<typeof import("@/server/agents/sermonIntelligenceService").regenerateSermonIntelligence>
+): ReturnType<typeof import("@/server/agents/sermonIntelligenceService").regenerateSermonIntelligence> {
+  assertLocalMediaProcessing("Sermon intelligence regeneration");
+  return import(/* turbopackIgnore: true */ "@/server/agents/sermonIntelligenceService").then((module) => module.regenerateSermonIntelligence(...args));
+}
+
+function regenerateMinistryMoments(
+  ...args: Parameters<typeof import("@/server/agents/ministryMomentService").regenerateMinistryMoments>
+): ReturnType<typeof import("@/server/agents/ministryMomentService").regenerateMinistryMoments> {
+  assertLocalMediaProcessing("Ministry moment regeneration");
+  return import(/* turbopackIgnore: true */ "@/server/agents/ministryMomentService").then((module) => module.regenerateMinistryMoments(...args));
+}
+
+function refreshSubjectSpeakerTracking(
+  ...args: Parameters<typeof import("@/server/agents/subjectSpeakerTrackingService").refreshSubjectSpeakerTracking>
+): ReturnType<typeof import("@/server/agents/subjectSpeakerTrackingService").refreshSubjectSpeakerTracking> {
+  assertLocalMediaProcessing("Subject and speaker tracking");
+  return import(/* turbopackIgnore: true */ "@/server/agents/subjectSpeakerTrackingService").then((module) => module.refreshSubjectSpeakerTracking(...args));
+}
+
+function generateClipSuggestions(
+  ...args: Parameters<typeof import("@/server/agents/clipIntelligenceAgent").generateClipSuggestions>
+): ReturnType<typeof import("@/server/agents/clipIntelligenceAgent").generateClipSuggestions> {
+  assertLocalMediaProcessing("Smart clip generation");
+  return import(/* turbopackIgnore: true */ "@/server/agents/clipIntelligenceAgent").then((module) => module.generateClipSuggestions(...args));
+}
+
+async function queueSmartClipGeneration(sermonId: string): Promise<void> {
+  const existing = await prisma.processingJob.findFirst({
+    where: {
+      sermonId,
+      type: "GENERATE_CLIPS",
+      status: { in: ["PENDING", "RUNNING"] },
+    },
+    select: { id: true },
+  });
+
+  if (!existing) {
+    await createProcessingJob(sermonId, "GENERATE_CLIPS");
+  }
+}
 
 // ─── Generate intelligence ─────────────────────────────────────────────────────
 
@@ -121,6 +175,13 @@ export async function regenerateSmartClipsAction(
     return { success: false, message: "Sermon ID is required." };
   }
 
+  if (!canRunLocalMediaProcessing()) {
+    await queueSmartClipGeneration(sermonId);
+    revalidatePath(`/sermons/${sermonId}/review`);
+    revalidatePath(`/sermons/${sermonId}`);
+    return { success: true, message: "Smart clip generation queued for your local worker." };
+  }
+
   try {
     const result = await generateClipSuggestions(sermonId, { force: true });
     revalidatePath(`/sermons/${sermonId}/review`);
@@ -151,6 +212,13 @@ export async function regenerateSmartClipsByCategoryAction(
   const parsedCategory = smartClipCategorySchema.safeParse(category);
   if (!parsedCategory.success) {
     return { success: false, message: "Invalid smart clip category." };
+  }
+
+  if (!canRunLocalMediaProcessing()) {
+    await queueSmartClipGeneration(sermonId);
+    revalidatePath(`/sermons/${sermonId}/review`);
+    revalidatePath(`/sermons/${sermonId}`);
+    return { success: true, message: `${parsedCategory.data} smart clip generation queued for your local worker.` };
   }
 
   try {
