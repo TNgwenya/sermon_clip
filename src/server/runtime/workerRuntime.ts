@@ -3,6 +3,10 @@ export function isVercelRuntime(): boolean {
 }
 
 export function canRunLocalMediaProcessing(): boolean {
+  if (isVercelRuntime()) {
+    return false;
+  }
+
   return process.env.WORKER_ENABLED === "true" || !isVercelRuntime();
 }
 

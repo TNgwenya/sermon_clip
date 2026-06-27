@@ -1,6 +1,11 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  canRunLocalMediaProcessing,
+  localMediaProcessingUnavailableMessage,
+} from "@/server/runtime/workerRuntime";
+
 const DEFAULT_STORAGE_ROOT = path.join(/* turbopackIgnore: true */ process.cwd(), "storage");
 
 function assertPathSegment(value: string, label: string): string {
@@ -134,7 +139,14 @@ export function getLogPath(sermonId: string): string {
   return path.join(getSermonStoragePath(sermonId), "logs", "pipeline.log");
 }
 
+function assertLocalStorageAvailable(action: string): void {
+  if (!canRunLocalMediaProcessing()) {
+    throw new Error(localMediaProcessingUnavailableMessage(action));
+  }
+}
+
 export async function ensureSermonFolders(sermonId: string): Promise<void> {
+  assertLocalStorageAvailable("Local sermon storage");
   const sermonRoot = getSermonStoragePath(sermonId);
 
   await Promise.all([
@@ -153,11 +165,16 @@ export async function ensureSermonFolders(sermonId: string): Promise<void> {
 }
 
 export async function appendPipelineLog(sermonId: string, message: string): Promise<void> {
+  if (!canRunLocalMediaProcessing()) {
+    return;
+  }
+
   await ensureSermonFolders(sermonId);
   const line = `[${new Date().toISOString()}] ${message}\n`;
   await appendFile(/* turbopackIgnore: true */ getLogPath(sermonId), line, "utf8");
 }
 
 export async function ensureLocalStorageDirs(): Promise<void> {
+  assertLocalStorageAvailable("Local media storage setup");
   await mkdir(/* turbopackIgnore: true */ path.join(getStorageRoot(), "sermons"), { recursive: true });
 }

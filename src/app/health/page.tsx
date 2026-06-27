@@ -82,7 +82,7 @@ async function runHealthChecks(): Promise<HealthCheckResult[]> {
     checks.push({
       name: "Local media worker",
       status: "Missing",
-      message: "This deployment is web-only. Run media checks on the local worker with WORKER_ENABLED=true.",
+      message: "This deployment is web-only. Run media checks from the local Mac app or worker.",
       fix: "Run the local app or worker on your laptop for ffmpeg, yt-dlp, storage, and clip rendering.",
     });
   } else {
