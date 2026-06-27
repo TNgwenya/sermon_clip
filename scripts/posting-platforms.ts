@@ -1,4 +1,5 @@
 import { createReadStream } from "node:fs";
+import { readFile } from "node:fs/promises";
 
 export type PostingPlatform = "TikTok" | "Instagram" | "YouTube Shorts" | "Facebook";
 
@@ -36,6 +37,7 @@ type FetchLike = typeof fetch;
 
 const TIKTOK_MAX_TITLE_LENGTH = 2200;
 const TIKTOK_DEFAULT_CHUNK_SIZE = 32 * 1024 * 1024;
+const FACEBOOK_MAX_TITLE_LENGTH = 255;
 
 function clampText(value: string, maxLength: number): string {
   return value.length > maxLength ? value.slice(0, maxLength).trimEnd() : value;
@@ -76,6 +78,24 @@ export function buildTikTokTitle(post: AutomationPost): string {
   const tagText = hashtags.length > 0 ? `\n\n${hashtags.join(" ")}` : "";
 
   return clampText(`${title}${tagText}`, TIKTOK_MAX_TITLE_LENGTH);
+}
+
+export function buildFacebookText(post: AutomationPost): { title: string; description: string; published: boolean } {
+  const firstClip = post.clips[0];
+  const hashtags = Array.from(new Set(post.clips.flatMap((clip) => extractHashtags(clip.hashtags))));
+  const title = clampText(post.title || firstClip?.title || "Sermon clip", FACEBOOK_MAX_TITLE_LENGTH);
+  const caption = post.caption || firstClip?.caption || "";
+  const description = [
+    caption || title,
+    hashtags.length > 0 ? hashtags.join(" ") : "",
+    firstClip?.sermon.churchName ? `From ${firstClip.sermon.churchName}` : "",
+  ].filter(Boolean).join("\n\n");
+
+  return {
+    title,
+    description,
+    published: process.env.FACEBOOK_DEFAULT_PUBLISHED === "true",
+  };
 }
 
 async function getYouTubeAccessToken(fetchImpl: FetchLike = fetch): Promise<string> {
@@ -284,6 +304,48 @@ export async function uploadTikTokVideo(
   };
 }
 
+export async function uploadFacebookVideo(
+  post: AutomationPost,
+  videoPath: string,
+  _videoSize: number,
+  fetchImpl: FetchLike = fetch,
+): Promise<UploadResult> {
+  const pageId = process.env.FACEBOOK_PAGE_ID?.trim();
+  const pageAccessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN?.trim();
+  const graphVersion = process.env.FACEBOOK_GRAPH_VERSION?.trim() || "v23.0";
+
+  if (!pageId || !pageAccessToken) {
+    throw new Error("Facebook credentials are incomplete. Set FACEBOOK_PAGE_ID and FACEBOOK_PAGE_ACCESS_TOKEN.");
+  }
+
+  const text = buildFacebookText(post);
+  const videoBuffer = await readFile(videoPath);
+  const formData = new FormData();
+  formData.set("access_token", pageAccessToken);
+  formData.set("title", text.title);
+  formData.set("description", text.description);
+  formData.set("published", text.published ? "true" : "false");
+  formData.set("source", new Blob([videoBuffer], { type: "video/mp4" }), `${post.id}.mp4`);
+
+  const response = await fetchImpl(`https://graph.facebook.com/${graphVersion}/${pageId}/videos`, {
+    method: "POST",
+    body: formData,
+  });
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok || typeof data?.id !== "string") {
+    throw new Error(data?.error?.message ?? "Facebook video upload failed.");
+  }
+
+  return {
+    status: "POSTED",
+    externalPostId: data.id,
+    publishedUrl: `https://www.facebook.com/${data.id}`,
+    finalPrivacyStatus: text.published ? "published" : "unpublished",
+    publishError: text.published ? undefined : "Uploaded to the Facebook Page as unpublished. Set FACEBOOK_DEFAULT_PUBLISHED=true to publish automatically.",
+  };
+}
+
 export async function uploadPlatformPost(
   post: AutomationPost,
   videoPath: string,
@@ -295,10 +357,10 @@ export async function uploadPlatformPost(
       return uploadYouTubeShort(post, videoPath, videoSize, fetchImpl);
     case "TikTok":
       return uploadTikTokVideo(post, videoPath, videoSize, fetchImpl);
+    case "Facebook":
+      return uploadFacebookVideo(post, videoPath, videoSize, fetchImpl);
     case "Instagram":
       throw new Error("Instagram automatic posting needs a public video URL or temporary media hosting before it can work with Mac-local files.");
-    case "Facebook":
-      throw new Error("Facebook automatic posting is not implemented yet. Add a Page access token adapter before scheduling automatic Facebook posts.");
     default: {
       const exhaustivePlatform: never = post.platform;
       throw new Error(`Unsupported posting platform: ${exhaustivePlatform}`);

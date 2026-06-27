@@ -1,6 +1,11 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildFacebookText,
   buildTikTokInitBody,
   buildTikTokTitle,
   buildYouTubeText,
@@ -78,6 +83,49 @@ describe("posting platform helpers", () => {
         total_chunk_count: 3,
       },
     });
+  });
+
+  it("builds Facebook Page video text with safe unpublished default", () => {
+    const text = buildFacebookText({ ...basePost, platform: "Facebook" });
+
+    expect(text).toEqual({
+      title: "Sunday Sermon Clip",
+      description: "God is near when life feels loud.\n\n#Faith #Church\n\nFrom Grace Church",
+      published: false,
+    });
+  });
+
+  it("uploads Facebook videos to the configured Page endpoint", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "facebook-upload-"));
+    const videoPath = join(tempDir, "clip.mp4");
+    await writeFile(videoPath, Buffer.from("video"));
+    vi.stubEnv("FACEBOOK_PAGE_ID", "page-123");
+    vi.stubEnv("FACEBOOK_PAGE_ACCESS_TOKEN", "page-token");
+    vi.stubEnv("FACEBOOK_GRAPH_VERSION", "v99.0");
+    vi.stubEnv("FACEBOOK_DEFAULT_PUBLISHED", "true");
+    const fetchImpl = vi.fn(async () => Response.json({ id: "fb-video-1" }));
+
+    try {
+      const result = await uploadPlatformPost({ ...basePost, platform: "Facebook" }, videoPath, 5, fetchImpl as typeof fetch);
+      const [url, init] = fetchImpl.mock.calls[0];
+      const body = init?.body as FormData;
+
+      expect(url).toBe("https://graph.facebook.com/v99.0/page-123/videos");
+      expect(init?.method).toBe("POST");
+      expect(body.get("access_token")).toBe("page-token");
+      expect(body.get("title")).toBe("Sunday Sermon Clip");
+      expect(body.get("published")).toBe("true");
+      expect(body.get("description")).toContain("#Faith #Church");
+      expect(result).toEqual({
+        status: "POSTED",
+        externalPostId: "fb-video-1",
+        publishedUrl: "https://www.facebook.com/fb-video-1",
+        finalPrivacyStatus: "published",
+        publishError: undefined,
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps unsupported automatic platforms explicit", async () => {

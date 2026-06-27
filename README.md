@@ -67,6 +67,10 @@ TIKTOK_DEFAULT_PRIVACY_LEVEL=SELF_ONLY
 TIKTOK_DISABLE_DUET=true
 TIKTOK_DISABLE_COMMENT=true
 TIKTOK_DISABLE_STITCH=true
+FACEBOOK_PAGE_ID=your_facebook_page_id
+FACEBOOK_PAGE_ACCESS_TOKEN=your_facebook_page_access_token
+FACEBOOK_GRAPH_VERSION=v23.0
+FACEBOOK_DEFAULT_PUBLISHED=false
 POSTING_WORKER_DRY_RUN=true
 
 `OPENAI_TRANSCRIPTION_MODEL` defaults to `whisper-1` because the clipping pipeline requires segment timestamps for accurate video boundaries.
@@ -117,8 +121,11 @@ Useful worker settings:
 - `POSTING_WORKER_DRY_RUN`: defaults to dry-run unless set to `false`.
 - `TIKTOK_ACCESS_TOKEN`: enables automatic TikTok Direct Post uploads from the Mac worker. The token must include TikTok's `video.publish` permission.
 - `TIKTOK_DEFAULT_PRIVACY_LEVEL`: defaults to `SELF_ONLY` so early tests do not publish publicly.
+- `FACEBOOK_PAGE_ID`: Facebook Page id to upload videos to.
+- `FACEBOOK_PAGE_ACCESS_TOKEN`: Page access token for Graph API video publishing.
+- `FACEBOOK_DEFAULT_PUBLISHED`: defaults to `false`, so early tests upload videos as unpublished. Set to `true` only when you are ready for automatic public Page posts.
 
-Automatic YouTube Shorts and TikTok posts can upload directly from Mac-local files. Instagram automatic posting still needs a public video URL or temporary media hosting, and Facebook automatic posting needs a Page access-token adapter.
+Automatic YouTube Shorts, TikTok, and Facebook posts can upload directly from Mac-local files. Instagram automatic posting still needs a public video URL or temporary media hosting.
 
 For Neon/Vercel setup, create the Neon database, set `DATABASE_URL` in Vercel and locally, then run `npx prisma db push` once against Neon. To copy existing local SQLite rows into Neon, run:
 
