@@ -2661,6 +2661,27 @@ textarea::placeholder {
   opacity: 0;
 }
 
+.empty-video-state {
+  display: grid;
+  min-height: 11rem;
+  place-items: center;
+  padding: 1rem;
+  color: rgba(245, 247, 250, 0.86);
+  text-align: center;
+  background:
+    linear-gradient(145deg, rgba(14, 19, 28, 0.96), rgba(36, 43, 53, 0.92)),
+    #10141c;
+}
+
+.empty-video-state span {
+  position: relative;
+  z-index: 2;
+  max-width: 12rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 @keyframes poster-skeleton {
   to {
     background-position: -220% 0;

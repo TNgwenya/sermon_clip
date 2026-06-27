@@ -21,7 +21,6 @@ const { prisma } = await import("../src/lib/prisma");
 const {
   appendJobLog,
   markJobFailed,
-  markJobRunning,
   markJobSucceeded,
 } = await import("../src/server/agents/processing");
 
@@ -115,8 +114,22 @@ async function runJob(type: ProcessingJobType, sermonId: string): Promise<string
       return `Refreshed ${result.clipsRefreshed} clip quality record(s); ${result.clipsFailed} failed.`;
     }
     case "BURN_SUBTITLES":
-    case "RENDER_OVERLAY":
-      throw new Error(`${type} needs a clip-specific queue payload before the media worker can run it.`);
+    {
+      const { regenerateAllOutdatedCaptionsAction } = await import("../src/server/actions/sermons");
+      const result = await regenerateAllOutdatedCaptionsAction(sermonId);
+      if (!result.success) {
+        throw new Error(result.message);
+      }
+      return `Caption assets refreshed: ${result.completed} updated, ${result.skipped} skipped.`;
+    }
+    case "RENDER_OVERLAY": {
+      const { regenerateAllOutdatedAssetsAction } = await import("../src/server/actions/sermons");
+      const result = await regenerateAllOutdatedAssetsAction(sermonId);
+      if (!result.success) {
+        throw new Error(result.message);
+      }
+      return `Branding/export assets refreshed: ${result.completed} rebuilt, ${result.skipped} skipped.`;
+    }
     default:
       throw new Error(`Unsupported processing job type: ${type}`);
   }

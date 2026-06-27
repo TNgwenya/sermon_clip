@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { listBestPreviewCandidates } from "@/lib/clipPreview";
 import { videoFileResponse } from "@/server/http/videoFileResponse";
+import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
 async function fileHasBytes(filePath: string): Promise<boolean> {
   try {
@@ -24,6 +25,13 @@ export async function GET(
 
   if (!clipId) {
     return NextResponse.json({ error: "Clip id is required." }, { status: 400 });
+  }
+
+  if (!canRunLocalMediaProcessing()) {
+    return NextResponse.json(
+      { error: "Clip previews live on the Mac media worker. Open the local app to preview this file." },
+      { status: 409 },
+    );
   }
 
   const clip = await prisma.clipCandidate.findUnique({

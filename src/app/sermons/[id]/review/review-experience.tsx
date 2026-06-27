@@ -90,6 +90,7 @@ type ReviewExperienceProps = {
   sermonId: string;
   sermonTitle: string;
   clips: ClipReviewItem[];
+  localMediaAvailable: boolean;
 };
 
 type Draft = {
@@ -150,7 +151,7 @@ function isDeterministicFallbackClip(clip: Pick<ClipReviewItem, "qualityWarnings
   );
 }
 
-export function ReviewExperience({ sermonId, sermonTitle, clips }: ReviewExperienceProps) {
+export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvailable }: ReviewExperienceProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [filter, setFilter] = useState<ReviewFilter>("ALL");
@@ -534,13 +535,19 @@ export function ReviewExperience({ sermonId, sermonTitle, clips }: ReviewExperie
                     <div className="review-feed-video-frame">
                       <span className="review-feed-score-pill">{qualityView.scoreLabel}</span>
                       <span className="review-feed-duration-pill">{toDurationLabel(clip.durationSeconds)}</span>
-                      <video
-                        className="review-video"
-                        controls
-                        playsInline
-                        preload="metadata"
-                        src={`/api/clips/${clip.id}/preview?variant=best`}
-                      />
+                      {localMediaAvailable ? (
+                        <video
+                          className="review-video"
+                          controls
+                          playsInline
+                          preload="metadata"
+                          src={`/api/clips/${clip.id}/preview?variant=best`}
+                        />
+                      ) : (
+                        <div className="review-video empty-video-state">
+                          <span>Preview on Mac app</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 

@@ -267,11 +267,41 @@ async function queueSermonProcessingJob(
   return { id: job.id, reusedExisting: false };
 }
 
-function unavailableMediaActionState(action: string): { success: false; message: string } {
-  return {
-    success: false,
-    message: localMediaProcessingUnavailableMessage(action),
-  };
+async function queueSermonMediaAssetJobs(
+  sermonId: string,
+  requestedAssets?: ClipAssetKind[],
+): Promise<{ queued: number; reused: number; jobTypes: ProcessingJobType[] }> {
+  const assetSet = new Set(requestedAssets ?? ["render", "caption", "captionBurn", "overlay", "export"]);
+  const jobTypes: ProcessingJobType[] = [];
+
+  if (assetSet.has("render")) {
+    jobTypes.push("EXPORT_CLIPS");
+  }
+
+  if (assetSet.has("caption")) {
+    jobTypes.push("GENERATE_SUBTITLES");
+  }
+
+  if (assetSet.has("captionBurn")) {
+    jobTypes.push("BURN_SUBTITLES");
+  }
+
+  if (assetSet.has("overlay") || assetSet.has("export")) {
+    jobTypes.push("RENDER_OVERLAY");
+  }
+
+  let queued = 0;
+  let reused = 0;
+  for (const jobType of Array.from(new Set(jobTypes))) {
+    const job = await queueSermonProcessingJob(sermonId, jobType);
+    if (job.reusedExisting) {
+      reused += 1;
+    } else {
+      queued += 1;
+    }
+  }
+
+  return { queued, reused, jobTypes: Array.from(new Set(jobTypes)) };
 }
 
 function startOneClickSermonPipeline(sermonId: string): void {
@@ -2369,6 +2399,19 @@ export async function generateAndBurnSubtitlesForExportedClipsAction(
     return { success: false, message: "Missing sermon id for caption generation." };
   }
 
+  if (!canRunLocalMediaProcessing()) {
+    const queued = await queueSermonMediaAssetJobs(normalizedSermonId, ["caption", "captionBurn"]);
+    revalidatePath(`/sermons/${normalizedSermonId}`);
+    revalidatePath("/");
+
+    return {
+      success: true,
+      message: queued.queued > 0
+        ? `Caption generation queued for your local worker (${queued.jobTypes.join(", ")}).`
+        : `Caption generation is already queued for your local worker (${queued.jobTypes.join(", ")}).`,
+    };
+  }
+
   try {
     const result = await generateCaptionsForApprovedClips(normalizedSermonId, { force: true });
     revalidatePath(`/sermons/${normalizedSermonId}`);
@@ -2443,6 +2486,19 @@ export async function approveClipCandidateAction(clipId: string): Promise<ClipCa
       status: "APPROVED",
     },
   });
+
+  if (!canRunLocalMediaProcessing()) {
+    const queued = await queueSermonMediaAssetJobs(clip.sermonId);
+    revalidatePath(`/sermons/${clip.sermonId}`);
+    revalidatePath("/");
+
+    return {
+      success: true,
+      message: queued.queued > 0
+        ? "Clip approved. Media preparation was queued for your local worker."
+        : "Clip approved. Media preparation is already queued for your local worker.",
+    };
+  }
 
   try {
     await generateCaptionsForClip(clip.id, { force: true });
@@ -2590,6 +2646,20 @@ export async function setClipReviewStatusAction(
   });
 
   if (status === "APPROVED") {
+    if (!canRunLocalMediaProcessing()) {
+      const queued = await queueSermonMediaAssetJobs(clip.sermonId);
+      revalidatePath(`/sermons/${clip.sermonId}`);
+      revalidatePath(`/sermons/${clip.sermonId}/review`);
+      revalidatePath("/");
+
+      return {
+        success: true,
+        message: queued.queued > 0
+          ? "Clip approved. Media preparation was queued for your local worker."
+          : "Clip approved. Media preparation is already queued for your local worker.",
+      };
+    }
+
     try {
       const brandingSettings = await getBrandingSettings();
       await prepareApprovedClipAfterReview(
@@ -4879,6 +4949,22 @@ export async function regenerateClipOutdatedAssetsAction(clipId: string): Promis
     return { success: true, message: "All assets are already up to date." };
   }
 
+  if (!canRunLocalMediaProcessing()) {
+    const queued = await queueSermonMediaAssetJobs(clip.sermonId, assets);
+    await appendPipelineLog(
+      clip.sermonId,
+      `Queued local-worker regeneration for clip ${clip.id}. Assets: ${assets.join(", ")}. Jobs: ${queued.jobTypes.join(", ")}.`,
+    );
+    await revalidateClipPaths(clip.id, clip.sermonId);
+
+    return {
+      success: true,
+      message: queued.queued > 0
+        ? `Media rebuild queued for your local worker (${queued.jobTypes.join(", ")}). Keep the Mac media worker running.`
+        : `Media rebuild is already queued for your local worker (${queued.jobTypes.join(", ")}).`,
+    };
+  }
+
   let failed = 0;
   const errors: string[] = [];
 
@@ -4924,6 +5010,28 @@ export async function regenerateAllOutdatedAssetsAction(sermonId: string): Promi
       attempted: 0,
       completed: 0,
       skipped: 0,
+      failed: 0,
+      failures: [],
+    };
+  }
+
+  if (!canRunLocalMediaProcessing()) {
+    const queued = await queueSermonMediaAssetJobs(normalizedSermonId);
+    await appendPipelineLog(
+      normalizedSermonId,
+      `Queued local-worker batch regeneration. Jobs: ${queued.jobTypes.join(", ")}.`,
+    );
+    revalidatePath(`/sermons/${normalizedSermonId}`);
+    revalidatePath("/");
+
+    return {
+      success: true,
+      message: queued.queued > 0
+        ? `Media rebuild queued for your local worker (${queued.jobTypes.join(", ")}). Keep the Mac media worker running.`
+        : `Media rebuild is already queued for your local worker (${queued.jobTypes.join(", ")}).`,
+      attempted: queued.jobTypes.length,
+      completed: 0,
+      skipped: queued.reused,
       failed: 0,
       failures: [],
     };
@@ -5002,6 +5110,28 @@ export async function regenerateAllOutdatedCaptionsAction(sermonId: string): Pro
       attempted: 0,
       completed: 0,
       skipped: 0,
+      failed: 0,
+      failures: [],
+    };
+  }
+
+  if (!canRunLocalMediaProcessing()) {
+    const queued = await queueSermonMediaAssetJobs(normalizedSermonId, ["caption", "captionBurn"]);
+    await appendPipelineLog(
+      normalizedSermonId,
+      `Queued local-worker caption regeneration. Jobs: ${queued.jobTypes.join(", ")}.`,
+    );
+    revalidatePath(`/sermons/${normalizedSermonId}`);
+    revalidatePath("/");
+
+    return {
+      success: true,
+      message: queued.queued > 0
+        ? `Caption rebuild queued for your local worker (${queued.jobTypes.join(", ")}). Keep the Mac media worker running.`
+        : `Caption rebuild is already queued for your local worker (${queued.jobTypes.join(", ")}).`,
+      attempted: queued.jobTypes.length,
+      completed: 0,
+      skipped: queued.reused,
       failed: 0,
       failures: [],
     };

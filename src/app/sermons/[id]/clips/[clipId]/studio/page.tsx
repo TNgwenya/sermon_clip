@@ -35,6 +35,7 @@ import { resolveBrandingConfig } from "@/lib/clipBranding";
 import { buildClipAssetRecoveryPlan } from "@/lib/clipAssetRecovery";
 import { ClipAssetRecoveryButton } from "@/components/clip-asset-recovery-button";
 import { getBrandingSettings } from "@/server/branding/settings";
+import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
 type ClipStudioPageParams = {
   params: Promise<{ id: string; clipId: string }>;
@@ -62,6 +63,7 @@ function extractFramingDecisionSummary(captionData: unknown): string | null {
 
 export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   const { id: sermonId, clipId } = await params;
+  const localMediaAvailable = canRunLocalMediaProcessing();
 
   const sermon = await prisma.sermon.findUnique({
     where: { id: sermonId },
@@ -225,7 +227,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   const exportHistoryWithFileState = await Promise.all(
     exportHistory.map(async (record) => {
       const hasPath = Boolean(record.outputPath);
-      if (!hasPath || !record.outputPath) {
+      if (!localMediaAvailable || !hasPath || !record.outputPath) {
         return { ...record, fileExists: false };
       }
 
@@ -237,12 +239,12 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       }
     }),
   );
-  const currentExportFileExists = clip.exportedFilePath
+  const currentExportFileExists = localMediaAvailable && clip.exportedFilePath
     ? await stat(clip.exportedFilePath)
         .then((fileStat) => fileStat.isFile() && fileStat.size > 0)
         .catch(() => false)
     : false;
-  const sourceVideoExists = sermon.sourceVideoPath
+  const sourceVideoExists = localMediaAvailable && sermon.sourceVideoPath
     ? await stat(sermon.sourceVideoPath)
         .then((fileStat) => fileStat.isFile() && fileStat.size > 0)
         .catch(() => false)
@@ -318,7 +320,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
           : null;
   const bestPreviewPath =
     clip.captionedVideoPath ?? clip.overlayVideoPath ?? clip.exportedFilePath ?? clip.renderedFilePath ?? null;
-  const hasPreview = Boolean(bestPreviewPath);
+  const hasPreview = localMediaAvailable && Boolean(bestPreviewPath);
 
   const clipStatus = clip.status as "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
   const renderStatus = clip.renderStatus as "NOT_RENDERED" | "QUEUED" | "RENDERING" | "COMPLETED" | "FAILED";
@@ -386,8 +388,13 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             clipId={clip.id}
             currentStatus={clipStatus}
             hasPreview={hasPreview}
-            previewSrc={bestPreviewVariant ? `/api/clips/${clip.id}/preview?variant=${bestPreviewVariant}` : null}
+            previewSrc={localMediaAvailable && bestPreviewVariant ? `/api/clips/${clip.id}/preview?variant=${bestPreviewVariant}` : null}
             sourcePreviewSrc={sourceVideoExists ? `/api/sermons/${sermon.id}/source-preview` : null}
+            unavailableDescription={
+              localMediaAvailable
+                ? undefined
+                : "This Vercel control panel shows metadata only. Open the local Mac app to stream clip previews from local storage."
+            }
             renderLabel={renderStatusLabel(renderStatus)}
             renderTone={renderStatus === "COMPLETED" ? "success" : renderStatus === "FAILED" ? "danger" : "neutral"}
             durationLabel={timing.durationLabel}

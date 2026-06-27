@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { resolveExportHistory } from "@/lib/clipExportSettings";
 import { buildClipDownloadFileName } from "@/lib/exportNaming";
 import { videoFileResponse } from "@/server/http/videoFileResponse";
+import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
 async function fileHasBytes(filePath: string): Promise<boolean> {
   try {
@@ -35,6 +36,13 @@ export async function GET(
 
   if (!clipId) {
     return NextResponse.json({ error: "Clip id is required." }, { status: 400 });
+  }
+
+  if (!canRunLocalMediaProcessing()) {
+    return NextResponse.json(
+      { error: "Clip downloads live on the Mac media worker. Open the local app to download this file." },
+      { status: 409 },
+    );
   }
 
   const url = new URL(request.url);

@@ -17,6 +17,7 @@ import { RetryFailedJobButton } from "@/app/sermons/[id]/retry-failed-job-button
 import { RepairFailedClipOperationsButton } from "@/app/sermons/[id]/repair-failed-clip-operations-button";
 import { SermonLiveRefresh } from "@/app/sermons/[id]/sermon-live-refresh";
 import { getAudioPath, getLogPath, getSourceVideoPath } from "@/server/agents/storage";
+import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import { pastorFriendlyError } from "@/lib/pastorFriendlyErrors";
 import {
   derivePastorSermonWorkflow,
@@ -186,6 +187,10 @@ type SermonDetailItem = {
 };
 
 async function doesFileExist(filePath: string): Promise<boolean> {
+  if (!canRunLocalMediaProcessing()) {
+    return false;
+  }
+
   try {
     const fileStat = await stat(filePath);
     return fileStat.isFile() && fileStat.size > 0;
@@ -684,6 +689,7 @@ export default async function SermonDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const localMediaAvailable = canRunLocalMediaProcessing();
 
   const sermon: SermonDetailItem | null = await prisma.sermon.findUnique({
     where: { id },
@@ -1326,12 +1332,18 @@ export default async function SermonDetailPage({
             {previewClips.map((clip) => (
               <Link key={clip.id} href={`/sermons/${sermon.id}/clips/${clip.id}/studio`} className="sermon-preview-card">
                 <div className="video-card-shell">
-                  <video
-                    className="review-video"
-                    preload="none"
-                    poster={`/api/clips/${clip.id}/thumbnail`}
-                    src={`/api/clips/${clip.id}/preview?variant=best`}
-                  />
+                  {localMediaAvailable ? (
+                    <video
+                      className="review-video"
+                      preload="none"
+                      poster={`/api/clips/${clip.id}/thumbnail`}
+                      src={`/api/clips/${clip.id}/preview?variant=best`}
+                    />
+                  ) : (
+                    <div className="review-video empty-video-state">
+                      <span>Preview on Mac app</span>
+                    </div>
+                  )}
                   <span className="video-quality-pill">{clip.status === "EXPORTED" ? "Ready" : "Preview"}</span>
                   <span className="video-duration-pill">{Math.round(clip.durationSeconds)}s</span>
                 </div>

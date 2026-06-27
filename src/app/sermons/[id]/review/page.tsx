@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { prisma } from "@/lib/prisma";
 import { ReviewExperience } from "@/app/sermons/[id]/review/review-experience";
+import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
 type ReviewPageData = {
   id: string;
@@ -74,6 +75,7 @@ function normalizeStringArray(value: unknown): string[] {
 
 export default async function SermonReviewPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const localMediaAvailable = canRunLocalMediaProcessing();
 
   const sermon: ReviewPageData | null = await prisma.sermon.findUnique({
     where: { id },
@@ -161,7 +163,12 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
 
   return (
     <>
-      <ReviewExperience sermonId={sermon.id} sermonTitle={sermon.title} clips={clips} />
+      <ReviewExperience
+        sermonId={sermon.id}
+        sermonTitle={sermon.title}
+        clips={clips}
+        localMediaAvailable={localMediaAvailable}
+      />
       <div className="container">
         <Link href={`/sermons/${sermon.id}`} className="text-link">Back to sermon detail</Link>
       </div>

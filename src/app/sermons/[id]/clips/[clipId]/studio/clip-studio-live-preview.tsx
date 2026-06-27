@@ -22,6 +22,7 @@ type ClipStudioLivePreviewProps = {
   timingLabel: string;
   riskLabel: string;
   riskClassName: string;
+  unavailableDescription?: string;
 };
 
 const formatClassName = {
@@ -50,6 +51,7 @@ export function ClipStudioLivePreview({
   timingLabel,
   riskLabel,
   riskClassName,
+  unavailableDescription,
 }: ClipStudioLivePreviewProps) {
   const {
     exportSettings,
@@ -178,7 +180,7 @@ export function ClipStudioLivePreview({
             ) : (
               <EmptyState
                 title="Preview not available yet"
-                description="Clip preview is not available yet. Review timing and captions, then render to generate a playable preview."
+                description={unavailableDescription ?? "Clip preview is not available yet. Review timing and captions, then render to generate a playable preview."}
               />
             )}
 
