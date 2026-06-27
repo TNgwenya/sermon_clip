@@ -1,36 +1,8 @@
-import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import os from "node:os";
 
-type AutomationPost = {
-  id: string;
-  platform: "TikTok" | "Instagram" | "YouTube Shorts" | "Facebook";
-  title: string;
-  caption: string;
-  scheduledFor: string | null;
-  idempotencyKey: string;
-  clips: Array<{
-    id: string;
-    title: string;
-    caption: string;
-    hashtags: unknown;
-    localFileCandidates: string[];
-    sermon: {
-      title: string;
-      churchName: string;
-    };
-  }>;
-};
-
-type CompletionStatus = "POSTED" | "FAILED" | "PRIVATE_ONLY_UNVERIFIED";
-
-type UploadResult = {
-  status: CompletionStatus;
-  externalPostId?: string;
-  publishedUrl?: string;
-  publishError?: string;
-  finalPrivacyStatus?: string;
-};
+import type { AutomationPost, UploadResult } from "./posting-platforms.ts";
+import { uploadPlatformPost } from "./posting-platforms.ts";
 
 const workerId = process.env.POSTING_WORKER_ID?.trim() || `${os.hostname()}-posting-worker`;
 const apiBaseUrl = (process.env.WORKER_API_BASE_URL?.trim() || "http://localhost:3000").replace(/\/$/, "");
@@ -136,129 +108,6 @@ async function firstExistingFile(candidates: string[]): Promise<{ path: string; 
   throw new Error("No local video file exists for this scheduled post.");
 }
 
-function extractHashtags(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value
-    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-    .map((item) => item.trim().startsWith("#") ? item.trim() : `#${item.trim()}`);
-}
-
-function buildYouTubeText(post: AutomationPost): { title: string; description: string; tags: string[] } {
-  const firstClip = post.clips[0];
-  const hashtags = Array.from(new Set(post.clips.flatMap((clip) => extractHashtags(clip.hashtags))));
-  const title = (post.title || firstClip?.title || "Sermon clip").slice(0, 100);
-  const caption = post.caption || firstClip?.caption || "";
-  const description = [
-    caption,
-    hashtags.length > 0 ? hashtags.join(" ") : "#Shorts",
-    firstClip?.sermon.churchName ? `From ${firstClip.sermon.churchName}` : "",
-  ].filter(Boolean).join("\n\n");
-
-  return {
-    title,
-    description,
-    tags: Array.from(new Set(["Shorts", ...hashtags.map((tag) => tag.replace(/^#/, ""))])).slice(0, 20),
-  };
-}
-
-async function getYouTubeAccessToken(): Promise<string> {
-  const clientId = process.env.YOUTUBE_CLIENT_ID?.trim();
-  const clientSecret = process.env.YOUTUBE_CLIENT_SECRET?.trim();
-  const refreshToken = process.env.YOUTUBE_REFRESH_TOKEN?.trim();
-
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error("YouTube credentials are incomplete. Set YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, and YOUTUBE_REFRESH_TOKEN.");
-  }
-
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-    }),
-  });
-  const data = await response.json().catch(() => null);
-
-  if (!response.ok || typeof data?.access_token !== "string") {
-    throw new Error(data?.error_description ?? "Could not refresh YouTube access token.");
-  }
-
-  return data.access_token;
-}
-
-async function uploadYouTubeShort(post: AutomationPost, videoPath: string, videoSize: number): Promise<UploadResult> {
-  const requestedPrivacy = process.env.YOUTUBE_DEFAULT_PRIVACY_STATUS?.trim() || "private";
-  const apiVerified = process.env.YOUTUBE_API_VERIFIED === "true";
-  const privacyStatus = apiVerified ? requestedPrivacy : "private";
-  const token = await getYouTubeAccessToken();
-  const text = buildYouTubeText(post);
-
-  const metadata = {
-    snippet: {
-      title: text.title,
-      description: text.description,
-      tags: text.tags,
-      categoryId: "22",
-    },
-    status: {
-      privacyStatus,
-      selfDeclaredMadeForKids: false,
-    },
-  };
-
-  const createSessionResponse = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json; charset=UTF-8",
-      "x-upload-content-length": String(videoSize),
-      "x-upload-content-type": "video/mp4",
-    },
-    body: JSON.stringify(metadata),
-  });
-  const uploadUrl = createSessionResponse.headers.get("location");
-
-  if (!createSessionResponse.ok || !uploadUrl) {
-    const data = await createSessionResponse.json().catch(() => null);
-    throw new Error(data?.error?.message ?? "Could not start YouTube resumable upload.");
-  }
-
-  const uploadRequest = {
-    method: "PUT",
-    headers: {
-      "content-length": String(videoSize),
-      "content-type": "video/mp4",
-    },
-    body: createReadStream(videoPath),
-    duplex: "half",
-  } as unknown as RequestInit & { duplex: "half" };
-  const uploadResponse = await fetch(uploadUrl, uploadRequest);
-  const data = await uploadResponse.json().catch(() => null);
-
-  if (!uploadResponse.ok || typeof data?.id !== "string") {
-    throw new Error(data?.error?.message ?? "YouTube upload failed.");
-  }
-
-  const publishedUrl = `https://www.youtube.com/watch?v=${data.id}`;
-  const privateOnly = !apiVerified && requestedPrivacy !== "private";
-
-  return {
-    status: privateOnly ? "PRIVATE_ONLY_UNVERIFIED" : "POSTED",
-    externalPostId: data.id,
-    publishedUrl,
-    finalPrivacyStatus: privacyStatus,
-    publishError: privateOnly
-      ? "Uploaded privately because YOUTUBE_API_VERIFIED is not true. Complete Google API verification before public API publishing."
-      : undefined,
-  };
-}
-
 async function publishPost(post: AutomationPost): Promise<UploadResult> {
   const firstClip = post.clips[0];
   if (!firstClip) {
@@ -277,11 +126,7 @@ async function publishPost(post: AutomationPost): Promise<UploadResult> {
     };
   }
 
-  if (post.platform !== "YouTube Shorts") {
-    throw new Error(`${post.platform} automatic posting is not implemented yet.`);
-  }
-
-  return uploadYouTubeShort(post, video.path, video.size);
+  return uploadPlatformPost(post, video.path, video.size);
 }
 
 async function processDuePosts(): Promise<void> {
