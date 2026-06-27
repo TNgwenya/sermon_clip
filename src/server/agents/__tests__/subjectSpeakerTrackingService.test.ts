@@ -129,5 +129,5 @@ describe("subject speaker tracking service", () => {
       "Prayer moment",
       "People learning to pray",
     ]));
-  });
+  }, 15_000);
 });

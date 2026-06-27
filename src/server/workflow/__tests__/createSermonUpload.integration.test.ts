@@ -72,7 +72,9 @@ describe("create sermon upload workflow", () => {
     expect(result.message).toBe("Sermon saved. The full clip workflow has started automatically.");
     expect(result.createdSermonId).toBeTruthy();
     createdSermonIds.push(result.createdSermonId!);
-    expect(processSermonPipelineMock).toHaveBeenCalledWith(result.createdSermonId);
+    await vi.waitFor(() => {
+      expect(processSermonPipelineMock).toHaveBeenCalledWith(result.createdSermonId);
+    });
 
     const sermon = await prisma.sermon.findUniqueOrThrow({
       where: { id: result.createdSermonId! },
@@ -123,7 +125,9 @@ describe("create sermon upload workflow", () => {
     expect(result.success).toBe(true);
     expect(result.createdSermonId).toBeTruthy();
     createdSermonIds.push(result.createdSermonId!);
-    expect(processSermonPipelineMock).toHaveBeenCalledWith(result.createdSermonId);
+    await vi.waitFor(() => {
+      expect(processSermonPipelineMock).toHaveBeenCalledWith(result.createdSermonId);
+    });
 
     const sermon = await prisma.sermon.findUniqueOrThrow({
       where: { id: result.createdSermonId! },
