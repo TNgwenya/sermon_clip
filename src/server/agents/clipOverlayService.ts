@@ -17,7 +17,6 @@ import { access, rename, stat, unlink } from "node:fs/promises";
 import { spawn } from "node:child_process";
 
 import type { ClipCandidate, Prisma } from "@prisma/client";
-import sharp from "sharp";
 
 import { prisma } from "@/lib/prisma";
 import {
@@ -40,6 +39,7 @@ import {
   markOverlayAssetFailed,
 } from "@/server/regeneration/dependencies";
 import { getBrandingOverlayDimensions, renderBrandingOverlayPng } from "@/server/agents/brandingOverlay";
+import { getSharp } from "@/server/agents/sharpClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -397,6 +397,7 @@ function buildHookOverlaySvg(spec: HookOverlaySpec): string {
 }
 
 async function renderHookOverlayPng(outputPath: string, spec: HookOverlaySpec): Promise<void> {
+  const sharp = await getSharp();
   await sharp(Buffer.from(buildHookOverlaySvg(spec))).png().toFile(/* turbopackIgnore: true */ outputPath);
 }
 

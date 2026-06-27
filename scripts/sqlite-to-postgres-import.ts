@@ -5,7 +5,18 @@ import { Prisma, PrismaClient } from "@prisma/client";
 
 const execFileAsync = promisify(execFile);
 const sqlitePath = process.env.SQLITE_DATABASE_PATH ?? "prisma/dev.db";
-const prisma = new PrismaClient();
+const targetDatabaseUrl =
+  process.env.TARGET_DATABASE_URL?.trim()
+  || process.env.POSTGRES_DATABASE_URL?.trim()
+  || process.env.DATABASE_URL?.trim()
+  || "";
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: targetDatabaseUrl,
+    },
+  },
+});
 
 type SqliteRow = Record<string, unknown>;
 
@@ -109,6 +120,17 @@ async function insertRows(table: string, rows: SqliteRow[], fieldTypes: Map<stri
 }
 
 async function main(): Promise<void> {
+  if (!targetDatabaseUrl.startsWith("postgresql://") && !targetDatabaseUrl.startsWith("postgres://")) {
+    throw new Error(
+      [
+        "Set POSTGRES_DATABASE_URL or TARGET_DATABASE_URL to your Neon Postgres connection string.",
+        "Example:",
+        "POSTGRES_DATABASE_URL='postgresql://USER:PASSWORD@HOST/neondb?sslmode=require' SQLITE_DATABASE_PATH='prisma/dev.db' npm run import:sqlite-to-postgres",
+      ].join("\n"),
+    );
+  }
+
+  console.log(`Importing ${sqlitePath} into ${targetDatabaseUrl.replace(/:\/\/([^:]+):([^@]+)@/, "://$1:***@")}`);
   const tables = await listSqliteTables();
   const fieldTypesByModel = modelFieldTypes();
 

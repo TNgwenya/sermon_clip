@@ -3,9 +3,9 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import sharp from "sharp";
 
 import { prisma } from "@/lib/prisma";
+import { getSharp } from "@/server/agents/sharpClient";
 import { getMediaDimensions } from "@/server/media/ffmpeg";
 import { getSourceVideoPath } from "@/server/agents/storage";
 
@@ -293,6 +293,7 @@ async function detectPeopleInFrame(framePath: string, timeSeconds: number): Prom
     importOptionalModule<{ tensor3d(data: Uint8Array, shape: [number, number, number], dtype: "int32"): { dispose(): void } }>("@tensorflow/tfjs"),
     loadCocoModel(),
   ]);
+  const sharp = await getSharp();
   const { data, info } = await sharp(framePath)
     .removeAlpha()
     .raw()

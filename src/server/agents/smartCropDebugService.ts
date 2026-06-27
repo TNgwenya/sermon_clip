@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import sharp from "sharp";
 
 import { prisma } from "@/lib/prisma";
 import { normalizeManualCropKeyframes } from "@/lib/manualCrop";
+import { getSharp } from "@/server/agents/sharpClient";
 import { getSourceVideoPath, getSermonStoragePath } from "@/server/agents/storage";
 import { resolveSmartCropCenter, resolveSmartCropTimeline } from "@/server/agents/videoSubjectTrackingService";
 
@@ -93,6 +93,7 @@ export async function generateSmartCropDebugSnapshot(
     ffmpegPath: options?.ffmpegPath,
   });
 
+  const sharp = await getSharp();
   const image = sharp(rawFramePath);
   const metadata = await image.metadata();
   const width = metadata.width ?? 640;

@@ -244,8 +244,8 @@ const FOCUSED_WINDOW_SECONDS = 90;
 const MAX_WINDOW_SECONDS = 90;
 const BATCH_SIZE = 4;
 const MAX_BATCH_CLIPS = 8;
-const MAX_SERMON_CLIP_SUGGESTIONS = 24;
-const MIN_PASTOR_REVIEW_BOARD_OPTIONS = 12;
+const MAX_SERMON_CLIP_SUGGESTIONS = 25;
+const MIN_PASTOR_REVIEW_BOARD_OPTIONS = 15;
 const MIN_REVIEWABLE_CLIP_SUGGESTIONS = Number(process.env.CLIP_GENERATION_MIN_REVIEWABLE_RESULTS ?? MIN_PASTOR_REVIEW_BOARD_OPTIONS);
 const MAX_REVIEWABLE_CLIP_SUGGESTIONS = Number(process.env.CLIP_GENERATION_MAX_REVIEWABLE_RESULTS ?? MAX_SERMON_CLIP_SUGGESTIONS);
 const MIN_SELECTION_POST_READY_SCORE = 8.0;
@@ -4956,7 +4956,7 @@ export async function generateClipSuggestions(
           (candidate.transcriptGroundingOrderedFlowRatio ?? 0) >= 0.85 &&
           countSelectionWords(candidate.transcriptText) >= MIN_SELECTION_TRANSCRIPT_WORDS
         ))
-        .slice(0, Math.min(MAX_SERMON_CLIP_SUGGESTIONS, 12))
+        .slice(0, Math.min(MAX_SERMON_CLIP_SUGGESTIONS, MIN_REVIEWABLE_CLIP_SUGGESTIONS))
         .map((candidate) => ({
           ...candidate,
           qualityLabel: (candidate.finalQualityScore ?? candidate.score) >= MIN_GOOD_CLIP_SCORE ? "GOOD_NEEDS_REVIEW" : "NEEDS_EDITING",

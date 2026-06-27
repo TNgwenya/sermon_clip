@@ -2,7 +2,6 @@ import { access, rename, stat, unlink } from "node:fs/promises";
 import { spawn } from "node:child_process";
 
 import type { ClipCandidate, Prisma } from "@prisma/client";
-import sharp from "sharp";
 
 import { prisma } from "@/lib/prisma";
 import {
@@ -29,6 +28,7 @@ import {
   type CaptionStylePresetId,
 } from "@/lib/captionStylePresets";
 import { getBrandingSettings } from "@/server/branding/settings";
+import { getSharp } from "@/server/agents/sharpClient";
 
 type CaptionBurnOptions = {
   ffmpegPath?: string;
@@ -470,6 +470,7 @@ async function createCaptionOverlayImages(input: {
   outputPath: string;
 }): Promise<string[]> {
   const imagePaths: string[] = [];
+  const sharp = await getSharp();
 
   for (const cue of input.cues) {
     const imagePath = input.outputPath.replace(/\.mp4$/i, `.cue-${String(cue.index).padStart(2, "0")}.png`);

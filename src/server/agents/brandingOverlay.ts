@@ -1,10 +1,9 @@
 import { access } from "node:fs/promises";
 
-import sharp from "sharp";
-
 import type { ClipExportFormat } from "@prisma/client";
 
 import type { ClipBrandingConfig, WatermarkPosition } from "@/lib/clipBranding";
+import { getSharp } from "@/server/agents/sharpClient";
 
 export type BrandingOverlayContext = {
   format: ClipExportFormat;
@@ -169,6 +168,7 @@ export async function renderBrandingOverlayPng(
   }
 
   const svg = buildBrandingOverlaySvg(config, context);
+  const sharp = await getSharp();
   await sharp(Buffer.from(svg)).png().toFile(/* turbopackIgnore: true */ outputPath);
   return true;
 }

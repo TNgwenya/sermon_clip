@@ -2,8 +2,6 @@ import { access, mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/
 import { spawn } from "node:child_process";
 import path from "node:path";
 
-import sharp from "sharp";
-
 import { prisma } from "@/lib/prisma";
 import {
   appendJobLog,
@@ -20,6 +18,7 @@ import {
   getClipSrtPath,
 } from "@/server/agents/storage";
 import { checkFfmpegInstalled } from "@/server/media/ffmpeg";
+import { getSharp } from "@/server/agents/sharpClient";
 
 type SubtitleOptions = {
   force?: boolean;
@@ -243,6 +242,7 @@ function buildCueSvg(cue: SubtitleCue): string {
 
 async function renderSubtitleCueImage(cue: SubtitleCue, outputPath: string): Promise<void> {
   const svg = buildCueSvg(cue);
+  const sharp = await getSharp();
   await sharp(Buffer.from(svg)).png().toFile(outputPath);
 }
 
