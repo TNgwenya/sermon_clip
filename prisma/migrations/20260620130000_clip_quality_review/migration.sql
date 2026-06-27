@@ -1,0 +1,20 @@
+ALTER TABLE "ClipCandidate" ADD COLUMN "hookStrengthScore" REAL;
+ALTER TABLE "ClipCandidate" ADD COLUMN "standaloneClarityScore" REAL;
+ALTER TABLE "ClipCandidate" ADD COLUMN "emotionalImpactScore" REAL;
+ALTER TABLE "ClipCandidate" ADD COLUMN "sermonValueScore" REAL;
+ALTER TABLE "ClipCandidate" ADD COLUMN "shareabilityScore" REAL;
+ALTER TABLE "ClipCandidate" ADD COLUMN "contextSafetyScore" REAL;
+ALTER TABLE "ClipCandidate" ADD COLUMN "boundaryQualityScore" REAL;
+ALTER TABLE "ClipCandidate" ADD COLUMN "visualReadinessScore" REAL;
+ALTER TABLE "ClipCandidate" ADD COLUMN "overallPostScore" REAL;
+ALTER TABLE "ClipCandidate" ADD COLUMN "qualitySummary" TEXT;
+ALTER TABLE "ClipCandidate" ADD COLUMN "pastorFriendlyReason" TEXT;
+ALTER TABLE "ClipCandidate" ADD COLUMN "recommendedAction" TEXT;
+ALTER TABLE "ClipCandidate" ADD COLUMN "suggestedStartTimeSeconds" REAL;
+ALTER TABLE "ClipCandidate" ADD COLUMN "suggestedEndTimeSeconds" REAL;
+ALTER TABLE "ClipCandidate" ADD COLUMN "qualityClipCategory" TEXT;
+ALTER TABLE "ClipCandidate" ADD COLUMN "qualityWarnings" JSONB;
+ALTER TABLE "ClipCandidate" ADD COLUMN "qualityReviewedAt" DATETIME;
+ALTER TABLE "ClipCandidate" ADD COLUMN "qualityReviewSource" TEXT;
+
+CREATE INDEX "ClipCandidate_overallPostScore_idx" ON "ClipCandidate"("overallPostScore");

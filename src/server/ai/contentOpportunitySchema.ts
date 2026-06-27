@@ -1,0 +1,165 @@
+import { z } from "zod";
+
+export const CONTENT_OPPORTUNITY_CATEGORIES = [
+  "SOCIAL",
+  "DEVOTIONAL",
+  "DISCIPLESHIP",
+  "PROMOTION",
+  "WRITTEN",
+  "ENGAGEMENT",
+  "RECAP",
+] as const;
+
+export type ContentOpportunityCategory = (typeof CONTENT_OPPORTUNITY_CATEGORIES)[number];
+
+export const CONTENT_OPPORTUNITY_TYPES = [
+  "SHORT_FORM_CLIP_IDEA",
+  "QUOTE_GRAPHIC",
+  "SCRIPTURE_GRAPHIC",
+  "CAROUSEL_IDEA",
+  "CAPTION",
+  "REEL_HOOK",
+  "YOUTUBE_SHORTS_IDEA",
+  "TIKTOK_IDEA",
+  "FACEBOOK_POST_IDEA",
+  "INSTAGRAM_POST_IDEA",
+  "SERMON_SUMMARY",
+  "DEVOTIONAL_SUMMARY",
+  "NEWSLETTER_SUMMARY",
+  "BLOG_DRAFT_OUTLINE",
+  "ARTICLE_OUTLINE",
+  "EMAIL_RECAP",
+  "DISCUSSION_QUESTIONS",
+  "SMALL_GROUP_QUESTIONS",
+  "REFLECTION_QUESTIONS",
+  "FAMILY_DISCUSSION_QUESTIONS",
+  "YOUTH_DISCUSSION_QUESTIONS",
+  "SUNDAY_RECAP",
+  "NEXT_SERVICE_PROMOTION",
+  "INVITATION_CONTENT",
+  "ALTAR_CALL_FOLLOW_UP_CONTENT",
+  "EVENT_FOLLOW_UP_CONTENT",
+] as const;
+
+export type ContentOpportunityType = (typeof CONTENT_OPPORTUNITY_TYPES)[number];
+
+export const CONTENT_OPPORTUNITY_TYPE_LABELS: Record<ContentOpportunityType, string> = {
+  SHORT_FORM_CLIP_IDEA: "Short-form clip idea",
+  QUOTE_GRAPHIC: "Quote graphic",
+  SCRIPTURE_GRAPHIC: "Scripture graphic",
+  CAROUSEL_IDEA: "Carousel idea",
+  CAPTION: "Caption",
+  REEL_HOOK: "Reel hook",
+  YOUTUBE_SHORTS_IDEA: "YouTube Shorts idea",
+  TIKTOK_IDEA: "TikTok idea",
+  FACEBOOK_POST_IDEA: "Facebook post idea",
+  INSTAGRAM_POST_IDEA: "Instagram post idea",
+  SERMON_SUMMARY: "Sermon summary",
+  DEVOTIONAL_SUMMARY: "Devotional summary",
+  NEWSLETTER_SUMMARY: "Newsletter summary",
+  BLOG_DRAFT_OUTLINE: "Blog draft outline",
+  ARTICLE_OUTLINE: "Article outline",
+  EMAIL_RECAP: "Email recap",
+  DISCUSSION_QUESTIONS: "Discussion questions",
+  SMALL_GROUP_QUESTIONS: "Small-group questions",
+  REFLECTION_QUESTIONS: "Reflection questions",
+  FAMILY_DISCUSSION_QUESTIONS: "Family discussion questions",
+  YOUTH_DISCUSSION_QUESTIONS: "Youth discussion questions",
+  SUNDAY_RECAP: "Sunday recap",
+  NEXT_SERVICE_PROMOTION: "Next-service promotion",
+  INVITATION_CONTENT: "Invitation content",
+  ALTAR_CALL_FOLLOW_UP_CONTENT: "Altar call follow-up content",
+  EVENT_FOLLOW_UP_CONTENT: "Event follow-up content",
+};
+
+export const CONTENT_OPPORTUNITY_CATEGORY_LABELS: Record<ContentOpportunityCategory, string> = {
+  SOCIAL: "social",
+  DEVOTIONAL: "devotional",
+  DISCIPLESHIP: "discipleship",
+  PROMOTION: "promotion",
+  WRITTEN: "written",
+  ENGAGEMENT: "engagement",
+  RECAP: "recap",
+};
+
+export const DEFAULT_CONTENT_OPPORTUNITY_QUANTITIES: Record<ContentOpportunityType, number> = {
+  SHORT_FORM_CLIP_IDEA: 5,
+  QUOTE_GRAPHIC: 5,
+  SCRIPTURE_GRAPHIC: 3,
+  CAROUSEL_IDEA: 0,
+  CAPTION: 4,
+  REEL_HOOK: 2,
+  YOUTUBE_SHORTS_IDEA: 0,
+  TIKTOK_IDEA: 0,
+  FACEBOOK_POST_IDEA: 0,
+  INSTAGRAM_POST_IDEA: 0,
+  SERMON_SUMMARY: 1,
+  DEVOTIONAL_SUMMARY: 1,
+  NEWSLETTER_SUMMARY: 1,
+  BLOG_DRAFT_OUTLINE: 1,
+  ARTICLE_OUTLINE: 0,
+  EMAIL_RECAP: 0,
+  DISCUSSION_QUESTIONS: 0,
+  SMALL_GROUP_QUESTIONS: 5,
+  REFLECTION_QUESTIONS: 5,
+  FAMILY_DISCUSSION_QUESTIONS: 0,
+  YOUTH_DISCUSSION_QUESTIONS: 0,
+  SUNDAY_RECAP: 1,
+  NEXT_SERVICE_PROMOTION: 1,
+  INVITATION_CONTENT: 1,
+  ALTAR_CALL_FOLLOW_UP_CONTENT: 0,
+  EVENT_FOLLOW_UP_CONTENT: 0,
+};
+
+export const contentOpportunitySchema = z.object({
+  category: z.enum(CONTENT_OPPORTUNITY_CATEGORIES),
+  opportunityType: z.enum(CONTENT_OPPORTUNITY_TYPES),
+  title: z.string().trim().min(1).max(200),
+  shortDescription: z.string().trim().min(1).max(400),
+  bodyContent: z.string().trim().min(1).max(8000),
+  sourceTranscriptExcerpt: z.string().trim().max(1200).nullable().optional(),
+  relatedScripture: z.string().trim().max(200).nullable().optional(),
+  relatedMinistryMomentTitle: z.string().trim().max(200).nullable().optional(),
+  relatedClipTitle: z.string().trim().max(200).nullable().optional(),
+  suggestedPlatform: z.string().trim().max(120).nullable().optional(),
+  detectedLanguage: z.string().trim().max(80).nullable().optional(),
+  translatedFromLanguage: z.string().trim().max(80).nullable().optional(),
+  originalPhrase: z.string().trim().max(300).nullable().optional(),
+  englishMeaning: z.string().trim().max(500).nullable().optional(),
+  translationConfidence: z.number().min(0).max(1).nullable().optional(),
+  translationUncertaintyNote: z.string().trim().max(400).nullable().optional(),
+  confidenceScore: z.number().min(0).max(1),
+  aiReason: z.string().trim().min(1).max(1200),
+});
+
+export const contentOpportunityResponseSchema = z.object({
+  opportunities: z.array(contentOpportunitySchema).max(120),
+});
+
+export type ContentOpportunityRecord = z.infer<typeof contentOpportunitySchema>;
+export type ContentOpportunityResponse = z.infer<typeof contentOpportunityResponseSchema>;
+
+export const CONTENT_OPPORTUNITY_JSON_SHAPE = `{
+  "opportunities": [
+    {
+      "category": "SOCIAL",
+      "opportunityType": "QUOTE_GRAPHIC",
+      "title": "Faith over fear quote card",
+      "shortDescription": "A bold quote from the sermon for social sharing.",
+      "bodyContent": "\"God has not given us a spirit of fear...\" with supporting caption copy.",
+      "sourceTranscriptExcerpt": "God has not given us a spirit of fear...",
+      "relatedScripture": "2 Timothy 1:7",
+      "relatedMinistryMomentTitle": "Faith declaration over anxiety",
+      "relatedClipTitle": "Faith declaration clip",
+      "suggestedPlatform": "Instagram, Facebook",
+      "detectedLanguage": "English + Zulu",
+      "translatedFromLanguage": "Zulu",
+      "originalPhrase": "Nkulunkulu unathi",
+      "englishMeaning": "God is with us",
+      "translationConfidence": 0.78,
+      "translationUncertaintyNote": null,
+      "confidenceScore": 0.92,
+      "aiReason": "Strong direct quote and scripture anchor that aligns with the sermon theme."
+    }
+  ]
+}`;

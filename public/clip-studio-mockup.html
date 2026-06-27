@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clip Studio — Redesign Mockup</title>
+  <style>
+    :root {
+      --bg: #07080c;
+      --panel: #11131a;
+      --panel-2: #0d0f15;
+      --line: #272a35;
+      --text: #f2f4f8;
+      --muted: #9ca3b3;
+      --brand: #7e8dff;
+      --ok: #3ddc97;
+      --warn: #f8c75f;
+      --danger: #ef6f7f;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Segoe UI", "Inter", system-ui, -apple-system, sans-serif;
+      background:
+        radial-gradient(1200px 650px at 85% -40%, rgba(126, 141, 255, 0.12), transparent 45%),
+        radial-gradient(900px 500px at -10% -30%, rgba(61, 220, 151, 0.08), transparent 45%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.35;
+    }
+
+    .shell {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 22px 24px 40px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: start;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(17,19,26,.98), rgba(14,16,22,.98));
+      border-radius: 14px;
+      padding: 16px 18px;
+      position: sticky;
+      top: 12px;
+      z-index: 20;
+      backdrop-filter: blur(10px);
+    }
+
+    .kicker {
+      text-transform: uppercase;
+      letter-spacing: .13em;
+      font-size: 12px;
+      color: #78ebe3;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .title {
+      font-size: clamp(30px, 5vw, 48px);
+      letter-spacing: -0.02em;
+      line-height: 1.02;
+      margin-bottom: 6px;
+    }
+
+    .sub {
+      color: var(--muted);
+      font-size: 18px;
+      max-width: 64ch;
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      align-items: center;
+    }
+
+    .btn {
+      border: 1px solid var(--line);
+      background: #1a1e2a;
+      color: #d5daea;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .btn.primary {
+      background: linear-gradient(180deg, #8a98ff, #6e7df5);
+      border-color: #8f9fff;
+      color: #070b19;
+      font-weight: 700;
+    }
+
+    .btn.ghost { background: transparent; }
+    .btn.save { background: #1f2937; color: #eaf0ff; }
+
+    .status-strip {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      background: #1a1d27;
+      color: #c9cfdd;
+    }
+    .pill.warn { border-color: #6d5624; background: rgba(248,199,95,.18); color: #ffd98c; }
+    .pill.ok { border-color: #26684e; background: rgba(61,220,151,.15); color: #89f0c2; }
+    .pill.bad { border-color: #7a2f3f; background: rgba(239,111,127,.16); color: #ffb4bf; }
+
+    .studio {
+      display: grid;
+      grid-template-columns: minmax(360px, 47%) minmax(420px, 53%);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    .card-head {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .card-title { font-size: 22px; letter-spacing: -0.01em; }
+
+    .preview {
+      position: sticky;
+      top: 118px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .video {
+      border: 1px solid #4d5f95;
+      border-radius: 14px;
+      min-height: 520px;
+      background:
+        linear-gradient(180deg, rgba(7,9,14,.2), rgba(7,9,14,.78)),
+        linear-gradient(135deg, #283142 0%, #35465e 42%, #2c3c55 100%);
+      display: grid;
+      align-items: end;
+      padding: 16px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .video::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(0,0,0,0) 45%, rgba(0,0,0,.56));
+      pointer-events: none;
+    }
+
+    .caption-chip {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 2;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 5px 10px;
+      background: rgba(18,22,31,.86);
+      border: 1px solid #425072;
+      color: #d2defe;
+    }
+
+    .playline {
+      position: relative;
+      z-index: 2;
+      background: rgba(0,0,0,.38);
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      display: flex;
+      justify-content: space-between;
+      color: #f5f7fb;
+    }
+
+    .rail {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0,1fr));
+      gap: 8px;
+    }
+
+    .rail .btn { width: 100%; }
+
+    .right {
+      display: grid;
+      gap: 12px;
+    }
+
+    .tabs {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      width: fit-content;
+      margin: 12px 16px 0;
+    }
+
+    .tab {
+      border: 0;
+      background: #1a1e2a;
+      color: #b7c0d4;
+      padding: 9px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .tab.active { background: #2a3350; color: #ecf1ff; }
+
+    .section {
+      padding: 14px 16px 16px;
+      border-top: 1px solid var(--line);
+      display: grid;
+      gap: 10px;
+    }
+
+    .section:first-of-type { border-top: 0; }
+
+    .section h3 {
+      font-size: 16px;
+      letter-spacing: -0.01em;
+    }
+
+    .muted { color: var(--muted); font-size: 13px; }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0,1fr));
+      gap: 10px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      color: #c9d0df;
+    }
+
+    .field input,
+    .field textarea,
+    .field select {
+      width: 100%;
+      background: var(--panel-2);
+      border: 1px solid #2a2f3d;
+      color: #f2f4f8;
+      border-radius: 10px;
+      padding: 10px 11px;
+      font-size: 15px;
+      font-family: inherit;
+    }
+
+    .field textarea {
+      min-height: 88px;
+      resize: vertical;
+    }
+
+    .timeline {
+      border: 1px solid #2f3547;
+      border-radius: 11px;
+      background: #0e1118;
+      padding: 10px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .range {
+      height: 7px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #364463 0%, #8296de 38%, #73d3b5 75%, #2b344f 100%);
+      position: relative;
+    }
+
+    .range::before,
+    .range::after {
+      content: "";
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #dce6ff;
+      border: 2px solid #2a3a66;
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+
+    .range::before { left: 22%; }
+    .range::after { left: 63%; }
+
+    .insight {
+      border: 1px solid #5a4a22;
+      background: rgba(248,199,95,.09);
+      color: #f8d998;
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .footer {
+      border-top: 1px solid var(--line);
+      padding: 14px 16px;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      background: #10131d;
+      position: sticky;
+      bottom: 0;
+      z-index: 5;
+    }
+
+    @media (max-width: 1180px) {
+      .studio { grid-template-columns: 1fr; }
+      .preview { position: relative; top: 0; }
+    }
+
+    @media (max-width: 760px) {
+      .shell { padding: 14px; }
+      .topbar { position: relative; top: 0; }
+      .grid-2 { grid-template-columns: 1fr; }
+      .rail { grid-template-columns: 1fr 1fr; }
+      .footer { position: static; flex-wrap: wrap; }
+      .footer .btn { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div>
+        <p class="kicker">Clip Studio — Redesign</p>
+        <h1 class="title">The Miracle of Grace</h1>
+        <p class="sub">Focused editing workspace with one sticky preview and one structured control rail.</p>
+        <div class="status-strip">
+          <span class="pill bad">Rejected</span>
+          <span class="pill">1:28 clip</span>
+          <span class="pill warn">Boundary needs trim</span>
+          <span class="pill ok">Video ready</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="btn ghost">Back to Sermon</button>
+        <button class="btn">Back to Clips</button>
+        <button class="btn primary">Approve Clip</button>
+      </div>
+    </header>
+
+    <div class="studio">
+      <aside class="preview">
+        <article class="card">
+          <div class="card-head">
+            <h2 class="card-title">Live Preview</h2>
+            <span class="pill ok">16:9 source</span>
+          </div>
+          <div class="section">
+            <div class="video">
+              <span class="caption-chip">Caption style: Bold contrast</span>
+              <div class="playline"><span>00:55 / 01:28</span><span>▶︎ 1x  ⛶</span></div>
+            </div>
+            <div class="rail">
+              <button class="btn">Play</button>
+              <button class="btn">Pause</button>
+              <button class="btn">Restart</button>
+            </div>
+          </div>
+        </article>
+      </aside>
+
+      <section class="right">
+        <article class="card">
+          <div class="tabs">
+            <button class="tab active">Trim</button>
+            <button class="tab">Caption</button>
+            <button class="tab">Branding</button>
+            <button class="tab">Export</button>
+          </div>
+
+          <div class="section">
+            <h3>Trim Boundaries</h3>
+            <p class="muted">Drag handles or enter exact timestamps. Preview updates in place.</p>
+            <div class="timeline">
+              <div class="range"></div>
+              <div class="grid-2">
+                <label class="field">Clip starts at<input value="55.28" /></label>
+                <label class="field">Clip ends at<input value="56.56" /></label>
+              </div>
+            </div>
+            <p class="insight">! This clip may be too long for short-form. Suggested target: 45-60 seconds.</p>
+          </div>
+
+          <div class="section">
+            <h3>Caption Copy</h3>
+            <div class="field">Main caption<textarea>Open your mouth and receive the blessing of the Holy Ghost.</textarea></div>
+            <div class="grid-2">
+              <label class="field">Hook<input value="You are one prayer away from a breakthrough." /></label>
+              <label class="field">Hashtags<input value="#Faith #Grace #SermonClip #SundayWord" /></label>
+            </div>
+          </div>
+
+          <div class="section">
+            <h3>Publishing Snapshot</h3>
+            <div class="grid-2">
+              <label class="field">Category<select><option>Encouragement</option></select></label>
+              <label class="field">Audience<select><option>General audience</option></select></label>
+            </div>
+            <p class="muted">This panel replaces the old noisy technical blocks with the essentials editors need to decide and publish.</p>
+          </div>
+
+          <footer class="footer">
+            <button class="btn">Reset changes</button>
+            <button class="btn">Save draft</button>
+            <button class="btn save">Save + refresh preview</button>
+            <button class="btn primary">Save and approve</button>
+          </footer>
+        </article>
+      </section>
+    </div>
+  </div>
+</body>
+</html>

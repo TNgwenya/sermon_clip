@@ -1,0 +1,228 @@
+import type {
+  PostingDraftStatus as PrismaPostingDraftStatus,
+  PostingPlatform as PrismaPostingPlatform,
+} from "@prisma/client";
+
+import { prisma } from "@/lib/prisma";
+
+export type PostingPlatform = "TikTok" | "Instagram" | "YouTube Shorts" | "Facebook";
+
+export type PostingDraftStatus = "DRAFT" | "READY_FOR_MEDIA_TEAM";
+export type PostingAutomationMode = "MANUAL" | "AUTOMATIC";
+
+export type PostingDraft = {
+  id: string;
+  clipIds: string[];
+  platforms: PostingPlatform[];
+  postingSlot: string;
+  note: string;
+  status: PostingDraftStatus;
+  createdAt: string;
+};
+
+export const POSTING_PLATFORMS: PostingPlatform[] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
+
+const PLATFORM_TO_DB: Record<PostingPlatform, PrismaPostingPlatform> = {
+  TikTok: "TIKTOK",
+  Instagram: "INSTAGRAM",
+  "YouTube Shorts": "YOUTUBE_SHORTS",
+  Facebook: "FACEBOOK",
+};
+
+const PLATFORM_FROM_DB: Record<PrismaPostingPlatform, PostingPlatform> = {
+  TIKTOK: "TikTok",
+  INSTAGRAM: "Instagram",
+  YOUTUBE_SHORTS: "YouTube Shorts",
+  FACEBOOK: "Facebook",
+};
+
+const AUTOMATION_MODES: PostingAutomationMode[] = ["MANUAL", "AUTOMATIC"];
+
+function normalizeJsonStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+function toPostingDraft(input: {
+  id: string;
+  clipIdsJson: unknown;
+  platformsJson: unknown;
+  postingSlot: string;
+  note: string | null;
+  status: PrismaPostingDraftStatus;
+  createdAt: Date;
+}): PostingDraft {
+  return {
+    id: input.id,
+    clipIds: normalizeJsonStringArray(input.clipIdsJson),
+    platforms: normalizeJsonStringArray(input.platformsJson).filter((item): item is PostingPlatform => (
+      POSTING_PLATFORMS.includes(item as PostingPlatform)
+    )),
+    postingSlot: input.postingSlot,
+    note: input.note ?? "",
+    status: input.status,
+    createdAt: input.createdAt.toISOString(),
+  };
+}
+
+export function normalizePostingPlatforms(value: unknown): PostingPlatform[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(new Set(value.filter((item): item is PostingPlatform => (
+    typeof item === "string" && POSTING_PLATFORMS.includes(item as PostingPlatform)
+  ))));
+}
+
+export function normalizeClipIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(new Set(value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)));
+}
+
+export function normalizePostingAutomationMode(value: unknown): PostingAutomationMode {
+  return typeof value === "string" && AUTOMATION_MODES.includes(value as PostingAutomationMode)
+    ? value as PostingAutomationMode
+    : "MANUAL";
+}
+
+export function normalizeScheduledFor(value: unknown): Date | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function normalizeTimezone(value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return "Africa/Johannesburg";
+  }
+
+  return value.trim().slice(0, 80);
+}
+
+function buildPostingSlot(scheduledFor: Date | null, fallback: string): string {
+  if (!scheduledFor) {
+    return fallback.trim() || "This week";
+  }
+
+  return new Intl.DateTimeFormat("en", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(scheduledFor);
+}
+
+function buildScheduledPostIdempotencyKey(input: {
+  draftId: string;
+  platform: PostingPlatform;
+  clipIds: string[];
+  scheduledFor: Date | null;
+  automationMode: PostingAutomationMode;
+}): string {
+  return [
+    input.draftId,
+    input.platform,
+    [...input.clipIds].sort().join("-"),
+    input.scheduledFor?.toISOString() ?? "manual",
+    input.automationMode,
+  ].join(":");
+}
+
+export async function listPostingDrafts(): Promise<PostingDraft[]> {
+  const drafts = await prisma.postingDraft.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+
+  return drafts.map(toPostingDraft);
+}
+
+export async function createPostingDraft(input: {
+  clipIds: string[];
+  platforms: PostingPlatform[];
+  postingSlot: string;
+  automationMode?: PostingAutomationMode;
+  scheduledFor?: Date | null;
+  timezone?: string;
+  caption?: string;
+  title?: string;
+  note?: string;
+}): Promise<PostingDraft> {
+  const automationMode = input.automationMode ?? "MANUAL";
+  const scheduledFor = input.scheduledFor ?? null;
+  const postingSlot = buildPostingSlot(scheduledFor, input.postingSlot);
+  const timezone = input.timezone?.trim() || "Africa/Johannesburg";
+  const caption = input.caption?.trim() ?? "";
+  const title = input.title?.trim() ?? "";
+  const note = input.note?.trim() ?? "";
+
+  const draft = await prisma.$transaction(async (tx) => {
+    const created = await tx.postingDraft.create({
+      data: {
+        clipIdsJson: input.clipIds,
+        platformsJson: input.platforms,
+        postingSlot,
+        note: note || null,
+        status: "READY_FOR_MEDIA_TEAM",
+      },
+    });
+
+    const accounts = await tx.socialAccount.findMany({
+      where: {
+        platform: { in: input.platforms.map((platform) => PLATFORM_TO_DB[platform]) },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    await tx.scheduledPost.createMany({
+      data: input.platforms.map((platform) => {
+        const dbPlatform = PLATFORM_TO_DB[platform];
+        const account = accounts.find((item) => item.platform === dbPlatform);
+        const status = automationMode === "AUTOMATIC" ? "PLANNED" : "READY_FOR_MEDIA_TEAM";
+
+        return {
+          postingDraftId: created.id,
+          socialAccountId: account?.id ?? null,
+          clipIdsJson: input.clipIds,
+          platform: dbPlatform,
+          postingSlot,
+          title: title || null,
+          caption: caption || null,
+          note: note || null,
+          status,
+          automationMode,
+          scheduledFor,
+          timezone,
+          idempotencyKey: buildScheduledPostIdempotencyKey({
+            draftId: created.id,
+            platform,
+            clipIds: input.clipIds,
+            scheduledFor,
+            automationMode,
+          }),
+        };
+      }),
+    });
+
+    return created;
+  });
+
+  return toPostingDraft(draft);
+}
+
+export function toPrismaPostingPlatform(platform: PostingPlatform): PrismaPostingPlatform {
+  return PLATFORM_TO_DB[platform];
+}
+
+export function fromPrismaPostingPlatform(platform: PrismaPostingPlatform): PostingPlatform {
+  return PLATFORM_FROM_DB[platform];
+}

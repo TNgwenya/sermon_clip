@@ -1,0 +1,66 @@
+-- RedefineTables
+PRAGMA defer_foreign_keys=ON;
+PRAGMA foreign_keys=OFF;
+CREATE TABLE "new_ClipCandidate" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "sermonId" TEXT NOT NULL,
+    "startTimeSeconds" REAL NOT NULL,
+    "endTimeSeconds" REAL NOT NULL,
+    "durationSeconds" REAL NOT NULL,
+    "originalStartTimeSeconds" REAL,
+    "originalEndTimeSeconds" REAL,
+    "adjustedStartTimeSeconds" REAL,
+    "adjustedEndTimeSeconds" REAL,
+    "boundaryAdjustmentReason" TEXT,
+    "boundaryQuality" TEXT NOT NULL DEFAULT 'GOOD',
+    "renderStatus" TEXT NOT NULL DEFAULT 'NOT_RENDERED',
+    "renderedAt" DATETIME,
+    "renderError" TEXT,
+    "renderedFilePath" TEXT,
+    "renderedDurationSeconds" REAL,
+    "renderedSizeBytes" INTEGER,
+    "exportFormat" TEXT,
+    "exportStatus" TEXT NOT NULL DEFAULT 'NOT_EXPORTED',
+    "exportLayoutStrategy" TEXT,
+    "exportedAt" DATETIME,
+    "exportError" TEXT,
+    "exportedFilePath" TEXT,
+    "transcriptText" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "hook" TEXT NOT NULL,
+    "caption" TEXT NOT NULL,
+    "hashtags" JSONB NOT NULL,
+    "score" REAL NOT NULL,
+    "reasonSelected" TEXT NOT NULL,
+    "clipType" TEXT NOT NULL,
+    "riskLevel" TEXT NOT NULL,
+    "riskReasons" JSONB NOT NULL,
+    "contextWarning" BOOLEAN NOT NULL DEFAULT false,
+    "status" TEXT NOT NULL DEFAULT 'SUGGESTED',
+    "exportPath" TEXT,
+    "srtPath" TEXT,
+    "subtitlesGenerated" BOOLEAN NOT NULL DEFAULT false,
+    "subtitlesBurned" BOOLEAN NOT NULL DEFAULT false,
+    "captionStatus" TEXT NOT NULL DEFAULT 'NOT_GENERATED',
+    "subtitleFilePath" TEXT,
+    "captionGeneratedAt" DATETIME,
+    "captionGenerationError" TEXT,
+    "captionData" JSONB,
+    "captionBurnStatus" TEXT NOT NULL DEFAULT 'NOT_BURNED',
+    "captionedVideoPath" TEXT,
+    "captionBurnedAt" DATETIME,
+    "captionBurnError" TEXT,
+    "overlayStatus" TEXT NOT NULL DEFAULT 'NOT_RENDERED',
+    "overlayVideoPath" TEXT,
+    "overlayRenderedAt" DATETIME,
+    "overlayRenderError" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "ClipCandidate_sermonId_fkey" FOREIGN KEY ("sermonId") REFERENCES "Sermon" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+INSERT INTO "new_ClipCandidate" ("adjustedEndTimeSeconds", "adjustedStartTimeSeconds", "boundaryAdjustmentReason", "boundaryQuality", "caption", "captionBurnError", "captionBurnStatus", "captionBurnedAt", "captionData", "captionGeneratedAt", "captionGenerationError", "captionStatus", "captionedVideoPath", "clipType", "contextWarning", "createdAt", "durationSeconds", "endTimeSeconds", "exportError", "exportFormat", "exportLayoutStrategy", "exportPath", "exportStatus", "exportedAt", "exportedFilePath", "hashtags", "hook", "id", "originalEndTimeSeconds", "originalStartTimeSeconds", "reasonSelected", "renderError", "renderStatus", "renderedAt", "renderedDurationSeconds", "renderedFilePath", "renderedSizeBytes", "riskLevel", "riskReasons", "score", "sermonId", "srtPath", "startTimeSeconds", "status", "subtitleFilePath", "subtitlesBurned", "subtitlesGenerated", "title", "transcriptText", "updatedAt") SELECT "adjustedEndTimeSeconds", "adjustedStartTimeSeconds", "boundaryAdjustmentReason", "boundaryQuality", "caption", "captionBurnError", "captionBurnStatus", "captionBurnedAt", "captionData", "captionGeneratedAt", "captionGenerationError", "captionStatus", "captionedVideoPath", "clipType", "contextWarning", "createdAt", "durationSeconds", "endTimeSeconds", "exportError", "exportFormat", "exportLayoutStrategy", "exportPath", "exportStatus", "exportedAt", "exportedFilePath", "hashtags", "hook", "id", "originalEndTimeSeconds", "originalStartTimeSeconds", "reasonSelected", "renderError", "renderStatus", "renderedAt", "renderedDurationSeconds", "renderedFilePath", "renderedSizeBytes", "riskLevel", "riskReasons", "score", "sermonId", "srtPath", "startTimeSeconds", "status", "subtitleFilePath", "subtitlesBurned", "subtitlesGenerated", "title", "transcriptText", "updatedAt" FROM "ClipCandidate";
+DROP TABLE "ClipCandidate";
+ALTER TABLE "new_ClipCandidate" RENAME TO "ClipCandidate";
+CREATE INDEX "ClipCandidate_sermonId_idx" ON "ClipCandidate"("sermonId");
+PRAGMA foreign_keys=ON;
+PRAGMA defer_foreign_keys=OFF;

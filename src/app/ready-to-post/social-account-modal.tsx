@@ -1,0 +1,116 @@
+"use client";
+
+import { useState } from "react";
+
+import type { PostingPlatform } from "@/lib/postingDrafts";
+import type { SocialAccount } from "@/lib/socialAccounts";
+
+type SocialAccountModalProps = {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (account: SocialAccount) => void;
+};
+
+const SOCIAL_ACCOUNT_PLATFORMS: PostingPlatform[] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
+
+export function SocialAccountModal({ open, onClose, onCreated }: SocialAccountModalProps) {
+  const [platform, setPlatform] = useState<PostingPlatform>("Instagram");
+  const [label, setLabel] = useState("Church Instagram");
+  const [handle, setHandle] = useState("");
+  const [message, setMessage] = useState("");
+  const [pending, setPending] = useState(false);
+
+  if (!open) {
+    return null;
+  }
+
+  async function saveAccount() {
+    setPending(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/social-accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform,
+          label,
+          handle,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        setMessage(result.error ?? "Could not save this account.");
+        return;
+      }
+      onCreated(result.account);
+      setMessage("Social account saved for posting drafts.");
+    } catch {
+      setMessage("Could not save this account.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="feature-modal-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className="feature-modal social-account-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="social-account-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button type="button" className="feature-modal-close" onClick={onClose} aria-label="Close">
+          Close
+        </button>
+        <div className="stack-sm">
+          <p className="kicker">Social accounts</p>
+          <h2 id="social-account-title">Add a church channel</h2>
+          <p className="muted">
+            Save the channels your media team posts to. Direct publishing can connect later; for now these accounts guide drafts and captions.
+          </p>
+        </div>
+
+        <div className="schedule-fieldset">
+          <label htmlFor="socialPlatform">Platform</label>
+          <select id="socialPlatform" value={platform} onChange={(event) => setPlatform(event.target.value as PostingPlatform)}>
+            {SOCIAL_ACCOUNT_PLATFORMS.map((item) => (
+              <option key={item} value={item}>{item}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="schedule-fieldset">
+          <label htmlFor="socialLabel">Channel or page name</label>
+          <input
+            id="socialLabel"
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            placeholder="Example: Renewed Life Church Page"
+          />
+        </div>
+
+        <div className="schedule-fieldset">
+          <label htmlFor="socialHandle">Handle or page note</label>
+          <input
+            id="socialHandle"
+            value={handle}
+            onChange={(event) => setHandle(event.target.value)}
+            placeholder="Example: @renewedlife"
+          />
+        </div>
+
+        {message ? <p className={message.includes("saved") ? "success-banner" : "error-banner"}>{message}</p> : null}
+
+        <div className="feature-modal-footer">
+          <button type="button" className="button tertiary" onClick={onClose}>
+            Close
+          </button>
+          <button type="button" className="button primary" onClick={saveAccount} disabled={pending || label.trim().length === 0}>
+            {pending ? "Saving account..." : "Save account"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
