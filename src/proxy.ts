@@ -40,6 +40,10 @@ export function proxy(request: NextRequest): NextResponse {
   if (
     pathname.startsWith("/_next/")
     || pathname.startsWith("/api/automation/")
+    || pathname === "/privacy"
+    || pathname === "/privacy/"
+    || pathname === "/terms"
+    || pathname === "/terms/"
     || pathname === "/favicon.ico"
     || PUBLIC_FILE_PATTERN.test(pathname)
   ) {
