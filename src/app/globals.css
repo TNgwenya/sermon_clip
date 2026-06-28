@@ -7349,3 +7349,474 @@ textarea::placeholder {
       font-size: 0.62rem;
     }
   }
+
+.growth-page-shell {
+  width: min(100%, 1420px);
+  margin: 0 auto;
+  padding: 1.6rem 1.25rem 4rem;
+}
+
+.growth-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 1.1rem 0 0.65rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.growth-hero h1 {
+  max-width: 54rem;
+  font-size: clamp(2.35rem, 4.6vw, 4.2rem);
+  line-height: 1;
+}
+
+.growth-hero .muted {
+  max-width: 58rem;
+}
+
+.growth-signal-strip {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.growth-signal-strip .stat-card {
+  min-height: 8rem;
+  padding: 0.85rem;
+}
+
+.growth-signal-strip .stat-card-value {
+  font-size: clamp(1.45rem, 2.3vw, 2rem);
+  line-height: 1.05;
+}
+
+.growth-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(21rem, 0.65fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.growth-side-stack {
+  align-content: start;
+}
+
+.growth-recommendation-list,
+.growth-platform-list,
+.growth-trend-list,
+.growth-asset-list,
+.growth-campaign-timeline {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.growth-recommendation-card,
+.growth-platform-row,
+.growth-trend-card,
+.growth-asset-row,
+.growth-campaign-phase,
+.growth-calendar-card,
+.growth-copy-box,
+.growth-theme-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #151519;
+  padding: 0.85rem;
+}
+
+.growth-recommendation-card {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.growth-recommendation-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 1rem;
+}
+
+.growth-draft-form {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: end;
+}
+
+.growth-platform-chip-row {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.growth-two-column,
+.growth-explanation-grid,
+.growth-lower-grid,
+.growth-learning-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.growth-learning-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.growth-check-list {
+  display: grid;
+  gap: 0.35rem;
+  padding-left: 1.1rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.growth-platform-row {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.growth-platform-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.growth-platform-metrics span {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0.45rem;
+  color: #f8fafc;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.growth-asset-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.growth-asset-row:hover,
+.growth-theme-card:hover {
+  border-color: rgba(110, 231, 216, 0.42);
+  background: #19191f;
+}
+
+.growth-campaign-phase {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.growth-event-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) minmax(9rem, 0.5fr) minmax(0, 1.1fr) auto;
+  gap: 0.65rem;
+  align-items: end;
+  padding-bottom: 0.85rem;
+}
+
+.growth-event-form label {
+  display: grid;
+  gap: 0.32rem;
+}
+
+.growth-save-campaign-form {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0 0 0.85rem;
+}
+
+.growth-saved-campaign-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.growth-calendar-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.growth-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  padding-top: 0.85rem;
+}
+
+.growth-calendar-card {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 0.75rem;
+  min-height: 18rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.growth-calendar-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: #6ee7d8;
+  opacity: 0.82;
+}
+
+.growth-calendar-date {
+  display: grid;
+  gap: 0.25rem;
+  padding-left: 0.35rem;
+}
+
+.growth-calendar-date strong {
+  font-size: 1rem;
+}
+
+.growth-calendar-date span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.growth-calendar-body {
+  display: grid;
+  align-content: start;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.growth-calendar-body h3,
+.growth-calendar-body p {
+  overflow-wrap: anywhere;
+}
+
+.growth-saved-recommendation-list,
+.growth-prediction-grid,
+.growth-connector-list,
+.growth-baseline-list,
+.growth-outcome-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.growth-prediction-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.growth-saved-campaign-card {
+  display: grid;
+  align-content: start;
+  gap: 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #151519;
+  padding: 0.85rem;
+  min-width: 0;
+}
+
+.growth-saved-recommendation-row,
+.growth-prediction-card,
+.growth-connector-row,
+.growth-baseline-row,
+.growth-outcome-row {
+  display: grid;
+  gap: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #151519;
+  padding: 0.85rem;
+}
+
+.growth-saved-recommendation-row,
+.growth-connector-row,
+.growth-outcome-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.growth-connector-row {
+  min-height: 7rem;
+}
+
+.growth-connector-row code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.growth-connector-row .topbar-actions {
+  flex-wrap: nowrap;
+}
+
+.growth-connector-row .button {
+  min-width: 5rem;
+}
+
+.growth-baseline-row {
+  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(5rem, 0.32fr));
+  align-items: center;
+}
+
+.growth-baseline-row span,
+.growth-outcome-row span {
+  font-weight: 800;
+  text-align: right;
+}
+
+.growth-actuals-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 0.55rem;
+  align-items: end;
+}
+
+.growth-actuals-form label,
+.growth-outcome-form label {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.growth-outcome-form {
+  display: grid;
+  grid-template-columns: minmax(9rem, 0.75fr) minmax(0, 1fr) minmax(0, 1fr) minmax(5rem, 0.35fr) minmax(0, 1.2fr) auto;
+  gap: 0.6rem;
+  align-items: end;
+  padding-bottom: 0.85rem;
+}
+
+.growth-mini-phase-list {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.growth-mini-phase-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 0.5fr) minmax(0, 1fr);
+  gap: 0.45rem;
+  align-items: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 0.35rem;
+  font-size: 0.82rem;
+}
+
+.growth-mini-phase-row span {
+  color: var(--muted);
+}
+
+.growth-sermon-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.growth-theme-card {
+  display: grid;
+  align-content: start;
+  gap: 0.65rem;
+  min-height: 12rem;
+}
+
+@media (max-width: 1180px) {
+  .growth-signal-strip,
+  .growth-sermon-theme-grid,
+  .growth-calendar-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .growth-main-grid,
+  .growth-lower-grid,
+  .growth-saved-campaign-grid,
+  .growth-prediction-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .growth-actuals-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .growth-page-shell {
+    padding: 1rem 0.8rem 3rem;
+  }
+
+  .growth-hero {
+    align-items: stretch;
+  }
+
+  .growth-hero h1 {
+    font-size: 2.2rem;
+  }
+
+  .growth-signal-strip,
+  .growth-two-column,
+  .growth-explanation-grid,
+  .growth-learning-grid,
+  .growth-sermon-theme-grid,
+  .growth-calendar-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .growth-recommendation-heading,
+  .growth-asset-row,
+  .growth-saved-recommendation-row,
+  .growth-connector-row,
+  .growth-outcome-row,
+  .growth-baseline-row,
+  .growth-calendar-toolbar {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .growth-draft-form,
+  .growth-event-form,
+  .growth-save-campaign-form,
+  .growth-actuals-form,
+  .growth-outcome-form {
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+    display: grid;
+  }
+
+  .growth-baseline-row span,
+  .growth-outcome-row span {
+    text-align: left;
+  }
+
+  .growth-draft-form .button,
+  .growth-event-form .button,
+  .growth-save-campaign-form .button,
+  .growth-actuals-form .button,
+  .growth-outcome-form .button,
+  .growth-recommendation-heading .button,
+  .growth-asset-row .button,
+  .growth-saved-recommendation-row .button,
+  .growth-connector-row .button {
+    width: 100%;
+  }
+
+  .growth-connector-row .topbar-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
+  .growth-calendar-card {
+    min-height: auto;
+  }
+
+  .growth-mini-phase-row {
+    grid-template-columns: 1fr;
+  }
+}

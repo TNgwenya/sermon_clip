@@ -201,6 +201,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
         <div className="topbar-actions">
           <Link href="/sermons/new" className="button primary">Create clips</Link>
           <Link href="/ready-to-post" className="button secondary">Ready to post</Link>
+          <Link href="/growth" className="button tertiary">Growth cockpit</Link>
         </div>
       </header>
 

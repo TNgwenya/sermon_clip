@@ -350,6 +350,21 @@ enum SocialAccountStatus {
   NEEDS_REVIEW
 }
 
+enum SocialConnectorProvider {
+  YOUTUBE
+  META_FACEBOOK
+  META_INSTAGRAM
+  TIKTOK
+  THREADS
+}
+
+enum SocialConnectorStatus {
+  CONNECTED
+  NEEDS_REAUTH
+  ERROR
+  DISABLED
+}
+
 enum PostingDraftStatus {
   DRAFT
   READY_FOR_MEDIA_TEAM
@@ -379,6 +394,58 @@ enum ScheduledPostWorkerStatus {
   FAILED
 }
 
+enum GrowthMetricSource {
+  API
+  MANUAL
+  DERIVED
+}
+
+enum GrowthRecommendationStatus {
+  DRAFT
+  NEEDS_REVIEW
+  APPROVED
+  REJECTED
+  SCHEDULED
+  LEARNED
+}
+
+enum GrowthCampaignStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+enum GrowthCampaignPhaseStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  SKIPPED
+}
+
+enum GrowthTrendDecision {
+  USE
+  ADAPT_CAREFULLY
+  AVOID
+}
+
+enum GrowthGuardrailResult {
+  PASS
+  NEEDS_REVIEW
+  FAIL
+}
+
+enum MinistryOutcomeType {
+  EVENT_SIGNUP
+  PRAYER_REQUEST
+  DISCIPLESHIP_STEP
+  WEBSITE_CLICK
+  MESSAGE
+  TESTIMONY
+  SERVICE_ATTENDANCE
+  OTHER
+}
+
 enum SermonSubjectKind {
   TOPIC
   SCRIPTURE
@@ -402,36 +469,36 @@ enum VideoSubjectTrackingSource {
 }
 
 model Sermon {
-  id                 String          @id @default(cuid())
-  youtubeUrl         String
-  title              String
-  speakerName        String
-  churchName         String
-  language           String
+  id                    String                   @id @default(cuid())
+  youtubeUrl            String
+  title                 String
+  speakerName           String
+  churchName            String
+  language              String
   sourceDurationSeconds Float?
-  sermonStartSeconds Float?
-  sermonEndSeconds   Float?
-  analyzeFullRecording Boolean @default(false)
-  sermonDate         DateTime?
-  status             SermonStatus    @default(CREATED)
-  rightsConfirmed    Boolean
-  sourceVideoPath    String?
-  audioPath          String?
-  transcriptJsonPath String?
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
-  transcript         Transcript?
-  transcriptSegments TranscriptSegment[]
-  clipCandidates     ClipCandidate[]
-  ministryMoments    MinistryMoment[]
-  processingJobs     ProcessingJob[]
-  intelligence       SermonIntelligence?
-  scriptureRefs      SermonScriptureRef[]
-  structureSections  SermonStructureSection[]
-  topicTags          SermonTopicTag[]
-  subjectTracks      SermonSubjectTrack[]
-  speakerTracks      SermonSpeakerTrack[]
-  contentOpportunities ContentOpportunity[]
+  sermonStartSeconds    Float?
+  sermonEndSeconds      Float?
+  analyzeFullRecording  Boolean                  @default(false)
+  sermonDate            DateTime?
+  status                SermonStatus             @default(CREATED)
+  rightsConfirmed       Boolean
+  sourceVideoPath       String?
+  audioPath             String?
+  transcriptJsonPath    String?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+  transcript            Transcript?
+  transcriptSegments    TranscriptSegment[]
+  clipCandidates        ClipCandidate[]
+  ministryMoments       MinistryMoment[]
+  processingJobs        ProcessingJob[]
+  intelligence          SermonIntelligence?
+  scriptureRefs         SermonScriptureRef[]
+  structureSections     SermonStructureSection[]
+  topicTags             SermonTopicTag[]
+  subjectTracks         SermonSubjectTrack[]
+  speakerTracks         SermonSpeakerTrack[]
+  contentOpportunities  ContentOpportunity[]
 }
 
 model BrandingSettings {
@@ -448,20 +515,20 @@ model BrandingSettings {
 }
 
 model Transcript {
-  id          String   @id @default(cuid())
-  sermonId    String   @unique
+  id          String              @id @default(cuid())
+  sermonId    String              @unique
   fullText    String
   provider    String
   language    String
   rawJsonPath String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  sermon      Sermon   @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  sermon      Sermon              @relation(fields: [sermonId], references: [id], onDelete: Cascade)
   segments    TranscriptSegment[]
 }
 
 model TranscriptSegment {
-  id               String      @id @default(cuid())
+  id               String     @id @default(cuid())
   sermonId         String
   transcriptId     String
   startTimeSeconds Float
@@ -469,180 +536,180 @@ model TranscriptSegment {
   text             String
   speakerLabel     String?
   confidence       Float?
-  createdAt        DateTime    @default(now())
-  sermon           Sermon      @relation(fields: [sermonId], references: [id], onDelete: Cascade)
-  transcript       Transcript  @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+  createdAt        DateTime   @default(now())
+  sermon           Sermon     @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  transcript       Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
 
   @@index([sermonId])
   @@index([transcriptId])
 }
 
 model ClipCandidate {
-  id                 String     @id @default(cuid())
-  sermonId           String
-  ministryMomentId   String?
-  smartClipCategory  String?
-  recommendationReason String?
-  intendedAudience   String?
-  ministryValue      String?
-  socialValue        String?
-  suggestedHook      String?
-  suggestedCaption   String?
-  recommendationConfidence Float?
-  isAiGenerated      Boolean    @default(true)
-  isManuallyEdited   Boolean    @default(false)
-  startTimeSeconds   Float
-  endTimeSeconds     Float
-  durationSeconds    Float
-  originalStartTimeSeconds Float?
-  originalEndTimeSeconds   Float?
-  adjustedStartTimeSeconds Float?
-  adjustedEndTimeSeconds   Float?
-  boundaryAdjustmentReason String?
-  boundaryQuality          BoundaryQuality @default(GOOD)
-  completenessScore        Float?
-  completenessAction       String?
-  completenessReason       String?
-  completenessWarnings     Json?
-  completenessReviewedAt   DateTime?
-  completenessReviewSource ClipCompletenessReviewSource?
+  id                               String                        @id @default(cuid())
+  sermonId                         String
+  ministryMomentId                 String?
+  smartClipCategory                String?
+  recommendationReason             String?
+  intendedAudience                 String?
+  ministryValue                    String?
+  socialValue                      String?
+  suggestedHook                    String?
+  suggestedCaption                 String?
+  recommendationConfidence         Float?
+  isAiGenerated                    Boolean                       @default(true)
+  isManuallyEdited                 Boolean                       @default(false)
+  startTimeSeconds                 Float
+  endTimeSeconds                   Float
+  durationSeconds                  Float
+  originalStartTimeSeconds         Float?
+  originalEndTimeSeconds           Float?
+  adjustedStartTimeSeconds         Float?
+  adjustedEndTimeSeconds           Float?
+  boundaryAdjustmentReason         String?
+  boundaryQuality                  BoundaryQuality               @default(GOOD)
+  completenessScore                Float?
+  completenessAction               String?
+  completenessReason               String?
+  completenessWarnings             Json?
+  completenessReviewedAt           DateTime?
+  completenessReviewSource         ClipCompletenessReviewSource?
   previousAdjustedStartTimeSeconds Float?
   previousAdjustedEndTimeSeconds   Float?
-  renderStatus             ClipRenderStatus @default(NOT_RENDERED)
-  renderedAt               DateTime?
-  renderError              String?
-  renderedFilePath         String?
-  renderedDurationSeconds  Float?
-  renderedSizeBytes        Int?
-  exportFormat             ClipExportFormat?
-  exportStatus             ClipExportStatus @default(NOT_EXPORTED)
-  exportLayoutStrategy     ClipExportLayoutStrategy?
-  manualCropKeyframes      Json?
-  manualCropUpdatedAt      DateTime?
-  smartCropDebugSnapshotPath String?
-  smartCropDebugGeneratedAt DateTime?
-  smartCropDebugError      String?
-  manualCropRecommended    Boolean    @default(false)
-  rawAiCandidate           Json?
-  qualityDebugSnapshot     Json?
-  exportedAt               DateTime?
-  exportError              String?
-  exportedFilePath         String?
-  thumbnailPath            String?
-  thumbnailGeneratedAt     DateTime?
-  thumbnailError           String?
-  transcriptText     String
-  title              String
-  hook               String
-  caption            String
-  hashtags           Json
-  score              Float
-  reasonSelected     String
-  clipType           String
-  riskLevel          RiskLevel
-  riskReasons        Json
-  contextWarning     Boolean    @default(false)
-  hookStrengthScore       Float?
-  hookScore               Float?
-  hookType                ClipHookType?
-  hookProblem             String?
-  suggestedStartAdjustment Float?
-  hookReason              String?
-  standaloneClarityScore  Float?
-  emotionalImpactScore    Float?
-  emotionalWeightScore    Float?
-  sermonValueScore        Float?
-  ministryValueScore      Float?
-  shareabilityScore       Float?
-  socialShareabilityScore Float?
-  contextSafetyScore      Float?
-  boundaryQualityScore    Float?
-  visualConfidenceScore   Float?
-  speakerVisiblePercentage Float?
-  averageTrackingConfidence Float?
-  cropStabilityScore      Float?
-  wrongPersonSwitchRisk   Float?
-  majorCropJumpCount      Int?
-  faceOrBodyDetectionCoverage Float?
-  visualQualityScore      Float?
-  visualReadinessScore    Float?
-  audioQualityScore       Float?
-  averageLoudness         Float?
-  peakLoudness            Float?
-  silenceAtBeginningSeconds Float?
-  silenceAtEndSeconds     Float?
-  audioWarnings           Json?
-  captionQualityScore     Float?
-  captionQualityWarnings  Json?
-  arcCompletenessScore    Float?
-  finalQualityScore       Float?
-  qualityLabel            ClipQualityLabel?
-  qualityReasons          Json?
-  rankingCategory         ClipRankingCategory?
-  clipArcType             ClipArcType?
-  arcSummary              String?
-  setupStartTime          Float?
-  mainPointTime           Float?
-  payoffTime              Float?
-  applicationTime         Float?
-  whyThisClipFeelsComplete String?
-  whatContextMightBeMissing String?
-  durationQualityScore    Float?
-  durationQualityLabel    ClipDurationQuality?
-  bestPlatform            String?
-  duplicateOfClipId       String?
-  dedupeReason            String?
-  dedupeScore             Float?
-  postReadyStatus         PostReadyStatus?
-  postReadyReasons        Json?
-  postReadyBlockers       Json?
-  recommendedNextAction   PostReadyRecommendedAction?
-  overallPostScore        Float?
-  qualitySummary          String?
-  pastorFriendlyReason    String?
-  recommendedAction       ClipQualityRecommendedAction?
-  suggestedStartTimeSeconds Float?
-  suggestedEndTimeSeconds   Float?
-  qualityClipCategory     ClipQualityCategory?
-  qualityWarnings         Json?
-  qualityReviewedAt       DateTime?
-  qualityReviewSource     ClipQualityReviewSource?
-  status             ClipStatus @default(SUGGESTED)
-  exportPath         String?
-  srtPath            String?
-  subtitlesGenerated Boolean    @default(false)
-  subtitlesBurned    Boolean    @default(false)
-  captionStatus            CaptionStatus @default(NOT_GENERATED)
-  subtitleFilePath         String?
-  captionGeneratedAt       DateTime?
-  captionGenerationError   String?
-  captionData              Json?
-  captionBurnStatus        CaptionBurnStatus @default(NOT_BURNED)
-  captionedVideoPath       String?
-  captionBurnedAt          DateTime?
-  captionBurnError         String?
-  clipNotes                String?
-  overlayStatus            ClipOverlayStatus @default(NOT_RENDERED)
-  overlayVideoPath         String?
-  overlayRenderedAt        DateTime?
-  overlayRenderError       String?
-  renderFreshness          AssetFreshness @default(NEEDS_REGENERATION)
-  captionFreshness         AssetFreshness @default(NEEDS_REGENERATION)
-  captionBurnFreshness     AssetFreshness @default(NEEDS_REGENERATION)
-  overlayFreshness         AssetFreshness @default(NEEDS_REGENERATION)
-  exportFreshness          AssetFreshness @default(NEEDS_REGENERATION)
-  renderAssetVersion       Int @default(0)
-  captionAssetVersion      Int @default(0)
-  captionBurnAssetVersion  Int @default(0)
-  overlayAssetVersion      Int @default(0)
-  exportAssetVersion       Int @default(0)
-  assetInvalidationReason  String?
-  createdAt          DateTime   @default(now())
-  updatedAt          DateTime   @updatedAt
-  sermon             Sermon     @relation(fields: [sermonId], references: [id], onDelete: Cascade)
-  ministryMoment     MinistryMoment? @relation(fields: [ministryMomentId], references: [id], onDelete: SetNull)
-  relatedContentOpportunities ContentOpportunity[] @relation("RelatedClipContentOpportunities")
-  videoSubjectTracks VideoSubjectTrack[]
+  renderStatus                     ClipRenderStatus              @default(NOT_RENDERED)
+  renderedAt                       DateTime?
+  renderError                      String?
+  renderedFilePath                 String?
+  renderedDurationSeconds          Float?
+  renderedSizeBytes                Int?
+  exportFormat                     ClipExportFormat?
+  exportStatus                     ClipExportStatus              @default(NOT_EXPORTED)
+  exportLayoutStrategy             ClipExportLayoutStrategy?
+  manualCropKeyframes              Json?
+  manualCropUpdatedAt              DateTime?
+  smartCropDebugSnapshotPath       String?
+  smartCropDebugGeneratedAt        DateTime?
+  smartCropDebugError              String?
+  manualCropRecommended            Boolean                       @default(false)
+  rawAiCandidate                   Json?
+  qualityDebugSnapshot             Json?
+  exportedAt                       DateTime?
+  exportError                      String?
+  exportedFilePath                 String?
+  thumbnailPath                    String?
+  thumbnailGeneratedAt             DateTime?
+  thumbnailError                   String?
+  transcriptText                   String
+  title                            String
+  hook                             String
+  caption                          String
+  hashtags                         Json
+  score                            Float
+  reasonSelected                   String
+  clipType                         String
+  riskLevel                        RiskLevel
+  riskReasons                      Json
+  contextWarning                   Boolean                       @default(false)
+  hookStrengthScore                Float?
+  hookScore                        Float?
+  hookType                         ClipHookType?
+  hookProblem                      String?
+  suggestedStartAdjustment         Float?
+  hookReason                       String?
+  standaloneClarityScore           Float?
+  emotionalImpactScore             Float?
+  emotionalWeightScore             Float?
+  sermonValueScore                 Float?
+  ministryValueScore               Float?
+  shareabilityScore                Float?
+  socialShareabilityScore          Float?
+  contextSafetyScore               Float?
+  boundaryQualityScore             Float?
+  visualConfidenceScore            Float?
+  speakerVisiblePercentage         Float?
+  averageTrackingConfidence        Float?
+  cropStabilityScore               Float?
+  wrongPersonSwitchRisk            Float?
+  majorCropJumpCount               Int?
+  faceOrBodyDetectionCoverage      Float?
+  visualQualityScore               Float?
+  visualReadinessScore             Float?
+  audioQualityScore                Float?
+  averageLoudness                  Float?
+  peakLoudness                     Float?
+  silenceAtBeginningSeconds        Float?
+  silenceAtEndSeconds              Float?
+  audioWarnings                    Json?
+  captionQualityScore              Float?
+  captionQualityWarnings           Json?
+  arcCompletenessScore             Float?
+  finalQualityScore                Float?
+  qualityLabel                     ClipQualityLabel?
+  qualityReasons                   Json?
+  rankingCategory                  ClipRankingCategory?
+  clipArcType                      ClipArcType?
+  arcSummary                       String?
+  setupStartTime                   Float?
+  mainPointTime                    Float?
+  payoffTime                       Float?
+  applicationTime                  Float?
+  whyThisClipFeelsComplete         String?
+  whatContextMightBeMissing        String?
+  durationQualityScore             Float?
+  durationQualityLabel             ClipDurationQuality?
+  bestPlatform                     String?
+  duplicateOfClipId                String?
+  dedupeReason                     String?
+  dedupeScore                      Float?
+  postReadyStatus                  PostReadyStatus?
+  postReadyReasons                 Json?
+  postReadyBlockers                Json?
+  recommendedNextAction            PostReadyRecommendedAction?
+  overallPostScore                 Float?
+  qualitySummary                   String?
+  pastorFriendlyReason             String?
+  recommendedAction                ClipQualityRecommendedAction?
+  suggestedStartTimeSeconds        Float?
+  suggestedEndTimeSeconds          Float?
+  qualityClipCategory              ClipQualityCategory?
+  qualityWarnings                  Json?
+  qualityReviewedAt                DateTime?
+  qualityReviewSource              ClipQualityReviewSource?
+  status                           ClipStatus                    @default(SUGGESTED)
+  exportPath                       String?
+  srtPath                          String?
+  subtitlesGenerated               Boolean                       @default(false)
+  subtitlesBurned                  Boolean                       @default(false)
+  captionStatus                    CaptionStatus                 @default(NOT_GENERATED)
+  subtitleFilePath                 String?
+  captionGeneratedAt               DateTime?
+  captionGenerationError           String?
+  captionData                      Json?
+  captionBurnStatus                CaptionBurnStatus             @default(NOT_BURNED)
+  captionedVideoPath               String?
+  captionBurnedAt                  DateTime?
+  captionBurnError                 String?
+  clipNotes                        String?
+  overlayStatus                    ClipOverlayStatus             @default(NOT_RENDERED)
+  overlayVideoPath                 String?
+  overlayRenderedAt                DateTime?
+  overlayRenderError               String?
+  renderFreshness                  AssetFreshness                @default(NEEDS_REGENERATION)
+  captionFreshness                 AssetFreshness                @default(NEEDS_REGENERATION)
+  captionBurnFreshness             AssetFreshness                @default(NEEDS_REGENERATION)
+  overlayFreshness                 AssetFreshness                @default(NEEDS_REGENERATION)
+  exportFreshness                  AssetFreshness                @default(NEEDS_REGENERATION)
+  renderAssetVersion               Int                           @default(0)
+  captionAssetVersion              Int                           @default(0)
+  captionBurnAssetVersion          Int                           @default(0)
+  overlayAssetVersion              Int                           @default(0)
+  exportAssetVersion               Int                           @default(0)
+  assetInvalidationReason          String?
+  createdAt                        DateTime                      @default(now())
+  updatedAt                        DateTime                      @updatedAt
+  sermon                           Sermon                        @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  ministryMoment                   MinistryMoment?               @relation(fields: [ministryMomentId], references: [id], onDelete: SetNull)
+  relatedContentOpportunities      ContentOpportunity[]          @relation("RelatedClipContentOpportunities")
+  videoSubjectTracks               VideoSubjectTrack[]
 
   @@index([sermonId])
   @@index([sermonId, smartClipCategory])
@@ -651,22 +718,22 @@ model ClipCandidate {
 }
 
 model VideoSubjectTrack {
-  id              String                     @id @default(cuid())
-  clipCandidateId String
-  sermonId        String
-  kind            VideoSubjectTrackKind
-  source          VideoSubjectTrackingSource @default(HEURISTIC_CENTER)
-  label           String
-  confidenceScore Float
+  id               String                     @id @default(cuid())
+  clipCandidateId  String
+  sermonId         String
+  kind             VideoSubjectTrackKind
+  source           VideoSubjectTrackingSource @default(HEURISTIC_CENTER)
+  label            String
+  confidenceScore  Float
   startTimeSeconds Float
   endTimeSeconds   Float
-  frameWidth      Int?
-  frameHeight     Int?
-  sampleCount     Int                        @default(0)
-  boxesJson       Json
-  createdAt       DateTime                   @default(now())
-  updatedAt       DateTime                   @updatedAt
-  clipCandidate   ClipCandidate              @relation(fields: [clipCandidateId], references: [id], onDelete: Cascade)
+  frameWidth       Int?
+  frameHeight      Int?
+  sampleCount      Int                        @default(0)
+  boxesJson        Json
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+  clipCandidate    ClipCandidate              @relation(fields: [clipCandidateId], references: [id], onDelete: Cascade)
 
   @@index([clipCandidateId])
   @@index([sermonId])
@@ -675,18 +742,18 @@ model VideoSubjectTrack {
 }
 
 model ProcessingJob {
-  id           String              @id @default(cuid())
-  sermonId     String
-  type         ProcessingJobType
-  status       ProcessingJobStatus @default(PENDING)
-  startedAt    DateTime?
-  completedAt  DateTime?
-  errorMessage String?
-  logs         String?
+  id                String              @id @default(cuid())
+  sermonId          String
+  type              ProcessingJobType
+  status            ProcessingJobStatus @default(PENDING)
+  startedAt         DateTime?
+  completedAt       DateTime?
+  errorMessage      String?
+  logs              String?
   generationSummary Json?
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
-  sermon       Sermon              @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  sermon            Sermon              @relation(fields: [sermonId], references: [id], onDelete: Cascade)
 
   @@index([sermonId])
 }
@@ -694,80 +761,80 @@ model ProcessingJob {
 // ─── Sermon Intelligence Foundation ───────────────────────────────────────────
 
 model SermonIntelligence {
-  id                   String             @id @default(cuid())
-  sermonId             String             @unique
-  status               IntelligenceStatus @default(PENDING)
-  generatedTitle       String?
-  summary              String?
-  centralTheme         String?
-  shortOverview        String?
-  keyTakeaways         Json?
-  confidenceScore      Float?
-  isManuallyReviewed   Boolean            @default(false)
-  manualTitle          String?
-  manualSummary        String?
-  manualCentralTheme   String?
-  failureReason        String?
-  generatedAt          DateTime?
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
-  sermon               Sermon             @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  id                 String             @id @default(cuid())
+  sermonId           String             @unique
+  status             IntelligenceStatus @default(PENDING)
+  generatedTitle     String?
+  summary            String?
+  centralTheme       String?
+  shortOverview      String?
+  keyTakeaways       Json?
+  confidenceScore    Float?
+  isManuallyReviewed Boolean            @default(false)
+  manualTitle        String?
+  manualSummary      String?
+  manualCentralTheme String?
+  failureReason      String?
+  generatedAt        DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  sermon             Sermon             @relation(fields: [sermonId], references: [id], onDelete: Cascade)
 
   @@index([sermonId])
 }
 
 model SermonScriptureRef {
-  id                   String             @id @default(cuid())
-  sermonId             String
-  reference            String
-  book                 String?
-  chapter              Int?
-  verseStart           Int?
-  verseEnd             Int?
-  usageType            ScriptureUsageType
-  isPrimary            Boolean            @default(false)
-  frequencyCount       Int                @default(1)
-  confidenceScore      Float
-  transcriptEvidence   String?
-  isManuallyAdded      Boolean            @default(false)
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
-  sermon               Sermon             @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  id                 String             @id @default(cuid())
+  sermonId           String
+  reference          String
+  book               String?
+  chapter            Int?
+  verseStart         Int?
+  verseEnd           Int?
+  usageType          ScriptureUsageType
+  isPrimary          Boolean            @default(false)
+  frequencyCount     Int                @default(1)
+  confidenceScore    Float
+  transcriptEvidence String?
+  isManuallyAdded    Boolean            @default(false)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  sermon             Sermon             @relation(fields: [sermonId], references: [id], onDelete: Cascade)
 
   @@index([sermonId])
   @@index([sermonId, usageType])
 }
 
 model SermonStructureSection {
-  id                   String                     @id @default(cuid())
-  sermonId             String
-  sectionType          SermonStructureSectionType
-  title                String?
-  description          String?
-  orderIndex           Int
-  startTimeSeconds     Float?
-  endTimeSeconds       Float?
-  confidenceScore      Float
-  transcriptExcerpt    String?
-  isManuallyLabeled    Boolean                    @default(false)
-  createdAt            DateTime                   @default(now())
-  updatedAt            DateTime                   @updatedAt
-  sermon               Sermon                     @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  id                String                     @id @default(cuid())
+  sermonId          String
+  sectionType       SermonStructureSectionType
+  title             String?
+  description       String?
+  orderIndex        Int
+  startTimeSeconds  Float?
+  endTimeSeconds    Float?
+  confidenceScore   Float
+  transcriptExcerpt String?
+  isManuallyLabeled Boolean                    @default(false)
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+  sermon            Sermon                     @relation(fields: [sermonId], references: [id], onDelete: Cascade)
 
   @@index([sermonId])
 }
 
 model SermonTopicTag {
-  id                   String   @id @default(cuid())
-  sermonId             String
-  topic                String
-  confidenceScore      Float
-  evidence             String?
-  isAiGenerated        Boolean  @default(true)
-  isManuallyAdded      Boolean  @default(false)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-  sermon               Sermon   @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  id              String   @id @default(cuid())
+  sermonId        String
+  topic           String
+  confidenceScore Float
+  evidence        String?
+  isAiGenerated   Boolean  @default(true)
+  isManuallyAdded Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  sermon          Sermon   @relation(fields: [sermonId], references: [id], onDelete: Cascade)
 
   @@index([sermonId])
   @@index([topic])
@@ -816,7 +883,7 @@ model SermonSpeakerTrack {
 }
 
 model MinistryMoment {
-  id                   String                    @id @default(cuid())
+  id                   String                     @id @default(cuid())
   sermonId             String
   momentType           MinistryMomentType
   title                String
@@ -830,11 +897,11 @@ model MinistryMoment {
   suggestedUsage       String?
   clipCategory         String?
   reviewStatus         MinistryMomentReviewStatus @default(PENDING)
-  isAiGenerated        Boolean                   @default(true)
-  isManuallyAdjusted   Boolean                   @default(false)
-  createdAt            DateTime                  @default(now())
-  updatedAt            DateTime                  @updatedAt
-  sermon               Sermon                    @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  isAiGenerated        Boolean                    @default(true)
+  isManuallyAdjusted   Boolean                    @default(false)
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+  sermon               Sermon                     @relation(fields: [sermonId], references: [id], onDelete: Cascade)
   recommendedClips     ClipCandidate[]
   contentOpportunities ContentOpportunity[]
 
@@ -887,18 +954,47 @@ model ContentOpportunity {
 }
 
 model SocialAccount {
-  id             String              @id @default(cuid())
-  platform       PostingPlatform
-  label          String
-  handle         String?
-  status         SocialAccountStatus @default(CONNECTED)
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
-  scheduledPosts ScheduledPost[]
+  id              String                 @id @default(cuid())
+  platform        PostingPlatform
+  label           String
+  handle          String?
+  status          SocialAccountStatus    @default(CONNECTED)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  credentials     SocialCredential[]
+  scheduledPosts  ScheduledPost[]
+  metricSnapshots SocialMetricSnapshot[]
 
   @@index([platform])
   @@index([status])
   @@index([createdAt])
+}
+
+model SocialCredential {
+  id                     String                  @id @default(cuid())
+  socialAccountId        String?
+  provider               SocialConnectorProvider
+  externalAccountId      String
+  accountName            String?
+  handle                 String?
+  accessTokenCiphertext  String
+  refreshTokenCiphertext String?
+  tokenType              String?
+  scopesJson             Json?
+  metadataJson           Json?
+  expiresAt              DateTime?
+  status                 SocialConnectorStatus   @default(CONNECTED)
+  lastSyncAt             DateTime?
+  lastError              String?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  socialAccount          SocialAccount?          @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, externalAccountId])
+  @@index([socialAccountId])
+  @@index([provider])
+  @@index([status])
+  @@index([lastSyncAt])
 }
 
 model PostingDraft {
@@ -917,33 +1013,36 @@ model PostingDraft {
 }
 
 model ScheduledPost {
-  id              String              @id @default(cuid())
-  postingDraftId  String?
-  socialAccountId String?
-  clipIdsJson     Json
-  platform        PostingPlatform
-  postingSlot     String
-  title           String?
-  caption         String?
-  note            String?
-  status          ScheduledPostStatus @default(READY_FOR_MEDIA_TEAM)
-  automationMode  PostingAutomationMode @default(MANUAL)
-  scheduledFor    DateTime?
-  timezone        String?
-  workerStatus    ScheduledPostWorkerStatus @default(IDLE)
-  attemptCount    Int                 @default(0)
-  claimedAt       DateTime?
-  workerId        String?
-  lastAttemptAt   DateTime?
-  externalPostId  String?
-  publishedUrl    String?
-  publishError    String?
+  id                 String                      @id @default(cuid())
+  postingDraftId     String?
+  socialAccountId    String?
+  clipIdsJson        Json
+  platform           PostingPlatform
+  postingSlot        String
+  title              String?
+  caption            String?
+  note               String?
+  status             ScheduledPostStatus         @default(READY_FOR_MEDIA_TEAM)
+  automationMode     PostingAutomationMode       @default(MANUAL)
+  scheduledFor       DateTime?
+  timezone           String?
+  workerStatus       ScheduledPostWorkerStatus   @default(IDLE)
+  attemptCount       Int                         @default(0)
+  claimedAt          DateTime?
+  workerId           String?
+  lastAttemptAt      DateTime?
+  externalPostId     String?
+  publishedUrl       String?
+  publishError       String?
   finalPrivacyStatus String?
-  idempotencyKey  String              @unique
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
-  postingDraft    PostingDraft?       @relation(fields: [postingDraftId], references: [id], onDelete: SetNull)
-  socialAccount   SocialAccount?      @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+  idempotencyKey     String                      @unique
+  createdAt          DateTime                    @default(now())
+  updatedAt          DateTime                    @updatedAt
+  postingDraft       PostingDraft?               @relation(fields: [postingDraftId], references: [id], onDelete: SetNull)
+  socialAccount      SocialAccount?              @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+  predictions        PostPerformancePrediction[]
+  ministryOutcomes   MinistryOutcome[]
+  guardrailReviews   GrowthGuardrailReview[]
 
   @@index([postingDraftId])
   @@index([socialAccountId])
@@ -953,4 +1052,194 @@ model ScheduledPost {
   @@index([workerStatus])
   @@index([scheduledFor])
   @@index([createdAt])
+}
+
+model SocialMetricSnapshot {
+  id                         String                 @id @default(cuid())
+  socialAccountId            String?
+  platform                   String
+  platformPostId             String?
+  postUrl                    String?
+  followers                  Int?
+  views                      Int?
+  reach                      Int?
+  impressions                Int?
+  engagementRate             Float?
+  likes                      Int?
+  comments                   Int?
+  shares                     Int?
+  saves                      Int?
+  clickThroughs              Int?
+  eventSignups               Int?
+  watchTimeSeconds           Int?
+  averageViewDurationSeconds Float?
+  retentionRate              Float?
+  followerGrowth             Int?
+  rawMetrics                 Json?
+  source                     GrowthMetricSource     @default(API)
+  capturedAt                 DateTime               @default(now())
+  createdAt                  DateTime               @default(now())
+  socialAccount              SocialAccount?         @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+  predictionResults          PostPredictionResult[]
+
+  @@index([socialAccountId])
+  @@index([platform])
+  @@index([platformPostId])
+  @@index([capturedAt])
+}
+
+model PostPerformancePrediction {
+  id                          String                 @id @default(cuid())
+  scheduledPostId             String?
+  clipIdsJson                 Json
+  platform                    String
+  predictedReachLow           Int
+  predictedReachHigh          Int
+  predictedEngagementRate     Float
+  predictedFollowerGrowthLow  Int
+  predictedFollowerGrowthHigh Int
+  predictedWatchTimeSeconds   Int
+  confidence                  String
+  reasoning                   Json
+  modelVersion                String                 @default("growth-system-v1")
+  createdAt                   DateTime               @default(now())
+  scheduledPost               ScheduledPost?         @relation(fields: [scheduledPostId], references: [id], onDelete: SetNull)
+  results                     PostPredictionResult[]
+
+  @@index([scheduledPostId])
+  @@index([platform])
+  @@index([createdAt])
+}
+
+model PostPredictionResult {
+  id                     String                    @id @default(cuid())
+  predictionId           String
+  metricSnapshotId       String?
+  actualReach            Int?
+  actualEngagementRate   Float?
+  actualFollowerGrowth   Int?
+  actualWatchTimeSeconds Int?
+  reachErrorPercent      Float?
+  engagementErrorPercent Float?
+  evaluatedAt            DateTime                  @default(now())
+  prediction             PostPerformancePrediction @relation(fields: [predictionId], references: [id], onDelete: Cascade)
+  metricSnapshot         SocialMetricSnapshot?     @relation(fields: [metricSnapshotId], references: [id], onDelete: SetNull)
+
+  @@index([predictionId])
+  @@index([metricSnapshotId])
+  @@index([evaluatedAt])
+}
+
+model GrowthRecommendation {
+  id                 String                     @id @default(cuid())
+  sourceClipId       String?
+  sourceSermonId     String?
+  recommendationType String
+  title              String
+  priority           Int
+  platformsJson      Json
+  recommendationJson Json
+  rationale          Json
+  guardrails         Json
+  status             GrowthRecommendationStatus @default(NEEDS_REVIEW)
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  @@index([sourceClipId])
+  @@index([sourceSermonId])
+  @@index([status])
+  @@index([priority])
+  @@index([createdAt])
+}
+
+model GrowthCampaign {
+  id               String                @id @default(cuid())
+  name             String
+  eventName        String
+  eventType        String?
+  objective        String
+  startsAt         DateTime?
+  endsAt           DateTime?
+  signupUrl        String?
+  status           GrowthCampaignStatus  @default(DRAFT)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  phases           GrowthCampaignPhase[]
+  ministryOutcomes MinistryOutcome[]
+
+  @@index([status])
+  @@index([startsAt])
+  @@index([createdAt])
+}
+
+model GrowthCampaignPhase {
+  id         String                    @id @default(cuid())
+  campaignId String
+  name       String
+  timing     String
+  content    String
+  cta        String
+  orderIndex Int
+  status     GrowthCampaignPhaseStatus @default(PLANNED)
+  createdAt  DateTime                  @default(now())
+  updatedAt  DateTime                  @updatedAt
+  campaign   GrowthCampaign            @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@index([status])
+  @@index([orderIndex])
+}
+
+model GrowthTrend {
+  id           String              @id @default(cuid())
+  platform     String
+  name         String
+  trendType    String
+  decision     GrowthTrendDecision
+  ministryFit  Int
+  reason       String
+  adaptation   String
+  evidenceJson Json?
+  detectedAt   DateTime            @default(now())
+  createdAt    DateTime            @default(now())
+
+  @@index([platform])
+  @@index([decision])
+  @@index([detectedAt])
+}
+
+model GrowthGuardrailReview {
+  id                String                @id @default(cuid())
+  scheduledPostId   String?
+  targetType        String
+  targetId          String
+  result            GrowthGuardrailResult
+  issuesJson        Json
+  suggestedRevision String?
+  reviewedBy        String?
+  reviewedAt        DateTime              @default(now())
+  scheduledPost     ScheduledPost?        @relation(fields: [scheduledPostId], references: [id], onDelete: SetNull)
+
+  @@index([scheduledPostId])
+  @@index([targetType, targetId])
+  @@index([result])
+  @@index([reviewedAt])
+}
+
+model MinistryOutcome {
+  id              String              @id @default(cuid())
+  scheduledPostId String?
+  campaignId      String?
+  outcomeType     MinistryOutcomeType
+  value           Int                 @default(1)
+  notes           String?
+  occurredAt      DateTime            @default(now())
+  createdAt       DateTime            @default(now())
+  scheduledPost   ScheduledPost?      @relation(fields: [scheduledPostId], references: [id], onDelete: SetNull)
+  campaign        GrowthCampaign?     @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([scheduledPostId])
+  @@index([campaignId])
+  @@index([outcomeType])
+  @@index([occurredAt])
 }

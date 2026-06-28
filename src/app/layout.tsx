@@ -25,6 +25,8 @@ export default function RootLayout({
               <Link href="/sermons/new" className="rail-item">Create</Link>
               <Link href="/sermons" className="rail-item">Library</Link>
               <Link href="/ready-to-post" className="rail-item">Post</Link>
+              <Link href="/growth" className="rail-item">Growth</Link>
+              <Link href="/settings/social" className="rail-item">Social</Link>
               <Link href="/settings/branding" className="rail-item">Brand</Link>
               <Link href="/opportunities" className="rail-item">Ideas</Link>
             </nav>
