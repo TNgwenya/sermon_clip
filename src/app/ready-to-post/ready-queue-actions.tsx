@@ -60,7 +60,7 @@ export function ReadyQueueActions({
           onClick={() => setScheduleOpen(true)}
           disabled={selectedClipIds.length === 0}
         >
-          Create posting draft
+          Schedule selected
         </button>
         <button type="button" className="button tertiary" onClick={() => setSocialOpen(true)}>
           {socialAccounts.length > 0 ? "Manage social accounts" : "Add social accounts"}
@@ -99,7 +99,7 @@ export function SchedulePostButton({ clipId, onDraftCreated }: SchedulePostButto
   return (
     <>
       <button type="button" className="button tertiary" onClick={() => setScheduleOpen(true)}>
-        Create posting draft
+        Schedule post
       </button>
       <ScheduleDraftModal
         clipIds={[clipId]}

@@ -8,9 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "import:sqlite-to-postgres": "node --experimental-strip-types scripts/sqlite-to-postgres-import.ts",
-    "worker:posting": "node --experimental-strip-types scripts/posting-worker.ts",
-    "worker:media": "node --experimental-strip-types --loader ./scripts/ts-path-loader.mjs scripts/media-worker.ts",
-    "youtube:oauth": "node --experimental-strip-types scripts/youtube-oauth-token.ts",
+    "worker:posting": "node --env-file-if-exists=.env --experimental-strip-types scripts/posting-worker.ts",
+    "worker:media": "node --env-file-if-exists=.env --experimental-strip-types --loader ./scripts/ts-path-loader.mjs scripts/media-worker.ts",
+    "youtube:oauth": "node --env-file-if-exists=.env --experimental-strip-types scripts/youtube-oauth-token.ts",
     "test": "vitest run"
   },
   "dependencies": {

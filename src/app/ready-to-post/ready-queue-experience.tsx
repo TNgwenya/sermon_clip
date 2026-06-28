@@ -568,8 +568,8 @@ export function ReadyQueueExperience({
               <h3>{approvedWaitingCount > 0 ? "Uploads unlock after preparation" : "No planned uploads yet"}</h3>
               <p className="muted small">
                 {approvedWaitingCount > 0
-                  ? "Prepare approved clips first. Once downloads exist, create posting drafts for each platform."
-                  : "Create a posting draft from a ready clip to build the manual upload checklist."}
+                  ? "Prepare approved clips first. Scheduling unlocks when downloads exist."
+                  : "Schedule a ready clip for automatic posting or manual handoff."}
               </p>
             </div>
           ) : filteredScheduledPosts.length === 0 ? (
@@ -685,7 +685,8 @@ export function ReadyQueueExperience({
                   {getQualityLabelText(selectedQualityLabel)}
                 </span>
               </div>
-              <div className="selected-quality-panel">
+              <details className="selected-quality-panel selected-quality-details">
+                <summary>Quality checks</summary>
                 <div className="selected-quality-summary">
                   <strong>{selectedQualitySummary}</strong>
                   {selectedNextActionLabel ? <span>{selectedNextActionLabel}</span> : null}
@@ -702,7 +703,7 @@ export function ReadyQueueExperience({
                 ) : (
                   <p className="muted small">No quality blockers are currently attached to this clip.</p>
                 )}
-              </div>
+              </details>
               {!controlPanelMode ? <div
                 className="video-card-shell ready-video-shell selected-asset-video"
                 data-preview-state={videoPreviewStates[selectedClip.id] ?? "poster"}
@@ -848,8 +849,8 @@ export function ReadyQueueExperience({
             </article>
             <article className="setup-item">
               <div>
-                <h3>{scopedDrafts.length} posting draft{scopedDrafts.length === 1 ? "" : "s"}</h3>
-                <p className="muted small">{scopedDrafts[0] ? `${scopedDrafts[0].postingSlot} · ${scopedDrafts[0].platforms.join(", ")}` : "Select clips and create a media handoff."}</p>
+                <h3>{scopedDrafts.length} handoff{scopedDrafts.length === 1 ? "" : "s"}</h3>
+                <p className="muted small">{scopedDrafts[0] ? `${scopedDrafts[0].postingSlot} · ${scopedDrafts[0].platforms.join(", ")}` : "Select clips and schedule them."}</p>
               </div>
               <span className="status-pill status-exported">Drafts</span>
             </article>
@@ -922,8 +923,8 @@ export function ReadyQueueExperience({
               title={approvedWaitingCount > 0 ? "Approved clips are waiting above" : "No clip cards to download yet"}
               description={
                 approvedWaitingCount > 0
-                  ? "Use Prepare approved clips to create finished videos. This tray will then show downloads, captions, hashtags, and posting drafts."
-                  : "When preparation finishes, clips will appear with video downloads, captions, hashtags, posting drafts, and quality notes."
+                  ? "Use Prepare approved clips to create finished videos. This tray will then show captions, hashtags, and scheduling."
+                  : "When preparation finishes, clips will appear with captions, hashtags, scheduling, and quality notes."
               }
             />
           ) : filteredClips.length === 0 ? (

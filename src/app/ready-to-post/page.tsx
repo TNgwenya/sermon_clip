@@ -303,10 +303,10 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           <h1>Publishing desk</h1>
           <p className="muted">
             {scopedClipTitle
-              ? `Showing ${scopedClipTitle}${scopedSermonTitle ? ` from ${scopedSermonTitle}` : ""}. Prepare this clip if needed, then download the video and platform captions for posting.`
+              ? `Showing ${scopedClipTitle}${scopedSermonTitle ? ` from ${scopedSermonTitle}` : ""}. Schedule it or copy platform captions.`
               : scopedSermonTitle
-              ? `Showing clips from ${scopedSermonTitle}. Prepare approved clips, then download videos and platform captions for the media team.`
-              : "Review finished clips, copy platform captions, and hand posts to the media team."}
+              ? `Showing clips from ${scopedSermonTitle}. Schedule posts and copy captions.`
+              : "Schedule posts, copy captions, and track worker status."}
           </p>
           {scopedClipTitle || scopedSermonTitle ? (
             <div className="ready-scope-pill">

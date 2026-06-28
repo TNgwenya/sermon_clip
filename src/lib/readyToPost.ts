@@ -116,7 +116,7 @@ export function buildReadyQueueStatus(input: {
       headline: `${input.readyCount} clip${input.readyCount === 1 ? "" : "s"} ready to post`,
       description: input.preparingCount > 0
         ? `${input.preparingCount} more clip${input.preparingCount === 1 ? " is" : "s are"} still being prepared.`
-        : "Download finished clips, copy captions, or create a posting draft for your media team.",
+        : "Schedule posts or copy captions from finished clips.",
     };
   }
 

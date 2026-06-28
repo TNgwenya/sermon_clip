@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { PostingAutomationMode, PostingDraft, PostingPlatform } from "@/lib/postingDrafts";
 
 const platforms: PostingPlatform[] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
+const automaticPlatforms = new Set<PostingPlatform>(["TikTok", "YouTube Shorts", "Facebook"]);
 const postingSlots = ["Sunday recap", "Midweek encouragement", "Prayer invitation", "Weekend invite"];
 
 function formatDateTimeLocal(date: Date): string {
@@ -20,7 +21,7 @@ type ScheduleDraftModalProps = {
 };
 
 export function ScheduleDraftModal({ clipIds, open, onClose, onCreated }: ScheduleDraftModalProps) {
-  const [selectedPlatforms, setSelectedPlatforms] = useState<PostingPlatform[]>(["Instagram", "Facebook"]);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<PostingPlatform[]>(["YouTube Shorts"]);
   const [automationMode, setAutomationMode] = useState<PostingAutomationMode>("AUTOMATIC");
   const [scheduledFor, setScheduledFor] = useState(() => {
     const date = new Date(Date.now() + 60 * 60_000);
@@ -40,11 +41,25 @@ export function ScheduleDraftModal({ clipIds, open, onClose, onCreated }: Schedu
   }
 
   function togglePlatform(platform: PostingPlatform) {
+    if (automationMode === "AUTOMATIC" && !automaticPlatforms.has(platform)) {
+      return;
+    }
+
     setSelectedPlatforms((current) => (
       current.includes(platform)
         ? current.filter((item) => item !== platform)
         : [...current, platform]
     ));
+  }
+
+  function changeAutomationMode(mode: PostingAutomationMode) {
+    setAutomationMode(mode);
+    if (mode === "AUTOMATIC") {
+      setSelectedPlatforms((current) => {
+        const supported = current.filter((platform) => automaticPlatforms.has(platform));
+        return supported.length > 0 ? supported : ["YouTube Shorts"];
+      });
+    }
   }
 
   async function createDraft() {
@@ -93,11 +108,8 @@ export function ScheduleDraftModal({ clipIds, open, onClose, onCreated }: Schedu
           Close
         </button>
         <div className="stack-sm">
-          <p className="kicker">Posting draft</p>
-          <h2 id="schedule-draft-title">Schedule these clips</h2>
-          <p className="muted">
-            Create a manual handoff or an automatic posting job for the Mac worker.
-          </p>
+          <p className="kicker">Publishing</p>
+          <h2 id="schedule-draft-title">Schedule post</h2>
         </div>
 
         <div className="schedule-draft-summary">
@@ -113,7 +125,7 @@ export function ScheduleDraftModal({ clipIds, open, onClose, onCreated }: Schedu
                 type="radio"
                 name="automationMode"
                 checked={automationMode === "AUTOMATIC"}
-                onChange={() => setAutomationMode("AUTOMATIC")}
+                onChange={() => changeAutomationMode("AUTOMATIC")}
               />
               <span>Automatic</span>
             </label>
@@ -122,7 +134,7 @@ export function ScheduleDraftModal({ clipIds, open, onClose, onCreated }: Schedu
                 type="radio"
                 name="automationMode"
                 checked={automationMode === "MANUAL"}
-                onChange={() => setAutomationMode("MANUAL")}
+                onChange={() => changeAutomationMode("MANUAL")}
               />
               <span>Manual</span>
             </label>
@@ -132,30 +144,33 @@ export function ScheduleDraftModal({ clipIds, open, onClose, onCreated }: Schedu
         <div className="schedule-fieldset">
           <p className="small muted">Platforms</p>
           <div className="platform-toggle-grid">
-            {platforms.map((platform) => (
+            {platforms.map((platform) => {
+              const disabled = automationMode === "AUTOMATIC" && !automaticPlatforms.has(platform);
+              return (
               <label key={platform} className="selection-check platform-toggle">
                 <input
                   type="checkbox"
                   checked={selectedPlatforms.includes(platform)}
                   onChange={() => togglePlatform(platform)}
+                  disabled={disabled}
                 />
                 <span>{platform}</span>
               </label>
-            ))}
+              );
+            })}
           </div>
         </div>
 
-        <div className="schedule-fieldset">
-          <label htmlFor="postingSlot">Posting label</label>
-          <select id="postingSlot" value={postingSlot} onChange={(event) => setPostingSlot(event.target.value)}>
-            {postingSlots.map((slot) => (
-              <option key={slot} value={slot}>{slot}</option>
-            ))}
-          </select>
-        </div>
-
-        {automationMode === "AUTOMATIC" ? (
-          <div className="schedule-fieldset schedule-two-column">
+        <div className="schedule-fieldset schedule-two-column">
+          <label htmlFor="postingSlot">
+            Posting label
+            <select id="postingSlot" value={postingSlot} onChange={(event) => setPostingSlot(event.target.value)}>
+              {postingSlots.map((slot) => (
+                <option key={slot} value={slot}>{slot}</option>
+              ))}
+            </select>
+          </label>
+          {automationMode === "AUTOMATIC" ? (
             <label htmlFor="scheduledFor">
               Scheduled date and time
               <input
@@ -165,6 +180,11 @@ export function ScheduleDraftModal({ clipIds, open, onClose, onCreated }: Schedu
                 onChange={(event) => setScheduledFor(event.target.value)}
               />
             </label>
+          ) : null}
+        </div>
+
+        {automationMode === "AUTOMATIC" ? (
+          <div className="schedule-fieldset">
             <label htmlFor="timezone">
               Timezone
               <input
@@ -177,44 +197,44 @@ export function ScheduleDraftModal({ clipIds, open, onClose, onCreated }: Schedu
           </div>
         ) : null}
 
-        <div className="schedule-fieldset">
-          <label htmlFor="postTitle">Post title</label>
-          <input
-            id="postTitle"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Optional. The worker can use the clip title if blank."
-          />
-        </div>
+        <details className="schedule-optional-fields">
+          <summary>Optional copy and note</summary>
+          <div className="schedule-fieldset">
+            <label htmlFor="postTitle">Post title</label>
+            <input
+              id="postTitle"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="Use clip title when blank"
+            />
+          </div>
 
-        <div className="schedule-fieldset">
-          <label htmlFor="postCaption">Caption</label>
-          <textarea
-            id="postCaption"
-            value={caption}
-            onChange={(event) => setCaption(event.target.value)}
-            rows={4}
-            placeholder="Optional. The worker can use the generated clip caption if blank."
-          />
-        </div>
+          <div className="schedule-fieldset">
+            <label htmlFor="postCaption">Caption</label>
+            <textarea
+              id="postCaption"
+              value={caption}
+              onChange={(event) => setCaption(event.target.value)}
+              rows={3}
+              placeholder="Use generated clip caption when blank"
+            />
+          </div>
 
-        <div className="schedule-fieldset">
-          <label htmlFor="draftNote">Media team note</label>
-          <textarea
-            id="draftNote"
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            rows={3}
-            placeholder="Example: Post the prayer clip first and use the Facebook caption for the church page."
-          />
-        </div>
+          <div className="schedule-fieldset">
+            <label htmlFor="draftNote">Media team note</label>
+            <textarea
+              id="draftNote"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              rows={2}
+              placeholder="Internal note"
+            />
+          </div>
+        </details>
 
         {message ? <p className={message.includes("saved") ? "success-banner" : "error-banner"}>{message}</p> : null}
 
         <div className="feature-modal-footer">
-          <button type="button" className="button tertiary" onClick={onClose}>
-            Close
-          </button>
           <button type="button" className="button primary" onClick={createDraft} disabled={pending || selectedPlatforms.length === 0}>
             {pending ? "Saving..." : automationMode === "AUTOMATIC" ? "Schedule post" : "Save posting draft"}
           </button>
