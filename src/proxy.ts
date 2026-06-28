@@ -37,10 +37,17 @@ export function proxy(request: NextRequest): NextResponse {
   }
 
   const { pathname } = request.nextUrl;
+  const tiktokVerificationPath = pathname.match(/^\/(tiktok[A-Za-z0-9]+\.txt)\/+$/);
+  if (tiktokVerificationPath) {
+    const url = request.nextUrl.clone();
+    url.pathname = `/${tiktokVerificationPath[1]}`;
+    return NextResponse.rewrite(url);
+  }
+
   if (
     pathname.startsWith("/_next/")
     || pathname.startsWith("/api/automation/")
-    || pathname.startsWith("/tiktokfLd97ImnjWIJmcyM6oqmjHob9AvuOAex.txt")
+    || /^\/tiktok[A-Za-z0-9]+\.txt$/.test(pathname)
     || pathname === "/privacy"
     || pathname === "/privacy/"
     || pathname === "/terms"

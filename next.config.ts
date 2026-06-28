@@ -8,14 +8,6 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: projectRoot,
   },
-  async rewrites() {
-    return [
-      {
-        source: "/tiktokfLd97ImnjWIJmcyM6oqmjHob9AvuOAex.txt/:path*",
-        destination: "/tiktokfLd97ImnjWIJmcyM6oqmjHob9AvuOAex.txt",
-      },
-    ];
-  },
   experimental: {
     serverActions: {
       bodySizeLimit: "2gb",
