@@ -432,14 +432,17 @@ export function ReadyQueueExperience({
     setSocialAccounts((current) => [account, ...current].slice(0, 100));
   }
 
-  async function updateScheduledPostStatus(postId: string, status: "READY_FOR_MEDIA_TEAM" | "POSTED" | "FAILED" | "SKIPPED") {
+  async function patchScheduledPost(
+    postId: string,
+    body: { status: "READY_FOR_MEDIA_TEAM" | "POSTED" | "FAILED" | "SKIPPED" } | { action: "POST_NOW" },
+  ) {
     setPendingScheduledPostId(postId);
     setPublishingMessage("");
     try {
       const response = await fetch("/api/ready-to-post/scheduled-posts", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: postId, status }),
+        body: JSON.stringify({ id: postId, ...body }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -447,12 +450,24 @@ export function ReadyQueueExperience({
         return;
       }
       setScheduledPosts((current) => current.map((post) => (post.id === postId ? data.scheduledPost : post)));
-      setPublishingMessage(status === "POSTED" ? "Post marked as published." : "Scheduled post updated.");
+      if ("action" in body && body.action === "POST_NOW") {
+        setPublishingMessage("Post moved to now. The Mac worker will pick it up on its next check.");
+      } else if ("status" in body) {
+        setPublishingMessage(body.status === "POSTED" ? "Post marked as published." : "Scheduled post updated.");
+      }
     } catch {
       setPublishingMessage("Could not update this scheduled post.");
     } finally {
       setPendingScheduledPostId(null);
     }
+  }
+
+  async function updateScheduledPostStatus(postId: string, status: "READY_FOR_MEDIA_TEAM" | "POSTED" | "FAILED" | "SKIPPED") {
+    await patchScheduledPost(postId, { status });
+  }
+
+  async function postScheduledPostNow(postId: string) {
+    await patchScheduledPost(postId, { action: "POST_NOW" });
   }
 
   function setVideoPreviewState(clipId: string, state: VideoPreviewState) {
@@ -928,6 +943,7 @@ export function ReadyQueueExperience({
                 const firstClip = post.clipIds.map((clipId) => clips.find((clip) => clip.id === clipId)).find(Boolean);
                 const platformHandoff = firstClip ? getPlatformHandoff(firstClip, post.platform) : null;
                 const isPending = pendingScheduledPostId === post.id;
+                const canPostNow = post.automationMode === "AUTOMATIC" && (post.status === "PLANNED" || post.status === "FAILED");
 
                 return (
                   <article key={post.id} className="manual-publishing-card">
@@ -969,6 +985,16 @@ export function ReadyQueueExperience({
                       </div>
                     </div>
                     <div className="manual-publishing-actions">
+                      {canPostNow ? (
+                        <button
+                          type="button"
+                          className="button primary"
+                          onClick={() => postScheduledPostNow(post.id)}
+                          disabled={isPending}
+                        >
+                          {isPending ? "Moving..." : "Post now"}
+                        </button>
+                      ) : null}
                       {post.automationMode === "MANUAL" && !controlPanelMode ? <a className="button secondary" href={downloadHref}>Download</a> : null}
                       <CopyCaptionButton
                         label={platformHandoff?.primaryCopyLabel ?? (post.platform === "YouTube Shorts" ? "Copy title" : "Copy caption")}
@@ -980,7 +1006,7 @@ export function ReadyQueueExperience({
                       </a> : null}
                       <button
                         type="button"
-                        className="button primary"
+                        className={canPostNow ? "button tertiary" : "button primary"}
                         onClick={() => updateScheduledPostStatus(post.id, "POSTED")}
                         disabled={isPending || post.status === "POSTED"}
                       >

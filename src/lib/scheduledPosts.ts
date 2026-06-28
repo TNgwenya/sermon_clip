@@ -40,8 +40,10 @@ export type ScheduledPost = {
 };
 
 export type ManualPublishingStatus = "READY_FOR_MEDIA_TEAM" | "POSTED" | "FAILED" | "SKIPPED";
+export type ScheduledPostAction = "POST_NOW";
 
 const MANUAL_PUBLISHING_STATUSES: ManualPublishingStatus[] = ["READY_FOR_MEDIA_TEAM", "POSTED", "FAILED", "SKIPPED"];
+const SCHEDULED_POST_ACTIONS: ScheduledPostAction[] = ["POST_NOW"];
 
 function normalizeClipIds(value: unknown): string[] {
   return Array.isArray(value)
@@ -125,6 +127,12 @@ export function normalizeManualPublishingStatus(value: unknown): ManualPublishin
     : null;
 }
 
+export function normalizeScheduledPostAction(value: unknown): ScheduledPostAction | null {
+  return typeof value === "string" && SCHEDULED_POST_ACTIONS.includes(value as ScheduledPostAction)
+    ? value as ScheduledPostAction
+    : null;
+}
+
 export async function updateScheduledPostStatus(input: {
   id: string;
   status: ManualPublishingStatus;
@@ -149,6 +157,45 @@ export async function updateScheduledPostStatus(input: {
   });
 
   return toScheduledPost(post);
+}
+
+export async function postScheduledPostNow(input: {
+  id: string;
+  now?: Date;
+}): Promise<ScheduledPost | null> {
+  const now = input.now ?? new Date();
+
+  const updateResult = await prisma.scheduledPost.updateMany({
+    where: {
+      id: input.id,
+      automationMode: "AUTOMATIC",
+      status: { in: ["PLANNED", "FAILED"] },
+    },
+    data: {
+      status: "PLANNED",
+      workerStatus: "IDLE",
+      postingSlot: "Post now",
+      scheduledFor: now,
+      claimedAt: null,
+      workerId: null,
+      publishError: null,
+    },
+  });
+
+  if (updateResult.count === 0) {
+    return null;
+  }
+
+  const post = await prisma.scheduledPost.findUnique({
+    where: { id: input.id },
+    include: {
+      socialAccount: {
+        select: { label: true },
+      },
+    },
+  });
+
+  return post ? toScheduledPost(post) : null;
 }
 
 export type AutomationUpcomingPost = ScheduledPost & {
