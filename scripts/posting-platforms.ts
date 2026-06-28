@@ -1,10 +1,14 @@
 import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
+import crypto from "node:crypto";
+
+import { PrismaClient, type SocialConnectorProvider } from "@prisma/client";
 
 export type PostingPlatform = "TikTok" | "Instagram" | "YouTube Shorts" | "Facebook";
 
 export type AutomationPost = {
   id: string;
+  socialAccountId: string | null;
   platform: PostingPlatform;
   title: string;
   caption: string;
@@ -38,6 +42,111 @@ type FetchLike = typeof fetch;
 const TIKTOK_MAX_TITLE_LENGTH = 2200;
 const TIKTOK_DEFAULT_CHUNK_SIZE = 32 * 1024 * 1024;
 const FACEBOOK_MAX_TITLE_LENGTH = 255;
+const STORED_CREDENTIAL_PROVIDERS: Record<Exclude<PostingPlatform, "Instagram">, SocialConnectorProvider> = {
+  "YouTube Shorts": "YOUTUBE",
+  TikTok: "TIKTOK",
+  Facebook: "META_FACEBOOK",
+};
+
+let prismaClient: PrismaClient | null = null;
+
+function getPrismaClient(): PrismaClient {
+  prismaClient ??= new PrismaClient();
+  return prismaClient;
+}
+
+function encryptionSecret(): string {
+  const secret = process.env.OAUTH_TOKEN_ENCRYPTION_KEY?.trim()
+    || process.env.AUTH_SECRET?.trim()
+    || process.env.NEXTAUTH_SECRET?.trim();
+
+  if (!secret) {
+    throw new Error("Stored social credentials require OAUTH_TOKEN_ENCRYPTION_KEY or AUTH_SECRET in the worker environment.");
+  }
+
+  return secret;
+}
+
+function encryptionKey(): Buffer {
+  return crypto.createHash("sha256").update(encryptionSecret()).digest();
+}
+
+function decryptToken(value: string): string {
+  const [version, iv, tag, encrypted] = value.split(":");
+  if (version !== "v1" || !iv || !tag || !encrypted) {
+    throw new Error("Unsupported encrypted social credential format.");
+  }
+
+  const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(iv, "base64url"));
+  decipher.setAuthTag(Buffer.from(tag, "base64url"));
+
+  return Buffer.concat([
+    decipher.update(Buffer.from(encrypted, "base64url")),
+    decipher.final(),
+  ]).toString("utf8");
+}
+
+function encryptToken(value: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  return [
+    "v1",
+    iv.toString("base64url"),
+    tag.toString("base64url"),
+    encrypted.toString("base64url"),
+  ].join(":");
+}
+
+function isExpiringSoon(expiresAt: Date | null, now = new Date()): boolean {
+  return Boolean(expiresAt && expiresAt.getTime() <= now.getTime() + 60_000);
+}
+
+type StoredPostingCredential = {
+  id: string;
+  provider: SocialConnectorProvider;
+  externalAccountId: string;
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: Date | null;
+};
+
+async function getStoredPostingCredential(
+  provider: SocialConnectorProvider,
+  socialAccountId: string | null,
+): Promise<StoredPostingCredential | null> {
+  const credential = await getPrismaClient().socialCredential.findFirst({
+    where: {
+      provider,
+      status: "CONNECTED",
+      ...(socialAccountId ? { socialAccountId } : {}),
+    },
+    orderBy: { updatedAt: "desc" },
+    select: {
+      id: true,
+      provider: true,
+      externalAccountId: true,
+      accessTokenCiphertext: true,
+      refreshTokenCiphertext: true,
+      expiresAt: true,
+    },
+  }).catch(() => null);
+
+  if (!credential) {
+    return null;
+  }
+
+  return {
+    id: credential.id,
+    provider: credential.provider,
+    externalAccountId: credential.externalAccountId,
+    accessToken: decryptToken(credential.accessTokenCiphertext),
+    refreshToken: credential.refreshTokenCiphertext ? decryptToken(credential.refreshTokenCiphertext) : null,
+    expiresAt: credential.expiresAt,
+  };
+}
 
 function clampText(value: string, maxLength: number): string {
   return value.length > maxLength ? value.slice(0, maxLength).trimEnd() : value;
@@ -98,13 +207,17 @@ export function buildFacebookText(post: AutomationPost): { title: string; descri
   };
 }
 
-async function getYouTubeAccessToken(fetchImpl: FetchLike = fetch): Promise<string> {
+async function getYouTubeAccessToken(post: AutomationPost, fetchImpl: FetchLike = fetch): Promise<string> {
   const clientId = process.env.YOUTUBE_CLIENT_ID?.trim();
   const clientSecret = process.env.YOUTUBE_CLIENT_SECRET?.trim();
-  const refreshToken = process.env.YOUTUBE_REFRESH_TOKEN?.trim();
+  const envRefreshToken = process.env.YOUTUBE_REFRESH_TOKEN?.trim();
+  const storedCredential = post.socialAccountId || !envRefreshToken
+    ? await getStoredPostingCredential(STORED_CREDENTIAL_PROVIDERS["YouTube Shorts"], post.socialAccountId)
+    : null;
+  const refreshToken = storedCredential?.refreshToken || envRefreshToken;
 
   if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error("YouTube credentials are incomplete. Set YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, and YOUTUBE_REFRESH_TOKEN.");
+    throw new Error("YouTube credentials are incomplete. Connect YouTube in Social settings or set YOUTUBE_REFRESH_TOKEN, plus YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET.");
   }
 
   const response = await fetchImpl("https://oauth2.googleapis.com/token", {
@@ -135,7 +248,7 @@ export async function uploadYouTubeShort(
   const requestedPrivacy = process.env.YOUTUBE_DEFAULT_PRIVACY_STATUS?.trim() || "private";
   const apiVerified = process.env.YOUTUBE_API_VERIFIED === "true";
   const privacyStatus = apiVerified ? requestedPrivacy : "private";
-  const token = await getYouTubeAccessToken(fetchImpl);
+  const token = await getYouTubeAccessToken(post, fetchImpl);
   const text = buildYouTubeText(post);
 
   const metadata = {
@@ -266,16 +379,78 @@ async function uploadTikTokChunks(
   }
 }
 
+async function refreshTikTokCredential(
+  credential: StoredPostingCredential,
+  fetchImpl: FetchLike,
+): Promise<string> {
+  const clientKey = process.env.TIKTOK_CLIENT_KEY?.trim();
+  const clientSecret = process.env.TIKTOK_CLIENT_SECRET?.trim();
+
+  if (!clientKey || !clientSecret || !credential.refreshToken) {
+    return credential.accessToken;
+  }
+
+  const response = await fetchImpl("https://open.tiktokapis.com/v2/oauth/token/", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_key: clientKey,
+      client_secret: clientSecret,
+      refresh_token: credential.refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok || typeof payload?.access_token !== "string") {
+    throw new Error(payload?.error_description ?? payload?.message ?? "Could not refresh TikTok access token.");
+  }
+
+  const refreshToken = typeof payload.refresh_token === "string" ? payload.refresh_token : credential.refreshToken;
+  const expiresAt = typeof payload.expires_in === "number"
+    ? new Date(Date.now() + Math.max(0, payload.expires_in - 60) * 1000)
+    : credential.expiresAt;
+
+  await getPrismaClient().socialCredential.update({
+    where: { id: credential.id },
+    data: {
+      accessTokenCiphertext: encryptToken(payload.access_token),
+      refreshTokenCiphertext: refreshToken ? encryptToken(refreshToken) : null,
+      tokenType: typeof payload.token_type === "string" ? payload.token_type : undefined,
+      expiresAt,
+      status: "CONNECTED",
+      lastError: null,
+    },
+  }).catch(() => undefined);
+
+  return payload.access_token;
+}
+
+async function getTikTokAccessToken(
+  credential: StoredPostingCredential,
+  fetchImpl: FetchLike,
+): Promise<string> {
+  return isExpiringSoon(credential.expiresAt)
+    ? refreshTikTokCredential(credential, fetchImpl)
+    : credential.accessToken;
+}
+
 export async function uploadTikTokVideo(
   post: AutomationPost,
   videoPath: string,
   videoSize: number,
   fetchImpl: FetchLike = fetch,
 ): Promise<UploadResult> {
-  const token = process.env.TIKTOK_ACCESS_TOKEN?.trim();
+  const envToken = process.env.TIKTOK_ACCESS_TOKEN?.trim();
+  const storedCredential = post.socialAccountId || !envToken
+    ? await getStoredPostingCredential(STORED_CREDENTIAL_PROVIDERS.TikTok, post.socialAccountId)
+    : null;
+  const token = storedCredential
+    ? await getTikTokAccessToken(storedCredential, fetchImpl)
+    : envToken;
 
   if (!token) {
-    throw new Error("TikTok credentials are incomplete. Set TIKTOK_ACCESS_TOKEN with video.publish access.");
+    throw new Error("TikTok credentials are incomplete. Connect TikTok in Social settings or set TIKTOK_ACCESS_TOKEN with video.publish access.");
   }
 
   const initBody = buildTikTokInitBody(post, videoSize);
@@ -310,12 +485,17 @@ export async function uploadFacebookVideo(
   _videoSize: number,
   fetchImpl: FetchLike = fetch,
 ): Promise<UploadResult> {
-  const pageId = process.env.FACEBOOK_PAGE_ID?.trim();
-  const pageAccessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN?.trim();
+  const envPageId = process.env.FACEBOOK_PAGE_ID?.trim();
+  const envPageAccessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN?.trim();
+  const storedCredential = post.socialAccountId || !envPageId || !envPageAccessToken
+    ? await getStoredPostingCredential(STORED_CREDENTIAL_PROVIDERS.Facebook, post.socialAccountId)
+    : null;
+  const pageId = storedCredential?.externalAccountId || envPageId;
+  const pageAccessToken = storedCredential?.accessToken || envPageAccessToken;
   const graphVersion = process.env.FACEBOOK_GRAPH_VERSION?.trim() || "v23.0";
 
   if (!pageId || !pageAccessToken) {
-    throw new Error("Facebook credentials are incomplete. Set FACEBOOK_PAGE_ID and FACEBOOK_PAGE_ACCESS_TOKEN.");
+    throw new Error("Facebook credentials are incomplete. Connect Facebook in Social settings or set FACEBOOK_PAGE_ID and FACEBOOK_PAGE_ACCESS_TOKEN.");
   }
 
   const text = buildFacebookText(post);

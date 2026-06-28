@@ -108,6 +108,7 @@ export function buildYouTubeOAuthUrl(input: {
     scope: [
       "https://www.googleapis.com/auth/yt-analytics.readonly",
       "https://www.googleapis.com/auth/youtube.readonly",
+      "https://www.googleapis.com/auth/youtube.upload",
     ].join(" "),
   });
 
@@ -127,6 +128,7 @@ export function buildMetaOAuthUrl(input: {
     scope: [
       "pages_show_list",
       "pages_read_engagement",
+      "pages_manage_posts",
       "read_insights",
       "instagram_basic",
       "instagram_manage_insights",
@@ -149,6 +151,7 @@ export function buildTikTokOAuthUrl(input: {
     state: input.state,
     scope: [
       "user.info.basic",
+      "video.publish",
       "video.list",
     ].join(","),
   });

@@ -32,7 +32,10 @@ describe("social analytics connector OAuth helpers", () => {
     const threadsUrl = new URL(buildThreadsOAuthUrl({ appId: "threads-app", redirectUri, state: "state" }));
 
     expect(youtubeUrl.searchParams.get("scope")).toContain("yt-analytics.readonly");
+    expect(youtubeUrl.searchParams.get("scope")).toContain("youtube.upload");
     expect(metaUrl.searchParams.get("scope")).toContain("instagram_manage_insights");
+    expect(metaUrl.searchParams.get("scope")).toContain("pages_manage_posts");
+    expect(tiktokUrl.searchParams.get("scope")).toContain("video.publish");
     expect(tiktokUrl.searchParams.get("scope")).toContain("video.list");
     expect(threadsUrl.searchParams.get("scope")).toContain("threads_manage_insights");
   });

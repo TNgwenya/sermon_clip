@@ -16,6 +16,7 @@ import {
 
 const basePost: AutomationPost = {
   id: "post-1",
+  socialAccountId: null,
   platform: "TikTok",
   title: "Sunday Sermon Clip",
   caption: "God is near when life feels loud.",
