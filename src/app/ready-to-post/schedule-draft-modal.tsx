@@ -114,7 +114,7 @@ export function ScheduleDraftModal({ clipIds, open, onClose, onCreated }: Schedu
 
         <div className="schedule-draft-summary">
           <span className="status-pill status-exported">{clipIds.length} clip{clipIds.length === 1 ? "" : "s"}</span>
-          <span className="status-pill">{automationMode === "AUTOMATIC" ? "Mac worker" : "Media team handoff"}</span>
+          <span className="status-pill">{automationMode === "AUTOMATIC" ? "Automatic posting" : "Media team handoff"}</span>
         </div>
 
         <div className="schedule-fieldset">

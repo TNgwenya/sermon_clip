@@ -292,7 +292,6 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
     preparingCount: preparingClipCount,
     approvedWaitingCount: approvedWaitingClipCount,
   });
-  const readyBytes = clips.reduce((total, clip) => total + (clip.estimatedBytes ?? 0), 0);
   const downloadAllHref = buildReadyDownloadHref(clips.filter((clip) => clip.mediaReady).map((clip) => clip.id));
 
   return (
@@ -300,13 +299,13 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
       <header className="ready-publishing-header">
         <div className="ready-title-block">
           <p className="kicker">Ready to post</p>
-          <h1>Publishing desk</h1>
+          <h1>Ready to Post</h1>
           <p className="muted">
             {scopedClipTitle
-              ? `Showing ${scopedClipTitle}${scopedSermonTitle ? ` from ${scopedSermonTitle}` : ""}. Schedule it or copy platform captions.`
+              ? `Review ${scopedClipTitle}${scopedSermonTitle ? ` from ${scopedSermonTitle}` : ""}, copy the caption, and choose the next posting step.`
               : scopedSermonTitle
-              ? `Showing clips from ${scopedSermonTitle}. Schedule posts and copy captions.`
-              : "Schedule posts, copy captions, and track worker status."}
+              ? `Review finished clips from ${scopedSermonTitle}, then download, copy captions, or schedule the best next post.`
+              : "Review finished sermon clips, copy captions, and schedule this week's posts."}
           </p>
           {scopedClipTitle || scopedSermonTitle ? (
             <div className="ready-scope-pill">
@@ -316,15 +315,11 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           ) : null}
           <div className="ready-quick-stats" aria-label="Ready to post summary">
             <span><strong>{downloadableClipCount}</strong> ready</span>
-            <span><strong>{approvedWaitingClipCount}</strong> to prepare</span>
             <span><strong>{visibleScheduledPosts.length}</strong> planned</span>
-            <span><strong>{visiblePackageHistory.length}</strong> packages</span>
-            {readyBytes > 0 ? <span><strong>{`${Math.round(readyBytes / 1024 / 1024)} MB`}</strong> media</span> : null}
+            <span><strong>{failedPreparationClipCount}</strong> need attention</span>
           </div>
         </div>
         <nav className="ready-publishing-nav" aria-label="Ready to post actions">
-          <Link href="/" className="button tertiary">Dashboard</Link>
-          <a href="/settings/branding" className="button secondary">Brand Kit</a>
           {scopeIsActive ? <Link href="/ready-to-post" className="button secondary">All ready clips</Link> : null}
           {!controlPanelMode && downloadableClipCount > 0 ? <a href={downloadAllHref} className="button primary">Download all</a> : null}
         </nav>
@@ -337,21 +332,21 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
               <p className="kicker">{failedPreparationClipCount > 0 ? "Needs recovery" : "Needs preparation"}</p>
               <h2>
                 {failedPreparationClipCount > 0
-                  ? `${failedPreparationClipCount} failed item${failedPreparationClipCount === 1 ? "" : "s"} ${failedPreparationClipCount === 1 ? "needs" : "need"} repair`
-                  : `${approvedWaitingClipCount} approved clip${approvedWaitingClipCount === 1 ? "" : "s"} ${approvedWaitingClipCount === 1 ? "needs" : "need"} downloads`}
+                  ? `${failedPreparationClipCount} clip${failedPreparationClipCount === 1 ? "" : "s"} ${failedPreparationClipCount === 1 ? "needs" : "need"} attention`
+                  : `${approvedWaitingClipCount} approved clip${approvedWaitingClipCount === 1 ? "" : "s"} ${approvedWaitingClipCount === 1 ? "is" : "are"} almost ready`}
               </h2>
               <p className="muted">
                 {failedPreparationClipCount > 0
-                  ? "Retry only the missing or failed preparation stages so the clip can get back to ready-to-post."
+                  ? "Refresh the missing media pieces so these clips can return to the posting queue."
                   : clipId
-                  ? "Prepare this clip to generate the final video file, captions, church branding, and ready-to-post package."
-                  : "Prepare them to generate the final video files, captions, church branding, and ready-to-post package."}
+                  ? "Prepare this clip so the final video, captions, and church branding are ready to share."
+                  : "Prepare these clips so the final videos, captions, and church branding are ready to share."}
               </p>
               <div className="ready-prep-steps" aria-label="Preparation steps">
-                <span>Render video</span>
-                <span>Write captions</span>
-                <span>Add branding</span>
-                <span>Create downloads</span>
+                <span>Video</span>
+                <span>Captions</span>
+                <span>Branding</span>
+                <span>Download</span>
               </div>
             </div>
             <div className="ready-prep-actions">
@@ -360,7 +355,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
                   sermonId={reviewSermonId}
                   approvedCount={approvedWaitingClipCount}
                   clipIds={clipId ? [clipId] : undefined}
-                  actionLabel={failedPreparationClipCount > 0 ? "Fix failed items" : undefined}
+                  actionLabel={failedPreparationClipCount > 0 ? "Refresh media" : undefined}
                 />
               ) : (
                 <Link href="/sermons" className="button primary">Choose a sermon</Link>
@@ -377,7 +372,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
                     <div>
                       <h3>{clip.title}</h3>
                       <p className="muted small">
-                        {clip.sermon.title} · Score {clip.score.toFixed(1)}
+                        {clip.sermon.title}
                         {clip.smartClipCategory ? ` · ${clip.smartClipCategory}` : ""}
                       </p>
                     </div>
@@ -387,8 +382,8 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
                         {recoveryPlan.failedLabels.length > 0 ? <span>{failureMessage}</span> : null}
                         <ClipAssetRecoveryButton
                           clipId={clip.id}
-                          label={recoveryPlan.actionLabel}
-                          busyLabel="Repairing this clip..."
+                          label="Refresh media"
+                          busyLabel="Refreshing media..."
                           variant="secondary"
                         />
                       </div>
@@ -398,13 +393,13 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
                     <div className="clip-badge-row">
                       <span className="status-pill status-approved">Approved</span>
                       <span className={`status-pill ${clip.renderStatus === "FAILED" ? "quality-reject" : ""}`}>
-                        Render {clip.renderStatus.toLowerCase().replace(/_/g, " ")}
+                        Video {clip.renderStatus === "FAILED" ? "needs attention" : "readying"}
                       </span>
                       <span className={`status-pill ${clip.exportStatus === "FAILED" ? "quality-reject" : ""}`}>
-                        Export {clip.exportStatus.toLowerCase().replace(/_/g, " ")}
+                        Download {clip.exportStatus === "FAILED" ? "needs attention" : "pending"}
                       </span>
                       <span className={`status-pill ${clip.captionStatus === "FAILED" ? "quality-reject" : ""}`}>
-                        Captions {clip.captionStatus.toLowerCase().replace(/_/g, " ")}
+                        Captions {clip.captionStatus === "FAILED" ? "need attention" : "readying"}
                       </span>
                     </div>
                     <Link href={`/sermons/${clip.sermon.id}/clips/${clip.id}/studio`} className="text-link">

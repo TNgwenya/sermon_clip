@@ -385,7 +385,6 @@ export function ReadyQueueExperience({
   const activeCaptionVariant = selectedReadyPackage?.variants.find((variant) => variant.platform === activeCaptionPlatform)
     ?? selectedReadyPackage?.variants[0]
     ?? null;
-  const totalReadyBytes = downloadableClips.reduce((total, clip) => total + (clip.estimatedBytes ?? 0), 0);
   const scopedDrafts = drafts.filter((draft) => hasClipOverlap(draft.clipIds, clipScopeIdSet));
   const scopedPackageHistory = packageHistory.filter((item) => hasClipOverlap(item.clipIds, clipScopeIdSet));
   const scopedScheduledPosts = scheduledPosts.filter((post) => hasClipOverlap(post.clipIds, clipScopeIdSet));
@@ -394,11 +393,6 @@ export function ReadyQueueExperience({
   const groupedScheduledPosts = Array.from(
     new Map(filteredScheduledPosts.map((post) => [getScheduledPostGroupKey(post), post])).values(),
   );
-  const scheduledPostDuplicateCounts = filteredScheduledPosts.reduce<Record<string, number>>((counts, post) => {
-    const key = getScheduledPostGroupKey(post);
-    counts[key] = (counts[key] ?? 0) + 1;
-    return counts;
-  }, {});
 
   function toggleClip(clipId: string) {
     setFocusedClipId(clipId);
@@ -528,140 +522,112 @@ export function ReadyQueueExperience({
 
   return (
     <>
-      <section className="publishing-desk-grid" aria-label="Publishing workspace">
+      <section className="publishing-desk-grid ready-master-detail" aria-label="Publishing workspace">
         <div className="publishing-board-panel">
           <div className="publishing-section-head">
             <div>
-              <p className="kicker">Posting queue</p>
-              <h2>{scopedScheduledPosts.length} upload{scopedScheduledPosts.length === 1 ? "" : "s"} planned</h2>
-              <p className="muted small">
-                {controlPanelMode
-                  ? "Control panel mode shows schedules and worker status. Media files stay on the Mac."
-                  : `${downloadableClips.length} downloadable clip${downloadableClips.length === 1 ? "" : "s"} available. Automatic jobs publish from the Mac worker.`}
-              </p>
-            </div>
-            <button type="button" className="button tertiary" onClick={refreshScheduledPosts}>Refresh</button>
-          </div>
-
-          <div className="publishing-toolbar">
-            <span className="publishing-search-chip">
-              {postedCount} posted · {formatPackageSize(totalReadyBytes) ?? "--"} ready package
-            </span>
-            <div className="publishing-segmented" aria-label="Filter scheduled posts">
-              {(Object.keys(PUBLISHING_FILTER_LABELS) as PublishingFilter[]).map((filter) => (
-                <button
-                  key={filter}
-                  type="button"
-                  className={publishingFilter === filter ? "active" : ""}
-                  onClick={() => setPublishingFilter(filter)}
-                >
-                  {PUBLISHING_FILTER_LABELS[filter]}
-                </button>
-              ))}
+              <p className="kicker">Ready clips</p>
+              <h2>Choose what to post next</h2>
+              <p className="muted small">Preview a finished clip, copy the caption, then download or schedule it.</p>
             </div>
           </div>
-
-          {publishingMessage ? <p className={publishingMessage.includes("Could not") ? "error-banner" : "success-banner"}>{publishingMessage}</p> : null}
-
-          {scopedScheduledPosts.length === 0 ? (
+          <div className="ready-filter-row">
+            <label className="ready-search-field">
+              <span>Search clips</span>
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Title, caption, audience..."
+              />
+            </label>
+            <label className="ready-select-field">
+              <span>Readiness</span>
+              <select value={qualityFilter} onChange={(event) => setQualityFilter(event.target.value as ClipQualityFilter)}>
+                {(Object.keys(CLIP_QUALITY_FILTER_LABELS) as ClipQualityFilter[]).map((filter) => (
+                  <option key={filter} value={filter}>{CLIP_QUALITY_FILTER_LABELS[filter]}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {clips.length === 0 ? (
+            <EmptyState
+              title={approvedWaitingCount > 0 ? "Approved clips are waiting above" : "No finished clips yet"}
+              description={
+                approvedWaitingCount > 0
+                  ? "Prepare approved clips first. Finished videos will appear here with captions and posting actions."
+                  : "Finished sermon clips will appear here when preparation is complete."
+              }
+            />
+          ) : filteredClips.length === 0 ? (
             <div className="publishing-empty-state">
-              <h3>{approvedWaitingCount > 0 ? "Uploads unlock after preparation" : "No planned uploads yet"}</h3>
-              <p className="muted small">
-                {approvedWaitingCount > 0
-                  ? "Prepare approved clips first. Scheduling unlocks when downloads exist."
-                  : "Schedule a ready clip for automatic posting or manual handoff."}
-              </p>
-            </div>
-          ) : filteredScheduledPosts.length === 0 ? (
-            <div className="publishing-empty-state">
-              <h3>No {PUBLISHING_FILTER_LABELS[publishingFilter].toLowerCase()} uploads</h3>
-              <p className="muted small">Switch filters to see the rest of the publishing queue.</p>
+              <h3>No clips match those filters</h3>
+              <p className="muted small">Clear search or choose another readiness status.</p>
+              <button type="button" className="button tertiary" onClick={() => {
+                setSearchQuery("");
+                setQualityFilter("ALL");
+              }}>Clear filters</button>
             </div>
           ) : (
-            <div className="manual-publishing-list">
-              {groupedScheduledPosts.slice(0, 8).map((post) => {
-                const downloadHref = buildPackageHistoryDownloadHref(post.clipIds);
-                const captionText = buildScheduledPostCaption(post, clips);
-                const title = buildScheduledPostTitle(post, clips);
-                const firstClip = post.clipIds.map((clipId) => clips.find((clip) => clip.id === clipId)).find(Boolean);
-                const platformHandoff = firstClip ? getPlatformHandoff(firstClip, post.platform) : null;
-                const isPending = pendingScheduledPostId === post.id;
-                const duplicateCount = scheduledPostDuplicateCounts[getScheduledPostGroupKey(post)] ?? 1;
+            <div className="asset-tray-list">
+              {filteredClips.map((clip) => {
+                const readyPackage = buildReadyToPostPackage({
+                  clipId: clip.id,
+                  title: clip.title,
+                  hook: clip.hook,
+                  caption: clip.caption,
+                  hashtags: clip.hashtags,
+                  estimatedBytes: clip.estimatedBytes,
+                  smartClipCategory: clip.smartClipCategory,
+                  intendedAudience: clip.intendedAudience,
+                });
+                const qualityLabel = getQualityLabel(clip);
+                const qualityIssues = buildReadinessIssues(clip);
+                const isBatchSelected = selectedClipIdSet.has(clip.id);
+                const isFocused = selectedClip?.id === clip.id;
 
                 return (
-                  <article key={post.id} className="manual-publishing-card">
-                    <div className={`platform-mark platform-${getPlatformClass(post.platform)}`} aria-hidden="true">
-                      {getPlatformInitials(post.platform)}
-                    </div>
-                    <div className="manual-publishing-copy">
-                      <h3>{post.platform} · {post.postingSlot}</h3>
-                      <p className="muted small">
-                        {title}{post.socialAccountLabel ? ` · ${post.socialAccountLabel}` : " · Media team handoff"}
-                      </p>
-                      {post.scheduledFor ? (
-                        <p className="muted small">
-                          {post.automationMode === "AUTOMATIC" ? "Automatic" : "Manual"} · {new Intl.DateTimeFormat(undefined, {
-                            month: "short",
-                            day: "numeric",
-                            hour: "numeric",
-                            minute: "2-digit",
-                          }).format(new Date(post.scheduledFor))}
-                          {post.timezone ? ` · ${post.timezone}` : ""}
-                        </p>
+                  <article key={clip.id} className={`asset-tray-card ${isBatchSelected ? "is-selected" : ""} ${isFocused ? "is-focused" : ""}`}>
+                    <button type="button" className="asset-tray-thumb" onClick={() => focusClip(clip.id)} aria-label={`Preview ${clip.title}`}>
+                      {controlPanelMode ? (
+                        <strong className="asset-tray-thumb-placeholder" aria-hidden="true">SC</strong>
                       ) : (
-                        <p className="muted small">{post.automationMode === "AUTOMATIC" ? "Automatic" : "Manual"} · No exact time set</p>
+                        <Image src={`/api/clips/${clip.id}/thumbnail`} alt="" width={72} height={128} />
                       )}
-                      {post.note ? <p className="muted small">{post.note}</p> : null}
-                      {post.publishError ? <p className="error-banner">{post.publishError}</p> : null}
-                      {post.publishedUrl ? (
-                        <a className="text-link small" href={post.publishedUrl} target="_blank" rel="noreferrer">View published post</a>
-                      ) : null}
-                      <div className="clip-badge-row">
-                        <span className={`status-pill ${post.status === "POSTED" ? "status-exported" : ""}`}>
-                          {SCHEDULED_POST_STATUS_LABELS[post.status]}
-                        </span>
-                        <span className="status-pill">{post.workerStatus.toLowerCase().replace(/_/g, " ")}</span>
-                        {post.attemptCount > 0 ? <span className="status-pill">{post.attemptCount} attempt{post.attemptCount === 1 ? "" : "s"}</span> : null}
-                        <span className="status-pill">{post.clipIds.length} clip{post.clipIds.length === 1 ? "" : "s"}</span>
-                        {duplicateCount > 1 ? <span className="status-pill">{duplicateCount} matching drafts</span> : null}
-                      </div>
-                      <div className="posting-checklist" aria-label={`${post.platform} posting checklist`}>
-                        <span className="posting-check-step is-ready">Video</span>
-                        <span className={`posting-check-step ${captionText ? "is-ready" : "needs-attention"}`}>Caption</span>
-                        <span className="posting-check-step">Upload</span>
-                        <span className={`posting-check-step ${post.status === "POSTED" ? "is-ready" : ""}`}>Posted</span>
-                      </div>
+                      <span>{isFocused ? "Previewing" : "Preview"}</span>
+                    </button>
+                    <div className="asset-tray-main">
+                      <label className="asset-select-check">
+                        <input type="checkbox" checked={isBatchSelected} onChange={() => toggleClip(clip.id)} />
+                        <span>{clip.title}</span>
+                      </label>
+                      <p className="muted small">{clip.sermon.title}</p>
+                      <p className="muted small">{readyPackage.contentsLabel}{readyPackage.sizeLabel ? ` · ${readyPackage.sizeLabel}` : ""}</p>
                     </div>
-                    <div className="manual-publishing-actions">
-                      {post.automationMode === "MANUAL" && !controlPanelMode ? <a className="button secondary" href={downloadHref}>Download</a> : null}
-                      <CopyCaptionButton
-                        label={platformHandoff?.primaryCopyLabel ?? (post.platform === "YouTube Shorts" ? "Copy title" : "Copy caption")}
-                        text={platformHandoff?.primaryCopyText ?? (captionText || `${post.platform} caption pending`)}
-                      />
-                      {post.platform === "YouTube Shorts" ? <CopyCaptionButton label="Copy caption" text={captionText || "Caption pending"} /> : null}
-                      {platformHandoff ? <CopyCaptionButton label="Copy checklist" text={platformHandoff.checklistText} /> : null}
-                      {post.note ? <CopyCaptionButton label="Copy note" text={post.note} /> : null}
-                      {post.automationMode === "MANUAL" ? <a className="button tertiary" href={platformHandoff?.uploadUrl ?? "#"} target="_blank" rel="noreferrer">
-                        Open {post.platform === "YouTube Shorts" ? "Studio" : post.platform}
-                      </a> : null}
-                      <button
-                        type="button"
-                        className="button primary"
-                        onClick={() => updateScheduledPostStatus(post.id, "POSTED")}
-                        disabled={isPending || post.status === "POSTED"}
-                      >
-                        {isPending ? "Updating..." : "Mark posted"}
+                    <div className="clip-badge-row">
+                      <span className={`status-pill ${getQualityToneClass(qualityLabel)}`}>
+                        {getQualityLabelText(qualityLabel)}
+                      </span>
+                      <span className={`status-pill ${clip.mediaReady ? "status-exported" : "quality-reject"}`}>
+                        {clip.mediaReady ? "Ready to share" : "Needs repair"}
+                      </span>
+                    </div>
+                    {qualityIssues[0] ? <p className="muted small">{qualityIssues[0]}</p> : null}
+                    <div className="selected-asset-actions compact-actions">
+                      {clip.mediaReady && !controlPanelMode ? (
+                        <a className="button secondary" href={readyPackage.downloadHref}>Download</a>
+                      ) : clip.mediaReady ? null : (
+                        <ClipAssetRecoveryButton
+                          clipId={clip.id}
+                          label="Refresh media"
+                          busyLabel="Refreshing..."
+                          variant="secondary"
+                        />
+                      )}
+                      <button type="button" className="button tertiary" onClick={() => focusClip(clip.id)}>
+                        {isFocused ? "Previewing" : "Preview"}
                       </button>
-                      {post.status !== "POSTED" ? (
-                        <button
-                          type="button"
-                          className="button tertiary"
-                          onClick={() => updateScheduledPostStatus(post.id, "SKIPPED")}
-                          disabled={isPending || post.status === "SKIPPED"}
-                        >
-                          Skip
-                        </button>
-                      ) : null}
+                      {clip.mediaReady ? <SchedulePostButton clipId={clip.id} label="Schedule" onDraftCreated={addDraft} /> : null}
                     </div>
                   </article>
                 );
@@ -675,18 +641,27 @@ export function ReadyQueueExperience({
             <>
               <div className="publishing-section-head compact">
                 <div>
-                  <p className="kicker">Selected asset</p>
+                  <p className="kicker">Preview and post</p>
                   <h2>{selectedClip.title}</h2>
-                  <p className="muted small">
-                    {selectedClip.sermon.title} · AI score {selectedClip.score.toFixed(1)}/10 · quality {formatScore(selectedClip.finalQualityScore ?? selectedClip.score)}/10
-                  </p>
+                  <p className="muted small">{selectedClip.sermon.title}</p>
                 </div>
                 <span className={`status-pill ${getQualityToneClass(selectedQualityLabel)}`}>
                   {getQualityLabelText(selectedQualityLabel)}
                 </span>
               </div>
+              <div className={`selected-action-summary ${selectedClip.mediaReady ? "is-ready" : "needs-attention"}`}>
+                <div>
+                  <strong>{selectedClip.mediaReady ? "Ready to share" : "Needs media refresh"}</strong>
+                  <span>
+                    {selectedClip.mediaReady
+                      ? "Preview the clip, copy the caption, then download or schedule it."
+                      : "Refresh the media before downloading or scheduling this clip."}
+                  </span>
+                </div>
+                <span className="status-pill">{selectedClip.mediaReady ? "Next: post" : "Next: repair"}</span>
+              </div>
               <details className="selected-quality-panel selected-quality-details">
-                <summary>Quality checks</summary>
+                <summary>Readiness note</summary>
                 <div className="selected-quality-summary">
                   <strong>{selectedQualitySummary}</strong>
                   {selectedNextActionLabel ? <span>{selectedNextActionLabel}</span> : null}
@@ -745,17 +720,18 @@ export function ReadyQueueExperience({
                 {selectedClip.mediaReady ? (
                   <>
                     {!controlPanelMode ? <a className="button primary" href={selectedReadyPackage.downloadHref}>Download video</a> : null}
-                    <SchedulePostButton clipId={selectedClip.id} onDraftCreated={addDraft} />
+                    <CopyCaptionButton label="Copy caption" text={activeHandoff?.captionText ?? selectedClip.caption} />
+                    <SchedulePostButton clipId={selectedClip.id} label="Schedule" onDraftCreated={addDraft} />
                   </>
                 ) : (
                   <ClipAssetRecoveryButton
                     clipId={selectedClip.id}
-                    label="Rebuild posting media"
-                    busyLabel="Rebuilding media..."
+                    label="Refresh media"
+                    busyLabel="Refreshing media..."
                     variant="primary"
                   />
                 )}
-                <Link href={`/sermons/${selectedClip.sermon.id}/review`} className="button tertiary">Review sermon</Link>
+                <Link href={`/sermons/${selectedClip.sermon.id}/clips/${selectedClip.id}/studio`} className="button tertiary">Edit clip</Link>
               </div>
               <div className="platform-caption-panel">
                 <div className="platform-caption-tabs" role="tablist" aria-label="Platform caption previews">
@@ -791,10 +767,8 @@ export function ReadyQueueExperience({
                     </div>
                     <div className="caption-copy-grid">
                       <CopyCaptionButton label={activeHandoff.primaryCopyLabel} text={activeHandoff.primaryCopyText} />
-                      <CopyCaptionButton label="Copy title" text={activeHandoff.titleText} />
-                      <CopyCaptionButton label="Copy caption" text={activeHandoff.captionText} />
+                      {activeHandoff.platform === "YouTube Shorts" ? <CopyCaptionButton label="Copy caption" text={activeHandoff.captionText} /> : null}
                       <CopyCaptionButton label="Copy hashtags" text={selectedReadyPackage.hashtags.join(" ")} />
-                      <CopyCaptionButton label="Copy checklist" text={activeHandoff.checklistText} />
                       <a className="button tertiary" href={activeHandoff.uploadUrl} target="_blank" rel="noreferrer">
                         Open {activeHandoff.platform === "YouTube Shorts" ? "Studio" : activeHandoff.platform}
                       </a>
@@ -803,19 +777,24 @@ export function ReadyQueueExperience({
                 ) : null}
               </div>
               <div className="ready-mobile-action-bar" aria-label="Selected clip actions">
-                {selectedClip.mediaReady && !controlPanelMode ? (
-                  <a className="button primary" href={selectedReadyPackage.downloadHref}>Download</a>
-                ) : selectedClip.mediaReady ? (
-                  <SchedulePostButton clipId={selectedClip.id} onDraftCreated={addDraft} />
+                {selectedClip.mediaReady ? (
+                  <>
+                    {!controlPanelMode ? <a className="button primary" href={selectedReadyPackage.downloadHref}>Download</a> : null}
+                    <CopyCaptionButton label="Copy caption" text={activeHandoff?.captionText ?? selectedClip.caption} />
+                    <SchedulePostButton clipId={selectedClip.id} label="Schedule" onDraftCreated={addDraft} />
+                    <Link href={`/sermons/${selectedClip.sermon.id}/clips/${selectedClip.id}/studio`} className="button tertiary">Edit clip</Link>
+                  </>
                 ) : (
-                  <ClipAssetRecoveryButton
-                    clipId={selectedClip.id}
-                    label="Rebuild"
-                    busyLabel="Rebuilding..."
-                    variant="primary"
-                  />
+                  <>
+                    <ClipAssetRecoveryButton
+                      clipId={selectedClip.id}
+                      label="Refresh"
+                      busyLabel="Refreshing..."
+                      variant="primary"
+                    />
+                    <Link href={`/sermons/${selectedClip.sermon.id}/clips/${selectedClip.id}/studio`} className="button tertiary">Edit clip</Link>
+                  </>
                 )}
-                <CopyCaptionButton label="Copy caption" text={activeHandoff?.captionText ?? selectedClip.caption} />
               </div>
             </>
           ) : (
@@ -831,8 +810,8 @@ export function ReadyQueueExperience({
         <div className="posting-draft-panel compact-panel">
           <div className="publishing-section-head compact">
             <div>
-              <p className="kicker">Setup</p>
-              <h2>Channels and handoffs</h2>
+              <p className="kicker">Support</p>
+              <h2>Channels and downloads</h2>
             </div>
           </div>
           <div className="setup-list">
@@ -856,25 +835,28 @@ export function ReadyQueueExperience({
             </article>
             <article className="setup-item package-history-overview">
               <div>
-                <h3>{scopedPackageHistory.length} recent package{scopedPackageHistory.length === 1 ? "" : "s"}</h3>
-                <p className="muted small">Re-download recent handoffs without rebuilding the queue.</p>
+                <h3>{scopedPackageHistory.length} recent download{scopedPackageHistory.length === 1 ? "" : "s"}</h3>
+                <p className="muted small">Re-download a recent handoff when the media team needs it again.</p>
               </div>
-              <span className="status-pill">{scopedPackageHistory.length > 0 ? "History" : "Empty"}</span>
+              <span className="status-pill">{scopedPackageHistory.length > 0 ? "Recent" : "Empty"}</span>
             </article>
             {scopedPackageHistory.length > 0 && !controlPanelMode ? (
-              <div className="package-history-list" aria-label="Recent package history">
-                {scopedPackageHistory.slice(0, 3).map((item) => (
-                  <article key={item.id} className="package-history-card">
-                    <div>
-                      <h3>{item.fileName}</h3>
-                      <p className="muted small">
-                        {item.clipCount} clip{item.clipCount === 1 ? "" : "s"} · {formatPackageSize(item.totalVideoBytes) ?? "Size unavailable"} · {formatPackageCreatedAt(item.createdAt)}
-                      </p>
-                    </div>
-                    <a className="button tertiary" href={buildPackageHistoryDownloadHref(item.clipIds)}>Re-download</a>
-                  </article>
-                ))}
-              </div>
+              <details className="package-history-details">
+                <summary>Show recent downloads</summary>
+                <div className="package-history-list" aria-label="Recent package history">
+                  {scopedPackageHistory.slice(0, 3).map((item) => (
+                    <article key={item.id} className="package-history-card">
+                      <div>
+                        <h3>{item.fileName}</h3>
+                        <p className="muted small">
+                          {item.clipCount} clip{item.clipCount === 1 ? "" : "s"} · {formatPackageSize(item.totalVideoBytes) ?? "Size unavailable"} · {formatPackageCreatedAt(item.createdAt)}
+                        </p>
+                      </div>
+                      <a className="button tertiary" href={buildPackageHistoryDownloadHref(item.clipIds)}>Re-download</a>
+                    </article>
+                  ))}
+                </div>
+              </details>
             ) : null}
           </div>
           <ReadyQueueActions
@@ -894,115 +876,126 @@ export function ReadyQueueExperience({
         <div className="posting-draft-panel compact-panel">
           <div className="publishing-section-head compact">
             <div>
-              <p className="kicker">Ready assets</p>
-              <h2>Clip tray</h2>
-              <p className="muted small">Preview one clip, select many clips, and build posting packages from the same tray.</p>
+              <p className="kicker">Planned posts</p>
+              <h2>{scopedScheduledPosts.length} upload{scopedScheduledPosts.length === 1 ? "" : "s"} planned</h2>
+              <p className="muted small">
+                {controlPanelMode
+                  ? "Scheduled posts are listed here. Open the Mac app to preview and download local media."
+                  : "A quiet view of what is scheduled, ready for upload, or already posted."}
+              </p>
+            </div>
+            <button type="button" className="button tertiary" onClick={refreshScheduledPosts}>Refresh</button>
+          </div>
+
+          <div className="publishing-toolbar">
+            <span className="publishing-search-chip">{postedCount} posted</span>
+            <div className="publishing-segmented" aria-label="Filter scheduled posts">
+              {(Object.keys(PUBLISHING_FILTER_LABELS) as PublishingFilter[]).map((filter) => (
+                <button
+                  key={filter}
+                  type="button"
+                  className={publishingFilter === filter ? "active" : ""}
+                  onClick={() => setPublishingFilter(filter)}
+                >
+                  {PUBLISHING_FILTER_LABELS[filter]}
+                </button>
+              ))}
             </div>
           </div>
-          <div className="ready-filter-row">
-            <label className="ready-search-field">
-              <span>Search clips</span>
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Title, caption, audience..."
-              />
-            </label>
-            <label className="ready-select-field">
-              <span>Quality</span>
-              <select value={qualityFilter} onChange={(event) => setQualityFilter(event.target.value as ClipQualityFilter)}>
-                {(Object.keys(CLIP_QUALITY_FILTER_LABELS) as ClipQualityFilter[]).map((filter) => (
-                  <option key={filter} value={filter}>{CLIP_QUALITY_FILTER_LABELS[filter]}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-          {clips.length === 0 ? (
-            <EmptyState
-              title={approvedWaitingCount > 0 ? "Approved clips are waiting above" : "No clip cards to download yet"}
-              description={
-                approvedWaitingCount > 0
-                  ? "Use Prepare approved clips to create finished videos. This tray will then show captions, hashtags, and scheduling."
-                  : "When preparation finishes, clips will appear with captions, hashtags, scheduling, and quality notes."
-              }
-            />
-          ) : filteredClips.length === 0 ? (
+
+          {publishingMessage ? <p className={publishingMessage.includes("Could not") ? "error-banner" : "success-banner"}>{publishingMessage}</p> : null}
+
+          {scopedScheduledPosts.length === 0 ? (
             <div className="publishing-empty-state">
-              <h3>No clips match those filters</h3>
-              <p className="muted small">Clear search or choose another quality status to see the rest of the tray.</p>
-              <button type="button" className="button tertiary" onClick={() => {
-                setSearchQuery("");
-                setQualityFilter("ALL");
-              }}>Clear filters</button>
+              <h3>{approvedWaitingCount > 0 ? "Scheduling unlocks after preparation" : "No planned posts yet"}</h3>
+              <p className="muted small">
+                {approvedWaitingCount > 0
+                  ? "Prepare approved clips first. Then schedule the strongest clips for the week."
+                  : "Schedule a ready clip when you know where it should go."}
+              </p>
+            </div>
+          ) : filteredScheduledPosts.length === 0 ? (
+            <div className="publishing-empty-state">
+              <h3>No {PUBLISHING_FILTER_LABELS[publishingFilter].toLowerCase()} uploads</h3>
+              <p className="muted small">Switch filters to see the rest of the posting plan.</p>
             </div>
           ) : (
-            <div className="asset-tray-list">
-              {filteredClips.map((clip) => {
-                const readyPackage = buildReadyToPostPackage({
-                  clipId: clip.id,
-                  title: clip.title,
-                  hook: clip.hook,
-                  caption: clip.caption,
-                  hashtags: clip.hashtags,
-                  estimatedBytes: clip.estimatedBytes,
-                  smartClipCategory: clip.smartClipCategory,
-                  intendedAudience: clip.intendedAudience,
-                });
-                const qualityLabel = getQualityLabel(clip);
-                const qualityIssues = buildReadinessIssues(clip);
-                const isBatchSelected = selectedClipIdSet.has(clip.id);
-                const isFocused = selectedClip?.id === clip.id;
+            <div className="manual-publishing-list">
+              {groupedScheduledPosts.slice(0, 8).map((post) => {
+                const downloadHref = buildPackageHistoryDownloadHref(post.clipIds);
+                const captionText = buildScheduledPostCaption(post, clips);
+                const title = buildScheduledPostTitle(post, clips);
+                const firstClip = post.clipIds.map((clipId) => clips.find((clip) => clip.id === clipId)).find(Boolean);
+                const platformHandoff = firstClip ? getPlatformHandoff(firstClip, post.platform) : null;
+                const isPending = pendingScheduledPostId === post.id;
 
                 return (
-                  <article key={clip.id} className={`asset-tray-card ${isBatchSelected ? "is-selected" : ""} ${isFocused ? "is-focused" : ""}`}>
-                    <button type="button" className="asset-tray-thumb" onClick={() => focusClip(clip.id)} aria-label={`Preview ${clip.title}`}>
-                      {controlPanelMode ? (
-                        <strong className="asset-tray-thumb-placeholder" aria-hidden="true">SC</strong>
+                  <article key={post.id} className="manual-publishing-card">
+                    <div className={`platform-mark platform-${getPlatformClass(post.platform)}`} aria-hidden="true">
+                      {getPlatformInitials(post.platform)}
+                    </div>
+                    <div className="manual-publishing-copy">
+                      <h3>{post.platform} · {post.postingSlot}</h3>
+                      <p className="muted small">
+                        {title}{post.socialAccountLabel ? ` · ${post.socialAccountLabel}` : " · Media team handoff"}
+                      </p>
+                      {post.scheduledFor ? (
+                        <p className="muted small">
+                          {post.automationMode === "AUTOMATIC" ? "Automatic" : "Manual"} · {new Intl.DateTimeFormat(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "numeric",
+                            minute: "2-digit",
+                          }).format(new Date(post.scheduledFor))}
+                        </p>
                       ) : (
-                        <Image src={`/api/clips/${clip.id}/thumbnail`} alt="" width={72} height={128} />
+                        <p className="muted small">{post.automationMode === "AUTOMATIC" ? "Automatic" : "Manual"} · No exact time set</p>
                       )}
-                      <span>{isFocused ? "Previewing" : "Preview"}</span>
-                    </button>
-                    <div className="asset-tray-main">
-                      <label className="asset-select-check">
-                        <input type="checkbox" checked={isBatchSelected} onChange={() => toggleClip(clip.id)} />
-                        <span>{clip.title}</span>
-                      </label>
-                      <p className="muted small">{readyPackage.contentsLabel} · {readyPackage.sizeLabel ?? "Size checking on download"}</p>
-                      <p className="muted small">{readyPackage.hashtags.join(" ") || "No hashtags yet"}</p>
+                      {post.note ? <p className="muted small">{post.note}</p> : null}
+                      {post.publishError ? <p className="error-banner">{post.publishError}</p> : null}
+                      {post.publishedUrl ? (
+                        <a className="text-link small" href={post.publishedUrl} target="_blank" rel="noreferrer">View published post</a>
+                      ) : null}
+                      <div className="clip-badge-row">
+                        <span className={`status-pill ${post.status === "POSTED" ? "status-exported" : ""}`}>
+                          {SCHEDULED_POST_STATUS_LABELS[post.status]}
+                        </span>
+                        <span className="status-pill">{post.clipIds.length} clip{post.clipIds.length === 1 ? "" : "s"}</span>
+                      </div>
+                      <div className="posting-checklist" aria-label={`${post.platform} posting checklist`}>
+                        <span className="posting-check-step is-ready">Video</span>
+                        <span className={`posting-check-step ${captionText ? "is-ready" : "needs-attention"}`}>Caption</span>
+                        <span className={`posting-check-step ${post.status === "POSTED" ? "is-ready" : ""}`}>Posted</span>
+                      </div>
                     </div>
-                    <div className="clip-badge-row">
-                      <span className={`status-pill ${getQualityToneClass(qualityLabel)}`}>
-                        {getQualityLabelText(qualityLabel)} · {formatScore(clip.finalQualityScore ?? clip.score)}
-                      </span>
-                      {readyPackage.badges.slice(0, 5).map((badge, index) => (
-                      <span key={`${clip.id}-${badge}-${index}`} className={`status-pill ${badge === "Ready to post" && clip.mediaReady ? "status-exported" : ""}`}>
-                        {badge === "Ready to post" && !clip.mediaReady ? "Needs repair" : badge}
-                      </span>
-                      ))}
-                    </div>
-                    <div className="asset-tray-meta">
-                      <span>Audio {formatScore(clip.audioQualityScore)}</span>
-                      <span>Captions {formatScore(clip.captionQualityScore)}</span>
-                      <span>Visual {formatScore(clip.visualConfidenceScore)}</span>
-                    </div>
-                    {qualityIssues[0] ? <p className="muted small">{qualityIssues[0]}</p> : null}
-                    <div className="selected-asset-actions compact-actions">
-                      {clip.mediaReady && !controlPanelMode ? (
-                        <a className="button secondary" href={readyPackage.downloadHref}>Download</a>
-                      ) : clip.mediaReady ? null : (
-                        <ClipAssetRecoveryButton
-                          clipId={clip.id}
-                          label="Rebuild media"
-                          busyLabel="Rebuilding..."
-                          variant="secondary"
-                        />
-                      )}
-                      <button type="button" className="button tertiary" onClick={() => focusClip(clip.id)}>
-                        {isFocused ? "Previewing" : "Preview here"}
+                    <div className="manual-publishing-actions">
+                      {post.automationMode === "MANUAL" && !controlPanelMode ? <a className="button secondary" href={downloadHref}>Download</a> : null}
+                      <CopyCaptionButton
+                        label={platformHandoff?.primaryCopyLabel ?? (post.platform === "YouTube Shorts" ? "Copy title" : "Copy caption")}
+                        text={platformHandoff?.primaryCopyText ?? (captionText || `${post.platform} caption pending`)}
+                      />
+                      {post.platform === "YouTube Shorts" ? <CopyCaptionButton label="Copy caption" text={captionText || "Caption pending"} /> : null}
+                      {post.automationMode === "MANUAL" ? <a className="button tertiary" href={platformHandoff?.uploadUrl ?? "#"} target="_blank" rel="noreferrer">
+                        Open {post.platform === "YouTube Shorts" ? "Studio" : post.platform}
+                      </a> : null}
+                      <button
+                        type="button"
+                        className="button primary"
+                        onClick={() => updateScheduledPostStatus(post.id, "POSTED")}
+                        disabled={isPending || post.status === "POSTED"}
+                      >
+                        {isPending ? "Updating..." : "Mark posted"}
                       </button>
-                      {clip.mediaReady ? <SchedulePostButton clipId={clip.id} onDraftCreated={addDraft} /> : null}
+                      {post.status !== "POSTED" ? (
+                        <button
+                          type="button"
+                          className="button tertiary"
+                          onClick={() => updateScheduledPostStatus(post.id, "SKIPPED")}
+                          disabled={isPending || post.status === "SKIPPED"}
+                        >
+                          Skip
+                        </button>
+                      ) : null}
                     </div>
                   </article>
                 );

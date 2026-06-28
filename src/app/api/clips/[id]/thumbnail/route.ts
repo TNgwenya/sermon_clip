@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
+import { ensureClipThumbnail } from "@/server/agents/clipThumbnailService";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
 function fallbackPoster(title: string): NextResponse {
@@ -66,7 +67,6 @@ export async function GET(
     return fallbackPoster(clip.title);
   }
 
-  const { ensureClipThumbnail } = await import(/* turbopackIgnore: true */ "@/server/agents/clipThumbnailService");
   const thumbnail = await ensureClipThumbnail(clip, { includeImage: true });
   if (thumbnail.webpPath && request.headers.get("accept")?.includes("image/webp")) {
     const webpImage = await readFile(/* turbopackIgnore: true */ thumbnail.webpPath);

@@ -90,16 +90,17 @@ export function ReadyQueueActions({
 
 type SchedulePostButtonProps = {
   clipId: string;
+  label?: string;
   onDraftCreated?: (draft: PostingDraft) => void;
 };
 
-export function SchedulePostButton({ clipId, onDraftCreated }: SchedulePostButtonProps) {
+export function SchedulePostButton({ clipId, label = "Schedule post", onDraftCreated }: SchedulePostButtonProps) {
   const [scheduleOpen, setScheduleOpen] = useState(false);
 
   return (
     <>
       <button type="button" className="button tertiary" onClick={() => setScheduleOpen(true)}>
-        Schedule post
+        {label}
       </button>
       <ScheduleDraftModal
         clipIds={[clipId]}

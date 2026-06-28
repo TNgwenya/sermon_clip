@@ -103,11 +103,17 @@ describe("posting platform helpers", () => {
     vi.stubEnv("FACEBOOK_PAGE_ACCESS_TOKEN", "page-token");
     vi.stubEnv("FACEBOOK_GRAPH_VERSION", "v99.0");
     vi.stubEnv("FACEBOOK_DEFAULT_PUBLISHED", "true");
-    const fetchImpl = vi.fn(async () => Response.json({ id: "fb-video-1" }));
+    const capturedRequests: Array<[input: RequestInfo | URL, init?: RequestInit]> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      capturedRequests.push([input, init]);
+      return Response.json({ id: "fb-video-1" });
+    };
 
     try {
-      const result = await uploadPlatformPost({ ...basePost, platform: "Facebook" }, videoPath, 5, fetchImpl as typeof fetch);
-      const [url, init] = fetchImpl.mock.calls[0];
+      const result = await uploadPlatformPost({ ...basePost, platform: "Facebook" }, videoPath, 5, fetchImpl);
+      const firstRequest = capturedRequests[0];
+      expect(firstRequest).toBeDefined();
+      const [url, init] = firstRequest;
       const body = init?.body as FormData;
 
       expect(url).toBe("https://graph.facebook.com/v99.0/page-123/videos");
