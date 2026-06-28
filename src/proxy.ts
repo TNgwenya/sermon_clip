@@ -40,6 +40,7 @@ export function proxy(request: NextRequest): NextResponse {
   if (
     pathname.startsWith("/_next/")
     || pathname.startsWith("/api/automation/")
+    || pathname.startsWith("/tiktokfLd97ImnjWIJmcyM6oqmjHob9AvuOAex.txt")
     || pathname === "/privacy"
     || pathname === "/privacy/"
     || pathname === "/terms"
