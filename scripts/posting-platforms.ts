@@ -23,7 +23,7 @@ export type AutomationPost = {
   }>;
 };
 
-export type CompletionStatus = "POSTED" | "FAILED" | "PRIVATE_ONLY_UNVERIFIED";
+export type CompletionStatus = "POSTED" | "FAILED" | "PRIVATE_ONLY_UNVERIFIED" | "SKIPPED";
 
 export type UploadResult = {
   status: CompletionStatus;

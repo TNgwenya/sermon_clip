@@ -287,10 +287,10 @@ export async function claimScheduledPost(input: {
   return post ? toScheduledPost(post) : null;
 }
 
-export type CompleteScheduledPostStatus = "POSTED" | "FAILED" | "PRIVATE_ONLY_UNVERIFIED";
+export type CompleteScheduledPostStatus = "POSTED" | "FAILED" | "PRIVATE_ONLY_UNVERIFIED" | "SKIPPED";
 
 export function normalizeCompleteScheduledPostStatus(value: unknown): CompleteScheduledPostStatus | null {
-  return value === "POSTED" || value === "FAILED" || value === "PRIVATE_ONLY_UNVERIFIED"
+  return value === "POSTED" || value === "FAILED" || value === "PRIVATE_ONLY_UNVERIFIED" || value === "SKIPPED"
     ? value
     : null;
 }

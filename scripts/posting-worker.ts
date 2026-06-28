@@ -119,10 +119,11 @@ async function publishPost(post: AutomationPost): Promise<UploadResult> {
   if (dryRun) {
     log("dry run publish", { id: post.id, platform: post.platform, videoPath: video.path });
     return {
-      status: "POSTED",
+      status: "SKIPPED",
       externalPostId: `dry-run-${post.id}`,
       publishedUrl: undefined,
       finalPrivacyStatus: "dry-run",
+      publishError: "Dry run only. Set POSTING_WORKER_DRY_RUN=false to upload to the platform.",
     };
   }
 
