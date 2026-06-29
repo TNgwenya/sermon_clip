@@ -1836,10 +1836,15 @@ export async function transcribeSermonAudio(
       );
     }
 
+    const storedTranscriptLanguage = languageHint && usesLocalMultilingualLanguageHint(languageHint)
+      ? languageHint.intendedLanguage
+      : transcriptWindowed.transcript.language ?? "unknown";
+
     const rawPayload = {
       provider: normalizedTranscript.provider,
       model: normalizedTranscript.model,
-      language: transcriptWindowed.transcript.language,
+      language: storedTranscriptLanguage,
+      providerDetectedLanguage: transcriptWindowed.transcript.language ?? null,
       fullText: transcriptWindowed.transcript.fullText,
       segmentCount: transcriptWindowed.transcript.segments.length,
       chunking: {
@@ -1923,14 +1928,14 @@ export async function transcribeSermonAudio(
         update: {
           fullText: transcriptWindowed.transcript.fullText,
           provider: normalizedTranscript.provider,
-          language: transcriptWindowed.transcript.language ?? "unknown",
+          language: storedTranscriptLanguage,
           rawJsonPath: transcriptJsonPath,
         },
         create: {
           sermonId: sermon.id,
           fullText: transcriptWindowed.transcript.fullText,
           provider: transcriptWindowed.transcript.provider,
-          language: transcriptWindowed.transcript.language ?? "unknown",
+          language: storedTranscriptLanguage,
           rawJsonPath: transcriptJsonPath,
         },
       });
