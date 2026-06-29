@@ -125,6 +125,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       smartCropDebugError: true,
       renderStatus: true,
       renderedFilePath: true,
+      remotePreviewUrl: true,
       renderError: true,
       renderFreshness: true,
       captionStatus: true,
@@ -320,7 +321,13 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
           : null;
   const bestPreviewPath =
     clip.captionedVideoPath ?? clip.overlayVideoPath ?? clip.exportedFilePath ?? clip.renderedFilePath ?? null;
-  const hasPreview = localMediaAvailable && Boolean(bestPreviewPath);
+  const hasRemotePreview = Boolean(clip.remotePreviewUrl);
+  const hasPreview = (localMediaAvailable && Boolean(bestPreviewPath)) || hasRemotePreview;
+  const previewSrc = hasRemotePreview
+    ? `/api/clips/${clip.id}/preview?variant=best`
+    : localMediaAvailable && bestPreviewVariant
+      ? `/api/clips/${clip.id}/preview?variant=${bestPreviewVariant}`
+      : null;
 
   const clipStatus = clip.status as "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
   const renderStatus = clip.renderStatus as "NOT_RENDERED" | "QUEUED" | "RENDERING" | "COMPLETED" | "FAILED";
@@ -388,12 +395,12 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             clipId={clip.id}
             currentStatus={clipStatus}
             hasPreview={hasPreview}
-            previewSrc={localMediaAvailable && bestPreviewVariant ? `/api/clips/${clip.id}/preview?variant=${bestPreviewVariant}` : null}
+            previewSrc={previewSrc}
             sourcePreviewSrc={sourceVideoExists ? `/api/sermons/${sermon.id}/source-preview` : null}
             unavailableDescription={
-              localMediaAvailable
+              localMediaAvailable || hasRemotePreview
                 ? undefined
-                : "This Vercel control panel shows metadata only. Open the local Mac app to stream clip previews from local storage."
+                : "No remote preview is available yet. Keep the Mac media worker running to render and upload this clip preview."
             }
             renderLabel={renderStatusLabel(renderStatus)}
             renderTone={renderStatus === "COMPLETED" ? "success" : renderStatus === "FAILED" ? "danger" : "neutral"}
