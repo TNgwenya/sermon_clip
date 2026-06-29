@@ -61,27 +61,19 @@ describe("transcription sermon segment filtering", () => {
     }
   });
 
-  it("keeps unsupported local language hints in the prompt without sending an API language code", () => {
+  it("does not send Whisper prompts for unsupported local language hints", () => {
     const result = __transcriptionTestUtils.buildTranscriptionLanguageHint("Xhosa and English");
 
     expect(result?.intendedLanguage).toBe("Xhosa and English");
     expect(result?.openAiLanguage).toBeUndefined();
-    expect(result?.prompt).toContain("Languages: Xhosa and English.");
-    expect(result?.prompt).toContain("Christian sermon");
-    expect(result?.prompt).toContain("Bible verses");
-    expect(result?.prompt).toContain("altar call");
-    expect(result?.prompt).not.toContain("Treat the user-provided language list as authoritative");
-    expect(result?.prompt).not.toContain("Do not auto-detect");
-    expect(result?.prompt).not.toContain("Keep filler words");
+    expect(result?.prompt).toBeUndefined();
   });
 
-  it("keeps South African language prompts as compact lexical context", () => {
+  it("keeps South African local language prompts disabled", () => {
     const result = __transcriptionTestUtils.buildTranscriptionLanguageHint("English, Zulu, Xhosa");
 
     expect(result?.openAiLanguage).toBeUndefined();
-    expect(result?.prompt).toContain("Languages: English, Zulu, Xhosa.");
-    expect(result?.prompt).not.toContain("Yoruba");
-    expect(result?.prompt).not.toContain("South African code-switching");
+    expect(result?.prompt).toBeUndefined();
   });
 
   it("adds sermon title, preacher, and church context to improve proper-name transcription", () => {
@@ -102,10 +94,11 @@ describe("transcription sermon segment filtering", () => {
       churchName: "",
     });
 
-    expect(result?.prompt).toContain("Pastor Test");
-    expect(result?.prompt).not.toContain("  Pastor   Test");
-    expect(result?.prompt).not.toContain("Church name");
-    const titleMatch = result?.prompt.match(/Known sermon terms: ([^,]+),/);
+    const prompt = result?.prompt ?? "";
+    expect(prompt).toContain("Pastor Test");
+    expect(prompt).not.toContain("  Pastor   Test");
+    expect(prompt).not.toContain("Church name");
+    const titleMatch = prompt.match(/Known sermon terms: ([^,]+),/);
     expect(titleMatch?.[1].length).toBeLessThanOrEqual(140);
   });
 
@@ -114,7 +107,7 @@ describe("transcription sermon segment filtering", () => {
 
     expect(result?.intendedLanguage).toBe("Zulu");
     expect(result?.openAiLanguage).toBeUndefined();
-    expect(result?.prompt).toContain("Zulu");
+    expect(result?.prompt).toBeUndefined();
   });
 
   it("passes supported language codes when available", () => {
@@ -132,7 +125,7 @@ describe("transcription sermon segment filtering", () => {
   });
 
   it("adds previous transcript context to chunk prompts without replacing the language hint", () => {
-    const languageHint = __transcriptionTestUtils.buildTranscriptionLanguageHint("Xhosa and English");
+    const languageHint = __transcriptionTestUtils.buildTranscriptionLanguageHint("English");
     const tail = __transcriptionTestUtils.getTranscriptTail(
       "God is faithful when the church keeps praying and the pastor reminds us to stir up the gift again",
       8,
@@ -140,12 +133,20 @@ describe("transcription sermon segment filtering", () => {
     const prompt = __transcriptionTestUtils.buildChunkTranscriptionPrompt(languageHint, tail);
 
     expect(tail).toBe("reminds us to stir up the gift again");
-    expect(prompt).toContain("Xhosa and English");
+    expect(prompt).toContain("Languages: English.");
     expect(prompt).toContain("Previous transcript context");
     expect(prompt).not.toContain("continue from the next spoken words");
     expect(prompt).not.toContain("do not invent bridge wording");
     expect(prompt).not.toContain("do not repeat unless spoken again");
     expect(prompt).toContain("stir up the gift again");
+  });
+
+  it("omits chunk prompts for local multilingual sermons", () => {
+    const languageHint = __transcriptionTestUtils.buildTranscriptionLanguageHint("English and Zulu");
+    const prompt = __transcriptionTestUtils.buildChunkTranscriptionPrompt(languageHint, "power of life and death");
+
+    expect(languageHint?.prompt).toBeUndefined();
+    expect(prompt).toBeUndefined();
   });
 
   it("keeps chunked transcript timestamps on the original sermon timeline", () => {

@@ -110,7 +110,7 @@ const CHUNK_DURATION_SECONDS = 20 * 60;
 const LOCAL_LANGUAGE_CHUNK_DURATION_SECONDS = 5 * 60;
 const CHUNK_FOLDER_NAME = "chunks";
 const CHUNK_TRANSCRIPT_CACHE_FOLDER_NAME = "chunk-transcripts";
-const CHUNK_TRANSCRIPT_CACHE_VERSION = 2;
+const CHUNK_TRANSCRIPT_CACHE_VERSION = 3;
 const TRANSCRIPTION_CONTEXT_WORDS = 70;
 const SPEECH_ENHANCED_AUDIO_NAME = "speech-enhanced-audio.mp3";
 const MAX_CONSECUTIVE_DUPLICATE_TRANSCRIPT_SEGMENTS = 1;
@@ -138,7 +138,7 @@ const LOCAL_MULTILINGUAL_LANGUAGE_CODES = new Set(["xh", "zu", "st", "tn"]);
 type TranscriptionLanguageHint = {
   intendedLanguage: string;
   openAiLanguage?: string;
-  prompt: string;
+  prompt?: string;
 };
 
 type TranscriptionPromptContext = {
@@ -482,7 +482,9 @@ function buildTranscriptionLanguageHint(
   return {
     intendedLanguage,
     openAiLanguage,
-    prompt: buildWhisperPromptContext(intendedLanguage, context).join(" "),
+    prompt: matches.some((match) => LOCAL_MULTILINGUAL_LANGUAGE_CODES.has(match.code))
+      ? undefined
+      : buildWhisperPromptContext(intendedLanguage, context).join(" "),
   };
 }
 
@@ -503,8 +505,12 @@ function buildChunkTranscriptionPrompt(
   languageHint: TranscriptionLanguageHint | null,
   previousTranscriptTail: string | null,
 ): string | undefined {
+  if (!languageHint?.prompt) {
+    return undefined;
+  }
+
   const promptParts = [
-    languageHint?.prompt,
+    languageHint.prompt,
     previousTranscriptTail
       ? `Previous transcript context: ${previousTranscriptTail}`
       : null,
