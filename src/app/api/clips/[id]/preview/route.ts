@@ -16,6 +16,10 @@ async function fileHasBytes(filePath: string): Promise<boolean> {
   }
 }
 
+function isHttpsUrl(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^https:\/\//i.test(value);
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -27,13 +31,6 @@ export async function GET(
     return NextResponse.json({ error: "Clip id is required." }, { status: 400 });
   }
 
-  if (!canRunLocalMediaProcessing()) {
-    return NextResponse.json(
-      { error: "Clip previews live on the Mac media worker. Open the local app to preview this file." },
-      { status: 409 },
-    );
-  }
-
   const clip = await prisma.clipCandidate.findUnique({
     where: { id: clipId },
     select: {
@@ -41,6 +38,7 @@ export async function GET(
       overlayVideoPath: true,
       exportedFilePath: true,
       captionedVideoPath: true,
+      remotePreviewUrl: true,
     },
   });
 
@@ -50,6 +48,21 @@ export async function GET(
 
   const url = new URL(request.url);
   const variant = (url.searchParams.get("variant") ?? "rendered").toLowerCase();
+  const remotePreviewUrl =
+    (variant === "best" || variant === "rendered") && isHttpsUrl(clip.remotePreviewUrl)
+      ? clip.remotePreviewUrl
+      : null;
+
+  if (!canRunLocalMediaProcessing()) {
+    if (remotePreviewUrl) {
+      return NextResponse.redirect(remotePreviewUrl, { status: 302 });
+    }
+
+    return NextResponse.json(
+      { error: "No remote preview is available yet. Run the Mac media worker to render and upload clip previews." },
+      { status: 409 },
+    );
+  }
 
   if (variant === "best") {
     const candidates = listBestPreviewCandidates(clip);
@@ -63,6 +76,9 @@ export async function GET(
     )).find((candidate): candidate is string => Boolean(candidate));
 
     if (!bestPath) {
+      if (remotePreviewUrl) {
+        return NextResponse.redirect(remotePreviewUrl, { status: 302 });
+      }
       return NextResponse.json({ error: "No preview file is available for this clip yet." }, { status: 409 });
     }
 
@@ -78,11 +94,17 @@ export async function GET(
 
   const filePath = pathByVariant[variant];
   if (!filePath) {
+    if (remotePreviewUrl) {
+      return NextResponse.redirect(remotePreviewUrl, { status: 302 });
+    }
     return NextResponse.json({ error: `Preview variant not available: ${variant}.` }, { status: 409 });
   }
 
   const hasBytes = await fileHasBytes(filePath);
   if (!hasBytes) {
+    if (remotePreviewUrl) {
+      return NextResponse.redirect(remotePreviewUrl, { status: 302 });
+    }
     return NextResponse.json({ error: "Preview file is missing or empty on disk." }, { status: 404 });
   }
 

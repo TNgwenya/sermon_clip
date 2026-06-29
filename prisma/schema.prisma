@@ -581,6 +581,9 @@ model ClipCandidate {
   renderedFilePath                 String?
   renderedDurationSeconds          Float?
   renderedSizeBytes                Int?
+  remotePreviewObjectKey           String?
+  remotePreviewUrl                 String?
+  remotePreviewUploadedAt          DateTime?
   exportFormat                     ClipExportFormat?
   exportStatus                     ClipExportStatus              @default(NOT_EXPORTED)
   exportLayoutStrategy             ClipExportLayoutStrategy?
