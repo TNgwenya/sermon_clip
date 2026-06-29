@@ -17,6 +17,7 @@ type ReadyQueueActionsProps = {
   onClearSelection?: () => void;
   onDraftCreated?: (draft: PostingDraft) => void;
   onSocialAccountCreated?: (account: SocialAccount) => void;
+  onSocialAccountsSynced?: (accounts: SocialAccount[]) => void;
   controlPanelMode?: boolean;
 };
 
@@ -30,6 +31,7 @@ export function ReadyQueueActions({
   onClearSelection,
   onDraftCreated,
   onSocialAccountCreated,
+  onSocialAccountsSynced,
   controlPanelMode = false,
 }: ReadyQueueActionsProps) {
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -69,6 +71,7 @@ export function ReadyQueueActions({
       </div>
       <ScheduleDraftModal
         clipIds={scheduleClipIds}
+        socialAccounts={socialAccounts}
         open={scheduleOpen}
         onClose={() => setScheduleOpen(false)}
         onCreated={(draft) => {
@@ -83,6 +86,7 @@ export function ReadyQueueActions({
           onSocialAccountCreated?.(account);
           setSocialOpen(false);
         }}
+        onSynced={onSocialAccountsSynced}
       />
     </>
   );
@@ -91,10 +95,11 @@ export function ReadyQueueActions({
 type SchedulePostButtonProps = {
   clipId: string;
   label?: string;
+  socialAccounts?: SocialAccount[];
   onDraftCreated?: (draft: PostingDraft) => void;
 };
 
-export function SchedulePostButton({ clipId, label = "Schedule post", onDraftCreated }: SchedulePostButtonProps) {
+export function SchedulePostButton({ clipId, label = "Schedule post", socialAccounts = [], onDraftCreated }: SchedulePostButtonProps) {
   const [scheduleOpen, setScheduleOpen] = useState(false);
 
   return (
@@ -104,6 +109,7 @@ export function SchedulePostButton({ clipId, label = "Schedule post", onDraftCre
       </button>
       <ScheduleDraftModal
         clipIds={[clipId]}
+        socialAccounts={socialAccounts}
         open={scheduleOpen}
         onClose={() => setScheduleOpen(false)}
         onCreated={(draft) => {

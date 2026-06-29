@@ -959,14 +959,22 @@ model SocialAccount {
   label           String
   handle          String?
   status          SocialAccountStatus    @default(CONNECTED)
+  externalProvider String?
+  externalAccountId String?
+  externalPlatform String?
+  profileUrl      String?
+  metadataJson    Json?
   createdAt       DateTime               @default(now())
   updatedAt       DateTime               @updatedAt
   credentials     SocialCredential[]
   scheduledPosts  ScheduledPost[]
   metricSnapshots SocialMetricSnapshot[]
 
+  @@unique([externalProvider, externalAccountId])
   @@index([platform])
   @@index([status])
+  @@index([externalProvider])
+  @@index([externalAccountId])
   @@index([createdAt])
 }
 
@@ -1035,6 +1043,9 @@ model ScheduledPost {
   publishedUrl       String?
   publishError       String?
   finalPrivacyStatus String?
+  mediaObjectKey     String?
+  mediaPublicUrl     String?
+  mediaUploadedAt    DateTime?
   idempotencyKey     String                      @unique
   createdAt          DateTime                    @default(now())
   updatedAt          DateTime                    @updatedAt

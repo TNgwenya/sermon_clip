@@ -429,7 +429,14 @@ export function ReadyQueueExperience({
   }
 
   function addSocialAccount(account: SocialAccount) {
-    setSocialAccounts((current) => [account, ...current].slice(0, 100));
+    setSocialAccounts((current) => [account, ...current.filter((item) => item.id !== account.id)].slice(0, 100));
+  }
+
+  function syncSocialAccounts(accounts: SocialAccount[]) {
+    setSocialAccounts((current) => {
+      const syncedIds = new Set(accounts.map((account) => account.id));
+      return [...accounts, ...current.filter((account) => !syncedIds.has(account.id))].slice(0, 100);
+    });
   }
 
   async function patchScheduledPost(
@@ -642,7 +649,7 @@ export function ReadyQueueExperience({
                       <button type="button" className="button tertiary" onClick={() => focusClip(clip.id)}>
                         {isFocused ? "Previewing" : "Preview"}
                       </button>
-                      {clip.mediaReady ? <SchedulePostButton clipId={clip.id} label="Schedule" onDraftCreated={addDraft} /> : null}
+                      {clip.mediaReady ? <SchedulePostButton clipId={clip.id} label="Schedule" socialAccounts={socialAccounts} onDraftCreated={addDraft} /> : null}
                     </div>
                   </article>
                 );
@@ -736,7 +743,7 @@ export function ReadyQueueExperience({
                   <>
                     {!controlPanelMode ? <a className="button primary" href={selectedReadyPackage.downloadHref}>Download video</a> : null}
                     <CopyCaptionButton label="Copy caption" text={activeHandoff?.captionText ?? selectedClip.caption} />
-                    <SchedulePostButton clipId={selectedClip.id} label="Schedule" onDraftCreated={addDraft} />
+                    <SchedulePostButton clipId={selectedClip.id} label="Schedule" socialAccounts={socialAccounts} onDraftCreated={addDraft} />
                   </>
                 ) : (
                   <ClipAssetRecoveryButton
@@ -796,7 +803,7 @@ export function ReadyQueueExperience({
                   <>
                     {!controlPanelMode ? <a className="button primary" href={selectedReadyPackage.downloadHref}>Download</a> : null}
                     <CopyCaptionButton label="Copy caption" text={activeHandoff?.captionText ?? selectedClip.caption} />
-                    <SchedulePostButton clipId={selectedClip.id} label="Schedule" onDraftCreated={addDraft} />
+                    <SchedulePostButton clipId={selectedClip.id} label="Schedule" socialAccounts={socialAccounts} onDraftCreated={addDraft} />
                     <Link href={`/sermons/${selectedClip.sermon.id}/clips/${selectedClip.id}/studio`} className="button tertiary">Edit clip</Link>
                   </>
                 ) : (
@@ -884,6 +891,7 @@ export function ReadyQueueExperience({
             onClearSelection={clearSelection}
             onDraftCreated={addDraft}
             onSocialAccountCreated={addSocialAccount}
+            onSocialAccountsSynced={syncSocialAccounts}
             controlPanelMode={controlPanelMode}
           />
         </div>

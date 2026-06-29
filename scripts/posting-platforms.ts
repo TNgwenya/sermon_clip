@@ -3,21 +3,39 @@ import { readFile } from "node:fs/promises";
 import crypto from "node:crypto";
 
 import { PrismaClient, type SocialConnectorProvider } from "@prisma/client";
+import {
+  createZernioPost,
+  getPlatformStatus,
+  getPublishedPlatformUrl,
+  getZernioPost,
+  ZernioApiError,
+  type ZernioCreatePostInput,
+  type ZernioPlatform,
+  type ZernioPost,
+} from "../src/server/integrations/zernioClient.ts";
 
 export type PostingPlatform = "TikTok" | "Instagram" | "YouTube Shorts" | "Facebook";
 
 export type AutomationPost = {
   id: string;
   socialAccountId: string | null;
+  socialAccountExternalProvider?: string | null;
+  socialAccountExternalAccountId?: string | null;
+  socialAccountExternalPlatform?: string | null;
   platform: PostingPlatform;
   title: string;
   caption: string;
   scheduledFor: string | null;
+  timezone?: string | null;
+  mediaObjectKey?: string | null;
+  mediaPublicUrl?: string | null;
+  mediaUploadedAt?: string | null;
   idempotencyKey: string;
   clips: Array<{
     id: string;
     title: string;
     caption: string;
+    durationSeconds?: number;
     hashtags: unknown;
     localFileCandidates: string[];
     sermon: {
@@ -35,11 +53,15 @@ export type UploadResult = {
   publishedUrl?: string;
   publishError?: string;
   finalPrivacyStatus?: string;
+  mediaObjectKey?: string;
+  mediaPublicUrl?: string;
+  mediaUploadedAt?: string;
 };
 
 type FetchLike = typeof fetch;
 
 const TIKTOK_MAX_TITLE_LENGTH = 2200;
+const INSTAGRAM_MAX_REEL_SECONDS = 60;
 const TIKTOK_DEFAULT_CHUNK_SIZE = 32 * 1024 * 1024;
 const FACEBOOK_MAX_TITLE_LENGTH = 255;
 const STORED_CREDENTIAL_PROVIDERS: Record<Exclude<PostingPlatform, "Instagram">, SocialConnectorProvider> = {
@@ -187,6 +209,157 @@ export function buildTikTokTitle(post: AutomationPost): string {
   const tagText = hashtags.length > 0 ? `\n\n${hashtags.join(" ")}` : "";
 
   return clampText(`${title}${tagText}`, TIKTOK_MAX_TITLE_LENGTH);
+}
+
+function platformToZernioPlatform(platform: PostingPlatform): ZernioPlatform | null {
+  switch (platform) {
+    case "TikTok":
+      return "tiktok";
+    case "Instagram":
+      return "instagram";
+    default:
+      return null;
+  }
+}
+
+export function buildDeterministicRequestId(value: string): string {
+  const hash = crypto.createHash("sha256").update(value).digest("hex");
+  return [
+    hash.slice(0, 8),
+    hash.slice(8, 12),
+    `4${hash.slice(13, 16)}`,
+    ((Number.parseInt(hash.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0") + hash.slice(18, 20),
+    hash.slice(20, 32),
+  ].join("-");
+}
+
+function getZernioAccountId(post: AutomationPost, zernioPlatform: ZernioPlatform): string {
+  if (
+    post.socialAccountExternalProvider === "zernio"
+    && post.socialAccountExternalPlatform === zernioPlatform
+    && post.socialAccountExternalAccountId
+  ) {
+    return post.socialAccountExternalAccountId;
+  }
+
+  throw new Error(`Connect and sync a Zernio ${post.platform} account before automatic posting.`);
+}
+
+function getPreparedMediaUrl(post: AutomationPost): string {
+  if (post.mediaPublicUrl?.trim()) {
+    return post.mediaPublicUrl.trim();
+  }
+
+  throw new Error("A public R2 media URL is required before publishing through Zernio.");
+}
+
+function assertInstagramDuration(post: AutomationPost): void {
+  const firstClip = post.clips[0];
+  const durationSeconds = firstClip?.durationSeconds;
+  if (typeof durationSeconds === "number" && durationSeconds > INSTAGRAM_MAX_REEL_SECONDS) {
+    throw new Error("Instagram automatic posting is limited to clips of 60 seconds or less until longer Reels are verified.");
+  }
+}
+
+export function buildZernioPostRequest(
+  post: AutomationPost,
+  videoSize: number,
+): ZernioCreatePostInput {
+  const zernioPlatform = platformToZernioPlatform(post.platform);
+  if (!zernioPlatform) {
+    throw new Error(`${post.platform} is not supported by the Zernio publisher.`);
+  }
+  if (zernioPlatform === "instagram") {
+    assertInstagramDuration(post);
+  }
+
+  const firstClip = post.clips[0];
+  const title = clampText(post.title || firstClip?.title || "Sermon clip", zernioPlatform === "tiktok" ? TIKTOK_MAX_TITLE_LENGTH : 2200);
+  const content = zernioPlatform === "tiktok"
+    ? buildTikTokTitle(post)
+    : clampText(post.caption || firstClip?.caption || title, 2200);
+  const platformSpecificData: Record<string, unknown> = {};
+  const privacyLevel = process.env.ZERNIO_TIKTOK_PRIVACY_LEVEL?.trim();
+  if (zernioPlatform === "tiktok" && privacyLevel) {
+    platformSpecificData.privacyLevel = privacyLevel;
+  }
+  if (zernioPlatform === "instagram") {
+    platformSpecificData.shareToFeed = true;
+  }
+
+  return {
+    requestId: buildDeterministicRequestId(post.idempotencyKey),
+    title,
+    content,
+    mediaItems: [{
+      type: "video",
+      url: getPreparedMediaUrl(post),
+      title,
+      filename: `${post.id}.mp4`,
+      size: videoSize,
+      mimeType: "video/mp4",
+    }],
+    platforms: [{
+      platform: zernioPlatform,
+      accountId: getZernioAccountId(post, zernioPlatform),
+      platformSpecificData: Object.keys(platformSpecificData).length > 0 ? platformSpecificData : undefined,
+    }],
+    publishNow: true,
+    timezone: post.timezone || undefined,
+    hashtags: Array.from(new Set(post.clips.flatMap((clip) => extractHashtags(clip.hashtags)))),
+    metadata: {
+      sermonClipScheduledPostId: post.id,
+      sermonClipClipIds: post.clips.map((clip) => clip.id),
+      sermonClipIdempotencyKey: post.idempotencyKey,
+    },
+  };
+}
+
+function zernioPostId(resultPost: ZernioPost | null | undefined): string | undefined {
+  return resultPost?._id;
+}
+
+export async function uploadZernioVideo(
+  post: AutomationPost,
+  _videoPath: string,
+  videoSize: number,
+  fetchImpl: FetchLike = fetch,
+): Promise<UploadResult> {
+  const zernioPlatform = platformToZernioPlatform(post.platform);
+  if (!zernioPlatform) {
+    throw new Error(`${post.platform} is not supported by the Zernio publisher.`);
+  }
+
+  const request = buildZernioPostRequest(post, videoSize);
+  let resultPost: ZernioPost | null | undefined;
+
+  try {
+    const result = await createZernioPost(request, fetchImpl);
+    resultPost = result.post ?? result.existingPost ?? null;
+  } catch (error) {
+    if (!(error instanceof ZernioApiError) || error.status !== 409 || !error.existingPostId) {
+      throw error;
+    }
+
+    const existingPost = await getZernioPost(error.existingPostId, fetchImpl);
+    const publishedUrl = getPublishedPlatformUrl(existingPost, zernioPlatform);
+    if (!publishedUrl) {
+      throw error;
+    }
+
+    resultPost = existingPost;
+  }
+
+  if (!resultPost) {
+    throw new Error("Zernio did not return a post.");
+  }
+
+  return {
+    status: "POSTED",
+    externalPostId: zernioPostId(resultPost),
+    publishedUrl: getPublishedPlatformUrl(resultPost, zernioPlatform) ?? undefined,
+    finalPrivacyStatus: getPlatformStatus(resultPost, zernioPlatform) ?? resultPost.status,
+  };
 }
 
 export function buildFacebookText(post: AutomationPost): { title: string; description: string; published: boolean } {
@@ -536,11 +709,11 @@ export async function uploadPlatformPost(
     case "YouTube Shorts":
       return uploadYouTubeShort(post, videoPath, videoSize, fetchImpl);
     case "TikTok":
-      return uploadTikTokVideo(post, videoPath, videoSize, fetchImpl);
+      return uploadZernioVideo(post, videoPath, videoSize, fetchImpl);
     case "Facebook":
       return uploadFacebookVideo(post, videoPath, videoSize, fetchImpl);
     case "Instagram":
-      throw new Error("Instagram automatic posting needs a public video URL or temporary media hosting before it can work with Mac-local files.");
+      return uploadZernioVideo(post, videoPath, videoSize, fetchImpl);
     default: {
       const exhaustivePlatform: never = post.platform;
       throw new Error(`Unsupported posting platform: ${exhaustivePlatform}`);

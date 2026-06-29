@@ -33,6 +33,9 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     publishedUrl: typeof body?.publishedUrl === "string" ? body.publishedUrl : null,
     publishError: typeof body?.publishError === "string" ? body.publishError : null,
     finalPrivacyStatus: typeof body?.finalPrivacyStatus === "string" ? body.finalPrivacyStatus : null,
+    mediaObjectKey: typeof body?.mediaObjectKey === "string" ? body.mediaObjectKey : null,
+    mediaPublicUrl: typeof body?.mediaPublicUrl === "string" ? body.mediaPublicUrl : null,
+    mediaUploadedAt: typeof body?.mediaUploadedAt === "string" ? new Date(body.mediaUploadedAt) : null,
   });
 
   if (!scheduledPost) {

@@ -50,6 +50,9 @@ function buildScheduledPost(overrides: Partial<ScheduledPost> = {}): ScheduledPo
     postingDraftId: "draft-1",
     socialAccountId: "account-1",
     socialAccountLabel: "Grace Instagram",
+    socialAccountExternalProvider: null,
+    socialAccountExternalAccountId: null,
+    socialAccountExternalPlatform: null,
     clipIds: ["other-clip"],
     platform: "Instagram",
     postingSlot: "Wed evening",
@@ -69,6 +72,9 @@ function buildScheduledPost(overrides: Partial<ScheduledPost> = {}): ScheduledPo
     publishedUrl: null,
     publishError: null,
     finalPrivacyStatus: null,
+    mediaObjectKey: null,
+    mediaPublicUrl: null,
+    mediaUploadedAt: null,
     idempotencyKey: "draft-1:instagram",
     createdAt: new Date().toISOString(),
     ...overrides,
@@ -82,6 +88,10 @@ function buildAccount(overrides: Partial<SocialAccount> = {}): SocialAccount {
     label: "Grace Instagram",
     handle: "@gracechurch",
     status: "CONNECTED",
+    externalProvider: null,
+    externalAccountId: null,
+    externalPlatform: null,
+    profileUrl: null,
     createdAt: new Date().toISOString(),
     ...overrides,
   };
@@ -181,4 +191,3 @@ describe("growth system", () => {
     ]);
   });
 });
-

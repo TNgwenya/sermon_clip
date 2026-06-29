@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildDeterministicRequestId,
   buildFacebookText,
   buildTikTokInitBody,
   buildTikTokTitle,
+  buildZernioPostRequest,
   buildYouTubeText,
   extractHashtags,
   uploadPlatformPost,
@@ -27,6 +29,7 @@ const basePost: AutomationPost = {
       id: "clip-1",
       title: "Jesus Meets Us In The Storm",
       caption: "Jesus meets us in the storm.",
+      durationSeconds: 45,
       hashtags: ["Faith", "#Church", ""],
       localFileCandidates: ["/tmp/clip.mp4"],
       sermon: {
@@ -86,6 +89,95 @@ describe("posting platform helpers", () => {
     });
   });
 
+  it("builds deterministic UUID request ids for safe Zernio retries", () => {
+    const first = buildDeterministicRequestId("post-1-tiktok");
+    const second = buildDeterministicRequestId("post-1-tiktok");
+
+    expect(first).toBe(second);
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  it("builds a Zernio TikTok post request with public media", () => {
+    const request = buildZernioPostRequest({
+      ...basePost,
+      socialAccountExternalProvider: "zernio",
+      socialAccountExternalPlatform: "tiktok",
+      socialAccountExternalAccountId: "zernio-tiktok-1",
+      mediaPublicUrl: "https://media.example.com/posting-temp/post-1/clip-1.mp4",
+    }, 1024);
+
+    expect(request).toMatchObject({
+      content: expect.stringContaining("God is near when life feels loud."),
+      mediaItems: [{
+        type: "video",
+        url: "https://media.example.com/posting-temp/post-1/clip-1.mp4",
+        title: "Sunday Sermon Clip",
+        filename: "post-1.mp4",
+        size: 1024,
+        mimeType: "video/mp4",
+      }],
+      platforms: [{
+        platform: "tiktok",
+        accountId: "zernio-tiktok-1",
+      }],
+      publishNow: true,
+      metadata: {
+        sermonClipScheduledPostId: "post-1",
+        sermonClipClipIds: ["clip-1"],
+        sermonClipIdempotencyKey: "post-1-tiktok",
+      },
+    });
+    expect(request.content.length).toBeLessThanOrEqual(2200);
+  });
+
+  it("omits TikTok privacy level unless explicitly configured", () => {
+    const request = buildZernioPostRequest({
+      ...basePost,
+      socialAccountExternalProvider: "zernio",
+      socialAccountExternalPlatform: "tiktok",
+      socialAccountExternalAccountId: "zernio-tiktok-1",
+      mediaPublicUrl: "https://media.example.com/clip.mp4",
+    }, 1024);
+
+    expect(request.platforms[0]?.platformSpecificData).toBeUndefined();
+  });
+
+  it("adds TikTok privacy level when configured", () => {
+    vi.stubEnv("ZERNIO_TIKTOK_PRIVACY_LEVEL", "SELF_ONLY");
+
+    const request = buildZernioPostRequest({
+      ...basePost,
+      socialAccountExternalProvider: "zernio",
+      socialAccountExternalPlatform: "tiktok",
+      socialAccountExternalAccountId: "zernio-tiktok-1",
+      mediaPublicUrl: "https://media.example.com/clip.mp4",
+    }, 1024);
+
+    expect(request.platforms[0]?.platformSpecificData).toEqual({ privacyLevel: "SELF_ONLY" });
+  });
+
+  it("requires a synced Zernio account for Zernio publishing", () => {
+    expect(() => buildZernioPostRequest({
+      ...basePost,
+      mediaPublicUrl: "https://media.example.com/clip.mp4",
+    }, 1024)).toThrow("Connect and sync a Zernio TikTok account");
+  });
+
+  it("blocks Instagram automatic posting above 60 seconds", () => {
+    expect(() => buildZernioPostRequest({
+      ...basePost,
+      platform: "Instagram",
+      socialAccountExternalProvider: "zernio",
+      socialAccountExternalPlatform: "instagram",
+      socialAccountExternalAccountId: "zernio-instagram-1",
+      mediaPublicUrl: "https://media.example.com/clip.mp4",
+      clips: [{
+        ...basePost.clips[0]!,
+        durationSeconds: 61,
+      }],
+    }, 1024)).toThrow("60 seconds or less");
+  });
+
   it("builds Facebook Page video text with safe unpublished default", () => {
     const text = buildFacebookText({ ...basePost, platform: "Facebook" });
 
@@ -135,8 +227,88 @@ describe("posting platform helpers", () => {
     }
   });
 
-  it("keeps unsupported automatic platforms explicit", async () => {
+  it("routes Instagram through the Zernio media URL requirement", async () => {
     await expect(uploadPlatformPost({ ...basePost, platform: "Instagram" }, "/tmp/clip.mp4", 25))
-      .rejects.toThrow("Instagram automatic posting needs a public video URL");
+      .rejects.toThrow("A public R2 media URL is required");
+  });
+
+  it("posts TikTok videos through Zernio", async () => {
+    vi.stubEnv("ZERNIO_API_KEY", "zernio-key");
+    const capturedRequests: Array<[input: RequestInfo | URL, init?: RequestInit]> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      capturedRequests.push([input, init]);
+      return Response.json({
+        post: {
+          _id: "zernio-post-1",
+          status: "published",
+          platforms: [{
+            platform: "tiktok",
+            status: "published",
+            platformPostUrl: "https://www.tiktok.com/@church/video/1",
+          }],
+        },
+      }, { status: 201 });
+    };
+
+    const result = await uploadPlatformPost({
+      ...basePost,
+      socialAccountExternalProvider: "zernio",
+      socialAccountExternalPlatform: "tiktok",
+      socialAccountExternalAccountId: "zernio-tiktok-1",
+      mediaPublicUrl: "https://media.example.com/clip.mp4",
+    }, "/tmp/clip.mp4", 25, fetchImpl);
+
+    expect(capturedRequests[0]?.[0]).toBe("https://zernio.com/api/v1/posts");
+    expect(capturedRequests[0]?.[1]?.method).toBe("POST");
+    expect(new Headers(capturedRequests[0]?.[1]?.headers).get("authorization")).toBe("Bearer zernio-key");
+    expect(result).toEqual({
+      status: "POSTED",
+      externalPostId: "zernio-post-1",
+      publishedUrl: "https://www.tiktok.com/@church/video/1",
+      finalPrivacyStatus: "published",
+    });
+  });
+
+  it("resolves Zernio duplicate responses when the existing post is already published", async () => {
+    vi.stubEnv("ZERNIO_API_KEY", "zernio-key");
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/v1/posts")) {
+        return Response.json({
+          error: "This exact content is already scheduled, publishing, or was posted to this account within the last 24 hours.",
+          details: {
+            existingPostId: "existing-post-1",
+          },
+        }, { status: 409 });
+      }
+
+      return Response.json({
+        post: {
+          _id: "existing-post-1",
+          status: "published",
+          platforms: [{
+            platform: "instagram",
+            status: "published",
+            platformPostUrl: "https://www.instagram.com/reel/1/",
+          }],
+        },
+      });
+    };
+
+    const result = await uploadPlatformPost({
+      ...basePost,
+      platform: "Instagram",
+      socialAccountExternalProvider: "zernio",
+      socialAccountExternalPlatform: "instagram",
+      socialAccountExternalAccountId: "zernio-instagram-1",
+      mediaPublicUrl: "https://media.example.com/clip.mp4",
+    }, "/tmp/clip.mp4", 25, fetchImpl);
+
+    expect(result).toEqual({
+      status: "POSTED",
+      externalPostId: "existing-post-1",
+      publishedUrl: "https://www.instagram.com/reel/1/",
+      finalPrivacyStatus: "published",
+    });
   });
 });

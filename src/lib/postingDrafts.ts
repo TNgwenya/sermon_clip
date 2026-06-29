@@ -186,7 +186,10 @@ export async function createPostingDraft(input: {
     await tx.scheduledPost.createMany({
       data: input.platforms.map((platform) => {
         const dbPlatform = PLATFORM_TO_DB[platform];
-        const account = accounts.find((item) => item.platform === dbPlatform);
+        const account = automationMode === "AUTOMATIC" && (dbPlatform === "TIKTOK" || dbPlatform === "INSTAGRAM")
+          ? accounts.find((item) => item.platform === dbPlatform && item.externalProvider === "zernio" && item.externalAccountId)
+            ?? accounts.find((item) => item.platform === dbPlatform)
+          : accounts.find((item) => item.platform === dbPlatform);
         const status = automationMode === "AUTOMATIC" ? "PLANNED" : "READY_FOR_MEDIA_TEAM";
 
         return {

@@ -16,6 +16,9 @@ export type ScheduledPost = {
   postingDraftId: string | null;
   socialAccountId: string | null;
   socialAccountLabel: string | null;
+  socialAccountExternalProvider: string | null;
+  socialAccountExternalAccountId: string | null;
+  socialAccountExternalPlatform: string | null;
   clipIds: string[];
   platform: PostingPlatform;
   postingSlot: string;
@@ -35,6 +38,9 @@ export type ScheduledPost = {
   publishedUrl: string | null;
   publishError: string | null;
   finalPrivacyStatus: string | null;
+  mediaObjectKey: string | null;
+  mediaPublicUrl: string | null;
+  mediaUploadedAt: string | null;
   idempotencyKey: string;
   createdAt: string;
 };
@@ -74,15 +80,26 @@ function toScheduledPost(input: {
   publishedUrl: string | null;
   publishError: string | null;
   finalPrivacyStatus: string | null;
+  mediaObjectKey: string | null;
+  mediaPublicUrl: string | null;
+  mediaUploadedAt: Date | null;
   idempotencyKey: string;
   createdAt: Date;
-  socialAccount: { label: string } | null;
+  socialAccount: {
+    label: string;
+    externalProvider: string | null;
+    externalAccountId: string | null;
+    externalPlatform: string | null;
+  } | null;
 }): ScheduledPost {
   return {
     id: input.id,
     postingDraftId: input.postingDraftId,
     socialAccountId: input.socialAccountId,
     socialAccountLabel: input.socialAccount?.label ?? null,
+    socialAccountExternalProvider: input.socialAccount?.externalProvider ?? null,
+    socialAccountExternalAccountId: input.socialAccount?.externalAccountId ?? null,
+    socialAccountExternalPlatform: input.socialAccount?.externalPlatform ?? null,
     clipIds: normalizeClipIds(input.clipIdsJson),
     platform: fromPrismaPostingPlatform(input.platform),
     postingSlot: input.postingSlot,
@@ -102,6 +119,9 @@ function toScheduledPost(input: {
     publishedUrl: input.publishedUrl,
     publishError: input.publishError,
     finalPrivacyStatus: input.finalPrivacyStatus,
+    mediaObjectKey: input.mediaObjectKey,
+    mediaPublicUrl: input.mediaPublicUrl,
+    mediaUploadedAt: input.mediaUploadedAt?.toISOString() ?? null,
     idempotencyKey: input.idempotencyKey,
     createdAt: input.createdAt.toISOString(),
   };
@@ -111,7 +131,12 @@ export async function listScheduledPosts(): Promise<ScheduledPost[]> {
   const posts = await prisma.scheduledPost.findMany({
     include: {
       socialAccount: {
-        select: { label: true },
+        select: {
+          label: true,
+          externalProvider: true,
+          externalAccountId: true,
+          externalPlatform: true,
+        },
       },
     },
     orderBy: { createdAt: "desc" },
@@ -151,7 +176,12 @@ export async function updateScheduledPostStatus(input: {
     data: { status: input.status },
     include: {
       socialAccount: {
-        select: { label: true },
+        select: {
+          label: true,
+          externalProvider: true,
+          externalAccountId: true,
+          externalPlatform: true,
+        },
       },
     },
   });
@@ -190,7 +220,12 @@ export async function postScheduledPostNow(input: {
     where: { id: input.id },
     include: {
       socialAccount: {
-        select: { label: true },
+        select: {
+          label: true,
+          externalProvider: true,
+          externalAccountId: true,
+          externalPlatform: true,
+        },
       },
     },
   });
@@ -203,6 +238,7 @@ export type AutomationUpcomingPost = ScheduledPost & {
     id: string;
     title: string;
     caption: string;
+    durationSeconds: number;
     hashtags: unknown;
     localFileCandidates: string[];
     sermon: {
@@ -234,7 +270,12 @@ export async function listUpcomingAutomationPosts(input: {
     },
     include: {
       socialAccount: {
-        select: { label: true },
+        select: {
+          label: true,
+          externalProvider: true,
+          externalAccountId: true,
+          externalPlatform: true,
+        },
       },
     },
     orderBy: { scheduledFor: "asc" },
@@ -248,6 +289,7 @@ export async function listUpcomingAutomationPosts(input: {
       id: true,
       title: true,
       caption: true,
+      durationSeconds: true,
       hashtags: true,
       exportedFilePath: true,
       exportPath: true,
@@ -272,10 +314,11 @@ export async function listUpcomingAutomationPosts(input: {
       clips: scheduledPost.clipIds
         .map((clipId) => clipsById.get(clipId))
         .filter((clip): clip is NonNullable<typeof clip> => Boolean(clip))
-        .map((clip) => ({
+    .map((clip) => ({
           id: clip.id,
           title: clip.title,
           caption: clip.caption,
+          durationSeconds: clip.durationSeconds,
           hashtags: clip.hashtags,
           localFileCandidates: [
             clip.exportedFilePath,
@@ -326,7 +369,12 @@ export async function claimScheduledPost(input: {
     where: { id: input.id },
     include: {
       socialAccount: {
-        select: { label: true },
+        select: {
+          label: true,
+          externalProvider: true,
+          externalAccountId: true,
+          externalPlatform: true,
+        },
       },
     },
   });
@@ -350,6 +398,9 @@ export async function completeScheduledPost(input: {
   publishedUrl?: string | null;
   publishError?: string | null;
   finalPrivacyStatus?: string | null;
+  mediaObjectKey?: string | null;
+  mediaPublicUrl?: string | null;
+  mediaUploadedAt?: Date | null;
 }): Promise<ScheduledPost | null> {
   const post = await prisma.scheduledPost.update({
     where: { id: input.id },
@@ -362,10 +413,18 @@ export async function completeScheduledPost(input: {
       publishedUrl: input.publishedUrl || null,
       publishError: input.publishError || null,
       finalPrivacyStatus: input.finalPrivacyStatus || null,
+      mediaObjectKey: input.mediaObjectKey || undefined,
+      mediaPublicUrl: input.mediaPublicUrl || undefined,
+      mediaUploadedAt: input.mediaUploadedAt || undefined,
     },
     include: {
       socialAccount: {
-        select: { label: true },
+        select: {
+          label: true,
+          externalProvider: true,
+          externalAccountId: true,
+          externalPlatform: true,
+        },
       },
     },
   }).catch(() => null);

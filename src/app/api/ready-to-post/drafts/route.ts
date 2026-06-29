@@ -56,6 +56,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     },
     select: {
       id: true,
+      durationSeconds: true,
       exportFormat: true,
       exportedFilePath: true,
       exportPath: true,
@@ -88,6 +89,42 @@ export async function POST(request: Request): Promise<NextResponse> {
       error: "Some selected clips need their posting media rebuilt before scheduling.",
       clipIds: missingMediaClipIds,
     }, { status: 409 });
+  }
+
+  if (automationMode === "AUTOMATIC") {
+    const zernioPlatforms = platforms.filter((platform) => platform === "TikTok" || platform === "Instagram");
+    if (zernioPlatforms.length > 0) {
+      const zernioAccounts = await prisma.socialAccount.findMany({
+        where: {
+          platform: { in: zernioPlatforms.map((platform) => platform === "TikTok" ? "TIKTOK" : "INSTAGRAM") },
+          status: "CONNECTED",
+          externalProvider: "zernio",
+          externalAccountId: { not: null },
+        },
+        select: { platform: true },
+      });
+      const connectedPlatforms = new Set(zernioAccounts.map((account) => account.platform));
+      const missingPlatforms = zernioPlatforms.filter((platform) => {
+        const dbPlatform = platform === "TikTok" ? "TIKTOK" : "INSTAGRAM";
+        return !connectedPlatforms.has(dbPlatform);
+      });
+
+      if (missingPlatforms.length > 0) {
+        return NextResponse.json({
+          error: `Sync a Zernio ${missingPlatforms.join(" and ")} account before automatic posting.`,
+        }, { status: 409 });
+      }
+    }
+
+    if (platforms.includes("Instagram")) {
+      const longInstagramClip = readyClips.find((clip) => clip.durationSeconds > 60);
+      if (longInstagramClip) {
+        return NextResponse.json({
+          error: "Instagram automatic posting is limited to clips of 60 seconds or less until longer Reels are verified.",
+          clipIds: [longInstagramClip.id],
+        }, { status: 409 });
+      }
+    }
   }
 
   const draft = await createPostingDraft({

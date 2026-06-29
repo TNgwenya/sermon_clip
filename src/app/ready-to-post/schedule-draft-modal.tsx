@@ -3,9 +3,9 @@
 import { useState } from "react";
 
 import type { PostingAutomationMode, PostingDraft, PostingPlatform } from "@/lib/postingDrafts";
+import type { SocialAccount } from "@/lib/socialAccounts";
 
 const platforms: PostingPlatform[] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
-const automaticPlatforms = new Set<PostingPlatform>(["TikTok", "YouTube Shorts", "Facebook"]);
 const postingSlots = ["Sunday recap", "Midweek encouragement", "Prayer invitation", "Weekend invite"];
 
 function formatDateTimeLocal(date: Date): string {
@@ -15,13 +15,38 @@ function formatDateTimeLocal(date: Date): string {
 
 type ScheduleDraftModalProps = {
   clipIds: string[];
+  socialAccounts?: SocialAccount[];
   open: boolean;
   onClose: () => void;
   onCreated: (draft: PostingDraft) => void;
 };
 
-export function ScheduleDraftModal({ clipIds, open, onClose, onCreated }: ScheduleDraftModalProps) {
-  const [selectedPlatforms, setSelectedPlatforms] = useState<PostingPlatform[]>(["YouTube Shorts"]);
+function hasSyncedZernioAccount(accounts: SocialAccount[], platform: PostingPlatform): boolean {
+  return accounts.some((account) => (
+    account.platform === platform
+    && account.status === "CONNECTED"
+    && account.externalProvider === "zernio"
+    && Boolean(account.externalAccountId)
+  ));
+}
+
+function buildAutomaticPlatforms(accounts: SocialAccount[]): Set<PostingPlatform> {
+  return new Set<PostingPlatform>([
+    ...(hasSyncedZernioAccount(accounts, "TikTok") ? ["TikTok" as const] : []),
+    ...(hasSyncedZernioAccount(accounts, "Instagram") ? ["Instagram" as const] : []),
+    "YouTube Shorts",
+    "Facebook",
+  ]);
+}
+
+export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose, onCreated }: ScheduleDraftModalProps) {
+  const automaticPlatforms = buildAutomaticPlatforms(socialAccounts);
+  const defaultAutomaticPlatform: PostingPlatform = automaticPlatforms.has("Instagram")
+    ? "Instagram"
+    : automaticPlatforms.has("TikTok")
+      ? "TikTok"
+      : "YouTube Shorts";
+  const [selectedPlatforms, setSelectedPlatforms] = useState<PostingPlatform[]>([defaultAutomaticPlatform]);
   const [automationMode, setAutomationMode] = useState<PostingAutomationMode>("AUTOMATIC");
   const [scheduledFor, setScheduledFor] = useState(() => {
     const date = new Date(Date.now() + 60 * 60_000);

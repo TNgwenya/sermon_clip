@@ -1,7 +1,8 @@
-import type { PostingPlatform as PrismaPostingPlatform, SocialAccountStatus as PrismaSocialAccountStatus } from "@prisma/client";
+import type { PostingPlatform as PrismaPostingPlatform, Prisma, SocialAccountStatus as PrismaSocialAccountStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { POSTING_PLATFORMS, type PostingPlatform } from "@/lib/postingDrafts";
+import { listZernioAccounts, type ZernioAccount } from "@/server/integrations/zernioClient";
 
 export type SocialAccountStatus = "CONNECTED" | "NEEDS_REVIEW";
 
@@ -11,6 +12,10 @@ export type SocialAccount = {
   label: string;
   handle: string;
   status: SocialAccountStatus;
+  externalProvider: string | null;
+  externalAccountId: string | null;
+  externalPlatform: string | null;
+  profileUrl: string | null;
   createdAt: string;
 };
 
@@ -34,6 +39,10 @@ function toSocialAccount(input: {
   label: string;
   handle: string | null;
   status: PrismaSocialAccountStatus;
+  externalProvider: string | null;
+  externalAccountId: string | null;
+  externalPlatform: string | null;
+  profileUrl: string | null;
   createdAt: Date;
 }): SocialAccount {
   return {
@@ -42,6 +51,10 @@ function toSocialAccount(input: {
     label: input.label,
     handle: input.handle ?? "",
     status: input.status,
+    externalProvider: input.externalProvider,
+    externalAccountId: input.externalAccountId,
+    externalPlatform: input.externalPlatform,
+    profileUrl: input.profileUrl,
     createdAt: input.createdAt.toISOString(),
   };
 }
@@ -84,4 +97,73 @@ export async function createSocialAccount(input: {
   });
 
   return toSocialAccount(account);
+}
+
+function zernioPlatformToPostingPlatform(platform: string): PrismaPostingPlatform | null {
+  switch (platform.toLowerCase()) {
+    case "instagram":
+      return "INSTAGRAM";
+    case "tiktok":
+      return "TIKTOK";
+    default:
+      return null;
+  }
+}
+
+function buildZernioAccountLabel(account: ZernioAccount): string {
+  return account.displayName?.trim()
+    || account.username?.trim()
+    || `${account.platform} account`;
+}
+
+export async function syncZernioSocialAccounts(): Promise<SocialAccount[]> {
+  const accounts = await Promise.all([
+    listZernioAccounts({ platform: "instagram", status: "connected" }),
+    listZernioAccounts({ platform: "tiktok", status: "connected" }),
+  ]);
+  const supportedAccounts = accounts.flat().filter((account) => zernioPlatformToPostingPlatform(account.platform));
+  const synced: SocialAccount[] = [];
+
+  for (const account of supportedAccounts) {
+    const platform = zernioPlatformToPostingPlatform(account.platform);
+    if (!platform) {
+      continue;
+    }
+
+    const existing = await prisma.socialAccount.findFirst({
+      where: {
+        externalProvider: "zernio",
+        externalAccountId: account._id,
+      },
+      select: { id: true },
+    });
+    const data = {
+      platform,
+      label: buildZernioAccountLabel(account),
+      handle: account.username?.trim() || null,
+      status: account.isActive === false ? "NEEDS_REVIEW" as const : "CONNECTED" as const,
+      externalProvider: "zernio",
+      externalAccountId: account._id,
+      externalPlatform: account.platform,
+      profileUrl: account.profileUrl ?? null,
+      metadataJson: {
+        profileId: account.profileId ?? null,
+        displayName: account.displayName ?? null,
+        isActive: account.isActive ?? null,
+      } satisfies Prisma.InputJsonValue,
+    };
+
+    const record = existing
+      ? await prisma.socialAccount.update({
+        where: { id: existing.id },
+        data,
+      })
+      : await prisma.socialAccount.create({
+        data,
+      });
+
+    synced.push(toSocialAccount(record));
+  }
+
+  return synced;
 }

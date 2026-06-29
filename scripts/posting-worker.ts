@@ -3,6 +3,7 @@ import os from "node:os";
 
 import type { AutomationPost, UploadResult } from "./posting-platforms.ts";
 import { uploadPlatformPost } from "./posting-platforms.ts";
+import { uploadPostingMediaToR2, type StagedMedia } from "./posting-media-staging.ts";
 
 const workerId = process.env.POSTING_WORKER_ID?.trim() || `${os.hostname()}-posting-worker`;
 const apiBaseUrl = (process.env.WORKER_API_BASE_URL?.trim() || "http://localhost:3000").replace(/\/$/, "");
@@ -15,6 +16,10 @@ const seenCompletions = new Set<string>();
 let cachedPosts: AutomationPost[] = [];
 let syncing = false;
 let posting = false;
+
+type PublishErrorWithStagedMedia = Error & {
+  stagedMedia?: StagedMedia;
+};
 
 function log(message: string, data?: unknown): void {
   const suffix = data ? ` ${JSON.stringify(data)}` : "";
@@ -81,6 +86,9 @@ async function completePost(post: AutomationPost, result: UploadResult): Promise
       publishedUrl: result.publishedUrl,
       publishError: result.publishError,
       finalPrivacyStatus: result.finalPrivacyStatus,
+      mediaObjectKey: result.mediaObjectKey,
+      mediaPublicUrl: result.mediaPublicUrl,
+      mediaUploadedAt: result.mediaUploadedAt,
     }),
   });
 
@@ -115,6 +123,13 @@ async function publishPost(post: AutomationPost): Promise<UploadResult> {
   }
 
   const video = await firstExistingFile(firstClip.localFileCandidates);
+  let stagedMedia: StagedMedia | undefined = post.mediaPublicUrl && post.mediaObjectKey
+    ? {
+      publicUrl: post.mediaPublicUrl,
+      objectKey: post.mediaObjectKey,
+      uploadedAt: post.mediaUploadedAt ?? new Date().toISOString(),
+    }
+    : undefined;
 
   if (dryRun) {
     log("dry run publish", { id: post.id, platform: post.platform, videoPath: video.path });
@@ -127,7 +142,37 @@ async function publishPost(post: AutomationPost): Promise<UploadResult> {
     };
   }
 
-  return uploadPlatformPost(post, video.path, video.size);
+  try {
+    const zernioPlatform = post.platform === "TikTok" || post.platform === "Instagram";
+    if (zernioPlatform && !stagedMedia) {
+      stagedMedia = await uploadPostingMediaToR2({
+        scheduledPostId: post.id,
+        clipId: firstClip.id,
+        videoPath: video.path,
+        videoSize: video.size,
+      });
+      log("staged media", { id: post.id, platform: post.platform, publicUrl: stagedMedia.publicUrl });
+    }
+
+    const result = await uploadPlatformPost({
+      ...post,
+      mediaObjectKey: stagedMedia?.objectKey ?? post.mediaObjectKey,
+      mediaPublicUrl: stagedMedia?.publicUrl ?? post.mediaPublicUrl,
+      mediaUploadedAt: stagedMedia?.uploadedAt ?? post.mediaUploadedAt,
+    }, video.path, video.size);
+
+    return {
+      ...result,
+      mediaObjectKey: result.mediaObjectKey ?? stagedMedia?.objectKey,
+      mediaPublicUrl: result.mediaPublicUrl ?? stagedMedia?.publicUrl,
+      mediaUploadedAt: result.mediaUploadedAt ?? stagedMedia?.uploadedAt,
+    };
+  } catch (error) {
+    if (error instanceof Error && stagedMedia) {
+      (error as PublishErrorWithStagedMedia).stagedMedia = stagedMedia;
+    }
+    throw error;
+  }
 }
 
 async function processDuePosts(): Promise<void> {
@@ -158,9 +203,13 @@ async function processDuePosts(): Promise<void> {
         log("post completed", { id: post.id, status: result.status });
       } catch (error) {
         const publishError = error instanceof Error ? error.message : String(error);
+        const stagedMedia = error instanceof Error ? (error as PublishErrorWithStagedMedia).stagedMedia : undefined;
         await completePost(post, {
           status: "FAILED",
           publishError,
+          mediaObjectKey: stagedMedia?.objectKey,
+          mediaPublicUrl: stagedMedia?.publicUrl,
+          mediaUploadedAt: stagedMedia?.uploadedAt,
         });
         log("post failed", { id: post.id, error: publishError });
       }

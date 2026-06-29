@@ -9,16 +9,18 @@ type SocialAccountModalProps = {
   open: boolean;
   onClose: () => void;
   onCreated: (account: SocialAccount) => void;
+  onSynced?: (accounts: SocialAccount[]) => void;
 };
 
 const SOCIAL_ACCOUNT_PLATFORMS: PostingPlatform[] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
 
-export function SocialAccountModal({ open, onClose, onCreated }: SocialAccountModalProps) {
+export function SocialAccountModal({ open, onClose, onCreated, onSynced }: SocialAccountModalProps) {
   const [platform, setPlatform] = useState<PostingPlatform>("Instagram");
   const [label, setLabel] = useState("Church Instagram");
   const [handle, setHandle] = useState("");
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
+  const [syncPending, setSyncPending] = useState(false);
 
   if (!open) {
     return null;
@@ -48,6 +50,29 @@ export function SocialAccountModal({ open, onClose, onCreated }: SocialAccountMo
       setMessage("Could not save this account.");
     } finally {
       setPending(false);
+    }
+  }
+
+  async function syncZernioAccounts() {
+    setSyncPending(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/social-accounts/zernio-sync", {
+        method: "POST",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        setMessage(result.error ?? "Could not sync Zernio accounts.");
+        return;
+      }
+      if (Array.isArray(result.accounts)) {
+        onSynced?.(result.accounts);
+      }
+      setMessage(`Synced ${result.accounts?.length ?? 0} Zernio account${result.accounts?.length === 1 ? "" : "s"}.`);
+    } catch {
+      setMessage("Could not sync Zernio accounts.");
+    } finally {
+      setSyncPending(false);
     }
   }
 
@@ -100,9 +125,12 @@ export function SocialAccountModal({ open, onClose, onCreated }: SocialAccountMo
           />
         </div>
 
-        {message ? <p className={message.includes("saved") ? "success-banner" : "error-banner"}>{message}</p> : null}
+        {message ? <p className={message.includes("saved") || message.includes("Synced") ? "success-banner" : "error-banner"}>{message}</p> : null}
 
         <div className="feature-modal-footer">
+          <button type="button" className="button secondary" onClick={syncZernioAccounts} disabled={syncPending}>
+            {syncPending ? "Syncing..." : "Sync Zernio accounts"}
+          </button>
           <button type="button" className="button tertiary" onClick={onClose}>
             Close
           </button>

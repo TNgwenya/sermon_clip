@@ -1,0 +1,99 @@
+import { createReadStream } from "node:fs";
+import path from "node:path";
+
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+
+export type StagedMedia = {
+  objectKey: string;
+  publicUrl: string;
+  uploadedAt: string;
+};
+
+let client: S3Client | null = null;
+
+function requiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(`${name} is required to stage media for Zernio publishing.`);
+  }
+
+  return value;
+}
+
+function getR2Client(): S3Client {
+  if (client) {
+    return client;
+  }
+
+  const accountId = requiredEnv("R2_ACCOUNT_ID");
+  client = new S3Client({
+    region: "auto",
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId: requiredEnv("R2_ACCESS_KEY_ID"),
+      secretAccessKey: requiredEnv("R2_SECRET_ACCESS_KEY"),
+    },
+  });
+
+  return client;
+}
+
+function cleanPathSegment(value: string): string {
+  const cleaned = value.trim().replace(/[^A-Za-z0-9._-]/g, "-").replace(/-+/g, "-");
+  if (!cleaned) {
+    throw new Error("Cannot build R2 object key from an empty identifier.");
+  }
+
+  return cleaned;
+}
+
+export function buildPostingMediaObjectKey(input: {
+  scheduledPostId: string;
+  clipId: string;
+  filename?: string;
+}): string {
+  const extension = path.extname(input.filename ?? "") || ".mp4";
+  return [
+    "posting-temp",
+    cleanPathSegment(input.scheduledPostId),
+    `${cleanPathSegment(input.clipId)}${extension}`,
+  ].join("/");
+}
+
+export function buildR2PublicUrl(objectKey: string): string {
+  const baseUrl = requiredEnv("R2_PUBLIC_BASE_URL").replace(/\/$/, "");
+  if (!/^https:\/\//i.test(baseUrl)) {
+    throw new Error("R2_PUBLIC_BASE_URL must be an HTTPS public bucket URL or custom domain.");
+  }
+
+  return `${baseUrl}/${objectKey.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+export async function uploadPostingMediaToR2(input: {
+  scheduledPostId: string;
+  clipId: string;
+  videoPath: string;
+  videoSize: number;
+  contentType?: string;
+}): Promise<StagedMedia> {
+  const bucket = requiredEnv("R2_BUCKET");
+  const objectKey = buildPostingMediaObjectKey({
+    scheduledPostId: input.scheduledPostId,
+    clipId: input.clipId,
+    filename: input.videoPath,
+  });
+
+  await getR2Client().send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: objectKey,
+    Body: createReadStream(input.videoPath),
+    ContentLength: input.videoSize,
+    ContentType: input.contentType ?? "video/mp4",
+  }));
+
+  return {
+    objectKey,
+    publicUrl: buildR2PublicUrl(objectKey),
+    uploadedAt: new Date().toISOString(),
+  };
+}
