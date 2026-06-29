@@ -48,6 +48,8 @@ export function proxy(request: NextRequest): NextResponse {
     pathname.startsWith("/_next/")
     || pathname.startsWith("/api/automation/")
     || /^\/tiktok[A-Za-z0-9]+\.txt$/.test(pathname)
+    || pathname === "/data-deletion"
+    || pathname === "/data-deletion/"
     || pathname === "/privacy"
     || pathname === "/privacy/"
     || pathname === "/terms"

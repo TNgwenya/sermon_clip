@@ -87,6 +87,10 @@ export default function PrivacyPage() {
             TikTok app permissions. You can also remove tokens from Sermon Clip&apos;s local
             environment variables or connected credential storage.
           </p>
+          <p>
+            You may also request deletion of connected social account data using the{" "}
+            <Link className="text-link" href="/data-deletion">User Data Deletion instructions</Link>.
+          </p>
         </div>
       </SectionCard>
 
