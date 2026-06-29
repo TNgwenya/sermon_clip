@@ -58,7 +58,7 @@ type ChunkTimelineSummary = {
 };
 
 type CachedChunkTranscriptPayload = {
-  version: 1;
+  version: typeof CHUNK_TRANSCRIPT_CACHE_VERSION;
   chunkFileName: string;
   bytes: number;
   durationSeconds: number | null;
@@ -110,6 +110,7 @@ const CHUNK_DURATION_SECONDS = 20 * 60;
 const LOCAL_LANGUAGE_CHUNK_DURATION_SECONDS = 5 * 60;
 const CHUNK_FOLDER_NAME = "chunks";
 const CHUNK_TRANSCRIPT_CACHE_FOLDER_NAME = "chunk-transcripts";
+const CHUNK_TRANSCRIPT_CACHE_VERSION = 2;
 const TRANSCRIPTION_CONTEXT_WORDS = 70;
 const SPEECH_ENHANCED_AUDIO_NAME = "speech-enhanced-audio.mp3";
 const MAX_CONSECUTIVE_DUPLICATE_TRANSCRIPT_SEGMENTS = 1;
@@ -134,16 +135,6 @@ const TRANSCRIPTION_LANGUAGE_ALIASES: Array<{ code: string; aliases: string[] }>
 
 const OPENAI_TRANSCRIPTION_LANGUAGE_CODES = new Set(["af", "en"]);
 const LOCAL_MULTILINGUAL_LANGUAGE_CODES = new Set(["xh", "zu", "st", "tn"]);
-const COMMON_FALSE_TRANSCRIPTION_LANGUAGE_GUESSES = [
-  "Yoruba",
-  "Swahili",
-  "Hausa",
-  "Lingala",
-  "Shona",
-  "Portuguese",
-  "French",
-];
-
 type TranscriptionLanguageHint = {
   intendedLanguage: string;
   openAiLanguage?: string;
@@ -233,7 +224,7 @@ function isCachedChunkTranscriptPayload(value: unknown): value is CachedChunkTra
 
   const payload = value as Partial<CachedChunkTranscriptPayload>;
   return (
-    payload.version === 1 &&
+    payload.version === CHUNK_TRANSCRIPT_CACHE_VERSION &&
     typeof payload.chunkFileName === "string" &&
     typeof payload.bytes === "number" &&
     (typeof payload.durationSeconds === "number" || payload.durationSeconds === null) &&
@@ -254,7 +245,7 @@ function buildChunkTranscriptCachePayload(input: {
   transcript: NormalizedTranscript;
 }): CachedChunkTranscriptPayload {
   return {
-    version: 1,
+    version: CHUNK_TRANSCRIPT_CACHE_VERSION,
     chunkFileName: path.basename(input.chunkPath),
     bytes: input.bytes,
     durationSeconds: input.durationSeconds,
@@ -433,40 +424,18 @@ function buildTranscriptionPromptContext(context?: TranscriptionPromptContext): 
   const sermonTitle = normalizePromptContextValue(context?.sermonTitle);
   const speakerName = normalizePromptContextValue(context?.speakerName);
   const churchName = normalizePromptContextValue(context?.churchName);
-  const lines: string[] = [];
-
-  if (sermonTitle) {
-    lines.push(`Sermon title: "${sermonTitle}".`);
-  }
-  if (speakerName) {
-    lines.push(`Preacher/speaker name: "${speakerName}".`);
-  }
-  if (churchName) {
-    lines.push(`Church name: "${churchName}".`);
-  }
-
   const expectedTerms = Array.from(new Set([sermonTitle, speakerName, churchName].filter((value): value is string => Boolean(value))));
-  if (expectedTerms.length > 0) {
-    lines.push(`Use these known names and title words when they are spoken: ${expectedTerms.map((term) => `"${term}"`).join(", ")}.`);
-  }
-
-  return lines;
+  return expectedTerms.length > 0
+    ? [`Known sermon terms: ${expectedTerms.join(", ")}.`]
+    : [];
 }
 
-function buildAuthoritativeLanguageInstructions(intendedLanguage: string): string[] {
-  const normalized = intendedLanguage.toLowerCase();
-  const falseLanguageGuesses = COMMON_FALSE_TRANSCRIPTION_LANGUAGE_GUESSES.filter((language) => {
-    return !normalized.includes(language.toLowerCase());
-  });
-
+function buildWhisperPromptContext(intendedLanguage: string, context?: TranscriptionPromptContext): string[] {
   return [
-    `Treat the user-provided language list as authoritative: "${intendedLanguage}".`,
-    "Do not auto-detect, relabel, translate, or substitute the speech as another language that is not in that list.",
-    falseLanguageGuesses.length > 0
-      ? `If the audio is unclear, do not reinterpret it as ${falseLanguageGuesses.join(", ")} unless that language is explicitly listed by the user.`
-      : null,
-    "For South African code-switching, preserve the closest faithful wording from the declared languages rather than replacing it with unrelated-language guesses.",
-  ].filter((line): line is string => Boolean(line));
+    `Languages: ${intendedLanguage}.`,
+    "Christian sermon, scripture, Bible verses, prayer, worship, altar call, Jesus, Amen, Hallelujah.",
+    ...buildTranscriptionPromptContext(context),
+  ];
 }
 
 function getDeclaredLanguageCodes(language: string | null | undefined): string[] {
@@ -513,15 +482,7 @@ function buildTranscriptionLanguageHint(
   return {
     intendedLanguage,
     openAiLanguage,
-    prompt: [
-      `The audio is a Christian sermon. The sermon language provided by the user is "${intendedLanguage}".`,
-      ...buildAuthoritativeLanguageInstructions(intendedLanguage),
-      ...buildTranscriptionPromptContext(context),
-      "Transcribe with that language context and do not translate spoken words.",
-      "Transcribe while preserving code-switching, English phrases, Bible book names, scripture references, verse numbers, pastor names, church phrases, altar-call language, worship cues, repeated emphasis, and prayer language exactly as spoken.",
-      "Keep filler words, repeated pastoral phrases, incomplete spoken sentences, and emotional emphasis when they are actually spoken because they help clip boundaries stay faithful.",
-      "Prefer faithful sermon wording over polished summaries, paraphrases, normalized grammar, or translated phrasing.",
-    ].join(" "),
+    prompt: buildWhisperPromptContext(intendedLanguage, context).join(" "),
   };
 }
 
@@ -545,7 +506,7 @@ function buildChunkTranscriptionPrompt(
   const promptParts = [
     languageHint?.prompt,
     previousTranscriptTail
-      ? `Previous sermon context for continuity only; continue from the next spoken words, do not invent bridge wording, and do not repeat unless spoken again: ${previousTranscriptTail}`
+      ? `Previous transcript context: ${previousTranscriptTail}`
       : null,
   ].filter((part): part is string => Boolean(part?.trim()));
 

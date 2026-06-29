@@ -66,27 +66,22 @@ describe("transcription sermon segment filtering", () => {
 
     expect(result?.intendedLanguage).toBe("Xhosa and English");
     expect(result?.openAiLanguage).toBeUndefined();
-    expect(result?.prompt).toContain("Xhosa and English");
-    expect(result?.prompt).toContain("Treat the user-provided language list as authoritative");
-    expect(result?.prompt).toContain("Do not auto-detect");
-    expect(result?.prompt).toContain("preserving code-switching");
-    expect(result?.prompt).toContain("Bible book names");
-    expect(result?.prompt).toContain("scripture references");
-    expect(result?.prompt).toContain("verse numbers");
-    expect(result?.prompt).toContain("altar-call language");
-    expect(result?.prompt).toContain("worship cues");
-    expect(result?.prompt).toContain("filler words");
-    expect(result?.prompt).toContain("incomplete spoken sentences");
-    expect(result?.prompt).toContain("paraphrases");
+    expect(result?.prompt).toContain("Languages: Xhosa and English.");
+    expect(result?.prompt).toContain("Christian sermon");
+    expect(result?.prompt).toContain("Bible verses");
+    expect(result?.prompt).toContain("altar call");
+    expect(result?.prompt).not.toContain("Treat the user-provided language list as authoritative");
+    expect(result?.prompt).not.toContain("Do not auto-detect");
+    expect(result?.prompt).not.toContain("Keep filler words");
   });
 
-  it("blocks unrelated-language substitutions for declared South African languages", () => {
+  it("keeps South African language prompts as compact lexical context", () => {
     const result = __transcriptionTestUtils.buildTranscriptionLanguageHint("English, Zulu, Xhosa");
 
     expect(result?.openAiLanguage).toBeUndefined();
-    expect(result?.prompt).toContain('Treat the user-provided language list as authoritative: "English, Zulu, Xhosa"');
-    expect(result?.prompt).toContain("do not reinterpret it as Yoruba, Swahili");
-    expect(result?.prompt).toContain("South African code-switching");
+    expect(result?.prompt).toContain("Languages: English, Zulu, Xhosa.");
+    expect(result?.prompt).not.toContain("Yoruba");
+    expect(result?.prompt).not.toContain("South African code-switching");
   });
 
   it("adds sermon title, preacher, and church context to improve proper-name transcription", () => {
@@ -96,10 +91,8 @@ describe("transcription sermon segment filtering", () => {
       churchName: "Melusi Christian Fellowship",
     });
 
-    expect(result?.prompt).toContain('Sermon title: "Stirring Up Your Gift"');
-    expect(result?.prompt).toContain('Preacher/speaker name: "Pastor Thabang Ngwenya"');
-    expect(result?.prompt).toContain('Church name: "Melusi Christian Fellowship"');
-    expect(result?.prompt).toContain("Use these known names and title words");
+    expect(result?.prompt).toContain("Known sermon terms: Stirring Up Your Gift, Pastor Thabang Ngwenya, Melusi Christian Fellowship.");
+    expect(result?.prompt).not.toContain("Use these known names and title words");
   });
 
   it("normalizes long sermon context values before adding them to the transcription prompt", () => {
@@ -109,10 +102,10 @@ describe("transcription sermon segment filtering", () => {
       churchName: "",
     });
 
-    expect(result?.prompt).toContain('Preacher/speaker name: "Pastor Test"');
+    expect(result?.prompt).toContain("Pastor Test");
     expect(result?.prompt).not.toContain("  Pastor   Test");
     expect(result?.prompt).not.toContain("Church name");
-    const titleMatch = result?.prompt.match(/Sermon title: "([^"]+)"/);
+    const titleMatch = result?.prompt.match(/Known sermon terms: ([^,]+),/);
     expect(titleMatch?.[1].length).toBeLessThanOrEqual(140);
   });
 
@@ -148,10 +141,10 @@ describe("transcription sermon segment filtering", () => {
 
     expect(tail).toBe("reminds us to stir up the gift again");
     expect(prompt).toContain("Xhosa and English");
-    expect(prompt).toContain("Previous sermon context");
-    expect(prompt).toContain("continue from the next spoken words");
-    expect(prompt).toContain("do not invent bridge wording");
-    expect(prompt).toContain("do not repeat unless spoken again");
+    expect(prompt).toContain("Previous transcript context");
+    expect(prompt).not.toContain("continue from the next spoken words");
+    expect(prompt).not.toContain("do not invent bridge wording");
+    expect(prompt).not.toContain("do not repeat unless spoken again");
     expect(prompt).toContain("stir up the gift again");
   });
 
@@ -262,6 +255,48 @@ describe("transcription sermon segment filtering", () => {
           cachePath,
           chunkPath,
           bytes: 25,
+          durationSeconds: 6,
+          languageCode: "en",
+        }),
+      ).resolves.toBeNull();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores legacy chunk transcript caches after prompt behavior changes", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "transcription-chunk-cache-"));
+    const chunkPath = join(tempDir, "chunk-000.mp3");
+    const cachePath = __transcriptionTestUtils.buildChunkTranscriptCachePath(tempDir, chunkPath);
+
+    try {
+      await writeFile(chunkPath, Buffer.alloc(24));
+      await writeFile(cachePath, JSON.stringify({
+        version: 1,
+        chunkFileName: "chunk-000.mp3",
+        bytes: 24,
+        durationSeconds: 6,
+        languageCode: "en",
+        transcript: {
+          fullText: "Keep filler words, repeated pastoral phrases.",
+          provider: "openai",
+          model: "whisper-1",
+          segments: [
+            {
+              startTimeSeconds: 0,
+              endTimeSeconds: 6,
+              text: "Keep filler words, repeated pastoral phrases.",
+            },
+          ],
+          raw: {},
+        },
+      }), "utf8");
+
+      await expect(
+        __transcriptionTestUtils.readCachedChunkTranscript({
+          cachePath,
+          chunkPath,
+          bytes: 24,
           durationSeconds: 6,
           languageCode: "en",
         }),
