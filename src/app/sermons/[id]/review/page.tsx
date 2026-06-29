@@ -61,6 +61,7 @@ type ReviewPageData = {
     exportedFilePath: string | null;
     subtitleFilePath: string | null;
     overlayVideoPath: string | null;
+    remotePreviewUrl: string | null;
     createdAt: Date;
   }>;
 };
@@ -137,6 +138,7 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
           exportedFilePath: true,
           subtitleFilePath: true,
           overlayVideoPath: true,
+          remotePreviewUrl: true,
           createdAt: true,
         },
       },

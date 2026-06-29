@@ -83,6 +83,7 @@ type ClipReviewItem = {
   smartCropDebugError: string | null;
   subtitleFilePath: string | null;
   overlayVideoPath: string | null;
+  remotePreviewUrl: string | null;
   createdAt: string;
 };
 
@@ -514,6 +515,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             const isSmartCrop = clip.exportLayoutStrategy === "SMART_CROP";
             const manualFramingApplied = hasManualFraming(clip);
             const isFallbackClip = isDeterministicFallbackClip(clip);
+            const canPreviewVideo = localMediaAvailable || Boolean(clip.remotePreviewUrl);
 
             return (
               <article
@@ -535,7 +537,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                     <div className="review-feed-video-frame">
                       <span className="review-feed-score-pill">{qualityView.scoreLabel}</span>
                       <span className="review-feed-duration-pill">{toDurationLabel(clip.durationSeconds)}</span>
-                      {localMediaAvailable ? (
+                      {canPreviewVideo ? (
                         <video
                           className="review-video"
                           controls
