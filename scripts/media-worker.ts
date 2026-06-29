@@ -226,10 +226,13 @@ async function runJob(type: ProcessingJobType, sermonId: string): Promise<string
     }
     case "GENERATE_CLIPS": {
       const { generateClipSuggestions } = await import("../src/server/agents/clipIntelligenceAgent");
+      const { prepareGeneratedClipReviewAssets } = await import("../src/server/agents/clipReviewAssetService");
       const result = await generateClipSuggestions(sermonId, { force: false });
+      const previewResult = await prepareGeneratedClipReviewAssets({ sermonId, force: false });
+      const previewSummary = `Preview prep: ${previewResult.prepared} prepared, ${previewResult.skipped} skipped, ${previewResult.failed} failed.`;
       return result.reusedExistingSuggestions
-        ? "Existing clip suggestions reused."
-        : `Generated ${result.clipCount} clip suggestion(s).`;
+        ? `Existing clip suggestions reused. ${previewSummary}`
+        : `Generated ${result.clipCount} clip suggestion(s). ${previewSummary}`;
     }
     case "EXPORT_CLIPS": {
       const { renderApprovedClipsForSermon } = await import("../src/server/agents/clipRenderService");

@@ -29,7 +29,6 @@ import {
 import { type MinistryMomentRecord as PromptMinistryMomentRecord } from "@/server/ai/ministryMomentSchema";
 import { appendPipelineLog } from "@/server/agents/storage";
 import { updateSermonStatus } from "@/server/status/sermonStatus";
-import { refreshVideoSubjectTracking } from "@/server/agents/videoSubjectTrackingService";
 
 export type ClipWindow = {
   windowId: string;
@@ -858,34 +857,10 @@ export async function generateClipSuggestions(
       });
     });
 
-    const savedClips = await prisma.clipCandidate.findMany({
-      where: {
-        sermonId: sermon.id,
-        status: "SUGGESTED",
-        isAiGenerated: true,
-        isManuallyEdited: false,
-        createdAt: { gte: job.createdAt },
-        ...(options?.targetCategory ? { smartClipCategory: options.targetCategory } : {}),
-      },
-      select: { id: true },
-    });
-
-    let trackedClipCount = 0;
-    for (const clip of savedClips) {
-      try {
-        const trackingResult = await refreshVideoSubjectTracking(clip.id);
-        trackedClipCount += 1;
-        await appendJobLog(job.id, `Video subject tracking prepared for clip ${clip.id} using ${trackingResult.source}.`);
-      } catch (trackingError) {
-        const trackingMessage = trackingError instanceof Error ? trackingError.message : "Unknown video subject tracking error.";
-        await appendJobLog(job.id, `Video subject tracking skipped for clip ${clip.id}: ${trackingMessage}`);
-      }
-    }
-
     await updateSermonStatus(sermon.id, "CLIPS_GENERATED");
     const successMessage = [
       `Saved ${dedupedWithBoundaryFields.length} clip suggestions.`,
-      `Video subject tracking prepared for ${trackedClipCount} clip(s).`,
+      "Preview rendering is handled by the review asset preparation step.",
       `Repair used in ${repairUsedCount} batch(es).`,
       `Target duration guidance ${TARGET_MIN_DURATION_SECONDS}-${TARGET_MAX_DURATION_SECONDS}s applied.`,
       `Boundary adjustments applied to ${boundaryAdjustedCount} candidate(s).`,

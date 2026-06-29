@@ -36,6 +36,7 @@ import {
 } from "@/server/agents/processing";
 import type { ClipQualityRefreshSummary } from "@/server/agents/clipQualityRefreshService";
 import type { ClipSuggestionCurationSummary } from "@/server/agents/clipSuggestionCurationService";
+import { prepareGeneratedClipReviewAssets } from "@/server/agents/clipReviewAssetService";
 import {
   computeRegenerableAssetsForClip,
   detectClipEditImpact,
@@ -1027,55 +1028,7 @@ async function prepareGeneratedClipPreviews(input: {
   force: boolean;
   onlyFailed?: boolean;
 }): Promise<{ prepared: number; failed: number; skipped: number }> {
-  const clips = await prisma.clipCandidate.findMany({
-    where: {
-      sermonId: input.sermonId,
-      status: "SUGGESTED",
-      isAiGenerated: true,
-      ...(input.onlyFailed ? { renderStatus: "FAILED" } : {}),
-    },
-    orderBy: [{ overallPostScore: "desc" }, { score: "desc" }, { createdAt: "asc" }],
-    select: {
-      id: true,
-      renderStatus: true,
-    },
-  });
-
-  if (clips.length === 0) {
-    return { prepared: 0, failed: 0, skipped: 0 };
-  }
-
-  let prepared = 0;
-  let failed = 0;
-  let skipped = 0;
-
-  await appendPipelineLog(input.sermonId, `Preparing preview assets for ${clips.length} generated clip(s).`);
-
-  for (const clip of clips) {
-    if (!input.force && clip.renderStatus === "COMPLETED") {
-      skipped += 1;
-      continue;
-    }
-
-    try {
-      await renderApprovedClip(clip.id, {
-        force: input.force,
-        allowRerender: input.force,
-      });
-      prepared += 1;
-    } catch (error) {
-      failed += 1;
-      const reason = error instanceof Error ? error.message : "Unknown preview render error.";
-      await appendPipelineLog(input.sermonId, `Preview render failed for clip ${clip.id}: ${reason}`);
-    }
-  }
-
-  await appendPipelineLog(
-    input.sermonId,
-    `Preview preparation complete. Prepared: ${prepared}, skipped: ${skipped}, failed: ${failed}.`,
-  );
-
-  return { prepared, failed, skipped };
+  return prepareGeneratedClipReviewAssets(input);
 }
 
 export async function createSermonAction(

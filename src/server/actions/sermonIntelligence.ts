@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import { createProcessingJob } from "@/server/agents/processing";
+import { prepareGeneratedClipReviewAssets } from "@/server/agents/clipReviewAssetService";
 import { SMART_CLIP_CATEGORIES, type SmartClipCategory } from "@/server/ai/ministryMomentSchema";
 import {
   canRunLocalMediaProcessing,
@@ -184,14 +185,15 @@ export async function regenerateSmartClipsAction(
 
   try {
     const result = await generateClipSuggestions(sermonId, { force: true });
+    const previewSummary = await prepareGeneratedClipReviewAssets({ sermonId, force: true });
     revalidatePath(`/sermons/${sermonId}/review`);
     revalidatePath(`/sermons/${sermonId}`);
 
     return {
       success: true,
       message: result.reusedExistingSuggestions
-        ? "Smart clips were already present and reused."
-        : `Smart clips refreshed (${result.clipCount} recommendations).`,
+        ? `Smart clips were already present and reused. Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`
+        : `Smart clips refreshed (${result.clipCount} recommendations). Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error.";
@@ -226,6 +228,7 @@ export async function regenerateSmartClipsByCategoryAction(
       force: true,
       targetCategory: parsedCategory.data,
     });
+    const previewSummary = await prepareGeneratedClipReviewAssets({ sermonId, force: true });
 
     revalidatePath(`/sermons/${sermonId}/review`);
     revalidatePath(`/sermons/${sermonId}`);
@@ -233,8 +236,8 @@ export async function regenerateSmartClipsByCategoryAction(
     return {
       success: true,
       message: result.reusedExistingSuggestions
-        ? `${parsedCategory.data} clips were already present and reused.`
-        : `${parsedCategory.data} clips refreshed (${result.clipCount} recommendation${result.clipCount === 1 ? "" : "s"}).`,
+        ? `${parsedCategory.data} clips were already present and reused. Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`
+        : `${parsedCategory.data} clips refreshed (${result.clipCount} recommendation${result.clipCount === 1 ? "" : "s"}). Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error.";

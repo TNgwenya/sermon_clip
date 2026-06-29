@@ -1,4 +1,4 @@
-import type { ClipRenderStatus, SermonStatus } from "@prisma/client";
+import type { SermonStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import {
@@ -20,8 +20,11 @@ import { generateClipSuggestions } from "@/server/agents/clipIntelligenceAgent";
 import { transcribeSermonAudio } from "@/server/agents/transcriptionAgent";
 import { generateSermonIntelligence } from "@/server/agents/sermonIntelligenceService";
 import { generateContentOpportunities } from "@/server/agents/contentMultiplicationService";
-import { renderApprovedClip } from "@/server/agents/clipRenderService";
 import { mediaFileIsUsable } from "@/server/media/fileGuards";
+import {
+  __clipReviewAssetServiceTestUtils,
+  prepareGeneratedClipReviewAssets,
+} from "@/server/agents/clipReviewAssetService";
 
 export type ProcessSermonPipelineOptions = {
   force?: boolean;
@@ -117,73 +120,6 @@ function buildFailureSummary(steps: PipelineStepResult[], failedLabel: string, f
     `Ran: ${ran.length > 0 ? ran.join(", ") : "none"}.`,
     `Skipped: ${skipped.length > 0 ? skipped.join(", ") : "none"}.`,
   ].join(" ");
-}
-
-type ReviewAssetPreparationClip = {
-  renderStatus: ClipRenderStatus;
-};
-
-function buildGeneratedClipReviewAssetPlan(
-  clip: ReviewAssetPreparationClip,
-  force?: boolean,
-): { preparePreviewVideo: boolean; prepareCaptionFile: false } {
-  const renderInProgress = clip.renderStatus === "QUEUED" || clip.renderStatus === "RENDERING";
-  const previewAlreadyReady = clip.renderStatus === "COMPLETED";
-
-  return {
-    preparePreviewVideo: !renderInProgress && (Boolean(force) || !previewAlreadyReady),
-    prepareCaptionFile: false,
-  };
-}
-
-async function prepareGeneratedClipReviewAssets(
-  sermonId: string,
-  options?: Pick<ProcessSermonPipelineOptions, "force">,
-): Promise<{ prepared: number; skipped: number; failed: number }> {
-  const clips = await prisma.clipCandidate.findMany({
-    where: {
-      sermonId,
-      status: "SUGGESTED",
-      isAiGenerated: true,
-    },
-    orderBy: [{ overallPostScore: "desc" }, { score: "desc" }, { startTimeSeconds: "asc" }],
-    select: {
-      id: true,
-      renderStatus: true,
-    },
-  });
-
-  if (clips.length === 0) {
-    return { prepared: 0, skipped: 0, failed: 0 };
-  }
-
-  let prepared = 0;
-  let skipped = 0;
-  let failed = 0;
-
-  for (const clip of clips) {
-    const plan = buildGeneratedClipReviewAssetPlan(clip, options?.force);
-    if (!plan.preparePreviewVideo) {
-      skipped += 1;
-      continue;
-    }
-
-    try {
-      await renderApprovedClip(clip.id, {
-        allowRerender: Boolean(options?.force),
-        force: options?.force,
-      });
-      prepared += 1;
-    } catch (error) {
-      failed += 1;
-      const message = error instanceof Error ? error.message : "Unknown preview render error.";
-      await appendPipelineLog(sermonId, `Review preview render failed for clip ${clip.id}: ${message}`);
-    }
-  }
-
-  await appendPipelineLog(sermonId, `Review preview preparation finished: ${prepared} prepared, ${skipped} skipped, ${failed} failed.`);
-
-  return { prepared, skipped, failed };
 }
 
 export async function processSermonPipeline(
@@ -312,7 +248,7 @@ export async function processSermonPipeline(
     await appendJobLog(parentJob.id, "Generate clip suggestions completed.");
 
     activeStepLabel = "Prepare generated clip review assets";
-    const previewResult = await prepareGeneratedClipReviewAssets(sermon.id, { force: options?.force });
+    const previewResult = await prepareGeneratedClipReviewAssets({ sermonId: sermon.id, force: options?.force });
     steps.push({
       label: "Prepare generated clip review assets",
       status: previewResult.failed === 0 ? "SUCCEEDED" : "SKIPPED",
@@ -369,5 +305,11 @@ export async function processSermonPipeline(
 }
 
 export const __processSermonPipelineTestUtils = {
-  buildGeneratedClipReviewAssetPlan,
+  buildGeneratedClipReviewAssetPlan: (
+    clip: Parameters<typeof __clipReviewAssetServiceTestUtils.shouldPreparePreview>[0],
+    force?: boolean,
+  ) => ({
+    preparePreviewVideo: __clipReviewAssetServiceTestUtils.shouldPreparePreview(clip, force),
+    prepareCaptionFile: false as const,
+  }),
 };
