@@ -61,8 +61,8 @@ describe("posting media staging", () => {
   });
 
   it("uses path-style addressing for Cloudflare R2 uploads", async () => {
-    vi.stubEnv("R2_ACCOUNT_ID", "account-id");
-    vi.stubEnv("R2_ACCESS_KEY_ID", "access-key");
+    vi.stubEnv("R2_ACCOUNT_ID", "ccec8a45b35c669f20ae3380a0f5859d");
+    vi.stubEnv("R2_ACCESS_KEY_ID", "12345678901234567890123456789012");
     vi.stubEnv("R2_SECRET_ACCESS_KEY", "secret-key");
     vi.stubEnv("R2_BUCKET", "sermon-clip-exports");
     vi.stubEnv("R2_PUBLIC_BASE_URL", "https://pub-example.r2.dev");
@@ -83,8 +83,38 @@ describe("posting media staging", () => {
     }
 
     expect(s3Mock.configs[0]).toMatchObject({
-      endpoint: "https://account-id.r2.cloudflarestorage.com",
+      endpoint: "https://ccec8a45b35c669f20ae3380a0f5859d.r2.cloudflarestorage.com",
       forcePathStyle: true,
     });
+  });
+
+  it("rejects invalid Cloudflare account ids before uploading", async () => {
+    vi.stubEnv("R2_ACCOUNT_ID", "not-the-account-id");
+    vi.stubEnv("R2_ACCESS_KEY_ID", "12345678901234567890123456789012");
+    vi.stubEnv("R2_SECRET_ACCESS_KEY", "secret-key");
+    vi.stubEnv("R2_BUCKET", "sermon-clip-exports");
+    vi.stubEnv("R2_PUBLIC_BASE_URL", "https://pub-example.r2.dev");
+
+    await expect(uploadPostingMediaToR2({
+      scheduledPostId: "post-1",
+      clipId: "clip-1",
+      videoPath: "/tmp/export.mp4",
+      videoSize: 10,
+    })).rejects.toThrow("32-character Cloudflare Account ID");
+  });
+
+  it("rejects invalid R2 access key ids before uploading", async () => {
+    vi.stubEnv("R2_ACCOUNT_ID", "ccec8a45b35c669f20ae3380a0f5859d");
+    vi.stubEnv("R2_ACCESS_KEY_ID", "not-the-r2-access-key-id");
+    vi.stubEnv("R2_SECRET_ACCESS_KEY", "secret-key");
+    vi.stubEnv("R2_BUCKET", "sermon-clip-exports");
+    vi.stubEnv("R2_PUBLIC_BASE_URL", "https://pub-example.r2.dev");
+
+    await expect(uploadPostingMediaToR2({
+      scheduledPostId: "post-1",
+      clipId: "clip-1",
+      videoPath: "/tmp/export.mp4",
+      videoSize: 10,
+    })).rejects.toThrow("32-character R2 S3 access key ID");
   });
 });

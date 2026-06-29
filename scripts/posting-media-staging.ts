@@ -20,19 +20,40 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+function requiredR2AccountId(): string {
+  const accountId = requiredEnv("R2_ACCOUNT_ID");
+  if (!/^[a-f0-9]{32}$/i.test(accountId)) {
+    throw new Error("R2_ACCOUNT_ID must be the 32-character Cloudflare Account ID.");
+  }
+
+  return accountId;
+}
+
+function requiredR2AccessKeyId(): string {
+  const accessKeyId = requiredEnv("R2_ACCESS_KEY_ID");
+  if (accessKeyId.length !== 32) {
+    throw new Error("R2_ACCESS_KEY_ID must be the 32-character R2 S3 access key ID.");
+  }
+
+  return accessKeyId;
+}
+
 function getR2Client(): S3Client {
+  const accountId = requiredR2AccountId();
+  const accessKeyId = requiredR2AccessKeyId();
+  const secretAccessKey = requiredEnv("R2_SECRET_ACCESS_KEY");
+
   if (client) {
     return client;
   }
 
-  const accountId = requiredEnv("R2_ACCOUNT_ID");
   client = new S3Client({
     region: "auto",
     endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
     forcePathStyle: true,
     credentials: {
-      accessKeyId: requiredEnv("R2_ACCESS_KEY_ID"),
-      secretAccessKey: requiredEnv("R2_SECRET_ACCESS_KEY"),
+      accessKeyId,
+      secretAccessKey,
     },
   });
 
