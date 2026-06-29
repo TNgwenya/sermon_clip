@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { buildClipWarnings, filterClips, summarizeReview, type ReviewClipModel } from "@/lib/clipReview";
+import {
+  buildClipWarnings,
+  filterClips,
+  getQueuedMediaAssetsForRemoteBatchAction,
+  summarizeReview,
+  type ReviewClipModel,
+} from "@/lib/clipReview";
 
 function clip(status: ReviewClipModel["status"]): ReviewClipModel {
   return {
@@ -37,5 +43,19 @@ describe("clip review summaries", () => {
       ...clip("APPROVED"),
       qualityWarnings: ["SMART_CROP_UNSTABLE"],
     })).toContain("Smart crop movement may need review");
+  });
+
+  it("queues local worker assets for remote batch media actions", () => {
+    expect(getQueuedMediaAssetsForRemoteBatchAction("approve")).toEqual([
+      "render",
+      "caption",
+      "captionBurn",
+      "overlay",
+      "export",
+    ]);
+    expect(getQueuedMediaAssetsForRemoteBatchAction("render")).toEqual([]);
+    expect(getQueuedMediaAssetsForRemoteBatchAction("export")).toEqual(["render", "overlay", "export"]);
+    expect(getQueuedMediaAssetsForRemoteBatchAction("reject")).toEqual([]);
+    expect(getQueuedMediaAssetsForRemoteBatchAction("pending")).toEqual([]);
   });
 });

@@ -12,6 +12,7 @@ export type ReviewProfessionalQualityLabel = "POST_READY" | "GOOD_NEEDS_REVIEW" 
 export type ReviewFilter = "ALL" | "APPROVED" | "REJECTED" | "PENDING" | "RENDERED" | "NOT_RENDERED";
 export type ReviewSort = "HIGHEST_SCORE" | "NEWEST" | "SHORTEST" | "LONGEST";
 export type ReviewBatchAction = "approve" | "reject" | "pending" | "render" | "caption" | "burn" | "overlay" | "export" | "prepare";
+export type ReviewQueuedMediaAsset = "render" | "caption" | "captionBurn" | "overlay" | "export";
 
 export type ReviewClipModel = {
   id: string;
@@ -99,6 +100,30 @@ export function sortClips<T extends ReviewClipModel>(clips: T[], sort: ReviewSor
   }
 
   return copy.sort((a, b) => b.durationSeconds - a.durationSeconds);
+}
+
+export function getQueuedMediaAssetsForRemoteBatchAction(action: ReviewBatchAction): ReviewQueuedMediaAsset[] {
+  if (action === "approve" || action === "prepare") {
+    return ["render", "caption", "captionBurn", "overlay", "export"];
+  }
+
+  if (action === "caption") {
+    return ["caption"];
+  }
+
+  if (action === "burn") {
+    return ["captionBurn"];
+  }
+
+  if (action === "overlay") {
+    return ["overlay"];
+  }
+
+  if (action === "export") {
+    return ["render", "overlay", "export"];
+  }
+
+  return [];
 }
 
 export function getClipPostScore(clip: Pick<ReviewClipModel, "overallPostScore" | "score">): number {

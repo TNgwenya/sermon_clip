@@ -66,6 +66,7 @@ import {
   buildPrepareApprovedSummary,
   buildPrepareClipPlan,
 } from "@/lib/prepareWorkflow";
+import { getQueuedMediaAssetsForRemoteBatchAction } from "@/lib/clipReview";
 import { isStaleActiveProcessingJob } from "@/lib/pastorWorkflow";
 import { prunePostingPackageHistoryByClipIds } from "@/lib/postingPackages";
 import {
@@ -3123,7 +3124,10 @@ export async function runClipBatchReviewAction(input: {
   return runOperationWithLogging<ClipReviewBatchActionState>(
     { sermonId, operation: `batch_review_${input.action}` },
     async () => {
-      const brandingSettings = input.action === "approve" ? await getBrandingSettings() : null;
+      const queuedRemoteAssets = canRunLocalMediaProcessing()
+        ? []
+        : getQueuedMediaAssetsForRemoteBatchAction(input.action);
+      const brandingSettings = input.action === "approve" && queuedRemoteAssets.length === 0 ? await getBrandingSettings() : null;
       const clipById = new Map(clips.map((clip) => [clip.id, clip]));
       let processed = 0;
       const failures: Array<{ clipId: string; reason: string }> = [];
@@ -3143,33 +3147,39 @@ export async function runClipBatchReviewAction(input: {
         try {
           if (input.action === "approve") {
             await prisma.clipCandidate.update({ where: { id: clipId }, data: { status: "APPROVED" } });
-            await prepareApprovedClipAfterReview(
-              clipId,
-              (brandingSettings?.defaultCaptionStyleName ?? "clean-lower") as CaptionStylePresetId,
-            );
+            if (queuedRemoteAssets.length === 0) {
+              await prepareApprovedClipAfterReview(
+                clipId,
+                (brandingSettings?.defaultCaptionStyleName ?? "clean-lower") as CaptionStylePresetId,
+              );
+            }
           } else if (input.action === "reject") {
             await prisma.clipCandidate.update({ where: { id: clipId }, data: { status: "REJECTED" } });
           } else if (input.action === "pending") {
             await prisma.clipCandidate.update({ where: { id: clipId }, data: { status: "SUGGESTED" } });
           } else if (input.action === "render") {
-            await renderApprovedClip(clipId, { force: true, allowRerender: true });
+            if (queuedRemoteAssets.length === 0) {
+              await renderApprovedClip(clipId, { force: true, allowRerender: true });
+            }
           } else if (input.action === "export") {
-            await prisma.clipCandidate.update({
-              where: { id: clipId },
-              data: { exportLayoutStrategy: "SMART_CROP" },
-            });
-            await refreshVideoSubjectTrackingBestEffort(clipId, sermonId);
-            await renderApprovedClipWithFallback({
-              clipId,
-              sermonId,
-              exportLayoutStrategy: "SMART_CROP",
-            });
-            await exportVerticalClipWithFallback({
-              clipId,
-              sermonId,
-              layoutStrategy: "SMART_CROP",
-              brandingOverlay: null,
-            });
+            if (queuedRemoteAssets.length === 0) {
+              await prisma.clipCandidate.update({
+                where: { id: clipId },
+                data: { exportLayoutStrategy: "SMART_CROP" },
+              });
+              await refreshVideoSubjectTrackingBestEffort(clipId, sermonId);
+              await renderApprovedClipWithFallback({
+                clipId,
+                sermonId,
+                exportLayoutStrategy: "SMART_CROP",
+              });
+              await exportVerticalClipWithFallback({
+                clipId,
+                sermonId,
+                layoutStrategy: "SMART_CROP",
+                brandingOverlay: null,
+              });
+            }
           }
 
           processed += 1;
@@ -3177,6 +3187,11 @@ export async function runClipBatchReviewAction(input: {
           const reason = error instanceof Error ? error.message : "Unknown batch action error.";
           failures.push({ clipId, reason });
         }
+      }
+
+      let queuedJobs: Awaited<ReturnType<typeof queueSermonMediaAssetJobs>> | null = null;
+      if (processed > 0 && queuedRemoteAssets.length > 0) {
+        queuedJobs = await queueSermonMediaAssetJobs(sermonId, queuedRemoteAssets);
       }
 
       revalidatePath(`/sermons/${sermonId}`);
@@ -3188,7 +3203,11 @@ export async function runClipBatchReviewAction(input: {
         success: failed === 0,
         message:
           failed === 0
-            ? `Batch action completed for ${processed} clip(s).`
+            ? queuedJobs
+              ? queuedJobs.queued > 0
+                ? `Batch action completed for ${processed} clip(s). Media preparation was queued for your local worker.`
+                : `Batch action completed for ${processed} clip(s). Media preparation is already queued for your local worker.`
+              : `Batch action completed for ${processed} clip(s).`
             : `Batch action completed with ${failed} failure(s). Processed ${processed}.`,
         processed,
         failed,
