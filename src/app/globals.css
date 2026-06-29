@@ -4693,6 +4693,35 @@ textarea::placeholder {
   gap: 0.4rem;
 }
 
+.schedule-plan-preview {
+  display: grid;
+  gap: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #101014;
+  padding: 0.65rem;
+}
+
+.schedule-plan-preview div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 2rem;
+}
+
+.schedule-plan-preview span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.schedule-plan-preview strong {
+  color: #f8fafc;
+  font-size: 0.9rem;
+  text-align: right;
+}
+
 .schedule-two-column {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: end;

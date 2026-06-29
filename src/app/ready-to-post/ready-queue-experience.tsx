@@ -45,6 +45,7 @@ export type ReadyQueueClip = {
   intendedAudience: string | null;
   mediaReady: boolean;
   estimatedBytes: number | null;
+  remotePreviewUrl: string | null;
   sermon: {
     id: string;
     title: string;
@@ -115,6 +116,14 @@ const QUALITY_LABELS: Record<ClipQualityLabel, string> = {
 
 const PLATFORMS: ScheduledPost["platform"][] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
 const INTERNAL_QUALITY_WARNINGS = new Set(["AI_REVIEW_FAILED", "FALLBACK_REVIEW"]);
+const HIDE_FROM_READY_STATUSES = new Set<ScheduledPost["status"]>([
+  "PLANNED",
+  "READY_FOR_MEDIA_TEAM",
+  "POSTING",
+  "POSTED",
+  "FAILED",
+  "PRIVATE_ONLY_UNVERIFIED",
+]);
 
 function buildBatchDownloadHref(selectedClipIds: string[]): string {
   if (selectedClipIds.length === 0) {
@@ -326,12 +335,27 @@ export function ReadyQueueExperience({
   const [videoPreviewStates, setVideoPreviewStates] = useState<Record<string, VideoPreviewState>>({});
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const clipScopeIdSet = useMemo(() => clipScopeIds ? new Set(clipScopeIds) : null, [clipScopeIds]);
-  const selectedClipIdSet = useMemo(() => new Set(selectedClipIds), [selectedClipIds]);
-  const downloadableClips = useMemo(() => clips.filter((clip) => clip.mediaReady), [clips]);
+  const scheduledClipIds = useMemo(() => {
+    const ids = new Set<string>();
+    scheduledPosts.forEach((post) => {
+      if (HIDE_FROM_READY_STATUSES.has(post.status)) {
+        post.clipIds.forEach((clipId) => ids.add(clipId));
+      }
+    });
+    return ids;
+  }, [scheduledPosts]);
+  const visibleSelectedClipIds = useMemo(
+    () => selectedClipIds.filter((clipId) => !scheduledClipIds.has(clipId)),
+    [scheduledClipIds, selectedClipIds],
+  );
+  const selectedClipIdSet = useMemo(() => new Set(visibleSelectedClipIds), [visibleSelectedClipIds]);
+  const readyQueueClips = useMemo(() => clips.filter((clip) => !scheduledClipIds.has(clip.id)), [clips, scheduledClipIds]);
+  const hiddenScheduledClipCount = clips.length - readyQueueClips.length;
+  const downloadableClips = useMemo(() => readyQueueClips.filter((clip) => clip.mediaReady), [readyQueueClips]);
   const downloadableClipIds = useMemo(() => new Set(downloadableClips.map((clip) => clip.id)), [downloadableClips]);
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
   const filteredClips = useMemo(() => {
-    return clips.filter((clip) => {
+    return readyQueueClips.filter((clip) => {
       const qualityLabel = getQualityLabel(clip);
       const matchesQuality = qualityFilter === "ALL"
         || (qualityFilter === "NEEDS_REVIEW" ? !qualityLabel : qualityLabel === qualityFilter);
@@ -348,15 +372,15 @@ export function ReadyQueueExperience({
 
       return matchesQuality && matchesSearch;
     });
-  }, [clips, normalizedSearchQuery, qualityFilter]);
-  const selectedDownloadableClipIds = selectedClipIds.filter((clipId) => downloadableClipIds.has(clipId));
+  }, [normalizedSearchQuery, qualityFilter, readyQueueClips]);
+  const selectedDownloadableClipIds = visibleSelectedClipIds.filter((clipId) => downloadableClipIds.has(clipId));
   const batchDownloadHref = buildBatchDownloadHref(
     selectedDownloadableClipIds.length > 0 ? selectedDownloadableClipIds : downloadableClips.map((clip) => clip.id),
   );
-  const selectedClip = clips.find((clip) => clip.id === focusedClipId)
-    ?? clips.find((clip) => selectedClipIdSet.has(clip.id))
+  const selectedClip = readyQueueClips.find((clip) => clip.id === focusedClipId)
+    ?? readyQueueClips.find((clip) => selectedClipIdSet.has(clip.id))
     ?? filteredClips[0]
-    ?? clips[0]
+    ?? readyQueueClips[0]
     ?? null;
   const selectedReadyPackage = selectedClip
     ? buildReadyToPostPackage({
@@ -404,7 +428,7 @@ export function ReadyQueueExperience({
   }
 
   function selectAll() {
-    setSelectedClipIds(filteredClips.length > 0 ? filteredClips.map((clip) => clip.id) : clips.map((clip) => clip.id));
+    setSelectedClipIds(filteredClips.length > 0 ? filteredClips.map((clip) => clip.id) : readyQueueClips.map((clip) => clip.id));
   }
 
   function clearSelection() {
@@ -572,11 +596,17 @@ export function ReadyQueueExperience({
               </select>
             </label>
           </div>
-          {clips.length === 0 ? (
+          {clips.length === 0 || readyQueueClips.length === 0 ? (
             <EmptyState
-              title={approvedWaitingCount > 0 ? "Approved clips are waiting above" : "No finished clips yet"}
+              title={
+                clips.length > 0 && readyQueueClips.length === 0
+                  ? "All ready clips are already scheduled"
+                  : approvedWaitingCount > 0 ? "Approved clips are waiting above" : "No finished clips yet"
+              }
               description={
-                approvedWaitingCount > 0
+                clips.length > 0 && readyQueueClips.length === 0
+                  ? "Scheduled and posted clips move out of this list so you can focus on what still needs a posting plan."
+                  : approvedWaitingCount > 0
                   ? "Prepare approved clips first. Finished videos will appear here with captions and posting actions."
                   : "Finished sermon clips will appear here when preparation is complete."
               }
@@ -701,7 +731,7 @@ export function ReadyQueueExperience({
                   <p className="muted small">No quality blockers are currently attached to this clip.</p>
                 )}
               </details>
-              {!controlPanelMode ? <div
+              {(!controlPanelMode || selectedClip.remotePreviewUrl) ? <div
                 className="video-card-shell ready-video-shell selected-asset-video"
                 data-preview-state={videoPreviewStates[selectedClip.id] ?? "poster"}
               >
@@ -735,7 +765,7 @@ export function ReadyQueueExperience({
               </div> : (
                 <div className="selected-quality-panel">
                   <strong>Media stored on Mac</strong>
-                  <p className="muted small">The Vercel control panel does not stream local clip files. Use the Mac app for preview and downloads.</p>
+                  <p className="muted small">This clip does not have a remote preview yet. Use the Mac app for local preview, or refresh review assets before previewing remotely.</p>
                 </div>
               )}
               <div className="selected-asset-actions">
@@ -912,6 +942,7 @@ export function ReadyQueueExperience({
 
           <div className="publishing-toolbar">
             <span className="publishing-search-chip">{postedCount} posted</span>
+            {hiddenScheduledClipCount > 0 ? <span className="publishing-search-chip">{hiddenScheduledClipCount} moved from ready</span> : null}
             <div className="publishing-segmented" aria-label="Filter scheduled posts">
               {(Object.keys(PUBLISHING_FILTER_LABELS) as PublishingFilter[]).map((filter) => (
                 <button

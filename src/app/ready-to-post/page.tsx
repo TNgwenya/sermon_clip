@@ -152,6 +152,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         overlayVideoPath: true,
         captionedVideoPath: true,
         renderedFilePath: true,
+        remotePreviewUrl: true,
         sermon: {
           select: {
             id: true,
@@ -261,6 +262,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         intendedAudience: clip.intendedAudience,
         mediaReady: media.mediaReady,
         estimatedBytes: media.estimatedBytes,
+        remotePreviewUrl: clip.remotePreviewUrl,
         sermon: clip.sermon,
       };
     }),

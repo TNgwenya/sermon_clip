@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import type { PostingAutomationMode, PostingDraft, PostingPlatform } from "@/lib/postingDrafts";
+import { formatScheduleInterval, suggestScheduleIntervalMinutes } from "@/lib/postingSchedule";
 import type { SocialAccount } from "@/lib/socialAccounts";
 
 const platforms: PostingPlatform[] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
@@ -11,6 +12,16 @@ const postingSlots = ["Sunday recap", "Midweek encouragement", "Prayer invitatio
 function formatDateTimeLocal(date: Date): string {
   const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return offsetDate.toISOString().slice(0, 16);
+}
+
+function formatPlanTime(date: Date): string {
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
 }
 
 type ScheduleDraftModalProps = {
@@ -41,6 +52,7 @@ function buildAutomaticPlatforms(accounts: SocialAccount[]): Set<PostingPlatform
 
 export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose, onCreated }: ScheduleDraftModalProps) {
   const automaticPlatforms = buildAutomaticPlatforms(socialAccounts);
+  const suggestedIntervalMinutes = suggestScheduleIntervalMinutes(clipIds.length);
   const defaultAutomaticPlatform: PostingPlatform = automaticPlatforms.has("Instagram")
     ? "Instagram"
     : automaticPlatforms.has("TikTok")
@@ -53,6 +65,7 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
     date.setMinutes(Math.ceil(date.getMinutes() / 15) * 15, 0, 0);
     return formatDateTimeLocal(date);
   });
+  const [customScheduleIntervalMinutes, setCustomScheduleIntervalMinutes] = useState<number | null>(null);
   const [timezone, setTimezone] = useState("Africa/Johannesburg");
   const [postingSlot, setPostingSlot] = useState(postingSlots[0]);
   const [title, setTitle] = useState("");
@@ -60,6 +73,31 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
   const [note, setNote] = useState("");
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
+  const intervalOptions = useMemo(() => {
+    const options = [
+      suggestedIntervalMinutes,
+      2 * 60,
+      4 * 60,
+      6 * 60,
+      24 * 60,
+    ].filter((minutes) => minutes > 0);
+
+    return Array.from(new Set(options));
+  }, [suggestedIntervalMinutes]);
+  const scheduleIntervalMinutes = customScheduleIntervalMinutes ?? suggestedIntervalMinutes;
+  const schedulePreview = useMemo(() => {
+    const start = new Date(scheduledFor);
+    if (automationMode !== "AUTOMATIC" || Number.isNaN(start.getTime())) {
+      return [];
+    }
+
+    const interval = clipIds.length > 1 ? scheduleIntervalMinutes : 0;
+    return clipIds.slice(0, 6).map((clipId, index) => ({
+      clipId,
+      label: `Clip ${index + 1}`,
+      scheduledFor: new Date(start.getTime() + index * interval * 60_000),
+    }));
+  }, [automationMode, clipIds, scheduleIntervalMinutes, scheduledFor]);
 
   if (!open) {
     return null;
@@ -104,6 +142,7 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
           title,
           caption,
           note,
+          scheduleIntervalMinutes: clipIds.length > 1 ? scheduleIntervalMinutes : 0,
         }),
       });
       const result = await response.json();
@@ -112,7 +151,7 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
         return;
       }
       onCreated(result.draft);
-      setMessage(automationMode === "AUTOMATIC" ? "Automatic post scheduled." : "Posting draft saved for the media team.");
+      setMessage(automationMode === "AUTOMATIC" ? "Automatic posting plan scheduled." : "Posting draft saved for the media team.");
     } catch {
       setMessage("Could not create the posting draft.");
     } finally {
@@ -140,6 +179,9 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
         <div className="schedule-draft-summary">
           <span className="status-pill status-exported">{clipIds.length} clip{clipIds.length === 1 ? "" : "s"}</span>
           <span className="status-pill">{automationMode === "AUTOMATIC" ? "Automatic posting" : "Media team handoff"}</span>
+          {automationMode === "AUTOMATIC" && clipIds.length > 1 ? (
+            <span className="status-pill">Every {formatScheduleInterval(scheduleIntervalMinutes)}</span>
+          ) : null}
         </div>
 
         <div className="schedule-fieldset">
@@ -222,6 +264,41 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
           </div>
         ) : null}
 
+        {automationMode === "AUTOMATIC" && clipIds.length > 1 ? (
+          <div className="schedule-fieldset">
+            <label htmlFor="scheduleIntervalMinutes">
+              Clip spacing
+              <select
+                id="scheduleIntervalMinutes"
+                value={scheduleIntervalMinutes}
+                onChange={(event) => setCustomScheduleIntervalMinutes(Number(event.target.value))}
+              >
+                {intervalOptions.map((minutes) => (
+                  <option key={minutes} value={minutes}>
+                    {minutes === suggestedIntervalMinutes ? "Suggested: " : ""}Every {formatScheduleInterval(minutes)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="muted small">
+              Each clip posts to all selected platforms at its assigned time. The next clip is staggered to avoid posting everything at once.
+            </p>
+            {schedulePreview.length > 0 ? (
+              <div className="schedule-plan-preview" aria-label="Suggested posting plan">
+                {schedulePreview.map((item) => (
+                  <div key={item.clipId}>
+                    <span>{item.label}</span>
+                    <strong>{formatPlanTime(item.scheduledFor)}</strong>
+                  </div>
+                ))}
+                {clipIds.length > schedulePreview.length ? (
+                  <p className="muted small">+ {clipIds.length - schedulePreview.length} more clip{clipIds.length - schedulePreview.length === 1 ? "" : "s"} in the same rhythm</p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         <details className="schedule-optional-fields">
           <summary>Optional copy and note</summary>
           <div className="schedule-fieldset">
@@ -257,7 +334,7 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
           </div>
         </details>
 
-        {message ? <p className={message.includes("saved") ? "success-banner" : "error-banner"}>{message}</p> : null}
+        {message ? <p className={message.includes("Could not") ? "error-banner" : "success-banner"}>{message}</p> : null}
 
         <div className="feature-modal-footer">
           <button type="button" className="button primary" onClick={createDraft} disabled={pending || selectedPlatforms.length === 0}>

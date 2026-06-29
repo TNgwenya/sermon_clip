@@ -10,6 +10,7 @@ import {
   normalizeScheduledFor,
   normalizeTimezone,
 } from "@/lib/postingDrafts";
+import { normalizeScheduleIntervalMinutes } from "@/lib/postingSchedule";
 import { resolveReadyMedia } from "@/lib/readyMedia";
 
 export async function GET(): Promise<NextResponse> {
@@ -25,6 +26,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const postingSlot = typeof body?.postingSlot === "string" ? body.postingSlot.trim() : "";
   const automationMode = normalizePostingAutomationMode(body?.automationMode);
   const scheduledFor = normalizeScheduledFor(body?.scheduledFor);
+  const scheduleIntervalMinutes = normalizeScheduleIntervalMinutes(body?.scheduleIntervalMinutes, clipIds.length);
   const timezone = normalizeTimezone(body?.timezone);
   const caption = typeof body?.caption === "string" ? body.caption.trim() : "";
   const title = typeof body?.title === "string" ? body.title.trim() : "";
@@ -133,6 +135,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     postingSlot: postingSlot || "This week",
     automationMode,
     scheduledFor,
+    scheduleIntervalMinutes,
     timezone,
     caption,
     title,

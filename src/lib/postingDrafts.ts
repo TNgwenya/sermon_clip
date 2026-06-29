@@ -4,6 +4,7 @@ import type {
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { buildClipSchedulePlan, normalizeScheduleIntervalMinutes } from "@/lib/postingSchedule";
 
 export type PostingPlatform = "TikTok" | "Instagram" | "YouTube Shorts" | "Facebook";
 
@@ -152,6 +153,7 @@ export async function createPostingDraft(input: {
   postingSlot: string;
   automationMode?: PostingAutomationMode;
   scheduledFor?: Date | null;
+  scheduleIntervalMinutes?: number;
   timezone?: string;
   caption?: string;
   title?: string;
@@ -159,6 +161,8 @@ export async function createPostingDraft(input: {
 }): Promise<PostingDraft> {
   const automationMode = input.automationMode ?? "MANUAL";
   const scheduledFor = input.scheduledFor ?? null;
+  const scheduleIntervalMinutes = normalizeScheduleIntervalMinutes(input.scheduleIntervalMinutes, input.clipIds.length);
+  const clipSchedulePlan = buildClipSchedulePlan(input.clipIds, scheduledFor, scheduleIntervalMinutes);
   const postingSlot = buildPostingSlot(scheduledFor, input.postingSlot);
   const timezone = input.timezone?.trim() || "Africa/Johannesburg";
   const caption = input.caption?.trim() ?? "";
@@ -184,36 +188,39 @@ export async function createPostingDraft(input: {
     });
 
     await tx.scheduledPost.createMany({
-      data: input.platforms.map((platform) => {
+      data: clipSchedulePlan.flatMap((clipSchedule) => input.platforms.map((platform) => {
         const dbPlatform = PLATFORM_TO_DB[platform];
         const account = automationMode === "AUTOMATIC" && (dbPlatform === "TIKTOK" || dbPlatform === "INSTAGRAM")
           ? accounts.find((item) => item.platform === dbPlatform && item.externalProvider === "zernio" && item.externalAccountId)
             ?? accounts.find((item) => item.platform === dbPlatform)
           : accounts.find((item) => item.platform === dbPlatform);
         const status = automationMode === "AUTOMATIC" ? "PLANNED" : "READY_FOR_MEDIA_TEAM";
+        const clipScheduledFor = clipSchedule.scheduledFor;
+        const clipPostingSlot = buildPostingSlot(clipScheduledFor, input.postingSlot);
+        const clipIds = [clipSchedule.clipId];
 
         return {
           postingDraftId: created.id,
           socialAccountId: account?.id ?? null,
-          clipIdsJson: input.clipIds,
+          clipIdsJson: clipIds,
           platform: dbPlatform,
-          postingSlot,
+          postingSlot: clipPostingSlot,
           title: title || null,
           caption: caption || null,
           note: note || null,
           status,
           automationMode,
-          scheduledFor,
+          scheduledFor: clipScheduledFor,
           timezone,
           idempotencyKey: buildScheduledPostIdempotencyKey({
             draftId: created.id,
             platform,
-            clipIds: input.clipIds,
-            scheduledFor,
+            clipIds,
+            scheduledFor: clipScheduledFor,
             automationMode,
           }),
         };
-      }),
+      })),
     });
 
     return created;
