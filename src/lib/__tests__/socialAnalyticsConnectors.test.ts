@@ -9,9 +9,11 @@ import {
 } from "@/lib/socialAnalyticsConnectors";
 
 const originalNextPublicAppUrl = process.env.NEXT_PUBLIC_APP_URL;
+const originalMetaOAuthExtraScopes = process.env.META_OAUTH_EXTRA_SCOPES;
 
 afterEach(() => {
   process.env.NEXT_PUBLIC_APP_URL = originalNextPublicAppUrl;
+  process.env.META_OAUTH_EXTRA_SCOPES = originalMetaOAuthExtraScopes;
 });
 
 describe("social analytics connector OAuth helpers", () => {
@@ -33,10 +35,25 @@ describe("social analytics connector OAuth helpers", () => {
 
     expect(youtubeUrl.searchParams.get("scope")).toContain("yt-analytics.readonly");
     expect(youtubeUrl.searchParams.get("scope")).toContain("youtube.upload");
-    expect(metaUrl.searchParams.get("scope")).toContain("instagram_manage_insights");
+    expect(metaUrl.searchParams.get("scope")).toContain("pages_show_list");
     expect(metaUrl.searchParams.get("scope")).toContain("pages_manage_posts");
+    expect(metaUrl.searchParams.get("scope")).not.toContain("instagram_manage_insights");
     expect(tiktokUrl.searchParams.get("scope")).toContain("video.publish");
     expect(tiktokUrl.searchParams.get("scope")).toContain("video.list");
     expect(threadsUrl.searchParams.get("scope")).toContain("threads_manage_insights");
+  });
+
+  it("allows Meta OAuth advanced scopes to be opted in by environment", () => {
+    process.env.META_OAUTH_EXTRA_SCOPES = "pages_read_engagement, instagram_basic, instagram_manage_insights";
+
+    const metaUrl = new URL(buildMetaOAuthUrl({
+      appId: "meta-app",
+      redirectUri: "https://church.example/api/oauth/meta/callback",
+      state: "state",
+    }));
+
+    expect(metaUrl.searchParams.get("scope")).toContain("pages_manage_posts");
+    expect(metaUrl.searchParams.get("scope")).toContain("instagram_basic");
+    expect(metaUrl.searchParams.get("scope")).toContain("instagram_manage_insights");
   });
 });

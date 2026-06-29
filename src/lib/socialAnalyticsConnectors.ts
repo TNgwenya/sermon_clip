@@ -93,6 +93,16 @@ export function buildOAuthRedirectUri(provider: "youtube" | "meta" | "tiktok" | 
   return `${buildAppBaseUrl()}/api/oauth/${provider}/callback`;
 }
 
+export function getMetaOAuthScopes(): string[] {
+  const baseScopes = ["pages_show_list", "pages_manage_posts"];
+  const extraScopes = (process.env.META_OAUTH_EXTRA_SCOPES ?? "")
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set([...baseScopes, ...extraScopes]));
+}
+
 export function buildYouTubeOAuthUrl(input: {
   clientId: string;
   redirectUri: string;
@@ -125,15 +135,7 @@ export function buildMetaOAuthUrl(input: {
     redirect_uri: input.redirectUri,
     response_type: "code",
     state: input.state,
-    scope: [
-      "pages_show_list",
-      "pages_read_engagement",
-      "pages_manage_posts",
-      "read_insights",
-      "instagram_basic",
-      "instagram_manage_insights",
-      "business_management",
-    ].join(","),
+    scope: getMetaOAuthScopes().join(","),
   });
 
   return `https://www.facebook.com/${process.env.META_GRAPH_VERSION?.trim() || "v23.0"}/dialog/oauth?${params.toString()}`;

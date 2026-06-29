@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { buildOAuthRedirectUri } from "@/lib/socialAnalyticsConnectors";
+import { buildOAuthRedirectUri, getMetaOAuthScopes } from "@/lib/socialAnalyticsConnectors";
 import {
   exchangeMetaAuthorizationCode,
   exchangeMetaLongLivedToken,
@@ -55,14 +55,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       accessToken: longLived.accessToken,
       tokenType: longLived.tokenType ?? shortLived.tokenType,
       expiresAt: longLived.expiresAt ?? shortLived.expiresAt,
-      scopes: [
-        "pages_show_list",
-        "pages_read_engagement",
-        "pages_manage_posts",
-        "read_insights",
-        "instagram_basic",
-        "instagram_manage_insights",
-      ],
+      scopes: getMetaOAuthScopes(),
     });
 
     return redirectToSettings(request, { oauth: "connected", provider: "meta", accounts: String(stored) });
