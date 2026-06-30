@@ -4740,6 +4740,35 @@ textarea::placeholder {
   padding: 0.65rem 0.75rem;
 }
 
+.platform-toggle-copy {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.platform-toggle-copy strong,
+.platform-toggle-copy small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.platform-toggle-copy strong {
+  color: #f8fafc;
+  font-size: 0.9rem;
+  line-height: 1.15;
+}
+
+.platform-toggle-copy small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
+.account-toggle {
+  align-items: flex-start;
+}
+
 .platform-toggle:has(input:disabled) {
   color: #777782;
   cursor: not-allowed;

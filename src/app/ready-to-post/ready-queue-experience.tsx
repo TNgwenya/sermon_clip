@@ -216,7 +216,12 @@ function hasClipOverlap(clipIds: string[], scopeClipIds: Set<string> | null): bo
 }
 
 function getScheduledPostGroupKey(post: ScheduledPost): string {
-  return [post.platform, post.postingSlot, [...post.clipIds].sort().join("|")].join("::");
+  return [
+    post.platform,
+    post.socialAccountId ?? post.socialAccountLabel ?? "media-team",
+    post.postingSlot,
+    [...post.clipIds].sort().join("|"),
+  ].join("::");
 }
 
 function getQualityLabel(clip: ReadyQueueClip): ClipQualityLabel | null {

@@ -170,6 +170,21 @@ async function getStoredPostingCredential(
   };
 }
 
+async function getFacebookEnvPageAccessToken(
+  pageId: string,
+  accessToken: string,
+  graphVersion: string,
+  fetchImpl: FetchLike,
+): Promise<string> {
+  const response = await fetchImpl(`https://graph.facebook.com/${graphVersion}/me/accounts?fields=id,access_token&access_token=${encodeURIComponent(accessToken)}`);
+  const data = await response.json().catch(() => null) as { data?: Array<{ id?: string; access_token?: string }> } | null;
+  const pageAccessToken = Array.isArray(data?.data)
+    ? data.data.find((page) => page.id === pageId)?.access_token?.trim()
+    : undefined;
+
+  return pageAccessToken || accessToken;
+}
+
 function clampText(value: string, maxLength: number): string {
   return value.length > maxLength ? value.slice(0, maxLength).trimEnd() : value;
 }
@@ -664,10 +679,20 @@ export async function uploadFacebookVideo(
     ? await getStoredPostingCredential(STORED_CREDENTIAL_PROVIDERS.Facebook, post.socialAccountId)
     : null;
   const pageId = storedCredential?.externalAccountId || envPageId;
-  const pageAccessToken = storedCredential?.accessToken || envPageAccessToken;
   const graphVersion = process.env.FACEBOOK_GRAPH_VERSION?.trim() || "v23.0";
 
-  if (!pageId || !pageAccessToken) {
+  if (!pageId) {
+    throw new Error("Facebook credentials are incomplete. Connect Facebook in Social settings or set FACEBOOK_PAGE_ID and FACEBOOK_PAGE_ACCESS_TOKEN.");
+  }
+
+  if (!storedCredential?.accessToken && !envPageAccessToken) {
+    throw new Error("Facebook credentials are incomplete. Connect Facebook in Social settings or set FACEBOOK_PAGE_ID and FACEBOOK_PAGE_ACCESS_TOKEN.");
+  }
+
+  const pageAccessToken = storedCredential?.accessToken
+    || (envPageAccessToken ? await getFacebookEnvPageAccessToken(pageId, envPageAccessToken, graphVersion, fetchImpl) : null);
+
+  if (!pageAccessToken) {
     throw new Error("Facebook credentials are incomplete. Connect Facebook in Social settings or set FACEBOOK_PAGE_ID and FACEBOOK_PAGE_ACCESS_TOKEN.");
   }
 

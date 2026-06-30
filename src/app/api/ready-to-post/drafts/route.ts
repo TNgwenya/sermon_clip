@@ -9,6 +9,8 @@ import {
   normalizePostingPlatforms,
   normalizeScheduledFor,
   normalizeTimezone,
+  PostingDraftValidationError,
+  type PostingPlatform,
 } from "@/lib/postingDrafts";
 import { normalizeScheduleIntervalMinutes } from "@/lib/postingSchedule";
 import { resolveReadyMedia } from "@/lib/readyMedia";
@@ -31,6 +33,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const caption = typeof body?.caption === "string" ? body.caption.trim() : "";
   const title = typeof body?.title === "string" ? body.title.trim() : "";
   const note = typeof body?.note === "string" ? body.note.trim() : "";
+  const socialAccountIdsByPlatform = normalizeSocialAccountIdsByPlatform(body?.socialAccountIdsByPlatform, platforms);
 
   if (clipIds.length === 0) {
     return NextResponse.json({ error: "Select at least one finished clip to schedule." }, { status: 400 });
@@ -103,7 +106,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           externalProvider: "zernio",
           externalAccountId: { not: null },
         },
-        select: { platform: true },
+        select: { id: true, platform: true },
       });
       const connectedPlatforms = new Set(zernioAccounts.map((account) => account.platform));
       const missingPlatforms = zernioPlatforms.filter((platform) => {
@@ -114,6 +117,20 @@ export async function POST(request: Request): Promise<NextResponse> {
       if (missingPlatforms.length > 0) {
         return NextResponse.json({
           error: `Sync a Zernio ${missingPlatforms.join(" and ")} account before automatic posting.`,
+        }, { status: 409 });
+      }
+
+      const zernioAccountKeys = new Set(zernioAccounts.map((account) => `${account.platform}:${account.id}`));
+      const invalidSelectedPlatforms = zernioPlatforms.filter((platform) => {
+        const dbPlatform = platform === "TikTok" ? "TIKTOK" : "INSTAGRAM";
+        return (socialAccountIdsByPlatform[platform] ?? []).some((accountId) => (
+          !zernioAccountKeys.has(`${dbPlatform}:${accountId}`)
+        ));
+      });
+
+      if (invalidSelectedPlatforms.length > 0) {
+        return NextResponse.json({
+          error: `Choose a synced Zernio ${invalidSelectedPlatforms.join(" and ")} account before automatic posting.`,
         }, { status: 409 });
       }
     }
@@ -129,18 +146,55 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
   }
 
-  const draft = await createPostingDraft({
-    clipIds,
-    platforms,
-    postingSlot: postingSlot || "This week",
-    automationMode,
-    scheduledFor,
-    scheduleIntervalMinutes,
-    timezone,
-    caption,
-    title,
-    note,
-  });
+  let draft;
+  try {
+    draft = await createPostingDraft({
+      clipIds,
+      platforms,
+      socialAccountIdsByPlatform,
+      postingSlot: postingSlot || "This week",
+      automationMode,
+      scheduledFor,
+      scheduleIntervalMinutes,
+      timezone,
+      caption,
+      title,
+      note,
+    });
+  } catch (error) {
+    if (error instanceof PostingDraftValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
+    throw error;
+  }
 
   return NextResponse.json({ draft }, { status: 201 });
+}
+
+function normalizeSocialAccountIdsByPlatform(
+  value: unknown,
+  platforms: PostingPlatform[],
+): Partial<Record<PostingPlatform, string[]>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const selectedPlatforms = new Set(platforms);
+  const result: Partial<Record<PostingPlatform, string[]>> = {};
+  for (const platform of platforms) {
+    const accountIds = (value as Record<string, unknown>)[platform];
+    if (!selectedPlatforms.has(platform) || !Array.isArray(accountIds)) {
+      continue;
+    }
+
+    const normalizedIds = Array.from(new Set(accountIds.filter((item): item is string => (
+      typeof item === "string" && item.trim().length > 0
+    ))));
+    if (normalizedIds.length > 0) {
+      result[platform] = normalizedIds;
+    }
+  }
+
+  return result;
 }

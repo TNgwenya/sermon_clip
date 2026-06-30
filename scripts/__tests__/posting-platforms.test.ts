@@ -131,6 +131,8 @@ describe("posting platform helpers", () => {
   });
 
   it("omits TikTok privacy level unless explicitly configured", () => {
+    vi.stubEnv("ZERNIO_TIKTOK_PRIVACY_LEVEL", "");
+
     const request = buildZernioPostRequest({
       ...basePost,
       socialAccountExternalProvider: "zernio",
@@ -179,6 +181,8 @@ describe("posting platform helpers", () => {
   });
 
   it("builds Facebook Page video text with safe unpublished default", () => {
+    vi.stubEnv("FACEBOOK_DEFAULT_PUBLISHED", "");
+
     const text = buildFacebookText({ ...basePost, platform: "Facebook" });
 
     expect(text).toEqual({
@@ -199,14 +203,18 @@ describe("posting platform helpers", () => {
     const capturedRequests: Array<[input: RequestInfo | URL, init?: RequestInit]> = [];
     const fetchImpl: typeof fetch = async (input, init) => {
       capturedRequests.push([input, init]);
+      if (String(input).includes("/me/accounts")) {
+        return Response.json({ data: [] });
+      }
+
       return Response.json({ id: "fb-video-1" });
     };
 
     try {
       const result = await uploadPlatformPost({ ...basePost, platform: "Facebook" }, videoPath, 5, fetchImpl);
-      const firstRequest = capturedRequests[0];
-      expect(firstRequest).toBeDefined();
-      const [url, init] = firstRequest;
+      const uploadRequest = capturedRequests.at(-1);
+      expect(uploadRequest).toBeDefined();
+      const [url, init] = uploadRequest!;
       const body = init?.body as FormData;
 
       expect(url).toBe("https://graph.facebook.com/v99.0/page-123/videos");
@@ -222,6 +230,40 @@ describe("posting platform helpers", () => {
         finalPrivacyStatus: "published",
         publishError: undefined,
       });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("derives a Facebook Page token from a configured user token", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "facebook-upload-"));
+    const videoPath = join(tempDir, "clip.mp4");
+    await writeFile(videoPath, Buffer.from("video"));
+    vi.stubEnv("FACEBOOK_PAGE_ID", "page-123");
+    vi.stubEnv("FACEBOOK_PAGE_ACCESS_TOKEN", "user-token");
+    vi.stubEnv("FACEBOOK_GRAPH_VERSION", "v99.0");
+    const capturedRequests: Array<[input: RequestInfo | URL, init?: RequestInit]> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      capturedRequests.push([input, init]);
+      if (String(input).includes("/me/accounts")) {
+        return Response.json({
+          data: [
+            { id: "page-123", access_token: "derived-page-token" },
+          ],
+        });
+      }
+
+      return Response.json({ id: "fb-video-1" });
+    };
+
+    try {
+      await uploadPlatformPost({ ...basePost, platform: "Facebook" }, videoPath, 5, fetchImpl);
+      const uploadRequest = capturedRequests.at(-1);
+      expect(uploadRequest).toBeDefined();
+      const [, init] = uploadRequest!;
+      const body = init?.body as FormData;
+
+      expect(body.get("access_token")).toBe("derived-page-token");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

@@ -8,6 +8,7 @@ import type { SocialAccount } from "@/lib/socialAccounts";
 
 const platforms: PostingPlatform[] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
 const postingSlots = ["Sunday recap", "Midweek encouragement", "Prayer invitation", "Weekend invite"];
+type AccountSelectionsByPlatform = Partial<Record<PostingPlatform, string[]>>;
 
 function formatDateTimeLocal(date: Date): string {
   const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
@@ -50,8 +51,44 @@ function buildAutomaticPlatforms(accounts: SocialAccount[]): Set<PostingPlatform
   ]);
 }
 
+function buildDefaultAccountSelections(accounts: SocialAccount[]): AccountSelectionsByPlatform {
+  return platforms.reduce((accumulator, platform) => {
+    const firstAccount = accounts.find((account) => account.platform === platform);
+    return firstAccount ? { ...accumulator, [platform]: [firstAccount.id] } : accumulator;
+  }, {} as AccountSelectionsByPlatform);
+}
+
+function isAutomaticPublishingAccount(account: SocialAccount): boolean {
+  if (account.platform !== "TikTok" && account.platform !== "Instagram") {
+    return true;
+  }
+
+  return account.externalProvider === "zernio" && Boolean(account.externalAccountId);
+}
+
+function buildPlatformHint(input: {
+  disabled: boolean;
+  automationMode: PostingAutomationMode;
+  connectedAccountCount: number;
+  selectableAccountCount: number;
+}): string {
+  if (input.disabled) {
+    return "Connect synced account";
+  }
+
+  if (input.selectableAccountCount > 0) {
+    return `${input.selectableAccountCount} account${input.selectableAccountCount === 1 ? "" : "s"}`;
+  }
+
+  return input.automationMode === "AUTOMATIC" ? "Configured channel" : "Media team handoff";
+}
+
 export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose, onCreated }: ScheduleDraftModalProps) {
   const automaticPlatforms = buildAutomaticPlatforms(socialAccounts);
+  const accountsByPlatform = useMemo(() => platforms.reduce((accumulator, platform) => ({
+    ...accumulator,
+    [platform]: socialAccounts.filter((account) => account.platform === platform && account.status === "CONNECTED"),
+  }), {} as Record<PostingPlatform, SocialAccount[]>), [socialAccounts]);
   const suggestedIntervalMinutes = suggestScheduleIntervalMinutes(clipIds.length);
   const defaultAutomaticPlatform: PostingPlatform = automaticPlatforms.has("Instagram")
     ? "Instagram"
@@ -59,7 +96,16 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
       ? "TikTok"
       : "YouTube Shorts";
   const [selectedPlatforms, setSelectedPlatforms] = useState<PostingPlatform[]>([defaultAutomaticPlatform]);
+  const [selectedSocialAccountIdsByPlatform, setSelectedSocialAccountIdsByPlatform] = useState<AccountSelectionsByPlatform>(() => (
+    buildDefaultAccountSelections(socialAccounts)
+  ));
   const [automationMode, setAutomationMode] = useState<PostingAutomationMode>("AUTOMATIC");
+  const selectableAccountsByPlatform = useMemo(() => platforms.reduce((accumulator, platform) => ({
+    ...accumulator,
+    [platform]: accountsByPlatform[platform].filter((account) => (
+      automationMode === "MANUAL" || isAutomaticPublishingAccount(account)
+    )),
+  }), {} as Record<PostingPlatform, SocialAccount[]>), [accountsByPlatform, automationMode]);
   const [scheduledFor, setScheduledFor] = useState(() => {
     const date = new Date(Date.now() + 60 * 60_000);
     date.setMinutes(Math.ceil(date.getMinutes() / 15) * 15, 0, 0);
@@ -84,7 +130,28 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
 
     return Array.from(new Set(options));
   }, [suggestedIntervalMinutes]);
+  const resolvedSocialAccountIdsByPlatform = useMemo(() => platforms.reduce((accumulator, platform) => {
+    const platformAccounts = selectableAccountsByPlatform[platform];
+    if (platformAccounts.length === 0) {
+      return accumulator;
+    }
+
+    const availableIds = new Set(platformAccounts.map((account) => account.id));
+    const selectedIds = selectedSocialAccountIdsByPlatform[platform];
+    if (selectedIds) {
+      const availableSelectedIds = selectedIds.filter((accountId) => availableIds.has(accountId));
+      if (availableSelectedIds.length > 0 || selectedIds.length === 0) {
+        return { ...accumulator, [platform]: availableSelectedIds };
+      }
+    }
+
+    return { ...accumulator, [platform]: [platformAccounts[0].id] };
+  }, {} as AccountSelectionsByPlatform), [selectableAccountsByPlatform, selectedSocialAccountIdsByPlatform]);
   const scheduleIntervalMinutes = customScheduleIntervalMinutes ?? suggestedIntervalMinutes;
+  const hasMissingAccountSelection = selectedPlatforms.some((platform) => (
+    selectableAccountsByPlatform[platform].length > 0
+    && (resolvedSocialAccountIdsByPlatform[platform]?.length ?? 0) === 0
+  ));
   const schedulePreview = useMemo(() => {
     const start = new Date(scheduledFor);
     if (automationMode !== "AUTOMATIC" || Number.isNaN(start.getTime())) {
@@ -115,6 +182,20 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
     ));
   }
 
+  function toggleSocialAccount(platform: PostingPlatform, accountId: string) {
+    setSelectedSocialAccountIdsByPlatform((current) => {
+      const currentIds = resolvedSocialAccountIdsByPlatform[platform] ?? [];
+      const nextIds = currentIds.includes(accountId)
+        ? currentIds.filter((item) => item !== accountId)
+        : [...currentIds, accountId];
+
+      return {
+        ...current,
+        [platform]: nextIds,
+      };
+    });
+  }
+
   function changeAutomationMode(mode: PostingAutomationMode) {
     setAutomationMode(mode);
     if (mode === "AUTOMATIC") {
@@ -135,6 +216,10 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
         body: JSON.stringify({
           clipIds,
           platforms: selectedPlatforms,
+          socialAccountIdsByPlatform: selectedPlatforms.reduce((accumulator, platform) => {
+            const accountIds = resolvedSocialAccountIdsByPlatform[platform]?.filter(Boolean) ?? [];
+            return accountIds.length > 0 ? { ...accumulator, [platform]: accountIds } : accumulator;
+          }, {} as AccountSelectionsByPlatform),
           automationMode,
           scheduledFor: automationMode === "AUTOMATIC" ? new Date(scheduledFor).toISOString() : null,
           timezone,
@@ -213,6 +298,8 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
           <div className="platform-toggle-grid">
             {platforms.map((platform) => {
               const disabled = automationMode === "AUTOMATIC" && !automaticPlatforms.has(platform);
+              const connectedAccountCount = accountsByPlatform[platform].length;
+              const selectableAccountCount = selectableAccountsByPlatform[platform].length;
               return (
               <label key={platform} className="selection-check platform-toggle">
                 <input
@@ -221,12 +308,36 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
                   onChange={() => togglePlatform(platform)}
                   disabled={disabled}
                 />
-                <span>{platform}</span>
+                <span className="platform-toggle-copy">
+                  <strong>{platform}</strong>
+                  <small>{buildPlatformHint({ disabled, automationMode, connectedAccountCount, selectableAccountCount })}</small>
+                </span>
               </label>
               );
             })}
           </div>
         </div>
+
+        {selectedPlatforms.some((platform) => selectableAccountsByPlatform[platform].length > 0) ? (
+          <div className="schedule-fieldset">
+            <p className="small muted">Posting accounts</p>
+            <div className="platform-toggle-grid">
+              {selectedPlatforms.flatMap((platform) => selectableAccountsByPlatform[platform].map((account) => (
+                <label key={`${platform}-${account.id}`} className="selection-check platform-toggle account-toggle">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(resolvedSocialAccountIdsByPlatform[platform]?.includes(account.id))}
+                    onChange={() => toggleSocialAccount(platform, account.id)}
+                  />
+                  <span className="platform-toggle-copy">
+                    <strong>{account.label}</strong>
+                    <small>{platform}{account.handle ? ` · ${account.handle}` : ""}</small>
+                  </span>
+                </label>
+              )))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="schedule-fieldset schedule-two-column">
           <label htmlFor="postingSlot">
@@ -335,9 +446,10 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
         </details>
 
         {message ? <p className={message.includes("Could not") ? "error-banner" : "success-banner"}>{message}</p> : null}
+        {hasMissingAccountSelection ? <p className="error-banner">Select at least one account for each chosen platform.</p> : null}
 
         <div className="feature-modal-footer">
-          <button type="button" className="button primary" onClick={createDraft} disabled={pending || selectedPlatforms.length === 0}>
+          <button type="button" className="button primary" onClick={createDraft} disabled={pending || selectedPlatforms.length === 0 || hasMissingAccountSelection}>
             {pending ? "Saving..." : automationMode === "AUTOMATIC" ? "Schedule post" : "Save posting draft"}
           </button>
         </div>

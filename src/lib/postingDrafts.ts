@@ -23,6 +23,13 @@ export type PostingDraft = {
 
 export const POSTING_PLATFORMS: PostingPlatform[] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
 
+export class PostingDraftValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PostingDraftValidationError";
+  }
+}
+
 const PLATFORM_TO_DB: Record<PostingPlatform, PrismaPostingPlatform> = {
   TikTok: "TIKTOK",
   Instagram: "INSTAGRAM",
@@ -128,10 +135,12 @@ function buildScheduledPostIdempotencyKey(input: {
   clipIds: string[];
   scheduledFor: Date | null;
   automationMode: PostingAutomationMode;
+  socialAccountId?: string | null;
 }): string {
   return [
     input.draftId,
     input.platform,
+    input.socialAccountId ?? "default",
     [...input.clipIds].sort().join("-"),
     input.scheduledFor?.toISOString() ?? "manual",
     input.automationMode,
@@ -150,6 +159,7 @@ export async function listPostingDrafts(): Promise<PostingDraft[]> {
 export async function createPostingDraft(input: {
   clipIds: string[];
   platforms: PostingPlatform[];
+  socialAccountIdsByPlatform?: Partial<Record<PostingPlatform, string[]>>;
   postingSlot: string;
   automationMode?: PostingAutomationMode;
   scheduledFor?: Date | null;
@@ -183,23 +193,31 @@ export async function createPostingDraft(input: {
     const accounts = await tx.socialAccount.findMany({
       where: {
         platform: { in: input.platforms.map((platform) => PLATFORM_TO_DB[platform]) },
+        status: "CONNECTED",
       },
       orderBy: { createdAt: "desc" },
     });
 
     await tx.scheduledPost.createMany({
-      data: clipSchedulePlan.flatMap((clipSchedule) => input.platforms.map((platform) => {
+      data: clipSchedulePlan.flatMap((clipSchedule) => input.platforms.flatMap((platform) => {
         const dbPlatform = PLATFORM_TO_DB[platform];
-        const account = automationMode === "AUTOMATIC" && (dbPlatform === "TIKTOK" || dbPlatform === "INSTAGRAM")
+        const selectedAccountIds = new Set(input.socialAccountIdsByPlatform?.[platform] ?? []);
+        const selectedAccounts = accounts.filter((item) => item.platform === dbPlatform && selectedAccountIds.has(item.id));
+        if (selectedAccountIds.size > 0 && selectedAccounts.length !== selectedAccountIds.size) {
+          throw new PostingDraftValidationError(`Choose a connected ${platform} account before scheduling.`);
+        }
+
+        const fallbackAccount = automationMode === "AUTOMATIC" && (dbPlatform === "TIKTOK" || dbPlatform === "INSTAGRAM")
           ? accounts.find((item) => item.platform === dbPlatform && item.externalProvider === "zernio" && item.externalAccountId)
             ?? accounts.find((item) => item.platform === dbPlatform)
           : accounts.find((item) => item.platform === dbPlatform);
+        const targetAccounts = selectedAccounts.length > 0 ? selectedAccounts : [fallbackAccount];
         const status = automationMode === "AUTOMATIC" ? "PLANNED" : "READY_FOR_MEDIA_TEAM";
         const clipScheduledFor = clipSchedule.scheduledFor;
         const clipPostingSlot = buildPostingSlot(clipScheduledFor, input.postingSlot);
         const clipIds = [clipSchedule.clipId];
 
-        return {
+        return targetAccounts.map((account) => ({
           postingDraftId: created.id,
           socialAccountId: account?.id ?? null,
           clipIdsJson: clipIds,
@@ -218,8 +236,9 @@ export async function createPostingDraft(input: {
             clipIds,
             scheduledFor: clipScheduledFor,
             automationMode,
+            socialAccountId: account?.id ?? null,
           }),
-        };
+        }));
       })),
     });
 
