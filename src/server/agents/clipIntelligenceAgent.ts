@@ -125,6 +125,7 @@ const MIN_POST_READY_SCORE = 8;
 const MIN_REVIEW_SCORE = 7.5;
 const MIN_EDITING_REVIEW_SCORE = 7.2;
 const MAX_FINAL_SELECTIONS = 6;
+const REPLACEABLE_SUGGESTION_STATUSES: Array<"SUGGESTED" | "REJECTED"> = ["SUGGESTED", "REJECTED"];
 
 type ClipQualityLabel = "POST_READY" | "GOOD_NEEDS_REVIEW" | "NEEDS_EDITING" | "REJECT";
 
@@ -2172,7 +2173,7 @@ export function shouldReuseExistingSuggestions(existingSuggestionCount: number, 
 export function buildSuggestionDeleteWhere(sermonId: string, targetCategory?: string, includeRejected = false) {
   return {
     sermonId,
-    status: includeRejected ? { in: ["SUGGESTED", "REJECTED"] as const } : "SUGGESTED" as const,
+    status: includeRejected ? { in: REPLACEABLE_SUGGESTION_STATUSES } : "SUGGESTED" as const,
     isAiGenerated: true,
     isManuallyEdited: false,
     ...(targetCategory ? { smartClipCategory: targetCategory } : {}),
