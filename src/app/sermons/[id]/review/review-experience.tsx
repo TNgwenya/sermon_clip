@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -161,6 +161,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
   const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
   const [sort, setSort] = useState<ReviewSort>("HIGHEST_SCORE");
   const [viewMode, setViewMode] = useState<"LIST" | "GRID">("LIST");
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [showFullFeed, setShowFullFeed] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [message, setMessage] = useState("");
@@ -211,6 +212,22 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
   }, [normalizedClips, filter, categoryFilter, sort]);
   const isFeedLimited = !showFullFeed && visibleClips.length > REVIEW_INITIAL_VISIBLE_COUNT;
   const renderedClips = isFeedLimited ? visibleClips.slice(0, REVIEW_INITIAL_VISIBLE_COUNT) : visibleClips;
+  const filterSummary = [
+    filter === "ALL" ? "All clips" : filter.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase()),
+    categoryFilter === "ALL" ? "All categories" : getQualityCategoryLabel(categoryFilter),
+    sort === "HIGHEST_SCORE"
+      ? "Best first"
+      : sort.toLowerCase().replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()),
+  ].join(" / ");
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(min-width: 981px)");
+    const syncFilterDisclosure = () => setFiltersOpen(mediaQuery.matches);
+
+    syncFilterDisclosure();
+    mediaQuery.addEventListener("change", syncFilterDisclosure);
+    return () => mediaQuery.removeEventListener("change", syncFilterDisclosure);
+  }, []);
 
   function setStatusMessage(success: boolean, value: string) {
     setMessageSuccess(success);
@@ -314,36 +331,41 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
           <div>
             <p className="kicker">Pastor review feed</p>
             <h1>{sermonTitle}</h1>
-            <p className="muted">Best clips first, with the sermon moment, AI note, and a simple decision path.</p>
+            <p className="muted">Approve clips and move them to posting.</p>
           </div>
           <div className="review-feed-topbar-actions">
             <Link href={`/ready-to-post?sermonId=${sermonId}`} className="button primary">
               Ready to post
             </Link>
-            <button
-              type="button"
-              className="button secondary"
-              disabled={isPending}
-              onClick={() => runQualityRefreshJob(false)}
-            >
-              Check readiness
-            </button>
-            <button
-              type="button"
-              className="button tertiary"
-              disabled={isPending}
-              onClick={() => runQualityRefreshJob(true)}
-            >
-              Recheck all
-            </button>
-            <button
-              type="button"
-              className="button tertiary"
-              disabled={isPending}
-              onClick={curateReviewFeed}
-            >
-              Curate feed
-            </button>
+            <details className="review-topbar-more">
+              <summary>Review tools</summary>
+              <div className="review-topbar-more-menu">
+                <button
+                  type="button"
+                  className="button secondary"
+                  disabled={isPending}
+                  onClick={() => runQualityRefreshJob(false)}
+                >
+                  Check readiness
+                </button>
+                <button
+                  type="button"
+                  className="button tertiary"
+                  disabled={isPending}
+                  onClick={() => runQualityRefreshJob(true)}
+                >
+                  Recheck all
+                </button>
+                <button
+                  type="button"
+                  className="button tertiary"
+                  disabled={isPending}
+                  onClick={curateReviewFeed}
+                >
+                  Curate feed
+                </button>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -361,41 +383,51 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
 
       <section className="card review-feed-toolbar stack-sm">
         <div className="review-feed-toolbar-row">
-          <div className="review-feed-filter-row">
-            <label className="stack-sm review-feed-toolbar-field">
-              Status
-              <select value={filter} onChange={(event) => setFilter(event.target.value as ReviewFilter)} disabled={isPending}>
-                <option value="ALL">All Clips</option>
-                <option value="PENDING">Needs Review</option>
-                <option value="APPROVED">Approved</option>
-                <option value="REJECTED">Rejected</option>
-                <option value="RENDERED">Preview Ready</option>
-                <option value="NOT_RENDERED">No Preview Yet</option>
-              </select>
-            </label>
+          <details
+            className="review-filter-disclosure"
+            open={filtersOpen}
+            onToggle={(event) => setFiltersOpen(event.currentTarget.open)}
+          >
+            <summary>
+              <span>Filter clips</span>
+              <span className="muted small">{filterSummary}</span>
+            </summary>
+            <div className="review-feed-filter-row">
+              <label className="stack-sm review-feed-toolbar-field">
+                Status
+                <select value={filter} onChange={(event) => setFilter(event.target.value as ReviewFilter)} disabled={isPending}>
+                  <option value="ALL">All Clips</option>
+                  <option value="PENDING">Needs Review</option>
+                  <option value="APPROVED">Approved</option>
+                  <option value="REJECTED">Rejected</option>
+                  <option value="RENDERED">Preview Ready</option>
+                  <option value="NOT_RENDERED">No Preview Yet</option>
+                </select>
+              </label>
 
-            <label className="stack-sm review-feed-toolbar-field">
-              Category
-              <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} disabled={isPending}>
-                <option value="ALL">All Categories</option>
-                {availableCategories.map((category) => (
-                  <option key={category} value={category}>
-                    {getQualityCategoryLabel(category)}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <label className="stack-sm review-feed-toolbar-field">
+                Category
+                <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} disabled={isPending}>
+                  <option value="ALL">All Categories</option>
+                  {availableCategories.map((category) => (
+                    <option key={category} value={category}>
+                      {getQualityCategoryLabel(category)}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-            <label className="stack-sm review-feed-toolbar-field">
-              Sort
-              <select value={sort} onChange={(event) => setSort(event.target.value as ReviewSort)} disabled={isPending}>
-                <option value="HIGHEST_SCORE">Best first</option>
-                <option value="NEWEST">Newest</option>
-                <option value="SHORTEST">Shortest duration</option>
-                <option value="LONGEST">Longest duration</option>
-              </select>
-            </label>
-          </div>
+              <label className="stack-sm review-feed-toolbar-field">
+                Sort
+                <select value={sort} onChange={(event) => setSort(event.target.value as ReviewSort)} disabled={isPending}>
+                  <option value="HIGHEST_SCORE">Best first</option>
+                  <option value="NEWEST">Newest</option>
+                  <option value="SHORTEST">Shortest duration</option>
+                  <option value="LONGEST">Longest duration</option>
+                </select>
+              </label>
+            </div>
+          </details>
 
           <div className="review-feed-toolbar-actions">
             <p className="small muted">Selected: {selected.length}</p>
@@ -527,6 +559,12 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             const manualFramingApplied = hasManualFraming(clip);
             const isFallbackClip = isDeterministicFallbackClip(clip);
             const canPreviewVideo = localMediaAvailable || Boolean(clip.remotePreviewUrl);
+            const isApprovedState = clip.status === "APPROVED" || clip.status === "EXPORTED";
+            const isPostReady = clip.status === "EXPORTED" || clip.exportStatus === "COMPLETED";
+            const visibleSignal =
+              clip.riskLevel !== "LOW" || clip.contextWarning
+                ? `${clip.riskLevel.toLowerCase()} context risk`
+                : `${qualityView.scoreLabel} score`;
 
             return (
               <article
@@ -573,101 +611,126 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       <span className={`status-pill quality-action-${actionTone}`}>
                         {readinessLabel}
                       </span>
-                      <span className="status-pill quality-category-pill">{clipCategory}</span>
-                      <span className={`status-pill risk-${clip.riskLevel.toLowerCase()}`}>{clip.riskLevel.toLowerCase()} context risk</span>
-                      {isFallbackClip ? (
-                        <span className="status-pill quality-action-watch">AI quota fallback</span>
-                      ) : null}
+                      <span className={`status-pill risk-${clip.riskLevel.toLowerCase()}`}>{visibleSignal}</span>
                     </div>
 
-                    {isFallbackClip ? (
-                      <p className="status-help small">
-                        AI selection was unavailable, so this clip came from deterministic sermon-window ranking. Review the moment and boundaries before approving.
-                      </p>
-                    ) : null}
-
-                    <p className="review-feed-insight">{insight}</p>
                     <div
-                      className={qualitySignals.length > 0 ? "review-feed-quality-strip" : "review-feed-quality-strip review-feed-quality-strip-compact"}
+                      className="review-feed-quality-strip review-feed-quality-strip-compact"
                       aria-label={`Quality signals for ${clip.title}`}
                     >
                       <div className={`review-feed-quality-score quality-action-${actionTone}`}>
                         <span>{qualityView.scoreSourceLabel}</span>
                         <strong>{qualityView.scoreLabel}</strong>
                       </div>
-                      {qualitySignals.length > 0 ? (
-                        <div className="review-feed-signal-list">
-                          {qualitySignals.map((signal) => (
-                            <span key={signal.key} className={`review-feed-signal quality-metric-${signal.tone}`}>
-                              <small>{signal.dimension}</small>
-                              <strong>{signal.label}</strong>
-                              <em>{`${signal.scoreLabel}/10`}</em>
-                            </span>
-                          ))}
+                    </div>
+
+                    <details className="review-feed-card-details">
+                      <summary>Details</summary>
+                      <div className="stack-sm">
+                        <p className="review-feed-insight">{insight}</p>
+                        <p className="review-feed-transcript">&quot;{clip.transcriptText}&quot;</p>
+                        <div className="review-feed-meta-row small muted">
+                          <span>{clipCategory}</span>
+                          <span>{toDurationLabel(clip.durationSeconds)} duration</span>
+                          <span>{clip.intendedAudience ?? "General audience"}</span>
+                          <span>{toFriendlyStatus(clip.exportStatus)}</span>
+                          {isFallbackClip ? <span>AI quota fallback</span> : null}
                         </div>
-                      ) : null}
-                    </div>
-                    <p className="review-feed-transcript">&quot;{clip.transcriptText}&quot;</p>
 
-                    <div className="review-feed-meta-row small muted">
-                      <span>{toDurationLabel(clip.durationSeconds)} duration</span>
-                      <span>{clip.intendedAudience ?? "General audience"}</span>
-                      <span>{toFriendlyStatus(clip.exportStatus)}</span>
-                    </div>
+                        {isFallbackClip ? (
+                          <p className="status-help small">
+                            AI selection was unavailable, so this clip came from deterministic sermon-window ranking. Review the moment and boundaries before approving.
+                          </p>
+                        ) : null}
 
-                    {clip.postReadyBlockers.length > 0 ? (
-                      <p className="status-help small">
-                        Needs a quick check: {clip.postReadyBlockers.slice(0, 2).join(" ")}
-                      </p>
-                    ) : null}
+                        {qualitySignals.length > 0 ? (
+                          <div className="review-feed-signal-list">
+                            {qualitySignals.map((signal) => (
+                              <span key={signal.key} className={`review-feed-signal quality-metric-${signal.tone}`}>
+                                <small>{signal.dimension}</small>
+                                <strong>{signal.label}</strong>
+                                <em>{`${signal.scoreLabel}/10`}</em>
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
 
-                    {warnings.length > 0 ? (
-                      <ul className="warning-list">
-                        {warnings.slice(0, 3).map((warning) => (
-                          <li key={warning}>{warning}</li>
-                        ))}
-                      </ul>
-                    ) : null}
+                        {clip.postReadyBlockers.length > 0 ? (
+                          <p className="status-help small">
+                            Needs a quick check: {clip.postReadyBlockers.slice(0, 2).join(" ")}
+                          </p>
+                        ) : null}
+
+                        {warnings.length > 0 ? (
+                          <ul className="warning-list">
+                            {warnings.slice(0, 3).map((warning) => (
+                              <li key={warning}>{warning}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
+                    </details>
                   </div>
 
                   <div className="review-feed-action-column" aria-label={`Review actions for ${clip.title}`}>
                     <div className="review-feed-action-stack">
-                      <button
-                        type="button"
-                        className="button primary review-action-primary"
-                        disabled={isPending || !canApprove}
-                        onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "APPROVED"))}
-                      >
-                        {clip.status === "APPROVED" || clip.status === "EXPORTED" ? "Approved" : "Approve"}
-                      </button>
-                      <button
-                        type="button"
-                        className="button secondary review-action-secondary"
-                        disabled={isPending || !canReject}
-                        onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "REJECTED"))}
-                      >
-                        Reject
-                      </button>
-                      <button
-                        type="button"
-                        className="button tertiary review-action-secondary"
-                        disabled={isPending || !canSetPending}
-                        onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "SUGGESTED"))}
-                      >
-                        Needs review
-                      </button>
-                    </div>
-
-                    <div className="review-feed-action-stack review-feed-action-stack-secondary">
-                      <Link href={`/sermons/${sermonId}/clips/${clip.id}/studio`} className="button accent review-action-edit">
-                        Edit clip
-                      </Link>
-                      {clip.exportStatus === "COMPLETED" || clip.status === "EXPORTED" ? (
-                        <Link href={`/ready-to-post?sermonId=${sermonId}`} className="button secondary review-action-secondary">
+                      {isApprovedState ? (
+                        <span className="review-approved-status status-pill status-approved">Approved</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="button primary review-action-primary"
+                          disabled={isPending || !canApprove}
+                          onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "APPROVED"))}
+                        >
+                          Approve
+                        </button>
+                      )}
+                      {isApprovedState && isPostReady ? (
+                        <Link href={`/ready-to-post?sermonId=${sermonId}`} className="button primary review-action-primary">
                           Open post queue
                         </Link>
-                      ) : null}
+                      ) : (
+                        <Link
+                          href={`/sermons/${sermonId}/clips/${clip.id}/studio`}
+                          className={isApprovedState ? "button primary review-action-primary" : "button accent review-action-edit"}
+                        >
+                          Edit clip
+                        </Link>
+                      )}
                     </div>
+
+                    <details className="review-card-more-actions">
+                      <summary>More</summary>
+                      <div className="review-feed-action-stack review-feed-action-stack-secondary">
+                        <button
+                          type="button"
+                          className="button secondary review-action-secondary"
+                          disabled={isPending || !canReject}
+                          onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "REJECTED"))}
+                        >
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          className="button tertiary review-action-secondary"
+                          disabled={isPending || !canSetPending}
+                          onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "SUGGESTED"))}
+                        >
+                          Needs review
+                        </button>
+                        {clip.exportStatus === "COMPLETED" || clip.status === "EXPORTED" ? (
+                          <Link href={`/ready-to-post?sermonId=${sermonId}`} className="button secondary review-action-secondary">
+                            Open post queue
+                          </Link>
+                        ) : null}
+                        {isApprovedState && isPostReady ? (
+                          <Link href={`/sermons/${sermonId}/clips/${clip.id}/studio`} className="button tertiary review-action-secondary">
+                            Edit clip
+                          </Link>
+                        ) : null}
+                      </div>
+                    </details>
                   </div>
                 </div>
 

@@ -1,10 +1,15 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Sermon Clip Agent",
   description: "Turn sermons into ready-to-post clips for your church.",
+  icons: {
+    icon: "/sermon-clip-1024.png",
+    apple: "/sermon-clip-1024.png",
+  },
 };
 
 export default function RootLayout({
@@ -18,7 +23,7 @@ export default function RootLayout({
         <div className="app-shell">
           <aside className="app-rail" aria-label="Main navigation">
             <Link href="/" className="rail-mark" aria-label="Sermon Clip dashboard">
-              SC
+              <Image src="/sermon-clip-1024.png" alt="" width={42} height={42} priority />
             </Link>
             <nav className="rail-nav">
               <Link href="/" className="rail-item">Home</Link>

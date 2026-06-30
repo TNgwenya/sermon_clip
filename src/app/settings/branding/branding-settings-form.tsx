@@ -21,6 +21,18 @@ const initialState: BrandingSettingsActionState = {
   message: "",
 };
 
+const APPROVED_FONT_OPTIONS = [
+  "Avenir Next",
+  "Inter",
+  "Montserrat",
+  "Poppins",
+  "Source Sans 3",
+  "Georgia",
+  "Arial",
+];
+
+const BRAND_COLOR_PRESETS = ["#0F766E", "#1D4ED8", "#FACC15", "#DC2626", "#111827", "#F8FAFC"];
+
 function SaveButton() {
   const { pending } = useFormStatus();
 
@@ -58,6 +70,50 @@ function getInitials(name: string): string {
 
 function getColorInputValue(value: string): string {
   return /^#[0-9A-Fa-f]{6}$/.test(value.trim()) ? value.trim() : "#000000";
+}
+
+function parseHexColor(value: string): [number, number, number] | null {
+  const match = value.trim().match(/^#([0-9A-Fa-f]{6})$/);
+  if (!match) {
+    return null;
+  }
+
+  const hex = match[1];
+  return [0, 2, 4].map((index) => Number.parseInt(hex.slice(index, index + 2), 16)) as [number, number, number];
+}
+
+function getRelativeLuminance([red, green, blue]: [number, number, number]): number {
+  const [r, g, b] = [red, green, blue].map((channel) => {
+    const value = channel / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function getContrastRatio(foreground: string, background: string): number | null {
+  const foregroundRgb = parseHexColor(foreground);
+  const backgroundRgb = parseHexColor(background);
+  if (!foregroundRgb || !backgroundRgb) {
+    return null;
+  }
+
+  const foregroundLuminance = getRelativeLuminance(foregroundRgb);
+  const backgroundLuminance = getRelativeLuminance(backgroundRgb);
+  const lighter = Math.max(foregroundLuminance, backgroundLuminance);
+  const darker = Math.min(foregroundLuminance, backgroundLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function getContrastCheck(color: string): { label: string; tone: "good" | "warn" | "muted" } {
+  const ratio = getContrastRatio("#FFFFFF", color);
+  if (!ratio) {
+    return { label: "Enter a valid hex color", tone: "muted" };
+  }
+
+  return ratio >= 4.5
+    ? { label: `Good with white text (${ratio.toFixed(1)}:1)`, tone: "good" }
+    : { label: `Check white text contrast (${ratio.toFixed(1)}:1)`, tone: "warn" };
 }
 
 function getPublicLogoUrl(path: string): string | null {
@@ -113,6 +169,16 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
   const [watermarkPosition, setWatermarkPosition] = useState(settings.watermarkPosition);
   const [defaultCaptionStyleName, setDefaultCaptionStyleName] = useState(settings.defaultCaptionStyleName);
   const captionStyle = useMemo(() => resolveCaptionStylePreset(defaultCaptionStyleName), [defaultCaptionStyleName]);
+  const fontOptions = useMemo(() => {
+    const currentFont = defaultFontFamily.trim();
+    if (!currentFont || APPROVED_FONT_OPTIONS.includes(currentFont)) {
+      return APPROVED_FONT_OPTIONS;
+    }
+
+    return [currentFont, ...APPROVED_FONT_OPTIONS];
+  }, [defaultFontFamily]);
+  const primaryContrast = useMemo(() => getContrastCheck(primaryBrandColor), [primaryBrandColor]);
+  const secondaryContrast = useMemo(() => getContrastCheck(secondaryBrandColor), [secondaryBrandColor]);
   const savedLogoPreviewUrl = useMemo(() => getPublicLogoUrl(churchLogoPath), [churchLogoPath]);
   const activeLogoPreviewUrl = removeLogo ? null : selectedLogoPreviewUrl ?? savedLogoPreviewUrl;
   const logoFileName = selectedLogoName || getFileName(churchLogoPath);
@@ -159,12 +225,15 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
   return (
     <form action={action} className="brand-kit-workspace" encType="multipart/form-data">
       <section className="card brand-kit-controls stack-md">
-        <div className="section-heading-row">
+        <div className="section-heading-row brand-controls-heading">
           <div>
             <p className="kicker">Identity</p>
             <h2>Brand defaults</h2>
           </div>
-          <span className="status-pill">Used for new prepared clips</span>
+          <div className="brand-controls-heading-actions">
+            <span className="status-pill">Used for new prepared clips</span>
+            <SaveButton />
+          </div>
         </div>
 
         <div className="stack-sm">
@@ -182,20 +251,31 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
         </div>
 
         <div className="brand-asset-field">
-          <div className={activeLogoPreviewUrl ? "brand-asset-mark has-logo" : "brand-asset-mark"} style={logoMarkStyle} aria-hidden="true">
-            {activeLogoPreviewUrl ? null : logoConfigured ? getInitials(churchName) : "+"}
-          </div>
           <div className="stack-sm">
-            <label htmlFor="churchLogoFile">Logo or Watermark File</label>
+            <span className="form-label">Logo or Watermark File</span>
             <div className="brand-logo-upload-row">
-              <input
-                ref={logoInputRef}
-                id="churchLogoFile"
-                name="churchLogoFile"
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/svg+xml"
-                onChange={handleLogoFileChange}
-              />
+              <label className="brand-logo-dropzone" htmlFor="churchLogoFile">
+                <input
+                  ref={logoInputRef}
+                  className="brand-logo-input"
+                  id="churchLogoFile"
+                  name="churchLogoFile"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  onChange={handleLogoFileChange}
+                />
+                <span
+                  className={activeLogoPreviewUrl ? "brand-logo-dropzone-preview has-logo" : "brand-logo-dropzone-preview"}
+                  style={logoMarkStyle}
+                  aria-hidden="true"
+                >
+                  {activeLogoPreviewUrl ? null : getInitials(churchName)}
+                </span>
+                <span className="brand-logo-dropzone-copy">
+                  <strong>{logoConfigured ? "Replace logo" : "Upload logo"}</strong>
+                  <span>{logoConfigured ? logoFileName : "PNG, JPG, WebP, or SVG"}</span>
+                </span>
+              </label>
               {logoConfigured ? (
                 <button className="button secondary" type="button" onClick={clearSelectedLogo}>
                   Remove
@@ -203,12 +283,10 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
               ) : null}
             </div>
             <input type="hidden" name="removeLogo" value={removeLogo ? "1" : "0"} />
-            <span className="muted small">
-              {logoConfigured ? logoFileName : "Upload a PNG, JPG, WebP, or SVG. Initials are used when no logo is set."}
-            </span>
+            <span className="muted small">Initials are used when no logo is set.</span>
             {state.fieldErrors?.churchLogoFile ? <p className="field-error">{state.fieldErrors.churchLogoFile}</p> : null}
             <details className="brand-path-details">
-              <summary>Use an existing logo path</summary>
+              <summary>Developer details</summary>
               <label className="stack-sm" htmlFor="churchLogoPath">
                 Existing Logo Path
                 <input
@@ -229,8 +307,8 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
         </div>
 
         <div className="brand-color-grid">
-          <label className="brand-color-control" htmlFor="primaryBrandColor">
-            <span>Main Theme Color</span>
+          <div className="brand-color-control">
+            <label htmlFor="primaryBrandColor">Main Theme Color</label>
             <span className="brand-color-input-row">
               <input
                 className="brand-color-swatch"
@@ -248,11 +326,24 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
                 placeholder="#0F766E"
               />
             </span>
+            <div className="brand-color-presets" aria-label="Quick main theme colors">
+              {BRAND_COLOR_PRESETS.map((color) => (
+                <button
+                  key={`primary-${color}`}
+                  className={primaryBrandColor.toUpperCase() === color ? "brand-color-preset is-active" : "brand-color-preset"}
+                  type="button"
+                  style={{ backgroundColor: color }}
+                  onClick={() => setPrimaryBrandColor(color)}
+                  aria-label={`Use ${color} as main theme color`}
+                />
+              ))}
+            </div>
+            <span className={`brand-contrast-check is-${primaryContrast.tone}`}>{primaryContrast.label}</span>
             {state.fieldErrors?.primaryBrandColor ? <p className="field-error">{state.fieldErrors.primaryBrandColor}</p> : null}
-          </label>
+          </div>
 
-          <label className="brand-color-control" htmlFor="secondaryBrandColor">
-            <span>Accent Color</span>
+          <div className="brand-color-control">
+            <label htmlFor="secondaryBrandColor">Accent Color</label>
             <span className="brand-color-input-row">
               <input
                 className="brand-color-swatch"
@@ -270,21 +361,38 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
                 placeholder="#1D4ED8"
               />
             </span>
+            <div className="brand-color-presets" aria-label="Quick accent colors">
+              {BRAND_COLOR_PRESETS.map((color) => (
+                <button
+                  key={`secondary-${color}`}
+                  className={secondaryBrandColor.toUpperCase() === color ? "brand-color-preset is-active" : "brand-color-preset"}
+                  type="button"
+                  style={{ backgroundColor: color }}
+                  onClick={() => setSecondaryBrandColor(color)}
+                  aria-label={`Use ${color} as accent color`}
+                />
+              ))}
+            </div>
+            <span className={`brand-contrast-check is-${secondaryContrast.tone}`}>{secondaryContrast.label}</span>
             {state.fieldErrors?.secondaryBrandColor ? <p className="field-error">{state.fieldErrors.secondaryBrandColor}</p> : null}
-          </label>
+          </div>
         </div>
 
         <div className="grid-two">
           <label className="stack-sm" htmlFor="defaultFontFamily">
             Caption Font
-            <input
+            <select
               id="defaultFontFamily"
               name="defaultFontFamily"
-              type="text"
               value={defaultFontFamily}
               onChange={(event) => setDefaultFontFamily(event.target.value)}
-              placeholder="Avenir Next"
-            />
+            >
+              {fontOptions.map((font) => (
+                <option key={font} value={font}>
+                  {font}
+                </option>
+              ))}
+            </select>
             {state.fieldErrors?.defaultFontFamily ? <p className="field-error">{state.fieldErrors.defaultFontFamily}</p> : null}
           </label>
 
@@ -315,29 +423,45 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
             <span className="status-pill">{captionStyle.motion}</span>
           </div>
           <p className="muted small">
-            Choose the default caption mood for prepared clips. Clip Studio can still tune the copy per clip.
+            Pick the caption look new clips should start with. Clip Studio can still tune each clip.
           </p>
           <input type="hidden" name="defaultCaptionStyleName" value={defaultCaptionStyleName} />
-          <div className="brand-caption-options">
-            {CAPTION_STYLE_PRESETS.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                className={preset.id === defaultCaptionStyleName ? "brand-caption-option is-active" : "brand-caption-option"}
-                onClick={() => setDefaultCaptionStyleName(preset.id)}
-              >
-                <span className={`brand-caption-option-preview ${preset.className}`}>
-                  {renderCaptionSample(preset.sampleText, preset.emphasisWords)}
-                </span>
-                <strong>{preset.name}</strong>
-                <span>{preset.description}</span>
-                <span className="brand-caption-option-meta">
-                  <span>{preset.personality}</span>
-                  <span>{preset.bestFor}</span>
-                </span>
-              </button>
-            ))}
+          <div className="brand-caption-selected">
+            <span className={`brand-caption-option-preview ${captionStyle.className}`}>
+              {renderCaptionSample(captionStyle.sampleText, captionStyle.emphasisWords)}
+            </span>
+            <span className="brand-caption-selected-copy">
+              <strong>{captionStyle.name}</strong>
+              <span>{captionStyle.description}</span>
+              <span className="brand-caption-option-meta">
+                <span>{captionStyle.personality}</span>
+                <span>{captionStyle.bestFor}</span>
+              </span>
+            </span>
           </div>
+          <details className="brand-caption-picker-details">
+            <summary>Change caption style</summary>
+            <div className="brand-caption-options">
+              {CAPTION_STYLE_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className={preset.id === defaultCaptionStyleName ? "brand-caption-option is-active" : "brand-caption-option"}
+                  onClick={() => setDefaultCaptionStyleName(preset.id)}
+                >
+                  <span className={`brand-caption-option-preview ${preset.className}`}>
+                    {renderCaptionSample(preset.sampleText, preset.emphasisWords)}
+                  </span>
+                  <strong>{preset.name}</strong>
+                  <span>{preset.description}</span>
+                  <span className="brand-caption-option-meta">
+                    <span>{preset.personality}</span>
+                    <span>{preset.bestFor}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </details>
           {state.fieldErrors?.defaultCaptionStyleName ? <p className="field-error">{state.fieldErrors.defaultCaptionStyleName}</p> : null}
         </section>
 
@@ -404,7 +528,7 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
         </div>
 
         <details className="advanced-details brand-advanced-details">
-          <summary>Advanced payload</summary>
+          <summary>Advanced export data</summary>
           <pre className="code-block">{JSON.stringify(helperPayload, null, 2)}</pre>
         </details>
       </aside>

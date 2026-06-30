@@ -56,10 +56,44 @@ export function ReadyQueueLiveRefresh({ status, intervalMs = 8000 }: ReadyQueueL
     return () => window.clearInterval(timer);
   }, [intervalMs, router, status.liveRefreshEnabled]);
 
+  if (!status.liveRefreshEnabled) {
+    return (
+      <details className="queue-live-panel queue-live-disclosure is-paused">
+        <summary>
+          <span>Check queue status</span>
+          <span className="muted small">{status.readyCount} ready · last checked {checkedAtLabel}</span>
+        </summary>
+        <div className="queue-live-details">
+          <div className="stack-sm">
+            <p className="kicker">Queue status</p>
+            <h2>{status.headline}</h2>
+            <p className="muted">{status.description}</p>
+            <p className="muted small">
+              Last checked {checkedAtLabel}
+              {refreshCount > 0 ? ` · ${refreshCount} update${refreshCount === 1 ? "" : "s"}` : ""}
+              {" · "}
+              {helperText}
+            </p>
+          </div>
+          <div className="review-priority-actions">
+            <button type="button" className="button tertiary" onClick={refreshNow}>
+              Check now
+            </button>
+            {status.readyCount === 0 ? (
+              <Link href="/" className="button secondary">
+                Open dashboard
+              </Link>
+            ) : null}
+          </div>
+        </div>
+      </details>
+    );
+  }
+
   return (
-    <section className={`queue-live-panel ${status.liveRefreshEnabled ? "is-live" : "is-paused"}`} aria-live="polite">
+    <section className="queue-live-panel is-live" aria-live="polite">
       <div className="stack-sm">
-        <p className="kicker">{status.liveRefreshEnabled ? "Preparing clips" : "Queue status"}</p>
+        <p className="kicker">Preparing clips</p>
         <h2>{status.headline}</h2>
         <p className="muted">{status.description}</p>
         <p className="muted small">

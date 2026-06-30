@@ -131,6 +131,21 @@ function sermonStatusTone(status: SermonStatus): string {
   return "tone-neutral";
 }
 
+function getPrimaryStatusLabel(sermon: SermonListItem, stats: ReturnType<typeof getSermonStats>): string {
+  if (stats.needsAttention) return "Needs attention";
+  return sermonStatusLabel(sermon.status);
+}
+
+function getPrimaryStatusTone(sermon: SermonListItem, stats: ReturnType<typeof getSermonStats>): string {
+  if (stats.needsAttention) return "tone-danger";
+  return sermonStatusTone(sermon.status);
+}
+
+function getSecondaryStatusDetail(stats: ReturnType<typeof getSermonStats>): string {
+  if (stats.readyClipCount === 1) return "1 ready clip";
+  return `${stats.readyClipCount} ready clips`;
+}
+
 function formatDate(date: Date | null): string {
   if (!date) return "No sermon date";
   return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(date);
@@ -183,19 +198,12 @@ function isProcessing(sermon: SermonListItem, stats: ReturnType<typeof getSermon
 }
 
 function getNextAction(sermon: SermonListItem, stats: ReturnType<typeof getSermonStats>): string {
-  if (stats.needsAttention) return "Review retry";
+  if (stats.needsAttention) return "Open sermon";
   if (sermon.status === "EXPORTED" || stats.readyClipCount > 0) return "Prepare post";
   if (sermon.status === "CLIPS_GENERATED" || sermon.status === "REVIEWING") return "Review clips";
   if (sermon.status === "TRANSCRIBED") return "Generate clips";
   if (isProcessing(sermon, stats)) return "Monitor progress";
   return "Open sermon";
-}
-
-function getIssueText(stats: ReturnType<typeof getSermonStats>): string {
-  const issueCount = stats.failedClipCount + stats.failedJobCount;
-  if (issueCount === 0) return "No retry work";
-  if (issueCount === 1) return "1 retry item";
-  return `${issueCount} retry items`;
 }
 
 function matchesLibraryView(item: SermonWithStats, view: LibraryView): boolean {
@@ -294,10 +302,10 @@ export default async function SermonsPage({ searchParams }: { searchParams: Prom
   });
   const allStats = sortedSermons.map((sermon) => ({ sermon, stats: getSermonStats(sermon) }));
   const visibleStats = allStats.filter((item) => matchesLibraryView(item, activeView));
-  const totalClips = visibleStats.reduce((total, item) => total + item.stats.clipCount, 0);
   const needsAttentionCount = visibleStats.filter((item) => item.stats.needsAttention).length;
   const readyClipCount = visibleStats.reduce((total, item) => total + item.stats.readyClipCount, 0);
   const processingCount = visibleStats.filter((item) => isProcessing(item.sermon, item.stats)).length;
+  const hasSingleVisibleSermon = visibleStats.length === 1;
   const featured = visibleStats.find((item) => item.stats.needsAttention)
     ?? visibleStats.find((item) => isProcessing(item.sermon, item.stats))
     ?? visibleStats.find((item) => item.stats.readyClipCount > 0)
@@ -317,53 +325,15 @@ export default async function SermonsPage({ searchParams }: { searchParams: Prom
         <div className="stack-sm">
           <p className="kicker">Library</p>
           <h1>Sermon Library</h1>
-          <p className="muted">A refined workspace for finding sermons, recovering failed work, and moving clips toward publishing.</p>
+          <p className="muted">Find sermons, fix issues, and continue publishing.</p>
         </div>
         <div className="topbar-actions">
-          <Link href="/" className="button tertiary">Dashboard</Link>
           <Link href="/sermons/new" className="button primary">New Sermon</Link>
         </div>
       </header>
 
       <section className="library-command-panel">
-        <article className={`library-featured-card${featured?.stats.needsAttention ? " needs-attention" : ""}`}>
-          {featured ? (
-            <>
-              <div className="library-featured-copy stack-sm">
-                <div className="clip-badge-row">
-                  <span className={`status-pill ${sermonStatusTone(featured.sermon.status)}`}>{sermonStatusLabel(featured.sermon.status)}</span>
-                  {featured.stats.needsAttention ? <span className="status-pill tone-danger">{getIssueText(featured.stats)}</span> : null}
-                </div>
-                <p className="kicker">Continue</p>
-                <h2>{featured.sermon.title}</h2>
-                <p className="muted">{featured.sermon.speakerName} at {featured.sermon.churchName}</p>
-              </div>
-              <div className="library-featured-side">
-                <div className="library-inline-metrics">
-                  <span><strong>{featured.stats.clipCount}</strong> clips</span>
-                  <span><strong>{featured.stats.readyClipCount}</strong> ready</span>
-                  <span><strong>{featured.stats.failedClipCount + featured.stats.failedJobCount}</strong> issues</span>
-                </div>
-                <Link href={`/sermons/${featured.sermon.id}`} className="button primary">{getNextAction(featured.sermon, featured.stats)}</Link>
-              </div>
-            </>
-          ) : (
-            <div className="library-featured-copy stack-sm">
-              <p className="kicker">Start</p>
-              <h2>No sermons match this view</h2>
-              <p className="muted">Clear the filters or add a sermon to begin processing clips.</p>
-            </div>
-          )}
-        </article>
-
         <div className="library-control-stack">
-          <div className="library-vitals" aria-label="Sermon library summary">
-            <StatCard label="Sermons" value={visibleStats.length} detail="In this view" />
-            <StatCard label="Attention" value={needsAttentionCount} detail="Retry work" tone={needsAttentionCount > 0 ? "danger" : "neutral"} />
-            <StatCard label="Ready clips" value={readyClipCount} detail={`${totalClips} total clips`} tone="success" />
-            <StatCard label="Processing" value={processingCount} detail="Currently moving" tone="warning" />
-          </div>
-
           <form className="library-filter-form" action="/sermons">
             <input type="hidden" name="view" value={activeView} />
             <label className="library-search-field">
@@ -394,10 +364,66 @@ export default async function SermonsPage({ searchParams }: { searchParams: Prom
             ))}
             {(query || status || activeView !== "all") ? <Link href="/sermons">Clear</Link> : null}
           </nav>
+
+          <div className="library-vitals" aria-label="Sermon library summary">
+            <StatCard
+              label="Needs attention"
+              value={needsAttentionCount}
+              detail={needsAttentionCount === 1 ? "Sermon to resolve" : "Sermons to resolve"}
+              tone={needsAttentionCount > 0 ? "danger" : "neutral"}
+            />
+            <StatCard
+              label="Ready clips"
+              value={readyClipCount}
+              detail="Prepared for posting"
+              tone="success"
+            />
+            {processingCount > 0 ? (
+              <StatCard
+                label="Processing"
+                value={processingCount}
+                detail={processingCount === 1 ? "Sermon moving" : "Sermons moving"}
+                tone="warning"
+              />
+            ) : null}
+          </div>
         </div>
+
+        <article className={`library-featured-card${featured?.stats.needsAttention ? " needs-attention" : ""}`}>
+          {featured ? (
+            <>
+              <div className="library-featured-copy stack-sm">
+                <div className="clip-badge-row">
+                  <span className={`status-pill ${getPrimaryStatusTone(featured.sermon, featured.stats)}`}>
+                    {getPrimaryStatusLabel(featured.sermon, featured.stats)}
+                  </span>
+                  <span className="status-pill tone-neutral">{getSecondaryStatusDetail(featured.stats)}</span>
+                </div>
+                <p className="kicker">Continue</p>
+                <h2>{featured.sermon.title}</h2>
+                <p className="muted">{featured.sermon.speakerName} at {featured.sermon.churchName}</p>
+              </div>
+              <div className="library-featured-side">
+                <div className="library-inline-metrics">
+                  <span><strong>{featured.stats.clipCount}</strong> clips</span>
+                  <span><strong>{featured.stats.readyClipCount}</strong> ready</span>
+                  <span><strong>{featured.stats.failedClipCount + featured.stats.failedJobCount}</strong> issues</span>
+                </div>
+                <Link href={`/sermons/${featured.sermon.id}`} className="button primary">{getNextAction(featured.sermon, featured.stats)}</Link>
+              </div>
+            </>
+          ) : (
+            <div className="library-featured-copy stack-sm">
+              <p className="kicker">Start</p>
+              <h2>No sermons match this view</h2>
+              <p className="muted">Clear the filters or add a sermon to begin processing clips.</p>
+            </div>
+          )}
+        </article>
       </section>
 
-      <section className="library-list-panel stack-md">
+      {hasSingleVisibleSermon && featured ? null : (
+        <section className="library-list-panel stack-md">
         <div className="library-section-heading">
           <div className="stack-xs">
             <h2>All sermons</h2>
@@ -428,11 +454,13 @@ export default async function SermonsPage({ searchParams }: { searchParams: Prom
                     return (
                       <li key={sermon.id}>
                         <Link href={`/sermons/${sermon.id}`} className={`library-sermon-card${stats.needsAttention ? " needs-attention" : ""}`}>
-                          <span className={`library-status-rail ${sermonStatusTone(sermon.status)}`} />
+                          <span className={`library-status-rail ${getPrimaryStatusTone(sermon, stats)}`} />
                           <div className="library-sermon-main stack-sm">
                             <div className="clip-badge-row">
-                              <span className={`status-pill ${sermonStatusTone(sermon.status)}`}>{sermonStatusLabel(sermon.status)}</span>
-                              {stats.needsAttention ? <span className="status-pill tone-danger">{getIssueText(stats)}</span> : null}
+                              <span className={`status-pill ${getPrimaryStatusTone(sermon, stats)}`}>
+                                {getPrimaryStatusLabel(sermon, stats)}
+                              </span>
+                              <span className="status-pill tone-neutral">{getSecondaryStatusDetail(stats)}</span>
                             </div>
                             <div>
                               <h3>{sermon.title}</h3>
@@ -460,7 +488,8 @@ export default async function SermonsPage({ searchParams }: { searchParams: Prom
             ))}
           </div>
         )}
-      </section>
+        </section>
+      )}
     </main>
   );
 }

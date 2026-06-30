@@ -16,6 +16,7 @@ import { RedoClipGenerationButton } from "@/app/sermons/[id]/redo-clip-generatio
 import { RetryFailedJobButton } from "@/app/sermons/[id]/retry-failed-job-button";
 import { RepairFailedClipOperationsButton } from "@/app/sermons/[id]/repair-failed-clip-operations-button";
 import { SermonLiveRefresh } from "@/app/sermons/[id]/sermon-live-refresh";
+import { SermonDetailPreviewCard } from "@/app/sermons/[id]/sermon-detail-preview-card";
 import { getAudioPath, getLogPath, getSourceVideoPath } from "@/server/agents/storage";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import { pastorFriendlyError } from "@/lib/pastorFriendlyErrors";
@@ -1063,21 +1064,35 @@ export default async function SermonDetailPage({
     };
   });
   const completedProcessingSteps = processingTheaterSteps.filter((step) => step.state === "done").length;
-  const activeProcessingStep =
-    processingTheaterSteps.find((step) => step.state === "active")
-    ?? processingTheaterSteps.find((step) => step.state === "failed")
-    ?? processingTheaterSteps.find((step) => step.state === "pending")
-    ?? processingTheaterSteps[processingTheaterSteps.length - 1];
+  const activeSermonStatuses = new Set<SermonStatus>([
+    "DOWNLOADING",
+    "AUDIO_EXTRACTING",
+    "TRANSCRIBING",
+    "GENERATING_CLIPS",
+    "EXPORTING",
+  ]);
+  const hasLiveProcessingWork =
+    operationSummary.running > 0 ||
+    processingJobs.some((job) => (
+      (job.status === "RUNNING" || job.status === "PENDING") &&
+      !isStaleActiveProcessingJob(job)
+    )) ||
+    activeSermonStatuses.has(sermon.status);
+  const activeProcessingStep = hasLiveProcessingWork
+    ? processingTheaterSteps.find((step) => step.state === "active")
+      ?? processingTheaterSteps.find((step) => step.state === "pending")
+      ?? processingTheaterSteps[processingTheaterSteps.length - 1]
+    : null;
   const activeJobProgressPercent =
-    activeProcessingStep.jobType === "DOWNLOAD_VIDEO" && downloadProgress
+    activeProcessingStep?.jobType === "DOWNLOAD_VIDEO" && downloadProgress
       ? Math.round(downloadProgress.percent)
-      : activeProcessingStep.state === "done"
+      : activeProcessingStep?.state === "done"
         ? 100
-        : activeProcessingStep.state === "active"
+        : activeProcessingStep?.state === "active"
           ? null
           : 0;
-  const operationProgressView: OperationProgressView =
-    activeProcessingStep.jobType === "DOWNLOAD_VIDEO" && downloadProgress
+  const operationProgressView: OperationProgressView | null = activeProcessingStep
+    ? activeProcessingStep.jobType === "DOWNLOAD_VIDEO" && downloadProgress
       ? {
         progressPercent: downloadProgress.percent,
         progressLabel: `${downloadProgress.percent.toFixed(1)}% of ${downloadProgress.totalLabel}`,
@@ -1130,33 +1145,29 @@ export default async function SermonDetailPage({
             detail: activeProcessingStep.latestJob?.logs
               ? `Latest note: ${activeProcessingStep.latestJob.logs.split("\n").at(-1)}`
               : "When this step reports measurable progress, it will appear here automatically.",
-          };
+          }
+    : null;
   const activeStepProgressFraction =
-    activeProcessingStep.state === "active"
+    activeProcessingStep?.state === "active" && operationProgressView
       ? (operationProgressView.progressPercent ?? activeJobProgressPercent ?? 25) / 100
       : 0;
   const processingProgressPercent = Math.min(
     100,
     Math.round(((completedProcessingSteps + activeStepProgressFraction) / processingTheaterSteps.length) * 100),
   );
-  const pastorProcessingMessage = activeProcessingStep.state === "done"
+  const pastorProcessingMessage = activeProcessingStep?.state === "done"
     ? "The sermon is ready for the next pastor action."
-    : activeProcessingStep.state === "failed"
+    : activeProcessingStep?.state === "failed"
       ? "One processing step needs attention before this sermon can keep moving."
-      : activeProcessingStep.state === "active"
+      : activeProcessingStep?.state === "active"
         ? "Sermon Clip is working on this sermon now."
         : "This sermon is waiting for the next processing step.";
   const latestTheaterJob =
-    latestJob?.status === "FAILED" && activeProcessingStep.state !== "failed"
+    activeProcessingStep && latestJob?.status === "FAILED" && activeProcessingStep.state !== "failed"
       ? processingJobs.find((job) => job.status !== "FAILED") ?? null
-      : latestJob;
-  const hasLiveProcessingWork =
-    operationSummary.running > 0 ||
-    processingJobs.some((job) => (
-      (job.status === "RUNNING" || job.status === "PENDING") &&
-      !isStaleActiveProcessingJob(job)
-    )) ||
-    activeProcessingStep.state === "active";
+      : activeProcessingStep
+        ? latestJob
+        : null;
 
   const pastorWorkflow = derivePastorSermonWorkflow({
     sourceVideoReady: hasSourceVideo,
@@ -1169,12 +1180,32 @@ export default async function SermonDetailPage({
     staleClipCount: operationSummary.outdated,
     latestFailedStepType: latestFailedJob?.type ?? null,
   });
-  const commandCenterTitle = hasLiveProcessingWork
+  const commandCenterTitle = failedRecoveryCount > 0
+    ? "Resolve failed item"
+    : hasLiveProcessingWork && activeProcessingStep
     ? activeProcessingStep.label
+    : hasExportedClips
+      ? "Ready to post"
+      : clipCounts.suggested > 0 && !hasReadyClips
+        ? "Review suggested clips"
     : pastorWorkflow.nextAction;
-  const commandCenterDescription = hasLiveProcessingWork
-    ? `Sermon Clip is currently working on ${activeProcessingStep.label.toLowerCase()}. Keep this page open to watch the current operation, ETA, and the remaining stages.`
-    : "Sermon Clip is tracking the work from sermon upload to approved clips, prepared videos, captions, church branding, and ready-to-post downloads.";
+  const commandCenterDescription = failedRecoveryCount > 0
+    ? `${failedRecoveryCount} failed ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention before this sermon keeps moving. Open the hidden troubleshooting section when you are ready to retry.`
+    : hasLiveProcessingWork && activeProcessingStep
+      ? `${activeProcessingStep.label} is running now. Watch the live progress here until the next pastor step is ready.`
+      : hasOutdatedAssets
+        ? `${operationSummary.outdated} prepared ${operationSummary.outdated === 1 ? "asset needs" : "assets need"} a refresh before posting.`
+        : hasExportedClips
+          ? `${clipCounts.exported} ${clipCounts.exported === 1 ? "clip is" : "clips are"} ready to post. Open the queue to download or schedule.`
+          : clipCounts.suggested > 0 && !hasReadyClips
+            ? `${clipCounts.suggested} suggested ${clipCounts.suggested === 1 ? "clip is" : "clips are"} ready. Review the strongest moments next.`
+            : hasApprovedClips
+              ? `${clipCounts.approved} approved ${clipCounts.approved === 1 ? "clip is" : "clips are"} waiting to be prepared for posting.`
+              : hasTranscriptRecord
+                ? "The transcript is ready. Find clip moments next."
+                : hasSourceVideo
+                  ? "The sermon video is ready. Continue processing to create the transcript and clip suggestions."
+                  : "Start processing this sermon to find clip moments.";
   const previewClips = orderedClipCandidates
     .filter((clip) => clip.status !== "REJECTED")
     .slice(0, 4);
@@ -1258,28 +1289,47 @@ export default async function SermonDetailPage({
           <p className="kicker">Next best step</p>
           <h2>{commandCenterTitle}</h2>
           <p className="muted">{commandCenterDescription}</p>
+          {needsAttention ? (
+            <div className={`sermon-command-note${failedRecoveryCount > 0 ? " urgent" : ""}`}>
+              <strong>
+                {failedRecoveryCount > 0
+                  ? `${failedRecoveryCount} failed ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention`
+                  : `${operationSummary.outdated} ${operationSummary.outdated === 1 ? "asset" : "assets"} need refresh`}
+              </strong>
+              <span>
+                {failedRecoveryCount > 0
+                  ? "Retry and repair controls stay tucked inside Troubleshoot this sermon."
+                  : "Refresh prepared media before posting stale downloads."}
+              </span>
+            </div>
+          ) : null}
           <div className="review-priority-actions">
-            {hasLiveProcessingWork ? (
+            {failedRecoveryCount > 0 ? (
+              <a href="#troubleshoot-this-sermon" className="button primary">
+                Review failed item
+              </a>
+            ) : null}
+            {failedRecoveryCount === 0 && hasLiveProcessingWork ? (
               <a href="#processing-progress" className="button primary">
                 View live progress
               </a>
             ) : null}
-            {!hasLiveProcessingWork && pastorWorkflow.primaryAction === "process" ? (
+            {failedRecoveryCount === 0 && !hasLiveProcessingWork && pastorWorkflow.primaryAction === "process" ? (
               <ProcessSermonButton sermonId={sermon.id} />
             ) : null}
-            {!hasLiveProcessingWork && pastorWorkflow.primaryAction === "review" ? (
+            {failedRecoveryCount === 0 && !hasLiveProcessingWork && pastorWorkflow.primaryAction === "review" ? (
               <Link href={`/sermons/${sermon.id}/review`} className="button primary">
                 Review suggested clips
               </Link>
             ) : null}
-            {!hasLiveProcessingWork && pastorWorkflow.primaryAction === "prepare" ? (
+            {failedRecoveryCount === 0 && !hasLiveProcessingWork && pastorWorkflow.primaryAction === "prepare" ? (
               <Link href={`/sermons/${sermon.id}/review`} className="button primary">
                 Prepare approved clips
               </Link>
             ) : null}
-            {!hasLiveProcessingWork && pastorWorkflow.primaryAction === "post" ? (
+            {failedRecoveryCount === 0 && !hasLiveProcessingWork && pastorWorkflow.primaryAction === "post" ? (
               <Link href={`/ready-to-post?sermonId=${sermon.id}`} className="button primary">
-                Open Ready To Post queue
+                Open ready-to-post queue
               </Link>
             ) : null}
             {pastorWorkflow.primaryAction !== "review" && pastorWorkflow.primaryAction !== "prepare" ? (
@@ -1291,13 +1341,6 @@ export default async function SermonDetailPage({
               Ministry insights
             </Link>
           </div>
-          {needsAttention ? (
-            <p className="sermon-command-note">
-              {failedRecoveryCount > 0
-                ? `${failedRecoveryCount} failed item${failedRecoveryCount === 1 ? "" : "s"} can be retried.`
-                : `${operationSummary.outdated} generated asset${operationSummary.outdated === 1 ? "" : "s"} can be refreshed when you prepare clips.`}
-            </p>
-          ) : null}
         </div>
 
         <div className="sermon-command-stats">
@@ -1330,33 +1373,18 @@ export default async function SermonDetailPage({
           </div>
           <div className="sermon-preview-grid">
             {previewClips.map((clip) => (
-              <Link key={clip.id} href={`/sermons/${sermon.id}/clips/${clip.id}/studio`} className="sermon-preview-card">
-                <div className="video-card-shell">
-                  {localMediaAvailable ? (
-                    <video
-                      className="review-video"
-                      preload="none"
-                      poster={`/api/clips/${clip.id}/thumbnail`}
-                      src={`/api/clips/${clip.id}/preview?variant=best`}
-                    />
-                  ) : (
-                    <div className="review-video empty-video-state">
-                      <span>Preview on Mac app</span>
-                    </div>
-                  )}
-                  <span className="video-quality-pill">{clip.status === "EXPORTED" ? "Ready" : "Preview"}</span>
-                  <span className="video-duration-pill">{Math.round(clip.durationSeconds)}s</span>
-                </div>
-                <div className="stack-sm">
-                  <strong>{clip.title}</strong>
-                  <span className="muted small">AI score {clip.score.toFixed(1)}/10</span>
-                </div>
-              </Link>
+              <SermonDetailPreviewCard
+                key={clip.id}
+                sermonId={sermon.id}
+                clip={clip}
+                localMediaAvailable={localMediaAvailable}
+              />
             ))}
           </div>
         </section>
       ) : null}
 
+      {hasLiveProcessingWork && activeProcessingStep && operationProgressView ? (
       <section id="processing-progress" className="processing-theater" aria-label="Sermon processing progress">
         <div className="processing-theater-copy stack-sm">
           <p className="kicker">Processing progress</p>
@@ -1431,8 +1459,9 @@ export default async function SermonDetailPage({
           ))}
         </div>
       </section>
+      ) : null}
 
-      <details className="advanced-details troubleshoot-details">
+      <details id="troubleshoot-this-sermon" className="advanced-details troubleshoot-details">
         <summary>Troubleshoot this sermon</summary>
         <div className="stack-lg advanced-details-body">
           <section className="card stack-md">

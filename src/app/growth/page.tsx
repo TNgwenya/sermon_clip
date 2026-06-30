@@ -179,6 +179,24 @@ function connectionTone(status: string): "success" | "warning" | "neutral" {
   return "neutral";
 }
 
+function confidenceTone(confidence: "High" | "Medium" | "Low"): "success" | "warning" | "danger" {
+  if (confidence === "High") return "success";
+  if (confidence === "Medium") return "warning";
+  return "danger";
+}
+
+function confidenceReason(confidence: "High" | "Medium" | "Low"): string {
+  if (confidence === "Low") {
+    return "Confidence is low because the system needs stronger clip-readiness signals or real platform analytics before it can strongly recommend this draft.";
+  }
+
+  if (confidence === "Medium") {
+    return "Confidence is moderate: the clip has useful signals, but platform learning data is still limited.";
+  }
+
+  return "Confidence is high because clip quality, readiness, and posting signals line up well.";
+}
+
 function normalizeSearchString(value: string | undefined, fallback: string): string {
   return value && value.trim().length > 0 ? value.trim() : fallback;
 }
@@ -489,16 +507,13 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
       <header className="growth-hero">
         <div className="stack-sm">
           <p className="kicker">Growth system</p>
-          <h1>Ministry-aware social growth cockpit.</h1>
-          <p className="muted">
-            Use sermon clips, platform signals, event timing, and guardrails to decide what to post next, why it matters, and what impact to expect.
-          </p>
+          <h1>Next best post</h1>
+          <p className="muted">Choose the next sermon clip to publish, with the reason and confidence up front.</p>
         </div>
         <nav className="topbar-actions" aria-label="Growth actions">
           <Link href="/ready-to-post" className="button primary">Open publishing desk</Link>
           <Link href="/settings/social" className="button secondary">Connect analytics</Link>
           <Link href="/opportunities" className="button secondary">Content ideas</Link>
-          <Link href="/sermons/new" className="button tertiary">Create clips</Link>
         </nav>
       </header>
 
@@ -523,22 +538,13 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
         </div>
       ) : null}
 
-      <section className="dashboard-command-strip growth-signal-strip" aria-label="Social growth summary">
-        <StatCard label="Connected platforms" value={`${connectedCount}/7`} detail="Native or manual tracking" tone="success" />
-        <StatCard label="Planned posts" value={plannedCount} detail="Waiting for approval or publish" tone="accent" />
-        <StatCard label="Published posts" value={postedCount} detail="Marked posted in workflow" />
-        <StatCard label="Growth-ready clips" value={clips.length} detail="Available content assets" tone="warning" />
-      </section>
-
       <section className="growth-main-grid">
         <SectionCard
-          title="AI recommendations"
-          description="Ranked by clip quality, platform fit, ministry value, readiness, and human approval safety."
+          title="Next best post"
           className="growth-recommendations-panel"
         >
           <form action={saveWeeklyGrowthRecommendations} className="growth-save-campaign-form">
             <button type="submit" className="button secondary">Save weekly recommendations</button>
-            <span className="muted small">Persists the current AI picks so the team can review them later.</span>
           </form>
           {recommendations.length === 0 ? (
             <EmptyState
@@ -548,17 +554,25 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
             />
           ) : (
             <div className="growth-recommendation-list">
-              {recommendations.map((recommendation) => (
+              {recommendations.slice(0, 1).map((recommendation) => {
+                const isLowConfidence = recommendation.prediction.confidence === "Low";
+
+                return (
                 <article key={recommendation.id} className="growth-recommendation-card">
                   <div className="growth-recommendation-heading">
                     <div className="stack-sm">
                       <div className="clip-badge-row">
                         <StatusBadge tone="accent">Priority {recommendation.priority}</StatusBadge>
                         <StatusBadge tone="success">{recommendation.ministryTheme}</StatusBadge>
-                        <StatusBadge tone="info">{recommendation.prediction.confidence} confidence</StatusBadge>
+                        <StatusBadge tone={confidenceTone(recommendation.prediction.confidence)}>
+                          {recommendation.prediction.confidence} confidence
+                        </StatusBadge>
                       </div>
                       <h2>{recommendation.title}</h2>
                       <p className="muted small">{recommendation.hook}</p>
+                      <p className={`growth-confidence-note${isLowConfidence ? " is-low" : ""}`}>
+                        {confidenceReason(recommendation.prediction.confidence)}
+                      </p>
                     </div>
                     <form action={createGrowthRecommendationDraft} className="growth-draft-form">
                       <input type="hidden" name="clipId" value={recommendation.sourceClipId} />
@@ -571,10 +585,18 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
                         name="note"
                         value={`Growth recommendation: ${recommendation.rationale.join(" ")} Guardrails: ${recommendation.guardrails.join(" ")}`}
                       />
-                      <button type="submit" className="button primary">Create draft</button>
-                      <Link href={`/ready-to-post?clipId=${recommendation.sourceClipId}`} className="button tertiary">
-                        Open clip
+                      <Link
+                        href={`/ready-to-post?clipId=${recommendation.sourceClipId}`}
+                        className={isLowConfidence ? "button primary" : "button tertiary"}
+                      >
+                        {isLowConfidence ? "Review recommendation" : "Open clip"}
                       </Link>
+                      <button type="submit" className={isLowConfidence ? "button tertiary" : "button primary"}>
+                        {isLowConfidence ? "Create draft anyway" : "Create draft"}
+                      </button>
+                      {isLowConfidence ? (
+                        <Link href="/sermons" className="button secondary">Use stronger clip</Link>
+                      ) : null}
                     </form>
                   </div>
 
@@ -619,37 +641,100 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
                     </div>
                   </div>
                 </article>
-              ))}
+                );
+              })}
+              {recommendations.length > 1 ? (
+                <details className="growth-more-recommendations">
+                  <summary>{recommendations.length - 1} more recommendations</summary>
+                  <div className="growth-recommendation-list compact">
+                    {recommendations.slice(1).map((recommendation) => (
+                      <article key={recommendation.id} className="growth-recommendation-card compact">
+                        <div className="growth-recommendation-heading">
+                          <div className="stack-sm">
+                            <div className="clip-badge-row">
+                              <StatusBadge tone="accent">Priority {recommendation.priority}</StatusBadge>
+                              <StatusBadge tone="success">{recommendation.ministryTheme}</StatusBadge>
+                            </div>
+                            <h3>{recommendation.title}</h3>
+                            <p className="muted small">{recommendation.postingWindow}</p>
+                          </div>
+                          <form action={createGrowthRecommendationDraft} className="growth-draft-form">
+                            <input type="hidden" name="clipId" value={recommendation.sourceClipId} />
+                            <input type="hidden" name="title" value={recommendation.title} />
+                            <input type="hidden" name="caption" value={recommendation.caption} />
+                            <input type="hidden" name="postingSlot" value={recommendation.postingWindow} />
+                            <input type="hidden" name="platforms" value={JSON.stringify(recommendation.platforms)} />
+                            <input
+                              type="hidden"
+                              name="note"
+                              value={`Growth recommendation: ${recommendation.rationale.join(" ")} Guardrails: ${recommendation.guardrails.join(" ")}`}
+                            />
+                            <button type="submit" className="button primary">Create draft</button>
+                          </form>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
             </div>
           )}
         </SectionCard>
 
         <aside className="growth-side-stack stack-lg">
-          <SectionCard title="Connected channels" description="API analytics can replace these derived estimates as each connector is approved.">
+          <SectionCard title="Best sermon assets" description="Evidence behind the next-post choice.">
+            {bestClips.length === 0 ? (
+              <EmptyState title="No growth-ready assets yet" description="Export approved clips to build your weekly posting plan." />
+            ) : (
+              <div className="growth-asset-list">
+                {bestClips.map((clip) => (
+                  <Link key={clip.id} href={`/sermons/${clip.sermon.id}/clips/${clip.id}/studio`} className="growth-asset-row">
+                    <div>
+                      <h3>{clip.title}</h3>
+                      <p className="muted small">{clip.sermon.title}</p>
+                    </div>
+                    <div className="clip-badge-row">
+                      <StatusBadge tone="accent">Score {Math.round(getClipGrowthScore(clip))}</StatusBadge>
+                      <StatusBadge tone="neutral">{normalizeClipQualityLabel(clip.qualityLabel ?? clip.postReadyStatus)}</StatusBadge>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </SectionCard>
+
+          <SectionCard title="Channels">
             <div className="growth-platform-list">
               {platformSnapshots.map((snapshot) => (
-                <article key={snapshot.platform} className="growth-platform-row">
-                  <div>
-                    <div className="clip-badge-row">
+                <details key={snapshot.platform} className="growth-platform-row compact">
+                  <summary className="growth-platform-summary">
+                    <span className="growth-channel-name">
                       <strong>{snapshot.platform}</strong>
                       <StatusBadge tone={connectionTone(snapshot.status)}>
                         {snapshot.status.toLowerCase().replace(/_/g, " ")}
                       </StatusBadge>
-                    </div>
-                    <p className="muted small">{snapshot.connectedLabel}</p>
-                  </div>
-                  <div className="growth-platform-metrics">
-                    <span>{snapshot.plannedPosts} planned</span>
-                    <span>{formatNumber(snapshot.estimatedReach)} reach</span>
-                    <span>{formatPercent(snapshot.estimatedEngagementRate)}</span>
-                  </div>
+                    </span>
+                    <span className="growth-channel-metrics">
+                      <span>{snapshot.plannedPosts} planned</span>
+                      <span>{formatNumber(snapshot.estimatedReach)} reach</span>
+                      <span>{formatPercent(snapshot.estimatedEngagementRate)}</span>
+                    </span>
+                  </summary>
+                  <p className="muted small">{snapshot.connectedLabel}</p>
                   <p className="muted small">{snapshot.nextMove}</p>
-                </article>
+                </details>
               ))}
             </div>
           </SectionCard>
 
-          <SectionCard title="Trend discernment" description="Trends are filtered for gospel fit before any adaptation is suggested.">
+          <details className="growth-disclosure-card">
+            <summary>
+              <span>
+                <strong>Trend guidance</strong>
+                <span className="muted small">Discern trends without crowding the next-post call.</span>
+              </span>
+              <StatusBadge tone="neutral">{trendAssessments.length} checks</StatusBadge>
+            </summary>
             <div className="growth-trend-list">
               {trendAssessments.map((assessment) => (
                 <article key={assessment.trend} className="growth-trend-card">
@@ -664,9 +749,25 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
                 </article>
               ))}
             </div>
-          </SectionCard>
+          </details>
         </aside>
       </section>
+
+      <section className="dashboard-command-strip growth-signal-strip" aria-label="Social growth summary">
+        <StatCard label="Connected platforms" value={`${connectedCount}/7`} detail="Tracked channels" tone="success" />
+        <StatCard label="Planned posts" value={plannedCount} detail="Upcoming" tone="accent" />
+        <StatCard label="Published posts" value={postedCount} detail="Posted" />
+        <StatCard label="Growth-ready clips" value={clips.length} detail="Assets" tone="warning" />
+      </section>
+
+      <details className="growth-disclosure-card growth-analytics-disclosure">
+        <summary>
+          <span>
+            <strong>Analytics setup</strong>
+            <span className="muted small">Connectors, baselines, saved picks, and prediction learning.</span>
+          </span>
+          <StatusBadge tone="neutral">Setup</StatusBadge>
+        </summary>
 
       <section className="growth-lower-grid growth-admin-grid">
         <SectionCard title="Analytics connectors" description="Connectors show what can sync now and what is ready for setup next.">
@@ -870,29 +971,18 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
           </div>
         )}
       </SectionCard>
+      </details>
+
+      <details className="growth-disclosure-card growth-campaigns-disclosure">
+        <summary>
+          <span>
+            <strong>Campaigns</strong>
+            <span className="muted small">Event planning, calendars, saved campaigns, and outcomes.</span>
+          </span>
+          <StatusBadge tone="neutral">{savedCampaignResult.campaigns.length} saved</StatusBadge>
+        </summary>
 
       <section className="growth-lower-grid">
-        <SectionCard title="Best sermon assets" description="Clips most likely to support gospel reach and meaningful engagement.">
-          {bestClips.length === 0 ? (
-            <EmptyState title="No growth-ready assets yet" description="Export approved clips to build your weekly posting plan." />
-          ) : (
-            <div className="growth-asset-list">
-              {bestClips.map((clip) => (
-                <Link key={clip.id} href={`/sermons/${clip.sermon.id}/clips/${clip.id}/studio`} className="growth-asset-row">
-                  <div>
-                    <h3>{clip.title}</h3>
-                    <p className="muted small">{clip.sermon.title}</p>
-                  </div>
-                  <div className="clip-badge-row">
-                    <StatusBadge tone="accent">Score {Math.round(getClipGrowthScore(clip))}</StatusBadge>
-                    <StatusBadge tone="neutral">{normalizeClipQualityLabel(clip.qualityLabel ?? clip.postReadyStatus)}</StatusBadge>
-                  </div>
-                </Link>
-              ))}
-            </div>
-          )}
-        </SectionCard>
-
         <SectionCard title="Event campaign planner" description={eventPlan.objective}>
           <form className="growth-event-form" action="/growth" method="get">
             <label>
@@ -1088,8 +1178,16 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
           </div>
         )}
       </SectionCard>
+      </details>
 
-      <SectionCard title="Learning loop" description="The system is designed to compare predicted and actual performance once native analytics snapshots are synced.">
+      <details className="growth-disclosure-card">
+        <summary>
+          <span>
+            <strong>Learning loop</strong>
+            <span className="muted small">How recommendations improve after publishing.</span>
+          </span>
+          <StatusBadge tone="neutral">Collapsed</StatusBadge>
+        </summary>
         <div className="growth-learning-grid">
           <div className="growth-copy-box">
             <p className="kicker">Current data source</p>
@@ -1104,12 +1202,17 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
             <p>Optimize for discipleship, saves, shares, prayerful comments, event signups, and next-step pathways over vanity metrics alone.</p>
           </div>
         </div>
-      </SectionCard>
+      </details>
 
-      <SectionCard title="Recent sermon themes" description="Use these as campaign anchors for devotionals, clips, scripture posts, and follow-up content.">
-        {sermons.length === 0 ? (
-          <EmptyState title="No sermons yet" description="Process a sermon to see theme-based growth opportunities." />
-        ) : (
+      {sermons.length > 0 ? (
+        <details className="growth-disclosure-card">
+          <summary>
+            <span>
+              <strong>Recent sermon themes</strong>
+              <span className="muted small">Use themes as supporting post and campaign anchors.</span>
+            </span>
+            <StatusBadge tone="neutral">{sermons.length} sermons</StatusBadge>
+          </summary>
           <div className="growth-sermon-theme-grid">
             {sermons.map((sermon) => (
               <article key={sermon.id} className="growth-theme-card">
@@ -1122,8 +1225,8 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
               </article>
             ))}
           </div>
-        )}
-      </SectionCard>
+        </details>
+      ) : null}
     </main>
   );
 }

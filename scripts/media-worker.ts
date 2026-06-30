@@ -46,7 +46,7 @@ async function runCaptionBurnJob(sermonId: string): Promise<string> {
       ],
     },
     orderBy: [{ overallPostScore: "desc" }, { score: "desc" }, { createdAt: "asc" }],
-    select: { id: true },
+    select: { id: true, captionData: true },
   });
 
   if (clips.length === 0) {
@@ -55,9 +55,19 @@ async function runCaptionBurnJob(sermonId: string): Promise<string> {
 
   const { burnCaptionsIntoRenderedClip } = await import("../src/server/agents/captionBurnService");
   let completed = 0;
+  let skipped = 0;
   const failures: string[] = [];
 
   for (const clip of clips) {
+    const captionData =
+      clip.captionData && typeof clip.captionData === "object" && !Array.isArray(clip.captionData)
+        ? clip.captionData as Record<string, unknown>
+        : {};
+    if (captionData["applyCaptionsToClip"] === false) {
+      skipped += 1;
+      continue;
+    }
+
     try {
       await burnCaptionsIntoRenderedClip(clip.id, {
         allowReburn: true,
@@ -74,7 +84,7 @@ async function runCaptionBurnJob(sermonId: string): Promise<string> {
     throw new Error(`Caption burn completed ${completed}/${clips.length}; failures: ${failures.slice(0, 3).join(" | ")}`);
   }
 
-  return `Caption burn completed for ${completed} clip(s).`;
+  return `Caption burn completed for ${completed} clip(s), skipped ${skipped} with captions off.`;
 }
 
 async function runOverlayAndExportJob(sermonId: string): Promise<string> {

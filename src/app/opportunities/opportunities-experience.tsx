@@ -5,12 +5,12 @@ import { useRouter } from "next/navigation";
 
 import {
   ConfidenceBadge,
-  EmptyState,
   SectionCard,
   StatusBadge,
 } from "@/components/ui";
 
 import {
+  generateContentOpportunitiesAction,
   regenerateContentOpportunitiesAction,
   regenerateContentOpportunityTypeAction,
   updateContentOpportunityContentAction,
@@ -46,6 +46,7 @@ type OpportunityItem = {
 type Props = {
   opportunities: OpportunityItem[];
   activeSermonId: string | null;
+  activeSermonTitle: string | null;
 };
 
 type EditDraft = {
@@ -67,7 +68,7 @@ function previewText(item: OpportunityItem): string {
   return source.length > 180 ? `${source.slice(0, 180)}...` : source;
 }
 
-export function OpportunitiesExperience({ opportunities, activeSermonId }: Props) {
+export function OpportunitiesExperience({ opportunities, activeSermonId, activeSermonTitle }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<string>("");
@@ -128,11 +129,50 @@ export function OpportunitiesExperience({ opportunities, activeSermonId }: Props
   }
 
   const canRunScopedRegeneration = Boolean(activeSermonId);
+  const hasIdeas = opportunities.length > 0;
 
   return (
-    <section className="stack-lg">
+    <section className="opportunities-board stack-lg">
+      {message ? <p className="status-help">{message}</p> : null}
 
-      <SectionCard title="Regeneration" description="Rerun generation safely for the currently scoped sermon or a specific opportunity type.">
+      {!hasIdeas ? (
+        <section className="card opportunities-empty-card">
+          <div className="stack-sm">
+            <p className="kicker">Idea board</p>
+            <h2>No post ideas yet</h2>
+            <p className="muted">
+              {activeSermonTitle
+                ? `${activeSermonTitle} is ready for idea generation. Create captions, devotionals, recaps, invitations, and engagement prompts from this sermon.`
+                : "Choose a sermon to create captions, devotionals, recaps, invitations, and engagement prompts."}
+            </p>
+          </div>
+          <div className="opportunities-empty-actions">
+            <button
+              type="button"
+              className="button primary"
+              disabled={isPending || !activeSermonId}
+              onClick={() => {
+                if (!activeSermonId) {
+                  return;
+                }
+
+                runAction(() => generateContentOpportunitiesAction(activeSermonId));
+              }}
+            >
+              {isPending
+                ? "Generating..."
+                : activeSermonTitle
+                  ? `Generate ideas for ${activeSermonTitle}`
+                  : "Choose a sermon first"}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      <details className="advanced-details opportunities-advanced">
+        <summary>Advanced generation tools</summary>
+        <div className="advanced-details-body stack-md">
+          <p className="muted small">Rerun generation for the currently scoped sermon or a specific opportunity type.</p>
         <div className="actions-row">
           <button
             type="button"
@@ -177,16 +217,10 @@ export function OpportunitiesExperience({ opportunities, activeSermonId }: Props
         {!canRunScopedRegeneration ? (
           <p className="muted small">Select a specific sermon in filters to run regeneration safely.</p>
         ) : null}
-      </SectionCard>
+        </div>
+      </details>
 
-      {message ? <p className="status-help">{message}</p> : null}
-
-      {opportunities.length === 0 ? (
-        <EmptyState
-          title="No content ideas match"
-          description="Choose a sermon and run generation to create content ideas."
-        />
-      ) : (
+      {hasIdeas ? (
         Array.from(groupedByCategory.entries()).map(([category, items]) => (
           <SectionCard key={category} title={category.toLowerCase()} description={`${items.length} content idea${items.length === 1 ? "" : "s"} in this group.`}>
             <div className="stack-sm">
@@ -296,7 +330,7 @@ export function OpportunitiesExperience({ opportunities, activeSermonId }: Props
             </div>
           </SectionCard>
         ))
-      )}
+      ) : null}
     </section>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { CSSProperties } from "react";
 import { useTransition, useState } from "react";
 
@@ -157,6 +158,10 @@ function formatMomentLabel(value: string): string {
   return value.replace(/_/g, " ").toLowerCase();
 }
 
+function formatStatusLabel(value: string): string {
+  return toTitleCase(value.replace(/_/g, " ").toLowerCase());
+}
+
 function toTitleCase(value: string): string {
   return value
     .split(" ")
@@ -191,6 +196,10 @@ function GenerateButton({ sermonId, isRegenerate }: { sermonId: string; isRegene
       {message && <p className="small muted">{message}</p>}
     </div>
   );
+}
+
+function ConfidenceDetail({ score }: { score: number }) {
+  return <span>Confidence: {formatConfidence(score)}</span>;
 }
 
 function OverrideForm({ sermonId, intelligence }: { sermonId: string; intelligence: IntelligenceData }) {
@@ -501,34 +510,27 @@ export function IntelligenceExperience({
   const effectiveSummary = intelligence.manualSummary ?? intelligence.summary;
 
   return (
-    <div className="stack-lg">
-      <div className="card stack-md">
-        <div className="actions-row">
-          <span className="small" style={statusBadgeStyle(intelligence.status)}>
-            Status: {intelligence.status}
-          </span>
-          {intelligence.generatedAt && (
-            <span className="small muted">Generated: {new Date(intelligence.generatedAt).toLocaleDateString()}</span>
-          )}
-          {intelligence.isManuallyReviewed && (
-            <span className="small" style={{ color: "var(--accent)" }}>Manually reviewed</span>
-          )}
-        </div>
-
-        {intelligence.status === "FAILED" && intelligence.failureReason && (
-          <div style={{ color: "var(--danger)" }} className="small">
-            Error: {formatFailureReason(intelligence.failureReason)}
-          </div>
-        )}
-
-        <GenerateButton sermonId={sermonId} isRegenerate={intelligence.status === "COMPLETED"} />
-        <RefreshButtons sermonId={sermonId} />
-      </div>
-
+    <div className="stack-lg sermon-intelligence-experience">
       {intelligence.status === "COMPLETED" && (
         <>
-          <div className="card stack-md">
+          <nav className="sermon-intelligence-tabs" aria-label="Sermon intelligence sections">
+            <a href="#summary">Summary</a>
+            <a href="#moments">Moments</a>
+            <a href="#scripture">Scripture</a>
+            <a href="#admin">Admin</a>
+          </nav>
+
+          <div className="card stack-md sermon-intelligence-overview-card" id="summary">
             <h2>Sermon Overview</h2>
+            <div className="actions-row sermon-intelligence-status-row">
+              <span className="status-pill status-exported">Analyzed</span>
+              {intelligence.generatedAt && (
+                <span className="small muted">Generated {new Date(intelligence.generatedAt).toLocaleDateString()}</span>
+              )}
+              {intelligence.isManuallyReviewed && (
+                <span className="small" style={{ color: "var(--accent)" }}>Manually reviewed</span>
+              )}
+            </div>
 
             <div className="stack-sm">
               <span className="kicker">Title</span>
@@ -565,19 +567,30 @@ export function IntelligenceExperience({
             )}
 
             {intelligence.confidenceScore !== null && (
-              <p className="small muted">
-                AI confidence: {formatConfidence(intelligence.confidenceScore)}
-              </p>
+              <details className="sermon-intelligence-evidence">
+                <summary>Analysis confidence</summary>
+                <p className="small muted">
+                  AI confidence: {formatConfidence(intelligence.confidenceScore)}
+                </p>
+              </details>
             )}
           </div>
 
-          <div className="card stack-md">
-            <h2>Manual Corrections</h2>
-            <p className="small muted">Override AI-generated fields. Leave blank to keep AI values.</p>
-            <OverrideForm sermonId={sermonId} intelligence={intelligence} />
-          </div>
+          <details className="card stack-md sermon-intelligence-disclosure" id="admin">
+            <summary>
+              <span>
+                <span className="kicker">Admin</span>
+                <strong>Manual Corrections</strong>
+              </span>
+              <span className="small muted">Edit title, theme, or summary</span>
+            </summary>
+            <div className="advanced-details-body">
+              <p className="small muted">Override AI-generated fields. Leave blank to keep AI values.</p>
+              <OverrideForm sermonId={sermonId} intelligence={intelligence} />
+            </div>
+          </details>
 
-          <div className="card stack-md">
+          <div className="card stack-md" id="speakers">
             <h2>Subjects & Speakers</h2>
             <p className="small muted">
               Track the main voices and recurring sermon subjects so clips, captions, and future reframing can stay context-aware.
@@ -597,11 +610,15 @@ export function IntelligenceExperience({
                           {speaker.isPrimary ? <span className="status-pill status-exported">Primary speaker</span> : null}
                         </div>
                         <p className="small muted">
-                          {speaker.segmentCount} segment{speaker.segmentCount === 1 ? "" : "s"} · {speaker.wordCount} words · {formatConfidence(speaker.confidenceScore)}
+                          {speaker.segmentCount} segment{speaker.segmentCount === 1 ? "" : "s"} · {speaker.wordCount} words
                         </p>
                         <p className="small muted">
                           {formatTimestamp(speaker.firstStartTimeSeconds)} - {formatTimestamp(speaker.lastEndTimeSeconds)}
                         </p>
+                        <details className="sermon-intelligence-evidence">
+                          <summary>Details</summary>
+                          <p className="small muted"><ConfidenceDetail score={speaker.confidenceScore} /></p>
+                        </details>
                       </div>
                     ))}
                   </div>
@@ -621,14 +638,18 @@ export function IntelligenceExperience({
                           <span className="status-pill">{subject.kind.toLowerCase().replace(/_/g, " ")}</span>
                         </div>
                         <p className="small muted">
-                          Mentioned {subject.occurrenceCount} time{subject.occurrenceCount === 1 ? "" : "s"} · {formatConfidence(subject.confidenceScore)}
+                          Mentioned {subject.occurrenceCount} time{subject.occurrenceCount === 1 ? "" : "s"}
                         </p>
                         {subject.firstStartTimeSeconds !== null ? (
                           <p className="small muted">
                             {formatTimestamp(subject.firstStartTimeSeconds)} - {formatTimestamp(subject.lastEndTimeSeconds)}
                           </p>
                         ) : null}
-                        {subject.evidence ? <p className="small muted">&quot;{subject.evidence}&quot;</p> : null}
+                        <details className="sermon-intelligence-evidence">
+                          <summary>Evidence</summary>
+                          <p className="small muted"><ConfidenceDetail score={subject.confidenceScore} /></p>
+                          {subject.evidence ? <p className="small muted">&quot;{subject.evidence}&quot;</p> : null}
+                        </details>
                       </div>
                     ))}
                   </div>
@@ -637,7 +658,7 @@ export function IntelligenceExperience({
             </div>
           </div>
 
-          <div className="card stack-md">
+          <div className="card stack-md" id="scripture">
             <h2>Scripture References</h2>
 
             {scriptureRefs.length === 0 ? (
@@ -651,14 +672,17 @@ export function IntelligenceExperience({
                       {ref.isPrimary && <span className="kicker">Primary</span>}
                       <span className="small muted">{ref.usageType.toLowerCase()}</span>
                       <span className="small muted">x{ref.frequencyCount}</span>
-                      <span className="small muted">{formatConfidence(ref.confidenceScore)}</span>
                       {ref.isManuallyAdded && <span className="small" style={{ color: "var(--accent)" }}>manual</span>}
                     </div>
-                    {ref.transcriptEvidence && (
-                      <p className="small muted" style={{ marginTop: "0.35rem" }}>
-                        &quot;{ref.transcriptEvidence}&quot;
-                      </p>
-                    )}
+                    <details className="sermon-intelligence-evidence">
+                      <summary>Evidence</summary>
+                      <p className="small muted"><ConfidenceDetail score={ref.confidenceScore} /></p>
+                      {ref.transcriptEvidence && (
+                        <p className="small muted">
+                          &quot;{ref.transcriptEvidence}&quot;
+                        </p>
+                      )}
+                    </details>
                   </div>
                 ))}
               </div>
@@ -687,22 +711,25 @@ export function IntelligenceExperience({
                           {formatTimestamp(sec.startTimeSeconds)} - {formatTimestamp(sec.endTimeSeconds)}
                         </span>
                       )}
-                      <span className="small muted">{formatConfidence(sec.confidenceScore)}</span>
                       {sec.isManuallyLabeled && <span className="small" style={{ color: "var(--accent)" }}>manual</span>}
                     </div>
                     {sec.description && <p className="small muted" style={{ marginTop: "0.35rem" }}>{sec.description}</p>}
-                    {sec.transcriptExcerpt && (
-                      <p className="small muted" style={{ marginTop: "0.35rem", fontStyle: "italic" }}>
-                        &quot;{sec.transcriptExcerpt}&quot;
-                      </p>
-                    )}
+                    <details className="sermon-intelligence-evidence">
+                      <summary>Evidence</summary>
+                      <p className="small muted"><ConfidenceDetail score={sec.confidenceScore} /></p>
+                      {sec.transcriptExcerpt && (
+                        <p className="small muted" style={{ fontStyle: "italic" }}>
+                          &quot;{sec.transcriptExcerpt}&quot;
+                        </p>
+                      )}
+                    </details>
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          <div className="card stack-md">
+          <div className="card stack-md" id="moments">
             <h2>Ministry Moments</h2>
 
             <div className="actions-row">
@@ -731,7 +758,6 @@ export function IntelligenceExperience({
                     <div className="actions-row">
                       <strong>{moment.title}</strong>
                       <span className="small muted">{formatMomentLabel(moment.momentType)}</span>
-                      <span className="small muted">{formatConfidence(moment.confidenceScore)}</span>
                       {moment.clipCategory ? <span className="kicker">{moment.clipCategory}</span> : null}
                       {moment.isManuallyAdjusted ? <span className="small" style={{ color: "var(--accent)" }}>manual</span> : null}
                     </div>
@@ -741,13 +767,22 @@ export function IntelligenceExperience({
                     </p>
                     {moment.suggestedAudience ? <p className="small muted">Audience: {moment.suggestedAudience}</p> : null}
                     {moment.suggestedUsage ? <p className="small muted">Usage: {moment.suggestedUsage}</p> : null}
-                    {moment.whyDetected ? <p className="small muted">Why: {moment.whyDetected}</p> : null}
-                    {moment.transcriptExcerpt ? <p className="small muted">&quot;{moment.transcriptExcerpt}&quot;</p> : null}
-                    <MinistryMomentReviewStatusControl
-                      sermonId={sermonId}
-                      momentId={moment.id}
-                      currentStatus={moment.reviewStatus}
-                    />
+                    <div className="sermon-intelligence-moment-actions">
+                      <Link href={`/sermons/${sermonId}`} className="button secondary">
+                        Create clip
+                      </Link>
+                      <details className="sermon-intelligence-evidence">
+                        <summary>Open evidence</summary>
+                        <p className="small muted"><ConfidenceDetail score={moment.confidenceScore} /></p>
+                        {moment.whyDetected ? <p className="small muted">Why: {moment.whyDetected}</p> : null}
+                        {moment.transcriptExcerpt ? <p className="small muted">&quot;{moment.transcriptExcerpt}&quot;</p> : null}
+                        <MinistryMomentReviewStatusControl
+                          sermonId={sermonId}
+                          momentId={moment.id}
+                          currentStatus={moment.reviewStatus}
+                        />
+                      </details>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -764,7 +799,6 @@ export function IntelligenceExperience({
                 {topicTags.map((tag) => (
                   <div key={tag.id} style={{ display: "flex", alignItems: "center", gap: "0.3rem", background: "#ecfeff", border: "1px solid #99f6e4", borderRadius: "2rem", padding: "0.25rem 0.65rem" }}>
                     <span className="small" style={{ color: "#134e4a", fontWeight: 600 }}>{tag.topic}</span>
-                    <span className="small muted">{formatConfidence(tag.confidenceScore)}</span>
                     <RemoveTopicButton sermonId={sermonId} topicId={tag.id} />
                   </div>
                 ))}
@@ -776,8 +810,61 @@ export function IntelligenceExperience({
               <AddTopicForm sermonId={sermonId} existingTopics={topicTags.map((t) => t.topic)} />
             </div>
           </div>
+
+          <details className="card stack-md sermon-intelligence-disclosure">
+            <summary>
+              <span>
+                <span className="kicker">Advanced</span>
+                <strong>Troubleshooting and regeneration</strong>
+              </span>
+              <span className="small muted">Rebuild analysis, moments, clips, or tracking</span>
+            </summary>
+            <div className="advanced-details-body stack-md">
+              <div className="actions-row">
+                <span className="small" style={statusBadgeStyle(intelligence.status)}>
+                  Status: {formatStatusLabel(intelligence.status)}
+                </span>
+                {intelligence.generatedAt && (
+                  <span className="small muted">Generated: {new Date(intelligence.generatedAt).toLocaleDateString()}</span>
+                )}
+              </div>
+              <GenerateButton sermonId={sermonId} isRegenerate />
+              <RefreshButtons sermonId={sermonId} />
+            </div>
+          </details>
         </>
       )}
+      {intelligence.status !== "COMPLETED" ? (
+        <div className="card stack-md sermon-intelligence-action-card">
+          <div className="actions-row">
+            <span className="small" style={statusBadgeStyle(intelligence.status)}>
+              Status: {formatStatusLabel(intelligence.status)}
+            </span>
+            {intelligence.generatedAt && (
+              <span className="small muted">Generated: {new Date(intelligence.generatedAt).toLocaleDateString()}</span>
+            )}
+          </div>
+
+          {intelligence.status === "FAILED" && intelligence.failureReason && (
+            <div style={{ color: "var(--danger)" }} className="small">
+              Error: {formatFailureReason(intelligence.failureReason)}
+            </div>
+          )}
+
+          <GenerateButton sermonId={sermonId} isRegenerate={intelligence.status === "COMPLETED"} />
+          <details className="sermon-intelligence-disclosure">
+            <summary>
+              <span>
+                <span className="kicker">Advanced</span>
+                <strong>Refresh generated assets</strong>
+              </span>
+            </summary>
+            <div className="advanced-details-body">
+              <RefreshButtons sermonId={sermonId} />
+            </div>
+          </details>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,8 +1,26 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { EmptyState } from "@/components/ui";
 import { prisma } from "@/lib/prisma";
 import { IntelligenceExperience } from "@/app/sermons/[id]/intelligence/intelligence-experience";
+
+function formatSermonStatus(status: string): string {
+  return status.replace(/_/g, " ").toLowerCase();
+}
+
+function missingTranscriptStatusLine(status: string): string {
+  const normalized = status.toUpperCase();
+  if (normalized.includes("FAILED") || normalized.includes("ERROR")) {
+    return "Status: sermon processing needs attention before a transcript can be created.";
+  }
+
+  if (normalized.includes("PROCESS") || normalized.includes("TRANSCRIB")) {
+    return "Status: transcript work appears to be in progress. Open the sermon to check the active step.";
+  }
+
+  return `Status: no transcript is available yet. Current sermon state: ${formatSermonStatus(status)}.`;
+}
 
 export default async function SermonIntelligencePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -133,15 +151,52 @@ export default async function SermonIntelligencePage({ params }: { params: Promi
   const hasTranscript = Boolean(sermon.transcript?.id);
 
   return (
-    <>
-      <div className="container">
-        <div className="stack-md">
-          <div>
-            <span className="kicker">Sermon Intelligence</span>
-            <h1>{sermon.title}</h1>
-            <p className="muted small">{sermon.speakerName} · {sermon.churchName}</p>
+    <main className="container sermon-intelligence-shell stack-lg">
+      <header className="card page-header stack-md">
+        <div className="stack-sm">
+          <p className="kicker">Sermon intelligence</p>
+          <h1>{sermon.title}</h1>
+          <p className="muted">{sermon.speakerName} at {sermon.churchName}</p>
+        </div>
+        {hasTranscript ? (
+          <div className="actions-row">
+            <Link href={`/sermons/${sermon.id}`} className="button secondary">
+              Sermon overview
+            </Link>
+            <Link href="/knowledge-base" className="button tertiary">
+              Knowledge base
+            </Link>
           </div>
+        ) : (
+          <div className="actions-row">
+            <Link href={`/sermons/${sermon.id}`} className="button primary">
+              Open sermon to transcribe
+            </Link>
+          </div>
+        )}
+      </header>
 
+      {!hasTranscript ? (
+        <section className="card stack-md sermon-intelligence-empty">
+          <div className="sermon-intelligence-status-line">
+            {missingTranscriptStatusLine(sermon.status)}
+          </div>
+          <EmptyState
+            title="Transcript required"
+            description="Process or transcribe this sermon before sermon intelligence can identify themes, scriptures, and ministry moments."
+            action={{ label: "Open sermon to transcribe", href: `/sermons/${sermon.id}`, variant: "primary" }}
+          />
+          <div className="sermon-intelligence-quiet-links">
+            <Link href="/sermons" className="text-link">
+              Sermon Library
+            </Link>
+            <Link href="/intelligence-dashboard" className="text-link">
+              Intelligence Dashboard
+            </Link>
+          </div>
+        </section>
+      ) : (
+        <div className="stack-md">
           <IntelligenceExperience
             sermonId={sermon.id}
             hasTranscript={hasTranscript}
@@ -159,23 +214,19 @@ export default async function SermonIntelligencePage({ params }: { params: Promi
             speakerTracks={sermon.speakerTracks}
             ministryMoments={sermon.ministryMoments}
           />
-
-          <div className="actions-row">
-            <Link href={`/sermons/${sermon.id}`} className="text-link">
-              Back to sermon overview
-            </Link>
-            <Link href="/sermons" className="text-link">
-              Sermon Library
-            </Link>
-            <Link href="/knowledge-base" className="text-link">
-              Knowledge Base
-            </Link>
-            <Link href="/intelligence-dashboard" className="text-link">
-              Intelligence Dashboard
-            </Link>
-          </div>
         </div>
-      </div>
-    </>
+      )}
+
+      {hasTranscript ? (
+        <div className="sermon-intelligence-quiet-links">
+          <Link href="/sermons" className="text-link">
+            Sermon Library
+          </Link>
+          <Link href="/intelligence-dashboard" className="text-link">
+            Intelligence Dashboard
+          </Link>
+        </div>
+      ) : null}
+    </main>
   );
 }

@@ -9,7 +9,6 @@ import type {
 
 import {
   PageHeader,
-  SectionCard,
 } from "@/components/ui";
 import { prisma } from "@/lib/prisma";
 import { OpportunitiesExperience } from "@/app/opportunities/opportunities-experience";
@@ -188,39 +187,65 @@ export default async function OpportunitiesPage({
     status: item.status,
     createdAt: item.createdAt.toISOString(),
   }));
+  const activeSermonId = filters.sermonId?.trim() || sermons[0]?.id || null;
+  const activeSermonTitle = sermons.find((sermon) => sermon.id === activeSermonId)?.title ?? null;
+  const hasIdeas = normalized.length > 0;
+  const hasActiveFilters = Boolean(
+    filters.sermonId ||
+    filters.category ||
+    filters.type ||
+    filters.status ||
+    filters.topic ||
+    filters.scripture ||
+    filters.ministryMomentType,
+  );
+  const opportunityStats = hasIdeas
+    ? [
+        { label: "Ideas shown", value: normalized.length },
+        ...(sermons.length > 0 ? [{ label: "Sermons available", value: sermons.length }] : []),
+        ...(momentTypes.length > 0 ? [{ label: "Moment types", value: momentTypes.length }] : []),
+      ]
+    : [];
 
   return (
     <main className="secondary-media-shell stack-lg">
       <PageHeader
         eyebrow="Publishing Ideas"
-        title="Turn sermon moments into more posts"
-        description="Review sermon-based captions, devotionals, invitations, recaps, and engagement ideas for the week."
-        actions={[
-          { label: "Dashboard", href: "/", variant: "secondary" },
-          { label: "Ready Queue", href: "/ready-to-post", variant: "primary" },
-          { label: "Sermon Library", href: "/sermons" },
-          { label: "Knowledge Base", href: "/knowledge-base" },
-          { label: "Ministry Patterns", href: "/intelligence-dashboard" },
-        ]}
+        title="Create post ideas from sermons"
+        description="Generate sermon-based captions, devotionals, invitations, recaps, and prompts."
+        meta={(
+          <nav className="opportunities-quiet-links" aria-label="Ideas support links">
+            <Link href="/sermons">Sermon Library</Link>
+            <Link href="/knowledge-base">Knowledge Base</Link>
+          </nav>
+        )}
       />
 
-      <section className="secondary-command-strip">
-        <article>
-          <span className="muted small">Ideas shown</span>
-          <strong>{normalized.length}</strong>
-        </article>
-        <article>
-          <span className="muted small">Sermons available</span>
-          <strong>{sermons.length}</strong>
-        </article>
-        <article>
-          <span className="muted small">Moment types</span>
-          <strong>{momentTypes.length}</strong>
-        </article>
-      </section>
+      <OpportunitiesExperience
+        opportunities={normalized}
+        activeSermonId={activeSermonId}
+        activeSermonTitle={activeSermonTitle}
+      />
 
-      <SectionCard title="Find Post Ideas" description="Narrow content ideas by sermon, category, status, scripture, or ministry moment.">
-        <form method="get" className="actions-row">
+      {opportunityStats.length > 0 ? (
+        <section className="secondary-command-strip opportunities-stat-strip">
+          {opportunityStats.map((stat) => (
+            <article key={stat.label}>
+              <span className="muted small">{stat.label}</span>
+              <strong>{stat.value}</strong>
+            </article>
+          ))}
+        </section>
+      ) : null}
+
+      <details className="opportunities-filter-details" open={hasIdeas || hasActiveFilters}>
+        <summary>
+          <span>
+            <strong>{hasIdeas ? "Filter ideas" : "Choose a different sermon"}</strong>
+            <span className="muted small">Sermon, category, status, scripture, or ministry moment.</span>
+          </span>
+        </summary>
+        <form method="get" className="actions-row opportunities-filter-form">
           <select name="sermonId" defaultValue={filters.sermonId ?? ""} style={{ minWidth: "14rem" }}>
             <option value="">All sermons</option>
             {sermons.map((sermon) => (
@@ -268,9 +293,7 @@ export default async function OpportunitiesPage({
           <button type="submit" className="button primary">Apply</button>
           <Link href="/opportunities" className="button tertiary">Clear</Link>
         </form>
-      </SectionCard>
-
-      <OpportunitiesExperience opportunities={normalized} activeSermonId={filters.sermonId?.trim() || null} />
+      </details>
     </main>
   );
 }

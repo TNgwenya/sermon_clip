@@ -2532,6 +2532,10 @@ async function prepareApprovedClipAfterReview(clipId: string, captionStylePreset
       sermonId: true,
       exportLayoutStrategy: true,
       renderStatus: true,
+      captionStatus: true,
+      subtitleFilePath: true,
+      srtPath: true,
+      captionData: true,
     },
   });
 
@@ -2556,12 +2560,22 @@ async function prepareApprovedClipAfterReview(clipId: string, captionStylePreset
     });
   }
 
-  await generateCaptionsForClip(clip.id, { force: true });
-  await burnCaptionsIntoRenderedClip(clip.id, {
-    allowReburn: true,
-    force: true,
-    captionStylePresetId,
-  });
+  const captionPreferences = resolveSavedClipCaptionPreferences(clip.captionData, captionStylePresetId);
+
+  if (captionPreferences.applyCaptionsToClip) {
+    if (clip.captionStatus !== "GENERATED" || !(clip.subtitleFilePath || clip.srtPath)) {
+      await generateCaptionsForClip(clip.id, { force: true });
+    }
+
+    await burnCaptionsIntoRenderedClip(clip.id, {
+      allowReburn: true,
+      force: true,
+      captionStylePresetId: captionPreferences.captionStylePresetId,
+    });
+  } else {
+    await markCaptionBurnSkippedForDisabledCaptions(clip.id, clip.sermonId);
+  }
+
   await renderClipOverlayBestEffort(clip.id, clip.sermonId);
 }
 
@@ -3306,12 +3320,18 @@ export async function prepareApprovedClipsAction(input: {
             clip.captionData && typeof clip.captionData === "object" && !Array.isArray(clip.captionData)
               ? (clip.captionData as Record<string, unknown>)
               : {};
-          const shouldApplyCaptions = typeof captionDataRecord["applyCaptionsToClip"] === "boolean"
-            ? captionDataRecord["applyCaptionsToClip"]
-            : true;
+          const captionPreferences = resolveSavedClipCaptionPreferences(
+            clip.captionData,
+            brandingSettings.defaultCaptionStyleName as CaptionStylePresetId,
+          );
+          const shouldApplyCaptions = captionPreferences.applyCaptionsToClip;
+          const hasManualCaptionCues =
+            captionDataRecord["manuallyEdited"] === true &&
+            Array.isArray(captionDataRecord["cues"]) &&
+            captionDataRecord["cues"].length > 0;
           const needsSmartCropRerender = clip.exportLayoutStrategy !== "SMART_CROP";
           const prepareVideo = plan.prepareVideo || needsSmartCropRerender;
-          const writeCaptions = shouldApplyCaptions && plan.writeCaptions;
+          const writeCaptions = shouldApplyCaptions && !hasManualCaptionCues && plan.writeCaptions;
           const addCaptionsToVideo = shouldApplyCaptions && (plan.addCaptionsToVideo || prepareVideo || writeCaptions);
           const addChurchBranding = plan.addChurchBranding || prepareVideo || addCaptionsToVideo;
           const createDownload = plan.createDownload || prepareVideo || addCaptionsToVideo || addChurchBranding;
@@ -3342,8 +3362,10 @@ export async function prepareApprovedClipsAction(input: {
             await burnCaptionsIntoRenderedClip(clip.id, {
               allowReburn: true,
               force: true,
-              captionStylePresetId: brandingSettings.defaultCaptionStyleName as CaptionStylePresetId,
+              captionStylePresetId: captionPreferences.captionStylePresetId,
             });
+          } else if (!shouldApplyCaptions) {
+            await markCaptionBurnSkippedForDisabledCaptions(clip.id, sermonId);
           }
 
           if (addChurchBranding) {
@@ -3793,6 +3815,8 @@ export async function updateClipStudioEditsAction(
       caption: true,
       hashtags: true,
       captionData: true,
+      captionBurnStatus: true,
+      exportStatus: true,
     },
   });
 
@@ -4011,13 +4035,17 @@ export async function updateClipStudioEditsAction(
     );
   } else if (captionChanged || hashtagChanged) {
     await appendPipelineLog(clip.sermonId, `Regeneration invalidation started for clip ${clip.id}: caption change from Clip Studio.`);
-    await invalidateAfterCaptionTextChange(
-      clip.id,
-      "Caption or hashtags changed from Clip Studio. Caption, burned captions, and exports require regeneration.",
-    );
+    await markManualCaptionEditPreparedForRebuild({
+      clipId: clip.id,
+      sermonId: clip.sermonId,
+      captionsEnabled: input.applyCaptionsToClip,
+      captionBurnStatus: clip.captionBurnStatus,
+      exportStatus: clip.exportStatus,
+      reason: "Caption or hashtags changed from Clip Studio. Burned captions and exports require regeneration.",
+    });
     await appendPipelineLog(
       clip.sermonId,
-      `Regeneration invalidation completed for clip ${clip.id}: caption/burn/export freshness updated.`,
+      `Regeneration invalidation completed for clip ${clip.id}: manual caption settings preserved and downstream assets updated.`,
     );
   } else if (hookChanged) {
     await appendPipelineLog(clip.sermonId, `Regeneration invalidation started for clip ${clip.id}: hook overlay change from Clip Studio.`);
@@ -4310,6 +4338,80 @@ export async function refreshClipVideoTrackingAction(clipId: string): Promise<Cl
 
 function toCaptionDataRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function resolveSavedClipCaptionPreferences(
+  captionData: unknown,
+  fallbackCaptionStylePresetId: CaptionStylePresetId,
+): {
+  applyCaptionsToClip: boolean;
+  captionStylePresetId: CaptionStylePresetId;
+} {
+  const captionDataRecord = toCaptionDataRecord(captionData);
+  const applyCaptionsToClip =
+    typeof captionDataRecord["applyCaptionsToClip"] === "boolean"
+      ? captionDataRecord["applyCaptionsToClip"]
+      : true;
+  const captionStylePresetId =
+    typeof captionDataRecord["captionStylePresetId"] === "string"
+      ? normalizeClipStudioCaptionStylePresetId(captionDataRecord["captionStylePresetId"])
+      : null;
+
+  return {
+    applyCaptionsToClip,
+    captionStylePresetId: captionStylePresetId ?? fallbackCaptionStylePresetId,
+  };
+}
+
+async function markCaptionBurnSkippedForDisabledCaptions(clipId: string, sermonId: string): Promise<void> {
+  await prisma.clipCandidate.update({
+    where: { id: clipId },
+    data: {
+      captionBurnStatus: "NOT_BURNED",
+      captionedVideoPath: null,
+      captionBurnedAt: null,
+      captionBurnError: null,
+      subtitlesBurned: false,
+      captionBurnFreshness: "UP_TO_DATE",
+    },
+  });
+  await appendPipelineLog(sermonId, `Caption burn skipped for clip ${clipId}: on-video captions are disabled.`);
+}
+
+async function markManualCaptionEditPreparedForRebuild(input: {
+  clipId: string;
+  sermonId: string;
+  captionsEnabled: boolean;
+  captionBurnStatus: "NOT_BURNED" | "BURNING" | "COMPLETED" | "FAILED" | null;
+  exportStatus: "NOT_EXPORTED" | "QUEUED" | "EXPORTING" | "COMPLETED" | "FAILED" | null;
+  reason: string;
+}): Promise<void> {
+  await prisma.clipCandidate.update({
+    where: { id: input.clipId },
+    data: {
+      captionFreshness: "UP_TO_DATE",
+      captionBurnFreshness: input.captionsEnabled
+        ? input.captionBurnStatus === "COMPLETED"
+          ? "NEEDS_REGENERATION"
+          : "UP_TO_DATE"
+        : "UP_TO_DATE",
+      exportFreshness: input.exportStatus === "COMPLETED" ? "NEEDS_REGENERATION" : "UP_TO_DATE",
+      assetInvalidationReason: input.reason,
+      ...(!input.captionsEnabled
+        ? {
+            captionBurnStatus: "NOT_BURNED" as const,
+            captionedVideoPath: null,
+            captionBurnedAt: null,
+            captionBurnError: null,
+            subtitlesBurned: false,
+          }
+        : {}),
+    },
+  });
+
+  if (!input.captionsEnabled) {
+    await appendPipelineLog(input.sermonId, `Caption burn disabled for clip ${input.clipId}; future exports will use the uncaptioned prepared video.`);
+  }
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

@@ -25,6 +25,33 @@ function statusTone(status: string): "success" | "warning" | "neutral" {
   return "neutral";
 }
 
+function setupStatusLabel(status: string): string {
+  if (status === "ready") return "Connected";
+  if (status === "needs_setup") return "Developer setup required";
+  if (status === "manual") return "Manual tracking";
+  return status.replace(/_/g, " ");
+}
+
+function platformStatus(input: { authHref: string | null; connectedAccounts?: number; missingEnv?: string[] }): {
+  label: string;
+  tone: "success" | "warning" | "neutral";
+  priority: number;
+} {
+  if ((input.connectedAccounts ?? 0) > 0) {
+    return { label: "Connected", tone: "success", priority: 1 };
+  }
+
+  if (input.authHref) {
+    return { label: "Ready to connect", tone: "success", priority: 0 };
+  }
+
+  if ((input.missingEnv ?? []).length > 0) {
+    return { label: "App credentials missing", tone: "warning", priority: 2 };
+  }
+
+  return { label: "Setup needed", tone: "warning", priority: 2 };
+}
+
 function oauthBanner(params: SearchParams): { tone: "success" | "warning"; title: string; message: string } | null {
   if (params.oauth === "connected") {
     const accountCount = params.accounts ? ` ${params.accounts} account${params.accounts === "1" ? "" : "s"} connected.` : "";
@@ -82,6 +109,54 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
       })
     : null;
   const banner = oauthBanner(params);
+  const connectorByPlatform = new Map(connectors.map((connector) => [connector.platform, connector]));
+  const connectionCards = [
+    {
+      platform: "YouTube",
+      provider: "youtube" as const,
+      authHref: youtubeAuthHref,
+      actionLabel: "Connect YouTube",
+      description: "Use YouTube analytics and approved Shorts uploads.",
+      setupDescription: "Uses analytics, readonly channel identity, and YouTube upload scopes.",
+      connector: connectorByPlatform.get("YouTube"),
+    },
+    {
+      platform: "Instagram / Facebook",
+      provider: "meta" as const,
+      authHref: metaAuthHref,
+      actionLabel: "Connect Meta",
+      description: "Use Meta Pages, Instagram business insights, and approved posting.",
+      setupDescription: "Uses Meta Pages, posting, and Instagram business insights permissions.",
+      connector: connectorByPlatform.get("Instagram / Facebook"),
+    },
+    {
+      platform: "TikTok",
+      provider: "tiktok" as const,
+      authHref: tiktokAuthHref,
+      actionLabel: "Connect TikTok",
+      description: "Use TikTok publishing and analytics when app review allows.",
+      setupDescription: "Uses basic profile plus video publishing/list scopes where TikTok app review allows.",
+      connector: connectorByPlatform.get("TikTok"),
+    },
+    {
+      platform: "Threads",
+      provider: "threads" as const,
+      authHref: threadsAuthHref,
+      actionLabel: "Connect Threads",
+      description: "Use Threads profile and insights data.",
+      setupDescription: "Uses Threads basic profile and insights scopes.",
+      connector: connectorByPlatform.get("Threads"),
+    },
+  ]
+    .map((card) => ({
+      ...card,
+      status: platformStatus({
+        authHref: card.authHref,
+        connectedAccounts: card.connector?.connectedAccounts,
+        missingEnv: card.connector?.missingEnv,
+      }),
+    }))
+    .sort((a, b) => a.status.priority - b.status.priority || a.platform.localeCompare(b.platform));
 
   return (
     <main className="growth-page-shell stack-lg">
@@ -89,12 +164,10 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
         <div className="stack-sm">
           <p className="kicker">Social settings</p>
           <h1>Social connections.</h1>
-          <p className="muted">
-            Connect the church accounts Sermon Clip can use for analytics and approved automatic posting. Developer app credentials stay in environment variables.
-          </p>
+          <p className="muted">Connect church accounts for analytics, scheduling, and approved posting.</p>
         </div>
         <nav className="topbar-actions">
-          <Link href="/growth" className="button primary">Back to growth</Link>
+          <Link href="/growth" className="button secondary">Back to growth</Link>
         </nav>
       </header>
 
@@ -105,63 +178,67 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
         </div>
       ) : null}
 
-      <SectionCard title="Connected accounts" description="Authorize each platform once. Account tokens are stored encrypted and used for analytics sync and approved publishing actions.">
-        <div className="growth-connector-list">
-          <article className="growth-connector-row">
-            <div>
-              <strong>YouTube</strong>
-              <p className="muted small">Redirect URI: <code>{buildOAuthRedirectUri("youtube")}</code></p>
-              <p className="muted small">Uses analytics, readonly channel identity, and YouTube upload scopes.</p>
-            </div>
-            {youtubeAuthHref ? <a href={youtubeAuthHref} className="button primary">Connect YouTube</a> : <StatusBadge tone="warning">Missing env</StatusBadge>}
-          </article>
-          <article className="growth-connector-row">
-            <div>
-              <strong>Instagram / Facebook</strong>
-              <p className="muted small">Redirect URI: <code>{buildOAuthRedirectUri("meta")}</code></p>
-              <p className="muted small">Uses Meta Pages, posting, and Instagram business insights permissions.</p>
-            </div>
-            {metaAuthHref ? <a href={metaAuthHref} className="button primary">Connect Meta</a> : <StatusBadge tone="warning">Missing env</StatusBadge>}
-          </article>
-          <article className="growth-connector-row">
-            <div>
-              <strong>TikTok</strong>
-              <p className="muted small">Redirect URI: <code>{buildOAuthRedirectUri("tiktok")}</code></p>
-              <p className="muted small">Uses basic profile plus video publishing/list scopes where TikTok app review allows.</p>
-            </div>
-            {tiktokAuthHref ? <a href={tiktokAuthHref} className="button primary">Connect TikTok</a> : <StatusBadge tone="warning">Missing env</StatusBadge>}
-          </article>
-          <article className="growth-connector-row">
-            <div>
-              <strong>Threads</strong>
-              <p className="muted small">Redirect URI: <code>{buildOAuthRedirectUri("threads")}</code></p>
-              <p className="muted small">Uses Threads basic profile and insights scopes.</p>
-            </div>
-            {threadsAuthHref ? <a href={threadsAuthHref} className="button primary">Connect Threads</a> : <StatusBadge tone="warning">Missing env</StatusBadge>}
-          </article>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Connector readiness" description="A connector is ready when its app credentials and at least one OAuth credential are present. Some APIs still require platform app review before insights or publishing work.">
-        <div className="growth-connector-list">
-          {connectors.map((connector) => (
-            <article key={connector.platform} className="growth-connector-row">
-              <div>
-                <div className="clip-badge-row">
-                  <strong>{connector.platform}</strong>
-                  <StatusBadge tone={statusTone(connector.status)}>{connector.status.replace(/_/g, " ")}</StatusBadge>
+      <SectionCard title="Account connections" description="Connect each platform once. Sermon Clip stores account access securely for analytics sync and approved publishing.">
+        <div className="growth-connector-list social-connection-list">
+          {connectionCards.map((card) => (
+            <article key={card.platform} className="growth-connector-row social-connector-card">
+              <div className="social-connector-main">
+                <div className="social-connector-heading">
+                  <strong>{card.platform}</strong>
+                  <StatusBadge tone={card.status.tone}>{card.status.label}</StatusBadge>
                 </div>
-                <p className="muted small">{connector.capability}</p>
-                {connector.missingEnv && connector.missingEnv.length > 0 ? (
-                  <p className="muted small">Missing env: {connector.missingEnv.join(", ")}</p>
+                <p className="muted small">{card.description}</p>
+                {typeof card.connector?.connectedAccounts === "number" ? (
+                  <p className="muted small">
+                    {card.connector.connectedAccounts} connected account{card.connector.connectedAccounts === 1 ? "" : "s"}
+                  </p>
                 ) : null}
-                {typeof connector.connectedAccounts === "number" ? (
-                  <p className="muted small">{connector.connectedAccounts} connected account{connector.connectedAccounts === 1 ? "" : "s"}</p>
-                ) : null}
+                <details className="social-setup-details">
+                  <summary>Setup details</summary>
+                  <div className="stack-sm">
+                    <p className="muted small">{card.setupDescription}</p>
+                    <p className="muted small">Redirect URI: <code>{buildOAuthRedirectUri(card.provider)}</code></p>
+                    {card.connector?.missingEnv && card.connector.missingEnv.length > 0 ? (
+                      <p className="muted small">Developer setup required: {card.connector.missingEnv.join(", ")}</p>
+                    ) : null}
+                  </div>
+                </details>
+              </div>
+              <div className="social-connector-actions">
+                {card.authHref ? (
+                  <a href={card.authHref} className="button primary">
+                    {(card.connector?.connectedAccounts ?? 0) > 0 ? "Connect another" : card.actionLabel}
+                  </a>
+                ) : (
+                  <StatusBadge tone="warning">Setup needed</StatusBadge>
+                )}
               </div>
             </article>
           ))}
         </div>
+
+        <details className="social-technical-readiness">
+          <summary>Technical readiness</summary>
+          <div className="growth-connector-list">
+            {connectors.map((connector) => (
+              <article key={connector.platform} className="growth-connector-row social-readiness-row">
+                <div>
+                  <div className="clip-badge-row">
+                    <strong>{connector.platform}</strong>
+                    <StatusBadge tone={statusTone(connector.status)}>{setupStatusLabel(connector.status)}</StatusBadge>
+                  </div>
+                  <p className="muted small">{connector.capability}</p>
+                  {connector.missingEnv && connector.missingEnv.length > 0 ? (
+                    <p className="muted small">Developer setup required: {connector.missingEnv.join(", ")}</p>
+                  ) : null}
+                  {typeof connector.connectedAccounts === "number" ? (
+                    <p className="muted small">{connector.connectedAccounts} connected account{connector.connectedAccounts === 1 ? "" : "s"}</p>
+                  ) : null}
+                </div>
+              </article>
+            ))}
+          </div>
+        </details>
       </SectionCard>
     </main>
   );

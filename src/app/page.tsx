@@ -1,12 +1,13 @@
 import Link from "next/link";
-import Image from "next/image";
 
 import {
   EmptyState,
   SectionCard,
   StatCard,
 } from "@/components/ui";
+import { HomeTopClipCard } from "@/app/home-top-clip-card";
 import { prisma } from "@/lib/prisma";
+import { formatSecondsForPastorView } from "@/lib/sermonSegment";
 import { getOperationalMetrics } from "@/server/workflow/operationsDiagnostics";
 
 type SermonStatus =
@@ -48,6 +49,17 @@ type SermonListItem = {
     postReadyStatus: ClipQualityLabel | null;
     finalQualityScore: number | null;
     score: number;
+    startTimeSeconds: number;
+    durationSeconds: number;
+    clipType: string;
+    hook: string;
+    suggestedHook: string | null;
+    reasonSelected: string;
+    renderedFilePath: string | null;
+    exportedFilePath: string | null;
+    captionedVideoPath: string | null;
+    overlayVideoPath: string | null;
+    remotePreviewUrl: string | null;
   }>;
 };
 
@@ -86,6 +98,20 @@ function workflowStatusText(status: SermonStatus): string {
   if (status === "FAILED") return "Needs attention";
   if (status === "TRANSCRIBED") return "Ready to find clips";
   return "Ready to start";
+}
+
+function clipTypeText(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/\b[a-z]/g, (letter) => letter.toUpperCase()) || "Clip";
+}
+
+function shortHookLine(value: string | null | undefined): string | null {
+  const text = value?.trim();
+  if (!text) return null;
+  return text.length > 118 ? `${text.slice(0, 115).trim()}...` : text;
 }
 
 export default async function Home({ searchParams }: { searchParams: Promise<SearchParams> }) {
@@ -131,6 +157,17 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
             postReadyStatus: true,
             finalQualityScore: true,
             score: true,
+            startTimeSeconds: true,
+            durationSeconds: true,
+            clipType: true,
+            hook: true,
+            suggestedHook: true,
+            reasonSelected: true,
+            renderedFilePath: true,
+            exportedFilePath: true,
+            captionedVideoPath: true,
+            overlayVideoPath: true,
+            remotePreviewUrl: true,
           },
           orderBy: [
             { finalQualityScore: "desc" },
@@ -169,23 +206,23 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
       ? `/sermons/${firstActionableSermon.id}`
       : "/sermons/new";
   const priorityActionLabel = priorityState === "attention"
-    ? "Open sermon"
+    ? "Open Sermon"
     : priorityState === "ready"
       ? "Open publishing desk"
       : priorityState === "resume"
         ? "Continue sermon"
         : "Create clips";
   const priorityTitle = priorityState === "attention"
-    ? "Some clips need a fresh preview or retry."
+    ? "One item needs attention."
     : priorityState === "ready"
-      ? "Your publishing desk has prepared clips."
+      ? "Prepared clips are ready."
       : priorityState === "resume"
         ? workflowStatusText(firstActionableSermon.status)
-        : "Create your first sermon clips.";
+        : "Create sermon clips.";
   const priorityDetail = priorityState === "attention"
-    ? "Resolve failed or stale items before sending clips to the publishing desk."
+    ? "Repair stale media before posting."
     : priorityState === "ready"
-      ? "Download the video, copy the caption, and mark each clip posted."
+      ? "Download, copy captions, or schedule the next post."
       : priorityState === "resume"
         ? firstActionableSermon.title
         : "Paste a sermon link or upload a service video to begin.";
@@ -196,12 +233,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
         <div className="stack-sm">
           <p className="kicker">Sermon Clip</p>
           <h1>Sermon command center.</h1>
-          <p className="muted">Start a sermon, recover failed work, review ranked clips, and move finished videos to the publishing desk.</p>
         </div>
         <div className="topbar-actions">
           <Link href="/sermons/new" className="button primary">Create clips</Link>
           <Link href="/ready-to-post" className="button secondary">Ready to post</Link>
-          <Link href="/growth" className="button tertiary">Growth cockpit</Link>
         </div>
       </header>
 
@@ -243,11 +278,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
           <div className="stack-sm">
             <p className="kicker">Quick start</p>
             <h2>Paste a sermon video link</h2>
-            <p className="muted">Create a transcript, find ministry moments, rank clips, and prepare pastor-friendly next steps.</p>
           </div>
           <div className="link-input-shell">
             <span className="input-icon">Link</span>
-            <input name="youtubeUrl" type="url" placeholder="Paste YouTube or sermon video link" />
+            <input name="youtubeUrl" type="url" placeholder="Paste sermon video link" />
           </div>
           <div className="upload-command-actions">
             <button className="button primary command-cta" type="submit">Get sermon clips</button>
@@ -257,28 +291,29 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
       </section>
 
       <section className="dashboard-command-strip home-signal-strip" aria-label="Workspace summary">
-        <StatCard label="Sermons" value={sermons.length} detail="In this workspace" />
-        <StatCard label="Clips found" value={metrics.clipsGenerated} detail="Suggested moments" tone="accent" />
-        <StatCard label="Post-ready" value={postReadyCount} detail="Passed quality checks" tone="success" />
-        <StatCard label="Review first" value={reviewFirstCount} detail="Good clips with notes" tone="warning" />
-        <StatCard label="Needs editing" value={needsEditingCount} detail="Fix before posting" tone="warning" />
-        <StatCard label="Downloads" value={exportedCount || metrics.clipsExported} detail="Ready files" tone="success" />
+        <StatCard label="Sermons" value={sermons.length} detail="In workspace" />
+        <StatCard label="Suggested clips" value={metrics.clipsGenerated} detail="Found moments" tone="accent" />
+        <StatCard label="Post-ready" value={postReadyCount} detail="Passed checks" tone="success" />
+        <StatCard label="Review first" value={reviewFirstCount} detail="Good with notes" tone="warning" />
+        <StatCard label="Needs editing" value={needsEditingCount} detail="Before posting" tone="warning" />
+        <StatCard label="Prepared files" value={exportedCount || metrics.clipsExported} detail="Downloads" tone="success" />
       </section>
 
+      {processingCount > 0 ? (
       <section className="home-queue-band">
-        <SectionCard title="Processing queue" description="Automatic work currently happening in the background.">
+        <SectionCard title="Background work">
           <div className={processingCount > 0 ? "live-refresh-panel is-live" : "live-refresh-panel is-paused"}>
             <div>
               <p className="kicker">{processingCount > 0 ? "Working now" : "Quiet queue"}</p>
               <strong>{processingCount > 0 ? `${processingCount} item(s) in progress` : "No active processing"}</strong>
-              <p className="muted small">The app will guide you to review clips when processing finishes.</p>
             </div>
             <Link href="/sermons" className="button secondary">View sermons</Link>
           </div>
         </SectionCard>
       </section>
+      ) : null}
 
-      <SectionCard title="Top clips to review" description="The best available clips appear first. Post-ready is different from merely having a preview.">
+      <SectionCard title="Top clips to review">
         {topClips.length === 0 ? (
           <EmptyState
             title="No ranked clips yet"
@@ -290,32 +325,38 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
             {topClips.map((clip, index) => {
               const label = clip.qualityLabel ?? clip.postReadyStatus;
               const score = clip.finalQualityScore ?? clip.score;
+              const hookLine = shortHookLine(clip.suggestedHook ?? clip.hook ?? clip.reasonSelected);
+              const canPreviewVideo = Boolean(
+                clip.remotePreviewUrl ||
+                clip.exportedFilePath ||
+                clip.captionedVideoPath ||
+                clip.overlayVideoPath ||
+                clip.renderedFilePath,
+              );
               return (
-                <Link key={clip.id} href={`/sermons/${clip.sermon.id}/review`} className="dashboard-clip-card">
-                  <div className="dashboard-clip-poster">
-                    <Image
-                      src={`/api/clips/${clip.id}/thumbnail`}
-                      alt=""
-                      fill
-                      sizes="(max-width: 760px) 100vw, (max-width: 1100px) 50vw, 25vw"
-                      priority={index === 0}
-                      unoptimized
-                    />
-                    <span className={`status-pill ${qualityTone(label)}`}>{qualityLabelText(label)}</span>
-                    <strong>{score.toFixed(1)}</strong>
-                  </div>
-                  <div className="stack-sm">
-                    <h3>{clip.title}</h3>
-                    <p className="muted small">{clip.sermon.title}</p>
-                  </div>
-                </Link>
+                <HomeTopClipCard
+                  key={clip.id}
+                  clipId={clip.id}
+                  href={`/sermons/${clip.sermon.id}/review`}
+                  title={clip.title}
+                  sermonTitle={clip.sermon.title}
+                  statusLabel={qualityLabelText(label)}
+                  statusTone={qualityTone(label)}
+                  scoreLabel={score.toFixed(1)}
+                  durationLabel={formatSecondsForPastorView(clip.durationSeconds)}
+                  timecodeLabel={`Starts ${formatSecondsForPastorView(clip.startTimeSeconds)}`}
+                  clipTypeLabel={clipTypeText(clip.clipType)}
+                  hookLine={hookLine}
+                  canPreviewVideo={canPreviewVideo}
+                  priority={index === 0}
+                />
               );
             })}
           </div>
         )}
       </SectionCard>
 
-      <SectionCard title="Recent sermons" description="Open a sermon to review ranked clips, prepare previews, captions, and downloads.">
+      <SectionCard title="Recent sermons">
         {sermons.length === 0 ? (
           <EmptyState
             title="No sermons found"

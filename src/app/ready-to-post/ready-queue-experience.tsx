@@ -190,21 +190,46 @@ function buildScheduledPostTitle(post: ScheduledPost, clips: ReadyQueueClip[]): 
   return post.clipIds.length === 1 ? handoffTitle : `${handoffTitle} + ${post.clipIds.length - 1} more`;
 }
 
-function getPlatformInitials(platform: ScheduledPost["platform"]): string {
-  switch (platform) {
-    case "Instagram":
-      return "IG";
-    case "TikTok":
-      return "TT";
-    case "YouTube Shorts":
-      return "YT";
-    case "Facebook":
-      return "FB";
-  }
-}
-
 function getPlatformClass(platform: ScheduledPost["platform"]): string {
   return platform.toLowerCase().replace(/\s+/g, "-");
+}
+
+function PlatformIcon({ platform }: { platform: ScheduledPost["platform"] }) {
+  const label = platform === "YouTube Shorts" ? "YouTube" : platform;
+
+  if (platform === "Instagram") {
+    return (
+      <svg className="social-platform-icon" viewBox="0 0 24 24" role="img" aria-label={label}>
+        <rect x="4.2" y="4.2" width="15.6" height="15.6" rx="5" fill="none" stroke="currentColor" strokeWidth="1.9" />
+        <circle cx="12" cy="12" r="3.6" fill="none" stroke="currentColor" strokeWidth="1.9" />
+        <circle cx="16.8" cy="7.3" r="1.1" fill="currentColor" />
+      </svg>
+    );
+  }
+
+  if (platform === "TikTok") {
+    return (
+      <svg className="social-platform-icon" viewBox="0 0 24 24" role="img" aria-label={label}>
+        <path d="M14.6 3.4v10.4a4.7 4.7 0 1 1-4.7-4.7c.4 0 .8.1 1.2.2v3.2a1.7 1.7 0 1 0 1.3 1.6V3.4h2.2Z" />
+        <path d="M14.6 3.4c.5 2.7 2.1 4.4 4.9 4.7v3.1c-1.8 0-3.5-.6-4.9-1.7V3.4Z" />
+      </svg>
+    );
+  }
+
+  if (platform === "YouTube Shorts") {
+    return (
+      <svg className="social-platform-icon" viewBox="0 0 24 24" role="img" aria-label={label}>
+        <rect x="2.7" y="6.3" width="18.6" height="11.4" rx="3.2" fill="none" stroke="currentColor" strokeWidth="1.9" />
+        <path d="m10.2 9 5 3-5 3V9Z" fill="currentColor" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg className="social-platform-icon" viewBox="0 0 24 24" role="img" aria-label={label}>
+      <path d="M14.4 8.2h3.1V4.4c-.6-.1-1.9-.2-3.4-.2-3.4 0-5.7 2.1-5.7 5.8v3.1H5v4.2h3.4v6.5h4.3v-6.5h3.5l.6-4.2h-4.1v-2.7c0-1.2.4-2.2 1.7-2.2Z" />
+    </svg>
+  );
 }
 
 function hasClipOverlap(clipIds: string[], scopeClipIds: Set<string> | null): boolean {
@@ -628,18 +653,7 @@ export function ReadyQueueExperience({
           ) : (
             <div className="asset-tray-list">
               {filteredClips.map((clip) => {
-                const readyPackage = buildReadyToPostPackage({
-                  clipId: clip.id,
-                  title: clip.title,
-                  hook: clip.hook,
-                  caption: clip.caption,
-                  hashtags: clip.hashtags,
-                  estimatedBytes: clip.estimatedBytes,
-                  smartClipCategory: clip.smartClipCategory,
-                  intendedAudience: clip.intendedAudience,
-                });
                 const qualityLabel = getQualityLabel(clip);
-                const qualityIssues = buildReadinessIssues(clip);
                 const isBatchSelected = selectedClipIdSet.has(clip.id);
                 const isFocused = selectedClip?.id === clip.id;
 
@@ -659,32 +673,15 @@ export function ReadyQueueExperience({
                         <span>{clip.title}</span>
                       </label>
                       <p className="muted small">{clip.sermon.title}</p>
-                      <p className="muted small">{readyPackage.contentsLabel}{readyPackage.sizeLabel ? ` · ${readyPackage.sizeLabel}` : ""}</p>
-                    </div>
-                    <div className="clip-badge-row">
-                      <span className={`status-pill ${getQualityToneClass(qualityLabel)}`}>
-                        {getQualityLabelText(qualityLabel)}
-                      </span>
-                      <span className={`status-pill ${clip.mediaReady ? "status-exported" : "quality-reject"}`}>
-                        {clip.mediaReady ? "Media prepared" : "Needs media refresh"}
-                      </span>
-                    </div>
-                    {qualityIssues[0] ? <p className="muted small">{qualityIssues[0]}</p> : null}
-                    <div className="selected-asset-actions compact-actions">
-                      {clip.mediaReady && !controlPanelMode ? (
-                        <a className="button secondary" href={readyPackage.downloadHref}>Download</a>
-                      ) : clip.mediaReady ? null : (
-                        <ClipAssetRecoveryButton
-                          clipId={clip.id}
-                          label="Refresh media"
-                          busyLabel="Refreshing..."
-                          variant="secondary"
-                        />
-                      )}
-                      <button type="button" className="button tertiary" onClick={() => focusClip(clip.id)}>
-                        {isFocused ? "Previewing" : "Preview"}
-                      </button>
-                      {clip.mediaReady ? <SchedulePostButton clipId={clip.id} label="Schedule" socialAccounts={socialAccounts} onDraftCreated={addDraft} /> : null}
+                      <div className="ready-tray-state-row">
+                        <span className={`status-pill ${clip.mediaReady ? "status-exported" : "quality-reject"}`}>
+                          {clip.mediaReady ? "Ready" : "Needs repair"}
+                        </span>
+                        <span className={`status-pill ${getQualityToneClass(qualityLabel)}`}>
+                          {getQualityLabelText(qualityLabel)}
+                        </span>
+                        {isBatchSelected ? <span className="status-pill">Selected</span> : null}
+                      </div>
                     </div>
                   </article>
                 );
@@ -711,8 +708,8 @@ export function ReadyQueueExperience({
                   <strong>{selectedClip.mediaReady ? "Media prepared" : "Needs media refresh"}</strong>
                   <span>
                     {selectedClip.mediaReady
-                      ? "Preview the clip, copy the caption, then download or schedule it."
-                      : "Refresh the media before downloading or scheduling this clip."}
+                      ? "Copy the caption, download, or schedule this clip."
+                      : "This clip is blocked until its media is repaired."}
                   </span>
                 </div>
                 <span className="status-pill">{selectedClip.mediaReady ? "Next: schedule" : "Next: repair"}</span>
@@ -790,49 +787,53 @@ export function ReadyQueueExperience({
                 )}
                 <Link href={`/sermons/${selectedClip.sermon.id}/clips/${selectedClip.id}/studio`} className="button tertiary">Edit clip</Link>
               </div>
-              <div className="platform-caption-panel">
-                <div className="platform-caption-tabs" role="tablist" aria-label="Platform caption previews">
-                  {PLATFORMS.map((platform) => (
-                    <button
-                      key={platform}
-                      type="button"
-                      className={activeCaptionPlatform === platform ? "active" : ""}
-                      onClick={() => setActiveCaptionPlatform(platform)}
-                    >
-                      {platform}
-                    </button>
-                  ))}
-                </div>
-                {activeHandoff ? (
-                  <div className="platform-caption-card">
-                    <div className="publishing-section-head compact">
-                      <div>
-                        <p className="kicker">{activeHandoff.platform}</p>
-                        <h3>{activeCaptionVariant?.label ?? `${activeHandoff.platform} handoff`}</h3>
-                      </div>
-                      <span className="status-pill">{activeHandoff.captionText.length} chars</span>
-                    </div>
-                    <div className="platform-handoff-stack">
-                      <div>
-                        <span>Title</span>
-                        <p>{activeHandoff.titleText}</p>
-                      </div>
-                      <div>
-                        <span>Caption</span>
-                        <p>{activeHandoff.captionText || "Caption pending."}</p>
-                      </div>
-                    </div>
-                    <div className="caption-copy-grid">
-                      <CopyCaptionButton label={activeHandoff.primaryCopyLabel} text={activeHandoff.primaryCopyText} />
-                      {activeHandoff.platform === "YouTube Shorts" ? <CopyCaptionButton label="Copy caption" text={activeHandoff.captionText} /> : null}
-                      <CopyCaptionButton label="Copy hashtags" text={selectedReadyPackage.hashtags.join(" ")} />
-                      <a className="button tertiary" href={activeHandoff.uploadUrl} target="_blank" rel="noreferrer">
-                        Open {activeHandoff.platform === "YouTube Shorts" ? "Studio" : activeHandoff.platform}
-                      </a>
-                    </div>
+              {selectedClip.mediaReady ? (
+                <details className="platform-caption-panel platform-caption-details">
+                  <summary>Platform captions</summary>
+                  <div className="platform-caption-tabs" role="tablist" aria-label="Platform caption previews">
+                    {PLATFORMS.map((platform) => (
+                      <button
+                        key={platform}
+                        type="button"
+                        className={activeCaptionPlatform === platform ? "active" : ""}
+                        onClick={() => setActiveCaptionPlatform(platform)}
+                      >
+                        <PlatformIcon platform={platform} />
+                        {platform}
+                      </button>
+                    ))}
                   </div>
-                ) : null}
-              </div>
+                  {activeHandoff ? (
+                    <div className="platform-caption-card">
+                      <div className="publishing-section-head compact">
+                        <div>
+                          <p className="kicker">{activeHandoff.platform}</p>
+                          <h3>{activeCaptionVariant?.label ?? `${activeHandoff.platform} handoff`}</h3>
+                        </div>
+                        <span className="status-pill">{activeHandoff.captionText.length} chars</span>
+                      </div>
+                      <div className="platform-handoff-stack">
+                        <div>
+                          <span>Title</span>
+                          <p>{activeHandoff.titleText}</p>
+                        </div>
+                        <div>
+                          <span>Caption</span>
+                          <p>{activeHandoff.captionText || "Caption pending."}</p>
+                        </div>
+                      </div>
+                      <div className="caption-copy-grid">
+                        <CopyCaptionButton label={activeHandoff.primaryCopyLabel} text={activeHandoff.primaryCopyText} />
+                        {activeHandoff.platform === "YouTube Shorts" ? <CopyCaptionButton label="Copy caption" text={activeHandoff.captionText} /> : null}
+                        <CopyCaptionButton label="Copy hashtags" text={selectedReadyPackage.hashtags.join(" ")} />
+                        <a className="button tertiary" href={activeHandoff.uploadUrl} target="_blank" rel="noreferrer">
+                          Open {activeHandoff.platform === "YouTube Shorts" ? "Studio" : activeHandoff.platform}
+                        </a>
+                      </div>
+                    </div>
+                  ) : null}
+                </details>
+              ) : null}
               <div className="ready-mobile-action-bar" aria-label="Selected clip actions">
                 {selectedClip.mediaReady ? (
                   <>
@@ -864,13 +865,14 @@ export function ReadyQueueExperience({
       </section>
 
       <section className="ready-support-grid" aria-label="Publishing support">
-        <div className="posting-draft-panel compact-panel">
-          <div className="publishing-section-head compact">
+        <details className="posting-draft-panel compact-panel ready-support-details">
+          <summary>
             <div>
               <p className="kicker">Support</p>
               <h2>Channels and downloads</h2>
+              <p className="muted small">{socialAccounts.length} channels · {scopedDrafts.length} handoffs · {scopedPackageHistory.length} downloads</p>
             </div>
-          </div>
+          </summary>
           <div className="setup-list">
             <article className="setup-item">
               <div>
@@ -929,10 +931,10 @@ export function ReadyQueueExperience({
             onSocialAccountsSynced={syncSocialAccounts}
             controlPanelMode={controlPanelMode}
           />
-        </div>
+        </details>
 
-        <div className="posting-draft-panel compact-panel">
-          <div className="publishing-section-head compact">
+        <details className="posting-draft-panel compact-panel ready-support-details">
+          <summary>
             <div>
               <p className="kicker">Planned posts</p>
               <h2>{scopedScheduledPosts.length} upload{scopedScheduledPosts.length === 1 ? "" : "s"} planned</h2>
@@ -942,6 +944,8 @@ export function ReadyQueueExperience({
                   : "A quiet view of what is scheduled, ready for upload, or already posted."}
               </p>
             </div>
+          </summary>
+          <div className="publishing-section-head compact ready-support-actions">
             <button type="button" className="button tertiary" onClick={refreshScheduledPosts}>Refresh</button>
           </div>
 
@@ -992,7 +996,7 @@ export function ReadyQueueExperience({
                 return (
                   <article key={post.id} className="manual-publishing-card">
                     <div className={`platform-mark platform-${getPlatformClass(post.platform)}`} aria-hidden="true">
-                      {getPlatformInitials(post.platform)}
+                      <PlatformIcon platform={post.platform} />
                     </div>
                     <div className="manual-publishing-copy">
                       <h3>{post.platform} · {post.postingSlot}</h3>
@@ -1072,7 +1076,7 @@ export function ReadyQueueExperience({
               })}
             </div>
           )}
-        </div>
+        </details>
       </section>
 
     </>

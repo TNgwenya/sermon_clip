@@ -15,7 +15,6 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
         <Link href="/" className="text-link">Back to dashboard</Link>
         <p className="kicker">Long sermon to clips</p>
         <h1>Start with one sermon. Leave with polished clips.</h1>
-        <p className="muted">Paste the sermon link or upload the video. Sermon Clip will find ministry moments and guide you to approval, preparation, and posting.</p>
       </header>
 
       <NewSermonForm initialYoutubeUrl={params.youtubeUrl ?? ""} />

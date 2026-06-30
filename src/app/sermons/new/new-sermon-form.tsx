@@ -69,6 +69,9 @@ function UploadProgressTheater() {
 export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: string }) {
   const [state, formAction] = useActionState(createSermonAction, initialCreateSermonState);
   const [activeFeatureModal, setActiveFeatureModal] = useState<FeatureModalKind | null>(null);
+  const hasSermonWindowErrors = Boolean(
+    state.fieldErrors?.sermonStartTimestamp || state.fieldErrors?.sermonEndTimestamp,
+  );
 
   return (
     <>
@@ -80,14 +83,12 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
         </div>
         <div className="stack-sm">
           <label htmlFor="youtubeUrl">Sermon video link</label>
-          <p className="muted small">Paste a sermon video link or upload a video file below. YouTube links work best for link-based processing.</p>
           {state.fieldErrors?.youtubeUrl ? <p className="field-error">{state.fieldErrors.youtubeUrl}</p> : null}
         </div>
 
         <div className="upload-drop-zone stack-sm dark-drop">
           <label htmlFor="sermonVideoFile">Upload sermon video (optional)</label>
           <input id="sermonVideoFile" name="sermonVideoFile" type="file" accept="video/*" />
-          <p className="muted small">Use this when the sermon video is already on this computer. The file is stored locally and used as the source video.</p>
           {state.fieldErrors?.mediaFile ? <p className="field-error">{state.fieldErrors.mediaFile}</p> : null}
         </div>
 
@@ -123,14 +124,14 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
           </div>
         </div>
 
-        <section className="sermon-window-panel stack-sm" aria-labelledby="sermon-window-title">
-          <div className="stack-sm">
-            <p className="kicker">Long service window</p>
-            <h2 id="sermon-window-title">Mark where the sermon starts and ends</h2>
-            <p className="muted small">
-              Optional. Use this when the video includes worship, announcements, or altar ministry before or after the sermon.
-            </p>
-          </div>
+        <details className="sermon-window-panel sermon-window-disclosure" open={hasSermonWindowErrors || undefined}>
+          <summary>
+            <span>
+              <span className="kicker">Optional</span>
+              <strong id="sermon-window-title">Trim long service</strong>
+            </span>
+            <span className="status-pill">Start/end time</span>
+          </summary>
           <div className="review-edit-grid upload-meta-grid">
             <div className="stack-sm">
               <label htmlFor="sermonStartTimestamp">Sermon starts at</label>
@@ -146,7 +147,7 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
               {state.fieldErrors?.sermonEndTimestamp ? <p className="field-error">{state.fieldErrors.sermonEndTimestamp}</p> : null}
             </div>
           </div>
-        </section>
+        </details>
 
         <div className="stack-sm">
           <label className="checkbox-label" htmlFor="rightsConfirmed">

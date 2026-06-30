@@ -645,6 +645,65 @@ export function ClipStudioEditor({
           <p className="muted small">Times are based on the original sermon video.</p>
           <StatusBadge tone={timingGuidance.tone}>{timingGuidance.label}</StatusBadge>
         </div>
+
+        <div className="clip-studio-simple-timing">
+          <div className="review-edit-grid">
+            <label className="stack-sm">
+              Start
+              <input
+                value={startTimestamp}
+                onChange={(event) => setStartTimestamp(event.target.value)}
+                disabled={isPending}
+                aria-invalid={Boolean(fieldErrors?.startTimestamp)}
+              />
+              {fieldErrors?.startTimestamp ? (
+                <span className="error-text small">{fieldErrors.startTimestamp}</span>
+              ) : null}
+            </label>
+
+            <label className="stack-sm">
+              End
+              <input
+                value={endTimestamp}
+                onChange={(event) => setEndTimestamp(event.target.value)}
+                disabled={isPending}
+                aria-invalid={Boolean(fieldErrors?.endTimestamp)}
+              />
+              {fieldErrors?.endTimestamp ? (
+                <span className="error-text small">{fieldErrors.endTimestamp}</span>
+              ) : null}
+            </label>
+
+            <div className="stack-sm">
+              <span className="muted small">Duration</span>
+              <p>{durationLabel}</p>
+            </div>
+          </div>
+
+          <div className="clip-studio-simple-actions">
+            <div className="clip-studio-quick-lengths" aria-label="Quick clip lengths">
+              <button type="button" className="button secondary" onClick={() => setDurationFromCurrentStart(45)} disabled={isPending}>
+                45s
+              </button>
+              <button type="button" className="button secondary" onClick={() => setDurationFromCurrentStart(60)} disabled={isPending}>
+                60s
+              </button>
+              <button type="button" className="button secondary" onClick={() => setDurationFromCurrentStart(90)} disabled={isPending}>
+                90s
+              </button>
+            </div>
+            <button type="button" className="button primary" onClick={submitChanges} disabled={isPending}>
+              Save changes
+            </button>
+          </div>
+        </div>
+
+        <details className="clip-studio-editor-disclosure">
+          <summary>
+            <span>Advanced timing</span>
+            <span className="muted small">Timeline, transcript trim, nudges</span>
+          </summary>
+          <div className="stack-md">
         {trimTrack ? (
           <div className="clip-studio-timeline clip-studio-edit-deck stack-sm">
             <div className="clip-studio-edit-deck-head">
@@ -849,38 +908,8 @@ export function ClipStudioEditor({
             </button>
           </div>
         ) : null}
-        <div className="review-edit-grid">
-          <label className="stack-sm">
-            Clip starts at
-            <input
-              value={startTimestamp}
-              onChange={(event) => setStartTimestamp(event.target.value)}
-              disabled={isPending}
-              aria-invalid={Boolean(fieldErrors?.startTimestamp)}
-            />
-            {fieldErrors?.startTimestamp ? (
-              <span className="error-text small">{fieldErrors.startTimestamp}</span>
-            ) : null}
-          </label>
-
-          <label className="stack-sm">
-            Clip ends at
-            <input
-              value={endTimestamp}
-              onChange={(event) => setEndTimestamp(event.target.value)}
-              disabled={isPending}
-              aria-invalid={Boolean(fieldErrors?.endTimestamp)}
-            />
-            {fieldErrors?.endTimestamp ? (
-              <span className="error-text small">{fieldErrors.endTimestamp}</span>
-            ) : null}
-          </label>
-
-          <div className="stack-sm">
-            <span className="muted small">Clip duration</span>
-            <p>{durationLabel}</p>
           </div>
-        </div>
+        </details>
 
         {timingPreview.warnings.length > 0 ? (
           <ul className="warning-list">
@@ -891,6 +920,11 @@ export function ClipStudioEditor({
         ) : null}
       </SectionCard>
 
+      <details className="clip-studio-editor-disclosure">
+        <summary>
+          <span>Speech cleanup</span>
+          <span className="muted small">Dead air and filler-word options</span>
+        </summary>
       <SectionCard title="Speech cleanup" description="Choose whether the rendered preview should be tightened.">
         <div className="stack-md">
           <label className="clip-studio-toggle-row">
@@ -953,6 +987,7 @@ export function ClipStudioEditor({
           </div>
         </div>
       </SectionCard>
+      </details>
 
       <SectionCard title="On-video captions & hook" description="Edit what appears on the prepared clip.">
         <div className="stack-md clip-studio-caption-form">
@@ -1051,32 +1086,49 @@ export function ClipStudioEditor({
               </div>
               <StatusBadge tone="accent">{resolvedCaptionStyle.name}</StatusBadge>
             </div>
-            <div className="clip-studio-caption-style-grid">
-              <button
-                type="button"
-                aria-pressed={captionStylePresetId === ""}
-                className={captionStylePresetId === "" ? "clip-studio-caption-style-option is-active" : "clip-studio-caption-style-option"}
-                onClick={() => setCaptionStylePresetId("")}
-                disabled={isPending}
-              >
-                <strong>Brand Kit default</strong>
-                <span>{resolveCaptionStylePreset(brandCaptionStylePresetId).name}</span>
-              </button>
-              {CAPTION_STYLE_PRESETS.map((preset) => (
+
+            <div className="clip-studio-selected-style">
+              <span className={`clip-studio-caption-style-preview ${resolvedCaptionStyle.className}`}>
+                {resolvedCaptionStyle.sampleText}
+              </span>
+              <div>
+                <strong>{resolvedCaptionStyle.name}</strong>
+                <p className="muted small">{resolvedCaptionStyle.motion}</p>
+              </div>
+            </div>
+
+            <details className="clip-studio-editor-disclosure compact">
+              <summary>
+                <span>Change caption style</span>
+                <span className="muted small">Show all style previews</span>
+              </summary>
+              <div className="clip-studio-caption-style-grid">
                 <button
-                  key={preset.id}
                   type="button"
-                  aria-pressed={captionStylePresetId === preset.id}
-                  className={captionStylePresetId === preset.id ? "clip-studio-caption-style-option is-active" : "clip-studio-caption-style-option"}
-                  onClick={() => setCaptionStylePresetId(preset.id)}
+                  aria-pressed={captionStylePresetId === ""}
+                  className={captionStylePresetId === "" ? "clip-studio-caption-style-option is-active" : "clip-studio-caption-style-option"}
+                  onClick={() => setCaptionStylePresetId("")}
                   disabled={isPending}
                 >
-                  <span className={`clip-studio-caption-style-preview ${preset.className}`}>{preset.sampleText}</span>
-                  <strong>{preset.name}</strong>
-                  <span>{preset.motion}</span>
+                  <strong>Brand Kit default</strong>
+                  <span>{resolveCaptionStylePreset(brandCaptionStylePresetId).name}</span>
                 </button>
-              ))}
-            </div>
+                {CAPTION_STYLE_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    aria-pressed={captionStylePresetId === preset.id}
+                    className={captionStylePresetId === preset.id ? "clip-studio-caption-style-option is-active" : "clip-studio-caption-style-option"}
+                    onClick={() => setCaptionStylePresetId(preset.id)}
+                    disabled={isPending}
+                  >
+                    <span className={`clip-studio-caption-style-preview ${preset.className}`}>{preset.sampleText}</span>
+                    <strong>{preset.name}</strong>
+                    <span>{preset.motion}</span>
+                  </button>
+                ))}
+              </div>
+            </details>
           </section>
 
           <section className="clip-studio-hook-panel" aria-labelledby="clip-hook-heading">
@@ -1124,6 +1176,11 @@ export function ClipStudioEditor({
               </button>
             ) : null}
 
+            <details className="clip-studio-editor-disclosure compact">
+              <summary>
+                <span>Hook advanced controls</span>
+                <span className="muted small">Position, timing, animation</span>
+              </summary>
             <div className="clip-studio-hook-grid">
               <label className="stack-sm">
                 Position
@@ -1213,6 +1270,7 @@ export function ClipStudioEditor({
                 </span>
               </label>
             </div>
+            </details>
           </section>
         </div>
       </SectionCard>

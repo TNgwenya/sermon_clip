@@ -272,6 +272,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   };
   const ministryScore = formatMinistryScore(clip.ministryValue);
   const socialScore = formatSocialScore(clip.socialValue);
+  const hasMinistryScore = Boolean(clip.ministryValue?.trim());
+  const hasSocialScore = Boolean(clip.socialValue?.trim());
   const videoSubjectTracks = clip.videoSubjectTracks.map((track) => {
     let centerX = 0.5;
     let centerY = 0.5;
@@ -376,10 +378,10 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
           </div>
 
           <div className="clip-studio-topbar-actions">
-            <Link href={`/sermons/${sermonId}`} className="button secondary">
+            <Link href={`/sermons/${sermonId}`} className="button tertiary">
               Sermon
             </Link>
-            <Link href={`/sermons/${sermonId}/review`} className="button secondary">
+            <Link href={`/sermons/${sermonId}/review`} className="button tertiary">
               Review
             </Link>
             <Link href={postClipHref} className="button primary">
@@ -443,8 +445,12 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             </div>
             <div className="stat-grid">
               <StatCard label="Category" value={clip.smartClipCategory ?? "Uncategorized"} tone="neutral" />
-              <StatCard label={ministryScore.label} value={ministryScore.value} tone={ministryScore.tone} />
-              <StatCard label={socialScore.label} value={socialScore.value} tone={socialScore.tone} />
+              {hasMinistryScore ? (
+                <StatCard label={ministryScore.label} value={ministryScore.value} tone={ministryScore.tone} />
+              ) : null}
+              {hasSocialScore ? (
+                <StatCard label={socialScore.label} value={socialScore.value} tone={socialScore.tone} />
+              ) : null}
               <StatCard
                 label="Audience"
                 value={clip.intendedAudience || "General"}

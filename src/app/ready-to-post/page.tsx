@@ -289,6 +289,9 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
   const reviewSermonId = sermonId ?? focusedClip?.sermon.id ?? clips[0]?.sermon.id ?? approvedWaitingClips[0]?.sermon.id ?? null;
   const reviewHref = reviewSermonId ? `/sermons/${reviewSermonId}/review` : "/sermons";
   const downloadableClipCount = clips.filter((clip) => clip.mediaReady).length;
+  const blockedReadyClips = clips.filter((clip) => !clip.mediaReady);
+  const blockedReadyClipCount = blockedReadyClips.length;
+  const firstBlockedClip = blockedReadyClips[0] ?? null;
   const queueStatus = buildReadyQueueStatus({
     readyCount: downloadableClipCount,
     preparingCount: preparingClipCount,
@@ -305,9 +308,9 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           <p className="muted">
             {scopedClipTitle
               ? `Review ${scopedClipTitle}${scopedSermonTitle ? ` from ${scopedSermonTitle}` : ""}, copy the caption, and choose the next posting step.`
-              : scopedSermonTitle
+            : scopedSermonTitle
               ? `Review finished clips from ${scopedSermonTitle}, then download, copy captions, or schedule the best next post.`
-              : "Review finished sermon clips, copy captions, and schedule this week's posts."}
+              : "Download, schedule, and hand off approved clips."}
           </p>
           {scopedClipTitle || scopedSermonTitle ? (
             <div className="ready-scope-pill">
@@ -316,14 +319,28 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
             </div>
           ) : null}
           <div className="ready-quick-stats" aria-label="Prepared clip summary">
-            <span><strong>{downloadableClipCount}</strong> prepared</span>
+            <span className="ready-stat-ready"><strong>{downloadableClipCount}</strong> ready</span>
+            {blockedReadyClipCount > 0 ? (
+              <span className="ready-stat-repair"><strong>{blockedReadyClipCount}</strong> needs repair</span>
+            ) : null}
             <span><strong>{visibleScheduledPosts.length}</strong> planned</span>
-            <span><strong>{failedPreparationClipCount}</strong> need attention</span>
+            {failedPreparationClipCount > 0 ? (
+              <span className="ready-stat-repair"><strong>{failedPreparationClipCount}</strong> prep issue{failedPreparationClipCount === 1 ? "" : "s"}</span>
+            ) : null}
           </div>
         </div>
         <nav className="ready-publishing-nav" aria-label="Ready to post actions">
           {scopeIsActive ? <Link href="/ready-to-post" className="button secondary">All ready clips</Link> : null}
-          {!controlPanelMode && downloadableClipCount > 0 ? <a href={downloadAllHref} className="button primary">Download all</a> : null}
+          {!controlPanelMode && downloadableClipCount > 0 ? (
+            <a href={downloadAllHref} className="button primary">
+              {blockedReadyClipCount > 0 ? "Download ready clips" : "Download all"}
+            </a>
+          ) : null}
+          {blockedReadyClipCount > 0 && firstBlockedClip ? (
+            <Link href={`/ready-to-post?clipId=${firstBlockedClip.id}`} className={downloadableClipCount > 0 ? "button secondary" : "button primary"}>
+              Review blocked clips
+            </Link>
+          ) : null}
         </nav>
       </header>
 
@@ -413,7 +430,6 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
             </div>
           </section>
         ) : null}
-        <ReadyQueueLiveRefresh status={queueStatus} />
         <ReadyQueueExperience
           clips={clips}
           clipScopeIds={scopeIsActive ? scopeClipIds : null}
@@ -424,6 +440,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           initialScheduledPosts={visibleScheduledPosts}
           controlPanelMode={controlPanelMode}
         />
+        <ReadyQueueLiveRefresh status={queueStatus} />
       </div>
     </main>
   );
