@@ -256,29 +256,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
         </form>
       </section>
 
-      <section className="home-workflow-strip" aria-label="Sermon Clip workflow">
-          <div className="tool-tile">
-            <span className="tool-orb">1</span>
-            <strong>Long sermon</strong>
-          </div>
-          <div className="tool-tile">
-            <span className="tool-orb">AI</span>
-            <strong>Find moments</strong>
-          </div>
-          <div className="tool-tile">
-            <span className="tool-orb">CC</span>
-            <strong>Captions</strong>
-          </div>
-          <div className="tool-tile">
-            <span className="tool-orb">9:16</span>
-            <strong>Auto framing</strong>
-          </div>
-          <div className="tool-tile">
-            <span className="tool-orb">✓</span>
-            <strong>Post-ready</strong>
-          </div>
-      </section>
-
       <section className="dashboard-command-strip home-signal-strip" aria-label="Workspace summary">
         <StatCard label="Sermons" value={sermons.length} detail="In this workspace" />
         <StatCard label="Clips found" value={metrics.clipsGenerated} detail="Suggested moments" tone="accent" />

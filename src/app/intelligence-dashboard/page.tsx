@@ -98,19 +98,6 @@ export default async function IntelligenceDashboardPage({
         </form>
       </SectionCard>
 
-      <SectionCard title="Weekly Multiplication Snapshot" description="A quick read on sermon clips, ministry moments, and content ideas.">
-        <div className="stat-grid">
-          <StatCard label="Sermons processed" value={dashboard.totals.sermonsProcessed} tone="accent" />
-          <StatCard label="Ministry moments" value={dashboard.totals.ministryMomentsDetected} />
-          <StatCard label="Clips suggested" value={dashboard.totals.clipsSuggested} />
-          <StatCard label="Clips approved" value={dashboard.totals.clipsApproved} tone="success" />
-          <StatCard label="Clips rendered" value={dashboard.totals.clipsRendered} />
-          <StatCard label="Content generated" value={dashboard.totals.contentOpportunitiesGenerated} />
-          <StatCard label="Content approved" value={dashboard.totals.contentOpportunitiesApproved} tone="success" />
-          <StatCard label="Content used" value={dashboard.totals.contentOpportunitiesUsed} tone="success" />
-        </div>
-      </SectionCard>
-
       <SectionCard title="Pastor Teaching Patterns" description="Themes and scriptures that keep showing up across sermons.">
         <div className="stat-grid">
           <StatCard label="Average opportunities per sermon" value={dashboard.pastorLearning.averageContentOpportunitiesPerSermon} tone="accent" />

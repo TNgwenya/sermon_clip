@@ -1876,28 +1876,11 @@ textarea::placeholder {
 }
 
 .home-priority-card {
-  position: relative;
-  overflow: hidden;
   display: grid;
   align-content: space-between;
   gap: 2rem;
   min-height: 21rem;
   padding: clamp(1.1rem, 3vw, 2rem);
-}
-
-.home-priority-card::before {
-  content: "";
-  position: absolute;
-  inset: -35% 45% auto -18%;
-  height: 24rem;
-  border-radius: 999px;
-  background: radial-gradient(circle, rgba(110, 231, 216, 0.18), transparent 68%);
-  pointer-events: none;
-}
-
-.home-priority-card > * {
-  position: relative;
-  z-index: 1;
 }
 
 .home-priority-card h2 {
@@ -1952,28 +1935,6 @@ textarea::placeholder {
   display: grid;
   align-content: center;
   padding: clamp(1rem, 2.5vw, 1.4rem);
-}
-
-.home-workflow-strip {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 0.65rem;
-}
-
-.home-workflow-strip .tool-tile {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #111114;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  justify-items: start;
-  text-align: left;
-  padding: 0.65rem;
-}
-
-.home-workflow-strip .tool-orb {
-  width: 2.7rem;
-  height: 2.7rem;
 }
 
 .home-signal-strip .stat-card {
@@ -4923,10 +4884,6 @@ textarea::placeholder {
     grid-template-columns: 1fr;
   }
 
-  .home-workflow-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .library-command-panel {
     grid-template-columns: 1fr;
   }
@@ -5131,15 +5088,8 @@ textarea::placeholder {
     padding: 1rem 0;
   }
 
-  .tool-strip,
-  .home-workflow-strip {
+  .tool-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .home-workflow-strip .tool-tile {
-    grid-template-columns: 1fr;
-    justify-items: center;
-    text-align: center;
   }
 
   .library-hero {
@@ -7739,7 +7689,7 @@ textarea::placeholder {
 }
 
 .growth-signal-strip {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.65rem;
 }
 
@@ -7751,6 +7701,10 @@ textarea::placeholder {
 .growth-signal-strip .stat-card-value {
   font-size: clamp(1.45rem, 2.3vw, 2rem);
   line-height: 1.05;
+}
+
+.growth-admin-grid {
+  align-items: start;
 }
 
 .growth-main-grid {

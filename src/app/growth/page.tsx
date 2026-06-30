@@ -461,10 +461,6 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
   const connectedCount = platformSnapshots.filter((item) => item.status === "CONNECTED").length;
   const plannedCount = scheduledPosts.filter((item) => !["POSTED", "SKIPPED", "FAILED"].includes(item.status)).length;
   const postedCount = scheduledPosts.filter((item) => item.status === "POSTED").length;
-  const totalEstimatedReach = platformSnapshots.reduce((sum, item) => sum + item.estimatedReach, 0);
-  const avgEngagement = platformSnapshots.length > 0
-    ? platformSnapshots.reduce((sum, item) => sum + item.estimatedEngagementRate, 0) / platformSnapshots.length
-    : 0;
   const previewEventName = normalizeSearchString(params.eventName, "Next Sunday service");
   const previewEventType = normalizeSearchString(params.eventType, "church service");
   const previewStartsAt = normalizeSearchDate(params.eventDate);
@@ -531,80 +527,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
         <StatCard label="Connected platforms" value={`${connectedCount}/7`} detail="Native or manual tracking" tone="success" />
         <StatCard label="Planned posts" value={plannedCount} detail="Waiting for approval or publish" tone="accent" />
         <StatCard label="Published posts" value={postedCount} detail="Marked posted in workflow" />
-        <StatCard label="Estimated reach" value={formatNumber(totalEstimatedReach)} detail="Derived until APIs sync" tone="accent" />
-        <StatCard label="Engagement outlook" value={formatPercent(avgEngagement)} detail="Model baseline" tone="success" />
         <StatCard label="Growth-ready clips" value={clips.length} detail="Available content assets" tone="warning" />
-      </section>
-
-      <section className="growth-lower-grid">
-        <SectionCard title="Analytics connectors" description="Connectors show what can sync now and what is ready for setup next.">
-          <div className="growth-connector-list">
-            {connectors.map((connector) => (
-              <article key={connector.platform} className="growth-connector-row">
-                <div>
-                  <div className="clip-badge-row">
-                    <strong>{connector.platform}</strong>
-                    <StatusBadge tone={connector.status === "ready" ? "success" : connector.status === "planned" ? "warning" : "neutral"}>
-                      {connector.status.replace(/_/g, " ")}
-                    </StatusBadge>
-                  </div>
-                  <p className="muted small">{connector.capability}</p>
-                  {connector.missingEnv && connector.missingEnv.length > 0 ? (
-                    <p className="muted small">Missing: {connector.missingEnv.join(", ")}</p>
-                  ) : null}
-                  {typeof connector.connectedAccounts === "number" ? (
-                    <p className="muted small">{connector.connectedAccounts} connected account{connector.connectedAccounts === 1 ? "" : "s"}</p>
-                  ) : null}
-                </div>
-                <div className="topbar-actions">
-                  {connector.syncAction === "youtube" ? (
-                    <form action={syncYouTubeAnalytics}>
-                      <button type="submit" className="button secondary">Sync</button>
-                    </form>
-                  ) : null}
-                  {connector.syncAction === "meta" ? (
-                    <form action={syncMetaAnalytics}>
-                      <button type="submit" className="button secondary">Sync</button>
-                    </form>
-                  ) : null}
-                  {connector.syncAction === "tiktok" ? (
-                    <form action={syncTikTokAnalytics}>
-                      <button type="submit" className="button secondary">Sync</button>
-                    </form>
-                  ) : null}
-                  {connector.syncAction === "threads" ? (
-                    <form action={syncThreadsAnalytics}>
-                      <button type="submit" className="button secondary">Sync</button>
-                    </form>
-                  ) : null}
-                  {connector.setupHref ? <Link href={connector.setupHref} className="button tertiary">Setup</Link> : null}
-                </div>
-              </article>
-            ))}
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Historical baseline" description="Actual snapshots now influence growth judgment and show where forecasts should improve.">
-          {!historicalBaselineResult.available ? (
-            <EmptyState title="No baseline available" description="Metric snapshots will appear here after YouTube sync or manual actual entry." />
-          ) : historicalBaselineResult.items.length === 0 ? (
-            <EmptyState title="No metric snapshots yet" description="Sync YouTube or record post actuals to build a performance baseline." />
-          ) : (
-            <div className="growth-baseline-list">
-              {historicalBaselineResult.items.map((baseline) => (
-                <article key={baseline.platform} className="growth-baseline-row">
-                  <div>
-                    <strong>{baseline.platform}</strong>
-                    <p className="muted small">{baseline.snapshotCount} snapshots</p>
-                  </div>
-                  <span>{baseline.averageReach === null ? "n/a" : formatNumber(baseline.averageReach)} reach</span>
-                  <span>{baseline.averageViews === null ? "n/a" : formatNumber(baseline.averageViews)} views</span>
-                  <span>{baseline.averageEngagementRate === null ? "n/a" : formatPercent(baseline.averageEngagementRate)}</span>
-                </article>
-              ))}
-            </div>
-          )}
-        </SectionCard>
       </section>
 
       <section className="growth-main-grid">
@@ -743,6 +666,77 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
             </div>
           </SectionCard>
         </aside>
+      </section>
+
+      <section className="growth-lower-grid growth-admin-grid">
+        <SectionCard title="Analytics connectors" description="Connectors show what can sync now and what is ready for setup next.">
+          <div className="growth-connector-list">
+            {connectors.map((connector) => (
+              <article key={connector.platform} className="growth-connector-row">
+                <div>
+                  <div className="clip-badge-row">
+                    <strong>{connector.platform}</strong>
+                    <StatusBadge tone={connector.status === "ready" ? "success" : connector.status === "planned" ? "warning" : "neutral"}>
+                      {connector.status.replace(/_/g, " ")}
+                    </StatusBadge>
+                  </div>
+                  <p className="muted small">{connector.capability}</p>
+                  {connector.missingEnv && connector.missingEnv.length > 0 ? (
+                    <p className="muted small">Missing: {connector.missingEnv.join(", ")}</p>
+                  ) : null}
+                  {typeof connector.connectedAccounts === "number" ? (
+                    <p className="muted small">{connector.connectedAccounts} connected account{connector.connectedAccounts === 1 ? "" : "s"}</p>
+                  ) : null}
+                </div>
+                <div className="topbar-actions">
+                  {connector.syncAction === "youtube" ? (
+                    <form action={syncYouTubeAnalytics}>
+                      <button type="submit" className="button secondary">Sync</button>
+                    </form>
+                  ) : null}
+                  {connector.syncAction === "meta" ? (
+                    <form action={syncMetaAnalytics}>
+                      <button type="submit" className="button secondary">Sync</button>
+                    </form>
+                  ) : null}
+                  {connector.syncAction === "tiktok" ? (
+                    <form action={syncTikTokAnalytics}>
+                      <button type="submit" className="button secondary">Sync</button>
+                    </form>
+                  ) : null}
+                  {connector.syncAction === "threads" ? (
+                    <form action={syncThreadsAnalytics}>
+                      <button type="submit" className="button secondary">Sync</button>
+                    </form>
+                  ) : null}
+                  {connector.setupHref ? <Link href={connector.setupHref} className="button tertiary">Setup</Link> : null}
+                </div>
+              </article>
+            ))}
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Historical baseline" description="Actual snapshots now influence growth judgment and show where forecasts should improve.">
+          {!historicalBaselineResult.available ? (
+            <EmptyState title="No baseline available" description="Metric snapshots will appear here after YouTube sync or manual actual entry." />
+          ) : historicalBaselineResult.items.length === 0 ? (
+            <EmptyState title="No metric snapshots yet" description="Sync YouTube or record post actuals to build a performance baseline." />
+          ) : (
+            <div className="growth-baseline-list">
+              {historicalBaselineResult.items.map((baseline) => (
+                <article key={baseline.platform} className="growth-baseline-row">
+                  <div>
+                    <strong>{baseline.platform}</strong>
+                    <p className="muted small">{baseline.snapshotCount} snapshots</p>
+                  </div>
+                  <span>{baseline.averageReach === null ? "n/a" : formatNumber(baseline.averageReach)} reach</span>
+                  <span>{baseline.averageViews === null ? "n/a" : formatNumber(baseline.averageViews)} views</span>
+                  <span>{baseline.averageEngagementRate === null ? "n/a" : formatPercent(baseline.averageEngagementRate)}</span>
+                </article>
+              ))}
+            </div>
+          )}
+        </SectionCard>
       </section>
 
       <section className="growth-lower-grid">
