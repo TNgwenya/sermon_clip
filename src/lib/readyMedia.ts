@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import type { Stats } from "node:fs";
 
 export type ReadyMediaClip = {
   exportFormat: string | null;
@@ -19,6 +20,11 @@ type ResolveReadyMediaOptions = {
   trustMetadata?: boolean;
 };
 
+type ReadyMediaFile = {
+  filePath: string;
+  stats: Stats;
+};
+
 function buildReadyMediaCandidates(clip: ReadyMediaClip): Array<string | null | undefined> {
   return [
     clip.exportFormat === "VERTICAL_9_16" ? clip.exportedFilePath : null,
@@ -31,18 +37,33 @@ function buildReadyMediaCandidates(clip: ReadyMediaClip): Array<string | null | 
 }
 
 export async function fileHasBytes(filePath: string): Promise<boolean> {
+  return Boolean(await statReadyMediaFile(filePath));
+}
+
+async function statReadyMediaFile(filePath: string): Promise<ReadyMediaFile | null> {
   try {
     const fileStat = await stat(/* turbopackIgnore: true */ filePath);
-    return fileStat.isFile() && fileStat.size > 0;
+    return fileStat.isFile() && fileStat.size > 0
+      ? { filePath, stats: fileStat }
+      : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
 export async function findExistingReadyMediaFile(candidates: Array<string | null | undefined>): Promise<string | null> {
+  return (await findExistingReadyMediaCandidate(candidates))?.filePath ?? null;
+}
+
+async function findExistingReadyMediaCandidate(candidates: Array<string | null | undefined>): Promise<ReadyMediaFile | null> {
   for (const candidate of candidates) {
-    if (candidate && await fileHasBytes(candidate)) {
-      return candidate;
+    if (!candidate) {
+      continue;
+    }
+
+    const file = await statReadyMediaFile(candidate);
+    if (file) {
+      return file;
     }
   }
 
@@ -64,9 +85,9 @@ export async function resolveReadyMedia(
     };
   }
 
-  const outputPath = await findExistingReadyMediaFile(candidates);
+  const outputFile = await findExistingReadyMediaCandidate(candidates);
 
-  if (!outputPath) {
+  if (!outputFile) {
     return {
       mediaReady: false,
       outputPath: null,
@@ -74,18 +95,9 @@ export async function resolveReadyMedia(
     };
   }
 
-  try {
-    const fileStat = await stat(/* turbopackIgnore: true */ outputPath);
-    return {
-      mediaReady: fileStat.isFile() && fileStat.size > 0,
-      outputPath,
-      estimatedBytes: fileStat.isFile() && fileStat.size > 0 ? fileStat.size : null,
-    };
-  } catch {
-    return {
-      mediaReady: false,
-      outputPath: null,
-      estimatedBytes: null,
-    };
-  }
+  return {
+    mediaReady: true,
+    outputPath: outputFile.filePath,
+    estimatedBytes: outputFile.stats.size,
+  };
 }

@@ -50,4 +50,57 @@ describe("resolveByteRange", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("adds cache validators to inline video previews", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "video-response-"));
+    const videoPath = join(tempDir, "preview.mp4");
+
+    try {
+      await writeFile(videoPath, Buffer.from("video"));
+
+      const response = await videoFileResponse({
+        request: new Request("http://localhost/api/clips/clip-1/preview"),
+        filePath: videoPath,
+        disposition: "inline",
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Cache-Control")).toBe("private, max-age=0, must-revalidate");
+      expect(response.headers.get("ETag")).toMatch(/^"[0-9a-f]+-[0-9a-f]+"$/);
+      expect(response.headers.get("Last-Modified")).toBeTruthy();
+      expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 304 for fresh inline video cache validators", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "video-response-"));
+    const videoPath = join(tempDir, "preview.mp4");
+
+    try {
+      await writeFile(videoPath, Buffer.from("video"));
+
+      const firstResponse = await videoFileResponse({
+        request: new Request("http://localhost/api/clips/clip-1/preview"),
+        filePath: videoPath,
+        disposition: "inline",
+      });
+      const entityTag = firstResponse.headers.get("ETag");
+      expect(entityTag).toBeTruthy();
+
+      const cachedResponse = await videoFileResponse({
+        request: new Request("http://localhost/api/clips/clip-1/preview", {
+          headers: { "If-None-Match": entityTag ?? "" },
+        }),
+        filePath: videoPath,
+        disposition: "inline",
+      });
+
+      expect(cachedResponse.status).toBe(304);
+      expect(cachedResponse.headers.get("ETag")).toBe(entityTag);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
