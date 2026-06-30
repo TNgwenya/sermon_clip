@@ -20,7 +20,7 @@ function SubmitButton() {
 
   return (
     <button className="button primary command-cta" type="submit" disabled={pending}>
-      {pending ? "Starting sermon clips..." : "Get clips in 1 click"}
+      {pending ? "Starting workflow..." : "Start clip workflow"}
     </button>
   );
 }
@@ -36,8 +36,8 @@ function UploadProgressTheater() {
     <div className="upload-progress-backdrop" role="status" aria-live="polite">
       <section className="upload-progress-theater">
         <div className="upload-progress-copy stack-sm">
-          <p className="kicker">Creating sermon clips</p>
-          <h2>We are getting your sermon ready.</h2>
+          <p className="kicker">Starting clip workflow</p>
+          <h2>Saving the sermon and starting analysis.</h2>
           <p className="muted">
             Keep this tab open while Sermon Clip saves the source and starts the full workflow toward generated clips.
           </p>
@@ -161,10 +161,10 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
         <div className="upload-form-footer">
           <SubmitButton />
           <button className="button tertiary" type="button" onClick={() => setActiveFeatureModal("drive")}>
-            Connect Google Drive
+            Google Drive (soon)
           </button>
           <button className="button tertiary" type="button" onClick={() => setActiveFeatureModal("zoom")}>
-            Import from Zoom
+            Zoom import (soon)
           </button>
         </div>
 

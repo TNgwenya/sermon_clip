@@ -315,8 +315,8 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
               <strong>{scopedClipTitle ?? scopedSermonTitle}</strong>
             </div>
           ) : null}
-          <div className="ready-quick-stats" aria-label="Ready to post summary">
-            <span><strong>{downloadableClipCount}</strong> ready</span>
+          <div className="ready-quick-stats" aria-label="Prepared clip summary">
+            <span><strong>{downloadableClipCount}</strong> prepared</span>
             <span><strong>{visibleScheduledPosts.length}</strong> planned</span>
             <span><strong>{failedPreparationClipCount}</strong> need attention</span>
           </div>
@@ -341,8 +341,8 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
                 {failedPreparationClipCount > 0
                   ? "Refresh the missing media pieces so these clips can return to the posting queue."
                   : clipId
-                  ? "Prepare this clip so the final video, captions, and church branding are ready to share."
-                  : "Prepare these clips so the final videos, captions, and church branding are ready to share."}
+                  ? "Prepare this clip so the final video, captions, and church branding are packaged for posting."
+                  : "Prepare these clips so the final videos, captions, and church branding are packaged for posting."}
               </p>
               <div className="ready-prep-steps" aria-label="Preparation steps">
                 <span>Video</span>

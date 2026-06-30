@@ -18,6 +18,19 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
         <p className="muted">Paste the sermon link or upload the video. Sermon Clip will find ministry moments and guide you to approval, preparation, and posting.</p>
       </header>
 
+      <NewSermonForm initialYoutubeUrl={params.youtubeUrl ?? ""} />
+
+      <section className="card workflow-card stack-sm">
+        <h2>What happens next</h2>
+        <div className="workflow-strip">
+          <div className="workflow-step done">Add sermon</div>
+          <div className="workflow-step pending">Find best moments</div>
+          <div className="workflow-step pending">Approve clips</div>
+          <div className="workflow-step pending">Prepare clips</div>
+          <div className="workflow-step pending">Download and post</div>
+        </div>
+      </section>
+
       <section className="upload-preview-band">
         <div className="sermon-before-frame">
           <span className="small muted">Source sermon</span>
@@ -33,19 +46,6 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
           </div>
         </div>
       </section>
-
-      <section className="card workflow-card stack-sm">
-        <h2>What happens next</h2>
-        <div className="workflow-strip">
-          <div className="workflow-step done">Add sermon</div>
-          <div className="workflow-step pending">Find best moments</div>
-          <div className="workflow-step pending">Approve clips</div>
-          <div className="workflow-step pending">Prepare clips</div>
-          <div className="workflow-step pending">Download and post</div>
-        </div>
-      </section>
-
-      <NewSermonForm initialYoutubeUrl={params.youtubeUrl ?? ""} />
     </main>
   );
 }

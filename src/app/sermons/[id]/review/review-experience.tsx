@@ -102,6 +102,8 @@ type Draft = {
   clipNotes: string;
 };
 
+const REVIEW_INITIAL_VISIBLE_COUNT = 8;
+
 function toDraft(clip: Pick<ClipReviewItem, "title" | "hook" | "caption" | "hashtags" | "clipNotes">): Draft {
   return {
     title: clip.title,
@@ -159,6 +161,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
   const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
   const [sort, setSort] = useState<ReviewSort>("HIGHEST_SCORE");
   const [viewMode, setViewMode] = useState<"LIST" | "GRID">("LIST");
+  const [showFullFeed, setShowFullFeed] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [messageSuccess, setMessageSuccess] = useState(true);
@@ -206,6 +209,8 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
     });
     return sortClips(filtered, sort);
   }, [normalizedClips, filter, categoryFilter, sort]);
+  const isFeedLimited = !showFullFeed && visibleClips.length > REVIEW_INITIAL_VISIBLE_COUNT;
+  const renderedClips = isFeedLimited ? visibleClips.slice(0, REVIEW_INITIAL_VISIBLE_COUNT) : visibleClips;
 
   function setStatusMessage(success: boolean, value: string) {
     setMessageSuccess(success);
@@ -470,7 +475,8 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             <p className="status-help">Try switching to All Clips, or run Generate Clip Suggestions from sermon detail.</p>
           </article>
         ) : (
-          visibleClips.map((clip, index) => {
+          <>
+          {renderedClips.map((clip, index) => {
             const draft = drafts[clip.id] ?? toDraft(clip);
             const warnings = buildClipWarnings(clip).filter((warning) => !warning.toLowerCase().includes("invalid option"));
             const qualityView = buildClipQualityView(clip, index);
@@ -806,6 +812,30 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               </article>
             );
           })
+          }
+          {visibleClips.length > REVIEW_INITIAL_VISIBLE_COUNT ? (
+            <article className="card review-feed-more-panel">
+              <div>
+                <strong>
+                  {isFeedLimited
+                    ? `Showing strongest ${REVIEW_INITIAL_VISIBLE_COUNT} of ${visibleClips.length} clips`
+                    : `Showing all ${visibleClips.length} clips`}
+                </strong>
+                <p className="muted small">
+                  Keep the first pass focused, then expand when you are ready for the full review queue.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => setShowFullFeed((current) => !current)}
+                disabled={isPending}
+              >
+                {isFeedLimited ? `Show all ${visibleClips.length}` : `Show strongest ${REVIEW_INITIAL_VISIBLE_COUNT}`}
+              </button>
+            </article>
+          ) : null}
+          </>
         )}
       </section>
     </main>

@@ -29,7 +29,7 @@ export function ReadyQueueLiveRefresh({ status, intervalMs = 8000 }: ReadyQueueL
     }
 
     if (status.approvedWaitingCount > 0) {
-      return "Ready downloads appear here after approved clips are prepared.";
+      return "Prepared downloads appear here after approved clips are processed.";
     }
 
     return "Finished sermon clips will appear here when preparation is complete.";

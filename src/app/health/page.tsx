@@ -10,8 +10,10 @@ import {
   getSermonStoragePath,
   getStorageRoot,
 } from "@/server/agents/storage";
+import { getClipThumbnailReadiness, type ClipThumbnailReadiness } from "@/server/agents/clipThumbnailService";
+import { checkYtDlpInstalled } from "@/server/agents/videoDownloadAgent";
+import { checkFfmpegInstalled } from "@/server/media/ffmpeg";
 import { getDataConsistencySummary, getOperationalMetrics } from "@/server/workflow/operationsDiagnostics";
-import type { ClipThumbnailReadiness } from "@/server/agents/clipThumbnailService";
 import { HealthRecoveryPanel } from "@/app/health/health-recovery-panel";
 import { buildWorkspaceHealthIssueBreakdown } from "@/lib/healthRecovery";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
@@ -123,7 +125,6 @@ async function runHealthChecks(): Promise<HealthCheckResult[]> {
       });
     }
 
-    const { checkFfmpegInstalled } = await import(/* turbopackIgnore: true */ "@/server/media/ffmpeg");
     const ffmpegInstalled = await checkFfmpegInstalled();
     checks.push({
       name: "FFmpeg",
@@ -155,7 +156,6 @@ async function runHealthChecks(): Promise<HealthCheckResult[]> {
     }
 
     try {
-      const { checkYtDlpInstalled } = await import(/* turbopackIgnore: true */ "@/server/agents/videoDownloadAgent");
       await checkYtDlpInstalled();
       checks.push({
         name: "yt-dlp",
@@ -205,7 +205,6 @@ async function getHealthThumbnailReadiness(): Promise<ClipThumbnailReadiness> {
     };
   }
 
-  const { getClipThumbnailReadiness } = await import(/* turbopackIgnore: true */ "@/server/agents/clipThumbnailService");
   return getClipThumbnailReadiness();
 }
 

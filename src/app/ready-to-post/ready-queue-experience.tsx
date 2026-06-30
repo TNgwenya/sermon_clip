@@ -70,7 +70,7 @@ type ClipQualityFilter = "ALL" | "POST_READY" | "GOOD_NEEDS_REVIEW" | "NEEDS_EDI
 type ClipQualityLabel = "POST_READY" | "GOOD_NEEDS_REVIEW" | "NEEDS_EDITING" | "REJECT";
 
 const VIDEO_PREVIEW_LABELS: Record<VideoPreviewState, string> = {
-  poster: "Ready preview",
+  poster: "Preview idle",
   loading: "Loading preview",
   ready: "Ready to play",
   playing: "Playing",
@@ -572,7 +572,7 @@ export function ReadyQueueExperience({
         <div className="publishing-board-panel">
           <div className="publishing-section-head">
             <div>
-              <p className="kicker">Ready clips</p>
+              <p className="kicker">Prepared clips</p>
               <h2>Choose what to post next</h2>
               <p className="muted small">Preview a finished clip, copy the caption, then download or schedule it.</p>
             </div>
@@ -600,7 +600,7 @@ export function ReadyQueueExperience({
             <EmptyState
               title={
                 clips.length > 0 && readyQueueClips.length === 0
-                  ? "All ready clips are already scheduled"
+                  ? "All prepared clips are already scheduled"
                   : approvedWaitingCount > 0 ? "Approved clips are waiting above" : "No finished clips yet"
               }
               description={
@@ -661,7 +661,7 @@ export function ReadyQueueExperience({
                         {getQualityLabelText(qualityLabel)}
                       </span>
                       <span className={`status-pill ${clip.mediaReady ? "status-exported" : "quality-reject"}`}>
-                        {clip.mediaReady ? "Ready to share" : "Needs repair"}
+                        {clip.mediaReady ? "Media prepared" : "Needs media refresh"}
                       </span>
                     </div>
                     {qualityIssues[0] ? <p className="muted small">{qualityIssues[0]}</p> : null}
@@ -688,7 +688,7 @@ export function ReadyQueueExperience({
           )}
         </div>
 
-        <aside className="selected-asset-panel" aria-label="Selected ready clip">
+        <aside className="selected-asset-panel" aria-label="Selected prepared clip">
           {selectedClip && selectedReadyPackage ? (
             <>
               <div className="publishing-section-head compact">
@@ -703,14 +703,14 @@ export function ReadyQueueExperience({
               </div>
               <div className={`selected-action-summary ${selectedClip.mediaReady ? "is-ready" : "needs-attention"}`}>
                 <div>
-                  <strong>{selectedClip.mediaReady ? "Ready to share" : "Needs media refresh"}</strong>
+                  <strong>{selectedClip.mediaReady ? "Media prepared" : "Needs media refresh"}</strong>
                   <span>
                     {selectedClip.mediaReady
                       ? "Preview the clip, copy the caption, then download or schedule it."
                       : "Refresh the media before downloading or scheduling this clip."}
                   </span>
                 </div>
-                <span className="status-pill">{selectedClip.mediaReady ? "Next: post" : "Next: repair"}</span>
+                <span className="status-pill">{selectedClip.mediaReady ? "Next: schedule" : "Next: repair"}</span>
               </div>
               <details className="selected-quality-panel selected-quality-details">
                 <summary>Readiness note</summary>
@@ -751,7 +751,7 @@ export function ReadyQueueExperience({
                   onEnded={() => setVideoPreviewState(selectedClip.id, "ready")}
                   onError={() => setVideoPreviewState(selectedClip.id, "error")}
                 />
-                <span className="video-quality-pill">{selectedClip.mediaReady ? "Ready" : "Needs repair"}</span>
+                <span className="video-quality-pill">{selectedClip.mediaReady ? "Media prepared" : "Needs repair"}</span>
                 <span className={`video-state-pill video-state-${videoPreviewStates[selectedClip.id] ?? "poster"}`}>{VIDEO_PREVIEW_LABELS[videoPreviewStates[selectedClip.id] ?? "poster"]}</span>
                 <button
                   type="button"
@@ -851,7 +851,7 @@ export function ReadyQueueExperience({
             </>
           ) : (
             <EmptyState
-              title="No ready clip selected"
+              title="No prepared clip selected"
               description="Finished clips will appear here after preparation completes."
             />
           )}

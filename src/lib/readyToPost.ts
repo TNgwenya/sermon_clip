@@ -113,7 +113,7 @@ export function buildReadyQueueStatus(input: {
     return {
       ...input,
       liveRefreshEnabled: input.preparingCount > 0,
-      headline: `${input.readyCount} clip${input.readyCount === 1 ? "" : "s"} ready to post`,
+      headline: `${input.readyCount} clip${input.readyCount === 1 ? "" : "s"} prepared for posting`,
       description: input.preparingCount > 0
         ? `${input.preparingCount} more clip${input.preparingCount === 1 ? " is" : "s are"} still being prepared.`
         : "Schedule posts or copy captions from finished clips.",
@@ -134,7 +134,7 @@ export function buildReadyQueueStatus(input: {
       ...input,
       liveRefreshEnabled: false,
       headline: `${input.approvedWaitingCount} approved clip${input.approvedWaitingCount === 1 ? "" : "s"} waiting`,
-      description: "Open the Pastor Review Feed and choose Prepare approved clips to create ready-to-post downloads.",
+      description: "Open the Pastor Review Feed and choose Prepare approved clips to create posting downloads.",
     };
   }
 
@@ -291,7 +291,7 @@ export function buildReadyToPostPackage(input: {
   return {
     previewHref: `/api/clips/${input.clipId}/preview?variant=best`,
     downloadHref: `/api/clips/${input.clipId}/download?variant=best`,
-    badges: ["Ready to post", ...platformBadges, ...ministryBadges],
+    badges: ["Posting package", ...platformBadges, ...ministryBadges],
     hashtags,
     platformCount: platformBadges.length,
     captionFileCount,

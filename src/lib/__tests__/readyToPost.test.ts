@@ -101,7 +101,7 @@ describe("ready-to-post package", () => {
     });
 
     expect(buildReadyQueueStatus({ readyCount: 3, preparingCount: 1, approvedWaitingCount: 0 })).toMatchObject({
-      headline: "3 clips ready to post",
+      headline: "3 clips prepared for posting",
       liveRefreshEnabled: true,
     });
   });
@@ -121,7 +121,7 @@ describe("ready-to-post package", () => {
     expect(readyPackage.previewHref).toBe("/api/clips/clip-123/preview?variant=best");
     expect(readyPackage.downloadHref).toBe("/api/clips/clip-123/download?variant=best");
     expect(readyPackage.badges).toEqual([
-      "Ready to post",
+      "Posting package",
       "TikTok",
       "Instagram",
       "YouTube Shorts",
