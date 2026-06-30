@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildClipQualityView,
   buildClipWarnings,
   filterClips,
   getQueuedMediaAssetsForRemoteBatchAction,
@@ -43,6 +44,20 @@ describe("clip review summaries", () => {
       ...clip("APPROVED"),
       qualityWarnings: ["SMART_CROP_UNSTABLE"],
     })).toContain("Smart crop movement may need review");
+  });
+
+  it("labels reviewed clip scores as quality scores", () => {
+    const qualityView = buildClipQualityView({
+      ...clip("SUGGESTED"),
+      finalQualityScore: 8.4,
+      qualityLabel: "POST_READY",
+      standaloneClarityScore: 8.1,
+      contextSafetyScore: 8.6,
+      visualReadinessScore: 7.2,
+    }, 0);
+
+    expect(qualityView.scoreSourceLabel).toBe("Quality score");
+    expect(qualityView.postReadiness.label).toBe("Strong post-ready clip");
   });
 
   it("queues local worker assets for remote batch media actions", () => {

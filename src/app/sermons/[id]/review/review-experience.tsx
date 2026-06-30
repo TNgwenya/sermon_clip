@@ -480,6 +480,11 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             const draft = drafts[clip.id] ?? toDraft(clip);
             const warnings = buildClipWarnings(clip).filter((warning) => !warning.toLowerCase().includes("invalid option"));
             const qualityView = buildClipQualityView(clip, index);
+            const qualitySignals = [
+              { key: "message", dimension: "Message", ...qualityView.messageClarity },
+              { key: "context", dimension: "Context", ...qualityView.contextSafety },
+              { key: "video", dimension: "Video", ...qualityView.visualReadiness },
+            ].filter((signal) => signal.scoreLabel !== "-");
             const clipCategory = getQualityCategoryLabel(clip.qualityClipCategory ?? clip.smartClipCategory);
             const actionLabel = clip.status === "REJECTED" ? "Rejected clip" : qualityView.actionLabel;
             const actionTone = clip.status === "REJECTED" ? "weak" : qualityView.actionTone;
@@ -582,6 +587,26 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                     ) : null}
 
                     <p className="review-feed-insight">{insight}</p>
+                    <div
+                      className={qualitySignals.length > 0 ? "review-feed-quality-strip" : "review-feed-quality-strip review-feed-quality-strip-compact"}
+                      aria-label={`Quality signals for ${clip.title}`}
+                    >
+                      <div className={`review-feed-quality-score quality-action-${actionTone}`}>
+                        <span>{qualityView.scoreSourceLabel}</span>
+                        <strong>{qualityView.scoreLabel}</strong>
+                      </div>
+                      {qualitySignals.length > 0 ? (
+                        <div className="review-feed-signal-list">
+                          {qualitySignals.map((signal) => (
+                            <span key={signal.key} className={`review-feed-signal quality-metric-${signal.tone}`}>
+                              <small>{signal.dimension}</small>
+                              <strong>{signal.label}</strong>
+                              <em>{`${signal.scoreLabel}/10`}</em>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                     <p className="review-feed-transcript">&quot;{clip.transcriptText}&quot;</p>
 
                     <div className="review-feed-meta-row small muted">

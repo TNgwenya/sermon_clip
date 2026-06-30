@@ -241,7 +241,11 @@ export function buildClipQualityView(clip: ReviewClipModel, rank: number): {
   return {
     rankLabel: rank === 0 ? "Best first post" : `Post pick #${rank + 1}`,
     scoreLabel: formatScore(score),
-    scoreSourceLabel: typeof clip.overallPostScore === "number" ? "Post score" : "Legacy score",
+    scoreSourceLabel: typeof clip.finalQualityScore === "number"
+      ? "Quality score"
+      : typeof clip.overallPostScore === "number"
+        ? "Post score"
+        : "Legacy score",
     actionLabel: professionalLabel ? getProfessionalQualityLabel(professionalLabel) : getRecommendedActionLabel(clip.recommendedAction),
     actionTone,
     categoryLabel: getQualityCategoryLabel(clip.qualityClipCategory),
