@@ -1740,24 +1740,46 @@ export function matchMinistryMoment(candidate: ClipJsonCandidate, moments: Minis
     return null;
   }
 
-  const categoryMatch = moments.find((moment) => normalizeMomentText(moment.clipCategory) === normalizeMomentText(candidate.smartClipCategory));
-  if (categoryMatch) {
-    return categoryMatch;
-  }
-
-  const typeMatch = moments.find((moment) => normalizeMomentText(moment.momentType) === normalizeMomentText(candidate.ministryMomentType));
-  if (typeMatch) {
-    return typeMatch;
-  }
-
   const scored = moments
-    .map((moment) => ({
-      moment,
-      overlap: overlapDuration(moment.startTimeSeconds, moment.endTimeSeconds, candidate.startTimeSeconds, candidate.endTimeSeconds),
-    }))
-    .sort((left, right) => right.overlap - left.overlap);
+    .map((moment) => {
+      const categoryMatch = normalizeMomentText(moment.clipCategory) === normalizeMomentText(candidate.smartClipCategory);
+      const typeMatch = Boolean(candidate.ministryMomentType) && normalizeMomentText(moment.momentType) === normalizeMomentText(candidate.ministryMomentType);
+      const overlap = overlapDuration(moment.startTimeSeconds, moment.endTimeSeconds, candidate.startTimeSeconds, candidate.endTimeSeconds);
+      const candidateDuration = Math.max(1, candidate.endTimeSeconds - candidate.startTimeSeconds);
+      const overlapRatio = overlap / candidateDuration;
+      const excerptText = [
+        moment.transcriptExcerpt ?? "",
+        moment.description,
+        moment.title,
+      ].join(" ");
+      const candidateText = [
+        candidate.transcriptText,
+        candidate.reasonSelected,
+        candidate.landingSentence,
+        candidate.title,
+      ].join(" ");
+      const evidenceScore = tokenContainment(excerptText, candidateText);
+      const score =
+        (categoryMatch ? 0.3 : 0) +
+        (typeMatch ? 0.2 : 0) +
+        Math.min(0.4, overlapRatio * 0.4) +
+        Math.min(0.25, evidenceScore * 0.25) +
+        Math.min(0.1, moment.confidenceScore * 0.1);
 
-  return scored[0]?.overlap ? scored[0].moment : null;
+      return { moment, score, overlapRatio, evidenceScore, categoryMatch, typeMatch };
+    })
+    .sort((left, right) => {
+      const scoreDiff = right.score - left.score;
+      if (scoreDiff !== 0) return scoreDiff;
+      return right.moment.confidenceScore - left.moment.confidenceScore;
+    });
+
+  const best = scored[0];
+  if (!best || best.score < 0.32) {
+    return null;
+  }
+
+  return best.moment;
 }
 
 export function enrichCandidate(candidate: BoundaryAdjustedCandidate, moments: MinistryMomentRecord[]): EnrichedClipCandidate {
@@ -1772,7 +1794,7 @@ export function enrichCandidate(candidate: BoundaryAdjustedCandidate, moments: M
     socialValue: candidate.socialValue,
     suggestedHook: candidate.suggestedHook,
     suggestedCaption: candidate.suggestedCaption,
-    recommendationConfidence: candidate.score / 10,
+    recommendationConfidence: matchedMoment?.confidenceScore ?? candidate.score / 10,
   };
 }
 
