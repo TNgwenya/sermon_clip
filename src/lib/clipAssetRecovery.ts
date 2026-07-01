@@ -90,8 +90,8 @@ export function buildClipAssetRecoveryPlan(input: ClipAssetRecoveryInput): ClipA
       ? "Clip media is up to date."
       : [
           failedLabels.length > 0 ? `Failed: ${failedLabels.join(", ")}` : null,
-          staleLabels.length > 0 ? `Needs rebuild: ${staleLabels.join(", ")}` : null,
+          staleLabels.length > 0 ? "Final video needs updating." : null,
         ].filter(Boolean).join(". "),
-    actionLabel: failedLabels.length > 0 ? "Retry failed media" : "Rebuild media",
+    actionLabel: failedLabels.length > 0 ? "Retry failed media" : "Prepare for Posting",
   };
 }

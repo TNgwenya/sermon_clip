@@ -1,7 +1,6 @@
 "use client";
 
-import { type CSSProperties, useEffect, useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { type CSSProperties, useEffect, useMemo, useState } from "react";
 
 import { SectionCard, StatusBadge } from "@/components/ui";
 import {
@@ -9,17 +8,13 @@ import {
   BRANDING_PRESET_LABELS,
   SELECTABLE_BRANDING_PRESETS,
   buildBrandingSummary,
+  type BrandBackgroundStyle,
   type BrandingPreset,
   type ClipBrandingConfig,
 } from "@/lib/clipBranding";
-import {
-  updateClipBrandingAction,
-  type ClipBrandingActionState,
-} from "@/server/actions/sermons";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
 
 type ClipStudioBrandingProps = {
-  clipId: string;
   initialConfig: ClipBrandingConfig;
   churchName: string;
   sermonTitle: string;
@@ -27,16 +22,17 @@ type ClipStudioBrandingProps = {
   logoAvailable: boolean;
 };
 
+const INTRO_ASSET_AVAILABLE = false;
+const OUTRO_ASSET_AVAILABLE = false;
+
 export function ClipStudioBranding({
-  clipId,
   initialConfig,
   churchName,
   sermonTitle,
   preacherName,
   logoAvailable,
 }: ClipStudioBrandingProps) {
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
+  const isPending = false;
   const { updateBrandingConfig } = useClipStudioPreview();
 
   const [enabled, setEnabled] = useState(initialConfig.enabled);
@@ -46,11 +42,10 @@ export function ClipStudioBranding({
   const [showPreacherName, setShowPreacherName] = useState(initialConfig.showPreacherName);
   const [watermarkEnabled, setWatermarkEnabled] = useState(initialConfig.watermarkEnabled);
   const [lowerThirdEnabled, setLowerThirdEnabled] = useState(initialConfig.lowerThirdEnabled);
+  const [introEnabled, setIntroEnabled] = useState(initialConfig.introEnabled);
+  const [outroEnabled, setOutroEnabled] = useState(initialConfig.outroEnabled);
+  const [backgroundStyle, setBackgroundStyle] = useState<BrandBackgroundStyle>(initialConfig.backgroundStyle);
   const [themeColor, setThemeColor] = useState(initialConfig.themeColor ?? "");
-
-  const [statusMessage, setStatusMessage] = useState("");
-  const [statusSuccess, setStatusSuccess] = useState(true);
-  const [fieldErrors, setFieldErrors] = useState<ClipBrandingActionState["fieldErrors"]>({});
 
   const previewConfig = useMemo<ClipBrandingConfig>(
     () => ({
@@ -61,6 +56,9 @@ export function ClipStudioBranding({
       showPreacherName,
       watermarkEnabled,
       lowerThirdEnabled,
+      introEnabled: INTRO_ASSET_AVAILABLE && introEnabled,
+      outroEnabled: OUTRO_ASSET_AVAILABLE && outroEnabled,
+      backgroundStyle,
       themeColor: themeColor.trim().length > 0 ? themeColor.trim() : null,
     }),
     [
@@ -71,6 +69,9 @@ export function ClipStudioBranding({
       showPreacherName,
       watermarkEnabled,
       lowerThirdEnabled,
+      introEnabled,
+      outroEnabled,
+      backgroundStyle,
       themeColor,
     ],
   );
@@ -89,43 +90,22 @@ export function ClipStudioBranding({
     updateBrandingConfig(previewConfig);
   }, [previewConfig, updateBrandingConfig]);
 
-  function saveBranding() {
-    setStatusMessage("");
-    setFieldErrors({});
-
-    startTransition(async () => {
-      const result = await updateClipBrandingAction({
-        clipId,
-        enabled,
-        preset,
-        showChurchName,
-        showSermonTitle,
-        showPreacherName,
-        watermarkEnabled,
-        lowerThirdEnabled,
-        themeColor: themeColor.trim().length > 0 ? themeColor.trim() : null,
-      });
-
-      setFieldErrors(result.fieldErrors ?? {});
-      setStatusSuccess(result.success);
-      setStatusMessage(result.message);
-
-      if (result.success) {
-        router.refresh();
-      }
-    });
-  }
-
   return (
     <SectionCard
-      title="Church branding"
-      description="Add simple church identity to your rendered clip without using a design editor."
+      title="Branding"
+      description="Add church identity layers to the current preview."
     >
       <div className="stack-md">
         <div className="clip-studio-effect-note">
-          <StatusBadge tone="success">Live preview</StatusBadge>
-          <p>Branding choices update the preview overlay immediately. Save and re-render before using the downloadable video.</p>
+          <StatusBadge tone="success">Preview updated</StatusBadge>
+          <p>Branding choices update the preview immediately. Prepare for Posting renders these layers.</p>
         </div>
+
+        {!logoAvailable || !INTRO_ASSET_AVAILABLE || !OUTRO_ASSET_AVAILABLE ? (
+          <p className="warning-banner">
+            Add your church logo and brand style in Brand settings.
+          </p>
+        ) : null}
 
         <label className="review-checkbox-row">
           <input
@@ -143,7 +123,6 @@ export function ClipStudioBranding({
             value={preset}
             onChange={(event) => setPreset(event.target.value as BrandingPreset)}
             disabled={isPending || !enabled}
-            aria-invalid={Boolean(fieldErrors?.preset)}
           >
             {SELECTABLE_BRANDING_PRESETS.map((option) => (
               <option key={option} value={option}>
@@ -151,7 +130,6 @@ export function ClipStudioBranding({
               </option>
             ))}
           </select>
-          {fieldErrors?.preset ? <span className="error-text small">{fieldErrors.preset}</span> : null}
           <p className="muted small">{BRANDING_PRESET_DESCRIPTIONS[preset]}</p>
         </label>
 
@@ -202,7 +180,41 @@ export function ClipStudioBranding({
             />
             <span>Add lower third</span>
           </label>
+
+          <label className="review-checkbox-row">
+            <input
+              type="checkbox"
+              checked={previewConfig.introEnabled}
+              onChange={(event) => setIntroEnabled(event.target.checked)}
+              disabled={!INTRO_ASSET_AVAILABLE}
+            />
+            <span>Intro</span>
+          </label>
+
+          <label className="review-checkbox-row">
+            <input
+              type="checkbox"
+              checked={previewConfig.outroEnabled}
+              onChange={(event) => setOutroEnabled(event.target.checked)}
+              disabled={!OUTRO_ASSET_AVAILABLE}
+            />
+            <span>Outro</span>
+          </label>
         </fieldset>
+
+        <label className="stack-sm">
+          Background style
+          <select
+            value={backgroundStyle}
+            onChange={(event) => setBackgroundStyle(event.target.value as BrandBackgroundStyle)}
+            disabled={isPending || !enabled}
+          >
+            <option value="NONE">Clean video</option>
+            <option value="SOFT_GRADIENT">Soft gradient</option>
+            <option value="SOLID_BRAND">Brand color</option>
+            <option value="BLURRED_TINT">Blurred tint</option>
+          </select>
+        </label>
 
         <label className="stack-sm">
           Theme color
@@ -212,14 +224,13 @@ export function ClipStudioBranding({
             onChange={(event) => setThemeColor(event.target.value)}
             placeholder="#0F766E"
             disabled={isPending || !enabled}
-            aria-invalid={Boolean(fieldErrors?.themeColor)}
           />
-          {fieldErrors?.themeColor ? <span className="error-text small">{fieldErrors.themeColor}</span> : null}
         </label>
 
         <div className={enabled ? "stack-sm clip-studio-brand-preview" : "stack-sm clip-studio-brand-preview is-disabled"}>
           <p className="muted small">Branding preview</p>
-          <div className="clip-studio-brand-frame" style={previewStyle}>
+          <div className={`clip-studio-brand-frame background-${backgroundStyle.toLowerCase().replace(/_/g, "-")}`} style={previewStyle}>
+            {enabled && previewConfig.introEnabled ? <div className="clip-studio-brand-intro">Intro</div> : null}
             {enabled && watermarkEnabled ? (
               <div className="clip-studio-brand-watermark">{churchName ? churchName.slice(0, 2).toUpperCase() : "SC"}</div>
             ) : null}
@@ -231,6 +242,7 @@ export function ClipStudioBranding({
             ) : (
               <div className="clip-studio-brand-clean-label">Clean clip preview</div>
             )}
+            {enabled && previewConfig.outroEnabled ? <div className="clip-studio-brand-outro">Outro</div> : null}
           </div>
           <p>{previewSummary}</p>
           <p className="muted small">
@@ -238,24 +250,7 @@ export function ClipStudioBranding({
             Preacher name: {preacherName || "Not available"}
           </p>
           <p className="muted small">Logo: {logoAvailable ? "Available" : "Missing"}</p>
-          {!logoAvailable ? (
-            <p className="warning-banner">
-              No church logo is available. The clip can still render with text branding.
-            </p>
-          ) : null}
         </div>
-
-        <div className="actions-row">
-          <button type="button" className="button secondary" onClick={saveBranding} disabled={isPending}>
-            Save branding settings
-          </button>
-        </div>
-
-        {statusMessage ? (
-          <p className={statusSuccess ? "success-banner" : "error-banner"} role="status" aria-live="polite">
-            {statusMessage}
-          </p>
-        ) : null}
       </div>
     </SectionCard>
   );

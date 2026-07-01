@@ -97,6 +97,7 @@ import {
   canRunLocalMediaProcessing,
   localMediaProcessingUnavailableMessage,
 } from "@/server/runtime/workerRuntime";
+import { formatSecondsForTimestampInput } from "@/lib/sermonSegment";
 import type { CaptionStylePresetId } from "@/lib/captionStylePresets";
 
 export type CreateSermonFormState = {
@@ -118,129 +119,129 @@ export type CreateSermonFormState = {
 };
 
 function downloadSermonVideo(
-  ...args: Parameters<typeof import("@/server/agents/videoDownloadAgent").downloadSermonVideo>
-): ReturnType<typeof import("@/server/agents/videoDownloadAgent").downloadSermonVideo> {
+  ...args: Parameters<typeof import("../agents/videoDownloadAgent").downloadSermonVideo>
+): ReturnType<typeof import("../agents/videoDownloadAgent").downloadSermonVideo> {
   assertLocalMediaProcessing("Video download");
-  return import(/* turbopackIgnore: true */ "@/server/agents/videoDownloadAgent").then((module) => module.downloadSermonVideo(...args));
+  return import(/* turbopackIgnore: true */ "../agents/videoDownloadAgent").then((module) => module.downloadSermonVideo(...args));
 }
 
 function extractSermonAudio(
-  ...args: Parameters<typeof import("@/server/agents/audioExtractionAgent").extractSermonAudio>
-): ReturnType<typeof import("@/server/agents/audioExtractionAgent").extractSermonAudio> {
+  ...args: Parameters<typeof import("../agents/audioExtractionAgent").extractSermonAudio>
+): ReturnType<typeof import("../agents/audioExtractionAgent").extractSermonAudio> {
   assertLocalMediaProcessing("Audio extraction");
-  return import(/* turbopackIgnore: true */ "@/server/agents/audioExtractionAgent").then((module) => module.extractSermonAudio(...args));
+  return import(/* turbopackIgnore: true */ "../agents/audioExtractionAgent").then((module) => module.extractSermonAudio(...args));
 }
 
 function transcribeSermonAudio(
-  ...args: Parameters<typeof import("@/server/agents/transcriptionAgent").transcribeSermonAudio>
-): ReturnType<typeof import("@/server/agents/transcriptionAgent").transcribeSermonAudio> {
+  ...args: Parameters<typeof import("../agents/transcriptionAgent").transcribeSermonAudio>
+): ReturnType<typeof import("../agents/transcriptionAgent").transcribeSermonAudio> {
   assertLocalMediaProcessing("Transcription");
-  return import(/* turbopackIgnore: true */ "@/server/agents/transcriptionAgent").then((module) => module.transcribeSermonAudio(...args));
+  return import(/* turbopackIgnore: true */ "../agents/transcriptionAgent").then((module) => module.transcribeSermonAudio(...args));
 }
 
 function generateClipSuggestions(
-  ...args: Parameters<typeof import("@/server/agents/clipIntelligenceAgent").generateClipSuggestions>
-): ReturnType<typeof import("@/server/agents/clipIntelligenceAgent").generateClipSuggestions> {
+  ...args: Parameters<typeof import("../agents/clipIntelligenceAgent").generateClipSuggestions>
+): ReturnType<typeof import("../agents/clipIntelligenceAgent").generateClipSuggestions> {
   assertLocalMediaProcessing("Clip generation");
-  return import(/* turbopackIgnore: true */ "@/server/agents/clipIntelligenceAgent").then((module) => module.generateClipSuggestions(...args));
+  return import(/* turbopackIgnore: true */ "../agents/clipIntelligenceAgent").then((module) => module.generateClipSuggestions(...args));
 }
 
 function mediaFileIsUsable(
-  ...args: Parameters<typeof import("@/server/media/fileGuards").mediaFileIsUsable>
-): ReturnType<typeof import("@/server/media/fileGuards").mediaFileIsUsable> {
+  ...args: Parameters<typeof import("../media/fileGuards").mediaFileIsUsable>
+): ReturnType<typeof import("../media/fileGuards").mediaFileIsUsable> {
   assertLocalMediaProcessing("Media validation");
-  return import(/* turbopackIgnore: true */ "@/server/media/fileGuards").then((module) => module.mediaFileIsUsable(...args));
+  return import(/* turbopackIgnore: true */ "../media/fileGuards").then((module) => module.mediaFileIsUsable(...args));
 }
 
 function refreshSermonClipQuality(
-  ...args: Parameters<typeof import("@/server/agents/clipQualityRefreshService").refreshSermonClipQuality>
-): ReturnType<typeof import("@/server/agents/clipQualityRefreshService").refreshSermonClipQuality> {
+  ...args: Parameters<typeof import("../agents/clipQualityRefreshService").refreshSermonClipQuality>
+): ReturnType<typeof import("../agents/clipQualityRefreshService").refreshSermonClipQuality> {
   assertLocalMediaProcessing("Clip quality refresh");
-  return import(/* turbopackIgnore: true */ "@/server/agents/clipQualityRefreshService").then((module) => module.refreshSermonClipQuality(...args));
+  return import(/* turbopackIgnore: true */ "../agents/clipQualityRefreshService").then((module) => module.refreshSermonClipQuality(...args));
 }
 
 function curateSermonAiSuggestions(
-  ...args: Parameters<typeof import("@/server/agents/clipSuggestionCurationService").curateSermonAiSuggestions>
-): ReturnType<typeof import("@/server/agents/clipSuggestionCurationService").curateSermonAiSuggestions> {
+  ...args: Parameters<typeof import("../agents/clipSuggestionCurationService").curateSermonAiSuggestions>
+): ReturnType<typeof import("../agents/clipSuggestionCurationService").curateSermonAiSuggestions> {
   assertLocalMediaProcessing("Clip suggestion curation");
-  return import(/* turbopackIgnore: true */ "@/server/agents/clipSuggestionCurationService").then((module) => module.curateSermonAiSuggestions(...args));
+  return import(/* turbopackIgnore: true */ "../agents/clipSuggestionCurationService").then((module) => module.curateSermonAiSuggestions(...args));
 }
 
 function refreshVideoSubjectTracking(
-  ...args: Parameters<typeof import("@/server/agents/videoSubjectTrackingService").refreshVideoSubjectTracking>
-): ReturnType<typeof import("@/server/agents/videoSubjectTrackingService").refreshVideoSubjectTracking> {
+  ...args: Parameters<typeof import("../agents/videoSubjectTrackingService").refreshVideoSubjectTracking>
+): ReturnType<typeof import("../agents/videoSubjectTrackingService").refreshVideoSubjectTracking> {
   assertLocalMediaProcessing("Video tracking");
-  return import(/* turbopackIgnore: true */ "@/server/agents/videoSubjectTrackingService").then((module) => module.refreshVideoSubjectTracking(...args));
+  return import(/* turbopackIgnore: true */ "../agents/videoSubjectTrackingService").then((module) => module.refreshVideoSubjectTracking(...args));
 }
 
 function generateSmartCropDebugSnapshot(
-  ...args: Parameters<typeof import("@/server/agents/smartCropDebugService").generateSmartCropDebugSnapshot>
-): ReturnType<typeof import("@/server/agents/smartCropDebugService").generateSmartCropDebugSnapshot> {
+  ...args: Parameters<typeof import("../agents/smartCropDebugService").generateSmartCropDebugSnapshot>
+): ReturnType<typeof import("../agents/smartCropDebugService").generateSmartCropDebugSnapshot> {
   assertLocalMediaProcessing("Smart crop debug snapshot");
-  return import(/* turbopackIgnore: true */ "@/server/agents/smartCropDebugService").then((module) => module.generateSmartCropDebugSnapshot(...args));
+  return import(/* turbopackIgnore: true */ "../agents/smartCropDebugService").then((module) => module.generateSmartCropDebugSnapshot(...args));
 }
 
 function renderApprovedClip(
-  ...args: Parameters<typeof import("@/server/agents/clipRenderService").renderApprovedClip>
-): ReturnType<typeof import("@/server/agents/clipRenderService").renderApprovedClip> {
+  ...args: Parameters<typeof import("../agents/clipRenderService").renderApprovedClip>
+): ReturnType<typeof import("../agents/clipRenderService").renderApprovedClip> {
   assertLocalMediaProcessing("Clip render");
-  return import(/* turbopackIgnore: true */ "@/server/agents/clipRenderService").then((module) => module.renderApprovedClip(...args));
+  return import(/* turbopackIgnore: true */ "../agents/clipRenderService").then((module) => module.renderApprovedClip(...args));
 }
 
 function renderApprovedClipsForSermon(
-  ...args: Parameters<typeof import("@/server/agents/clipRenderService").renderApprovedClipsForSermon>
-): ReturnType<typeof import("@/server/agents/clipRenderService").renderApprovedClipsForSermon> {
+  ...args: Parameters<typeof import("../agents/clipRenderService").renderApprovedClipsForSermon>
+): ReturnType<typeof import("../agents/clipRenderService").renderApprovedClipsForSermon> {
   assertLocalMediaProcessing("Clip render");
-  return import(/* turbopackIgnore: true */ "@/server/agents/clipRenderService").then((module) => module.renderApprovedClipsForSermon(...args));
+  return import(/* turbopackIgnore: true */ "../agents/clipRenderService").then((module) => module.renderApprovedClipsForSermon(...args));
 }
 
 function exportVerticalClip(
-  ...args: Parameters<typeof import("@/server/agents/clipExportService").exportVerticalClip>
-): ReturnType<typeof import("@/server/agents/clipExportService").exportVerticalClip> {
+  ...args: Parameters<typeof import("../agents/clipExportService").exportVerticalClip>
+): ReturnType<typeof import("../agents/clipExportService").exportVerticalClip> {
   assertLocalMediaProcessing("Clip export");
-  return import(/* turbopackIgnore: true */ "@/server/agents/clipExportService").then((module) => module.exportVerticalClip(...args));
+  return import(/* turbopackIgnore: true */ "../agents/clipExportService").then((module) => module.exportVerticalClip(...args));
 }
 
 function exportClipWithPreset(
-  ...args: Parameters<typeof import("@/server/agents/clipExportService").exportClipWithPreset>
-): ReturnType<typeof import("@/server/agents/clipExportService").exportClipWithPreset> {
+  ...args: Parameters<typeof import("../agents/clipExportService").exportClipWithPreset>
+): ReturnType<typeof import("../agents/clipExportService").exportClipWithPreset> {
   assertLocalMediaProcessing("Clip export");
-  return import(/* turbopackIgnore: true */ "@/server/agents/clipExportService").then((module) => module.exportClipWithPreset(...args));
+  return import(/* turbopackIgnore: true */ "../agents/clipExportService").then((module) => module.exportClipWithPreset(...args));
 }
 
 function renderClipOverlay(
-  ...args: Parameters<typeof import("@/server/agents/clipOverlayService").renderClipOverlay>
-): ReturnType<typeof import("@/server/agents/clipOverlayService").renderClipOverlay> {
+  ...args: Parameters<typeof import("../agents/clipOverlayService").renderClipOverlay>
+): ReturnType<typeof import("../agents/clipOverlayService").renderClipOverlay> {
   assertLocalMediaProcessing("Overlay render");
-  return import(/* turbopackIgnore: true */ "@/server/agents/clipOverlayService").then((module) => module.renderClipOverlay(...args));
+  return import(/* turbopackIgnore: true */ "../agents/clipOverlayService").then((module) => module.renderClipOverlay(...args));
 }
 
 function processSermonPipeline(
-  ...args: Parameters<typeof import("@/server/pipeline/processSermonPipeline").processSermonPipeline>
-): ReturnType<typeof import("@/server/pipeline/processSermonPipeline").processSermonPipeline> {
+  ...args: Parameters<typeof import("../pipeline/processSermonPipeline").processSermonPipeline>
+): ReturnType<typeof import("../pipeline/processSermonPipeline").processSermonPipeline> {
   assertLocalMediaProcessing("Sermon processing");
-  return import(/* turbopackIgnore: true */ "@/server/pipeline/processSermonPipeline").then((module) => module.processSermonPipeline(...args));
+  return import(/* turbopackIgnore: true */ "../pipeline/processSermonPipeline").then((module) => module.processSermonPipeline(...args));
 }
 
 function generateCaptionsForApprovedClips(
-  ...args: Parameters<typeof import("@/server/agents/captionService").generateCaptionsForApprovedClips>
-): ReturnType<typeof import("@/server/agents/captionService").generateCaptionsForApprovedClips> {
+  ...args: Parameters<typeof import("../agents/captionService").generateCaptionsForApprovedClips>
+): ReturnType<typeof import("../agents/captionService").generateCaptionsForApprovedClips> {
   assertLocalMediaProcessing("Caption generation");
-  return import(/* turbopackIgnore: true */ "@/server/agents/captionService").then((module) => module.generateCaptionsForApprovedClips(...args));
+  return import(/* turbopackIgnore: true */ "../agents/captionService").then((module) => module.generateCaptionsForApprovedClips(...args));
 }
 
 function generateCaptionsForClip(
-  ...args: Parameters<typeof import("@/server/agents/captionService").generateCaptionsForClip>
-): ReturnType<typeof import("@/server/agents/captionService").generateCaptionsForClip> {
+  ...args: Parameters<typeof import("../agents/captionService").generateCaptionsForClip>
+): ReturnType<typeof import("../agents/captionService").generateCaptionsForClip> {
   assertLocalMediaProcessing("Caption generation");
-  return import(/* turbopackIgnore: true */ "@/server/agents/captionService").then((module) => module.generateCaptionsForClip(...args));
+  return import(/* turbopackIgnore: true */ "../agents/captionService").then((module) => module.generateCaptionsForClip(...args));
 }
 
 function burnCaptionsIntoRenderedClip(
-  ...args: Parameters<typeof import("@/server/agents/captionBurnService").burnCaptionsIntoRenderedClip>
-): ReturnType<typeof import("@/server/agents/captionBurnService").burnCaptionsIntoRenderedClip> {
+  ...args: Parameters<typeof import("../agents/captionBurnService").burnCaptionsIntoRenderedClip>
+): ReturnType<typeof import("../agents/captionBurnService").burnCaptionsIntoRenderedClip> {
   assertLocalMediaProcessing("Caption burn");
-  return import(/* turbopackIgnore: true */ "@/server/agents/captionBurnService").then((module) => module.burnCaptionsIntoRenderedClip(...args));
+  return import(/* turbopackIgnore: true */ "../agents/captionBurnService").then((module) => module.burnCaptionsIntoRenderedClip(...args));
 }
 
 function assertLocalMediaProcessing(action: string): void {
@@ -540,6 +541,53 @@ export type UpdateClipExportSettingsInput = {
   framingMode: string;
   framingPersonality?: string;
   selectedFormats: string[];
+};
+
+export type PrepareClipStudioForPostingInput = {
+  clipId: string;
+  editPreview: {
+    startSeconds: number | null;
+    endSeconds: number | null;
+    mainCaption: string;
+    shortCaption: string;
+    platformCaption: string;
+    onVideoCaptionText: string;
+    hashtags: string;
+    captionCues: EditableCaptionCue[];
+    applyCaptionsToClip: boolean;
+    captionStylePresetId: string;
+    hookOverlay: UpdateClipStudioEditsInput["hookOverlay"];
+    speechCleanup: UpdateClipStudioEditsInput["speechCleanup"];
+  };
+  exportSettings: {
+    platformPreset: string;
+    primaryFormat: string;
+    selectedFormats: string[];
+    framingMode: string;
+    framingPersonality: string;
+  };
+  brandingConfig: {
+    enabled: boolean;
+    preset: string;
+    showChurchName: boolean;
+    showSermonTitle: boolean;
+    showPreacherName: boolean;
+    watermarkEnabled: boolean;
+    lowerThirdEnabled: boolean;
+    introEnabled: boolean;
+    outroEnabled: boolean;
+    backgroundStyle: string;
+    themeColor: string | null;
+  };
+};
+
+export type PrepareClipStudioForPostingState = {
+  success: boolean;
+  message: string;
+  results: ClipStudioRenderResult[];
+  queued?: boolean;
+  fieldErrors?: UpdateClipStudioEditsState["fieldErrors"] & UpdateClipExportSettingsState["fieldErrors"] & ClipBrandingActionState["fieldErrors"];
+  warnings?: string[];
 };
 
 export type UpdateClipExportSettingsState = {
@@ -2993,13 +3041,6 @@ export async function saveManualCropCorrectionAction(input: {
     return { success: false, message: "Clip candidate was not found." };
   }
 
-  if (clip.status === "EXPORTED") {
-    return {
-      success: false,
-      message: "Ready-to-post clips are locked. Open Clip Studio and prepare a new version if you need changes.",
-    };
-  }
-
   const keyframes = parsed.data.keyframes
     ? normalizeManualCropKeyframes(parsed.data.keyframes)
     : parsed.data.nudge
@@ -3019,13 +3060,14 @@ export async function saveManualCropCorrectionAction(input: {
       smartCropDebugSnapshotPath: null,
       smartCropDebugGeneratedAt: null,
       smartCropDebugError: null,
+      ...(clip.status === "EXPORTED" ? { status: "APPROVED" as const } : {}),
     },
   });
   await invalidateAfterBoundaryOrCropChange(clip.id, "Manual crop correction updated.");
   await appendPipelineLog(clip.sermonId, `Manual crop correction saved for clip ${clip.id}.`);
   await revalidateClipPaths(clip.id, clip.sermonId);
 
-  return { success: true, message: "Manual framing saved. Re-render the preview to apply it." };
+  return { success: true, message: "Framing updated. Prepare again when ready." };
 }
 
 export async function resetManualCropCorrectionAction(clipId: string): Promise<ManualCropActionState> {
@@ -3043,13 +3085,6 @@ export async function resetManualCropCorrectionAction(clipId: string): Promise<M
     return { success: false, message: "Clip candidate was not found." };
   }
 
-  if (clip.status === "EXPORTED") {
-    return {
-      success: false,
-      message: "Ready-to-post clips are locked. Open Clip Studio and prepare a new version if you need changes.",
-    };
-  }
-
   await prisma.clipCandidate.update({
     where: { id: clip.id },
     data: {
@@ -3058,13 +3093,14 @@ export async function resetManualCropCorrectionAction(clipId: string): Promise<M
       smartCropDebugSnapshotPath: null,
       smartCropDebugGeneratedAt: null,
       smartCropDebugError: null,
+      ...(clip.status === "EXPORTED" ? { status: "APPROVED" as const } : {}),
     },
   });
   await invalidateAfterBoundaryOrCropChange(clip.id, "Manual crop correction reset.");
   await appendPipelineLog(clip.sermonId, `Manual crop correction reset for clip ${clip.id}.`);
   await revalidateClipPaths(clip.id, clip.sermonId);
 
-  return { success: true, message: "Manual framing reset. Re-render the preview to return to automatic smart crop." };
+  return { success: true, message: "Framing reset. Prepare again when ready." };
 }
 
 export async function generateSmartCropDebugSnapshotAction(clipId: string): Promise<SmartCropDebugActionState> {
@@ -3393,6 +3429,9 @@ export async function prepareApprovedClipsAction(input: {
                       showPreacherName: true,
                       watermarkEnabled: true,
                       lowerThirdEnabled: true,
+                      introEnabled: false,
+                      outroEnabled: false,
+                      backgroundStyle: "NONE",
                       themeColor: brandingSettings.primaryBrandColor,
                     },
                     sermonTitle: sermon.title,
@@ -3834,13 +3873,6 @@ export async function updateClipStudioEditsAction(
     };
   }
 
-  if (clip.status === "EXPORTED") {
-    return {
-      success: false,
-      message: "Ready-to-post clips are locked. Open Clip Studio and prepare a new version if you need changes.",
-    };
-  }
-
   const durationSegment = await prisma.transcriptSegment.findFirst({
     where: { sermonId: clip.sermonId },
     orderBy: { endTimeSeconds: "desc" },
@@ -4071,6 +4103,7 @@ export async function updateClipStudioEditsAction(
         },
       },
       isManuallyEdited: true,
+      ...(clip.status === "EXPORTED" ? { status: "APPROVED" as const } : {}),
     },
   });
 
@@ -4203,13 +4236,6 @@ export async function updateClipExportSettingsAction(
     return { success: false, message: "Clip candidate was not found." };
   }
 
-  if (clip.status === "EXPORTED") {
-    return {
-      success: false,
-      message: "Ready-to-post clips are locked. Open Clip Studio and prepare a new version if you need changes.",
-    };
-  }
-
   const platformPreset = input.platformPreset as PlatformPreset;
   const mappedFormatFromPreset = mapPlatformPresetToFormat(platformPreset);
   const primaryFormat = isValidExportFormat(input.primaryFormat)
@@ -4251,6 +4277,7 @@ export async function updateClipExportSettingsAction(
           updatedAt: new Date().toISOString(),
         },
       },
+      ...(clip.status === "EXPORTED" ? { status: "APPROVED" as const } : {}),
     },
   });
 
@@ -4306,6 +4333,9 @@ export async function updateClipBrandingAction(input: {
   showPreacherName: boolean;
   watermarkEnabled: boolean;
   lowerThirdEnabled: boolean;
+  introEnabled: boolean;
+  outroEnabled: boolean;
+  backgroundStyle: string;
   themeColor: string | null;
 }): Promise<ClipBrandingActionState> {
   const clipId = input.clipId.trim();
@@ -4334,7 +4364,7 @@ export async function updateClipBrandingAction(input: {
 
   const clip = await prisma.clipCandidate.findUnique({
     where: { id: clipId },
-    select: { id: true, sermonId: true, captionData: true },
+    select: { id: true, sermonId: true, status: true, captionData: true },
   });
 
   if (!clip) {
@@ -4342,7 +4372,23 @@ export async function updateClipBrandingAction(input: {
   }
 
   const captionDataRecord = toCaptionDataRecord(clip.captionData);
+  const previousConfig = resolveBrandingConfig(clip.captionData);
   const preset = input.preset as BrandingPreset;
+  const nextConfig = {
+    enabled: input.enabled,
+    preset,
+    showChurchName: input.showChurchName,
+    showSermonTitle: input.showSermonTitle,
+    showPreacherName: input.showPreacherName,
+    watermarkEnabled: input.watermarkEnabled,
+    lowerThirdEnabled: input.lowerThirdEnabled,
+    introEnabled: input.introEnabled,
+    outroEnabled: input.outroEnabled,
+    backgroundStyle: ["NONE", "SOFT_GRADIENT", "SOLID_BRAND", "BLURRED_TINT"].includes(input.backgroundStyle)
+      ? input.backgroundStyle
+      : previousConfig.backgroundStyle,
+    themeColor,
+  };
 
   await prisma.clipCandidate.update({
     where: { id: clip.id },
@@ -4350,21 +4396,27 @@ export async function updateClipBrandingAction(input: {
       captionData: {
         ...captionDataRecord,
         brandingSettings: {
-          enabled: input.enabled,
-          preset,
-          showChurchName: input.showChurchName,
-          showSermonTitle: input.showSermonTitle,
-          showPreacherName: input.showPreacherName,
-          watermarkEnabled: input.watermarkEnabled,
-          lowerThirdEnabled: input.lowerThirdEnabled,
-          themeColor: themeColor,
+          ...nextConfig,
           updatedAt: new Date().toISOString(),
         },
       },
+      ...(clip.status === "EXPORTED" ? { status: "APPROVED" as const } : {}),
     },
   });
 
+  if (JSON.stringify(previousConfig) !== JSON.stringify(nextConfig)) {
+    await appendPipelineLog(clip.sermonId, `Regeneration invalidation started for clip ${clip.id}: branding changed from Clip Studio.`);
+    await invalidateAfterOverlaySettingChange(
+      clip.id,
+      "Branding changed from Clip Studio. Overlay and export assets require regeneration.",
+    );
+    await appendPipelineLog(clip.sermonId, `Regeneration invalidation completed for clip ${clip.id}: overlay/export freshness updated.`);
+  }
+
+  revalidatePath(`/sermons/${clip.sermonId}`);
+  revalidatePath(`/sermons/${clip.sermonId}/review`);
   revalidatePath(`/sermons/${clip.sermonId}/clips/${clip.id}/studio`);
+  revalidatePath("/ready-to-post");
 
   return { success: true, message: "Church branding settings saved." };
 }
@@ -4635,6 +4687,9 @@ export async function renderClipStudioExportsAction(input: {
         preacherNameUsed: preacherNameUsed || null,
         watermarkEnabled: brandingConfig.watermarkEnabled,
         lowerThirdEnabled: brandingConfig.lowerThirdEnabled,
+        introEnabled: brandingConfig.introEnabled,
+        outroEnabled: brandingConfig.outroEnabled,
+        backgroundStyle: brandingConfig.backgroundStyle,
         themeColor: brandingConfig.themeColor,
         logoAvailable,
       },
@@ -4816,18 +4871,182 @@ export async function renderClipStudioExportsAction(input: {
   const completed = results.filter((result) => result.status === "COMPLETED").length;
   const failed = results.length - completed;
 
+  if (failed === 0) {
+    await prisma.clipCandidate.update({
+      where: { id: clip.id },
+      data: { status: "EXPORTED" },
+    });
+  }
+
   revalidatePath(`/sermons/${clip.sermonId}`);
   revalidatePath(`/sermons/${clip.sermonId}/review`);
   revalidatePath(`/sermons/${clip.sermonId}/clips/${clip.id}/studio`);
+  revalidatePath("/ready-to-post");
   revalidatePath("/");
 
   return {
     success: failed === 0,
     message:
       failed === 0
-        ? `Render completed for ${completed} format(s).`
+        ? `Final video prepared for ${completed} format(s).`
         : `Render completed with ${failed} failure(s). Completed ${completed} format(s).`,
     results,
+  };
+}
+
+export async function prepareClipStudioForPostingAction(
+  input: PrepareClipStudioForPostingInput,
+): Promise<PrepareClipStudioForPostingState> {
+  const clipId = input.clipId.trim();
+  if (!clipId) {
+    return {
+      success: false,
+      message: "Missing clip id for preparation.",
+      results: [],
+    };
+  }
+
+  const { startSeconds, endSeconds } = input.editPreview;
+  if (startSeconds === null || endSeconds === null || endSeconds <= startSeconds) {
+    return {
+      success: false,
+      message: "Choose a valid start and end before preparing the final video.",
+      results: [],
+      fieldErrors: {
+        startTimestamp: startSeconds === null ? "Start time is required." : undefined,
+        endTimestamp: endSeconds === null || endSeconds <= (startSeconds ?? 0) ? "End time must come after start." : undefined,
+      },
+    };
+  }
+
+  const selectedFormats = Array.from(
+    new Set(input.exportSettings.selectedFormats.filter((format) => isValidExportFormat(format))),
+  );
+  const primaryFormat = isValidExportFormat(input.exportSettings.primaryFormat)
+    ? input.exportSettings.primaryFormat
+    : selectedFormats[0] ?? "VERTICAL_9_16";
+  const formatsToPrepare = selectedFormats.length > 0 ? selectedFormats : [primaryFormat];
+
+  const editResult = await updateClipStudioEditsAction({
+    clipId,
+    startTimestamp: formatSecondsForTimestampInput(startSeconds),
+    endTimestamp: formatSecondsForTimestampInput(endSeconds),
+    mainCaption: input.editPreview.mainCaption || input.editPreview.onVideoCaptionText,
+    shortCaption: input.editPreview.shortCaption,
+    platformCaption: input.editPreview.platformCaption,
+    hashtags: input.editPreview.hashtags,
+    captionCues: input.editPreview.captionCues,
+    applyCaptionsToClip: input.editPreview.applyCaptionsToClip,
+    captionStylePresetId: input.editPreview.captionStylePresetId,
+    hook: input.editPreview.hookOverlay.text,
+    hookOverlay: input.editPreview.hookOverlay,
+    speechCleanup: input.editPreview.speechCleanup,
+  });
+
+  if (!editResult.success) {
+    return {
+      success: false,
+      message: editResult.message,
+      results: [],
+      fieldErrors: editResult.fieldErrors,
+      warnings: editResult.warnings,
+    };
+  }
+
+  const exportResult = await updateClipExportSettingsAction({
+    clipId,
+    platformPreset: input.exportSettings.platformPreset,
+    primaryFormat,
+    framingMode: input.exportSettings.framingMode,
+    framingPersonality: input.exportSettings.framingPersonality,
+    selectedFormats: formatsToPrepare,
+  });
+
+  if (!exportResult.success) {
+    return {
+      success: false,
+      message: exportResult.message,
+      results: [],
+      fieldErrors: exportResult.fieldErrors,
+      warnings: editResult.warnings,
+    };
+  }
+
+  const brandingResult = await updateClipBrandingAction({
+    clipId,
+    enabled: input.brandingConfig.enabled,
+    preset: input.brandingConfig.preset,
+    showChurchName: input.brandingConfig.showChurchName,
+    showSermonTitle: input.brandingConfig.showSermonTitle,
+    showPreacherName: input.brandingConfig.showPreacherName,
+    watermarkEnabled: input.brandingConfig.watermarkEnabled,
+    lowerThirdEnabled: input.brandingConfig.lowerThirdEnabled,
+    introEnabled: input.brandingConfig.introEnabled,
+    outroEnabled: input.brandingConfig.outroEnabled,
+    backgroundStyle: input.brandingConfig.backgroundStyle,
+    themeColor: input.brandingConfig.themeColor,
+  });
+
+  if (!brandingResult.success) {
+    return {
+      success: false,
+      message: brandingResult.message,
+      results: [],
+      fieldErrors: brandingResult.fieldErrors,
+      warnings: editResult.warnings,
+    };
+  }
+
+  const clip = await prisma.clipCandidate.findUnique({
+    where: { id: clipId },
+    select: { id: true, sermonId: true },
+  });
+
+  if (!clip) {
+    return {
+      success: false,
+      message: "Clip candidate was not found.",
+      results: [],
+      warnings: editResult.warnings,
+    };
+  }
+
+  await prisma.clipCandidate.update({
+    where: { id: clip.id },
+    data: { status: "APPROVED" },
+  });
+
+  if (!canRunLocalMediaProcessing()) {
+    const queued = await queueSermonMediaAssetJobs(clip.sermonId);
+    revalidatePath(`/sermons/${clip.sermonId}`);
+    revalidatePath(`/sermons/${clip.sermonId}/review`);
+    revalidatePath(`/sermons/${clip.sermonId}/clips/${clip.id}/studio`);
+    revalidatePath("/ready-to-post");
+    revalidatePath("/");
+
+    return {
+      success: true,
+      queued: true,
+      message: queued.queued > 0
+        ? "Final video preparation was queued for your local worker."
+        : "Final video preparation is already queued for your local worker.",
+      results: [],
+      warnings: editResult.warnings,
+    };
+  }
+
+  const renderResult = await renderClipStudioExportsAction({
+    clipId: clip.id,
+    selectedFormats: formatsToPrepare,
+  });
+
+  return {
+    success: renderResult.success,
+    message: renderResult.success
+      ? "Prepared for posting using the current preview."
+      : renderResult.message,
+    results: renderResult.results,
+    warnings: editResult.warnings,
   };
 }
 

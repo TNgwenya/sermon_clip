@@ -181,7 +181,7 @@ export function resolveEffectiveFramingPreset(input: {
   const fallbackApplied = input.requestedPreset === "SMART_CROP" && safety.unsafe;
   const effectivePreset = fallbackApplied ? "FIT_BLURRED_BACKGROUND" : input.requestedPreset;
   const reason = fallbackApplied
-    ? `Auto pastor tracking was not safe enough (${safety.reason ?? "unsafe tracking"}), so full-stage blurred framing was used.`
+    ? `Auto Intelligent framing was not safe enough (${safety.reason ?? "unsafe tracking"}), so full-stage blurred framing was used.`
     : null;
 
   return {

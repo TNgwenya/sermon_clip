@@ -31,10 +31,11 @@ import { ClipStudioBranding } from "@/app/sermons/[id]/clips/[clipId]/studio/cli
 import { ClipStudioLivePreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-live-preview";
 import { ClipStudioPreviewProvider } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
 import { ClipStudioWorkbenchTabs } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-workbench-tabs";
+import { ClipStudioPrepareButton } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-prepare-button";
+import { ClipStudioTranscriptPanel } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-transcript-panel";
 import { resolveExportHistory, resolveExportSettings } from "@/lib/clipExportSettings";
 import { resolveBrandingConfig } from "@/lib/clipBranding";
 import { buildClipAssetRecoveryPlan } from "@/lib/clipAssetRecovery";
-import { ClipAssetRecoveryButton } from "@/components/clip-asset-recovery-button";
 import { getBrandingSettings } from "@/server/branding/settings";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import { resolveBestPreviewCandidate } from "@/lib/clipPreview";
@@ -326,8 +327,11 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
 
   const clipStatus = clip.status as "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
   const renderStatus = clip.renderStatus as "NOT_RENDERED" | "QUEUED" | "RENDERING" | "COMPLETED" | "FAILED";
-  const postClipHref = `/ready-to-post?sermonId=${encodeURIComponent(sermonId)}&clipId=${encodeURIComponent(clip.id)}`;
   const recoveryPlan = buildClipAssetRecoveryPlan(clip);
+  const latestPreparedMediaExists = exportHistoryWithFileState.some(
+    (record) => record.status === "COMPLETED" && record.fileExists && record.isLatest,
+  );
+  const hasPreparedMedia = currentExportFileExists || latestPreparedMediaExists;
 
   return (
     <ClipStudioPreviewProvider
@@ -372,23 +376,35 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
 
           <div className="clip-studio-topbar-actions">
             <Link href={`/sermons/${sermonId}`} className="button tertiary">
-              Sermon
+              Back to Sermon
             </Link>
             <Link href={`/sermons/${sermonId}/review`} className="button tertiary">
-              Review
+              Back to Clips
             </Link>
-            <Link href={postClipHref} className="button primary">
-              Post clip
-            </Link>
+            <ClipStudioPrepareButton
+              clipId={clip.id}
+              hasPreparedMedia={hasPreparedMedia}
+              serverNeedsUpdate={recoveryPlan.hasRecoverableIssue}
+            />
           </div>
         </div>
       </header>
 
       <div className="clip-studio-layout">
+        <ClipStudioTranscriptPanel
+          transcriptSegments={transcriptSegments}
+          clipStartSeconds={clip.startTimeSeconds}
+          clipEndSeconds={clip.endTimeSeconds}
+          clipDurationSeconds={clip.durationSeconds}
+          captionCues={onVideoCaptionCues}
+          speechCleanup={speechCleanupSettings}
+          momentType={clip.ministryMoment?.momentType ?? clip.clipType ?? null}
+          momentTitle={clip.ministryMoment?.title ?? null}
+          smartClipCategory={clip.smartClipCategory}
+        />
+
         <aside className="clip-studio-preview-column stack-md">
           <ClipStudioLivePreview
-            clipId={clip.id}
-            currentStatus={clipStatus}
             hasPreview={hasPreview}
             previewSrc={previewSrc}
             sourcePreviewSrc={sourceVideoExists ? `/api/sermons/${sermon.id}/source-preview` : null}
@@ -410,52 +426,12 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
           {clip.captionBurnError ? <p className="status-help">Caption burn issue: {clip.captionBurnError}</p> : null}
           {clip.overlayRenderError ? <p className="status-help">Branding issue: {clip.overlayRenderError}</p> : null}
           {clip.exportError ? <p className="status-help">Export issue: {clip.exportError}</p> : null}
-          {recoveryPlan.hasRecoverableIssue ? (
-            <section className="card stack-sm">
-              <p className="kicker">Media recovery</p>
-              <h3>{recoveryPlan.failedLabels.length > 0 ? "Some prepared media failed" : "Prepared media needs rebuild"}</h3>
-              <p className="muted small">{recoveryPlan.summary}</p>
-              <ClipAssetRecoveryButton
-                clipId={clip.id}
-                label={recoveryPlan.actionLabel}
-                busyLabel="Recovering this clip..."
-                variant="primary"
-              />
-            </section>
-          ) : null}
         </aside>
 
         <div className="clip-studio-main-column stack-md">
-          <section className="card clip-studio-score-card clip-studio-insight-card stack-sm">
-            <div className="section-heading-row">
-              <div>
-                <p className="kicker">Clip intelligence</p>
-                <h3>Why this clip works</h3>
-              </div>
-              <StatusBadge tone={clip.score >= 7 ? "success" : clip.score >= 4 ? "accent" : "warning"}>
-                {clip.score.toFixed(1)}
-              </StatusBadge>
-            </div>
-            <div className="stat-grid">
-              <StatCard label="Category" value={clip.smartClipCategory ?? "Uncategorized"} tone="neutral" />
-              {hasMinistryScore ? (
-                <StatCard label={ministryScore.label} value={ministryScore.value} tone={ministryScore.tone} />
-              ) : null}
-              {hasSocialScore ? (
-                <StatCard label={socialScore.label} value={socialScore.value} tone={socialScore.tone} />
-              ) : null}
-              <StatCard
-                label="Audience"
-                value={clip.intendedAudience || "General"}
-                tone="accent"
-              />
-            </div>
-            {clip.recommendationReason ? <p className="muted">{clip.recommendationReason}</p> : null}
-          </section>
           <ClipStudioWorkbenchTabs
             edit={
               <ClipStudioEditor
-                clipId={clip.id}
                 initialStartTimeSeconds={clip.startTimeSeconds}
                 initialEndTimeSeconds={clip.endTimeSeconds}
                 initialShortCaption={captionPackage.shortCaption ?? ""}
@@ -465,7 +441,6 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 initialApplyCaptionsToClip={applyCaptionsToClip}
                 initialCaptionStylePresetId={captionStyleOverride}
                 brandCaptionStylePresetId={appBranding?.defaultCaptionStyleName ?? DEFAULT_CAPTION_STYLE_PRESET_ID}
-                initialHook={clip.hook}
                 suggestedHook={clip.suggestedHook ?? ""}
                 initialHookOverlay={hookOverlay}
                 initialSpeechCleanup={speechCleanupSettings}
@@ -481,8 +456,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             format={
               <ClipStudioFormatFraming
                 clipId={clip.id}
+                clipDurationSeconds={clip.durationSeconds}
                 initialSettings={exportSettings}
-                exportHistory={exportHistoryWithFileState}
                 videoSubjectTracks={videoSubjectTracks}
                 manualCropKeyframes={clip.manualCropKeyframes}
                 manualCropUpdatedAt={clip.manualCropUpdatedAt?.toISOString() ?? null}
@@ -495,22 +470,10 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 averageTrackingConfidence={clip.averageTrackingConfidence}
                 cropStabilityScore={clip.cropStabilityScore}
                 framingDecisionSummary={framingDecisionSummary}
-                currentExport={
-                  clip.exportStatus === "COMPLETED" &&
-                  clip.exportFormat === "VERTICAL_9_16" &&
-                  clip.exportedFilePath
-                    ? {
-                        format: clip.exportFormat,
-                        outputPath: clip.exportedFilePath,
-                        fileExists: currentExportFileExists,
-                      }
-                    : null
-                }
               />
             }
             branding={
               <ClipStudioBranding
-                clipId={clip.id}
                 initialConfig={brandingConfig}
                 churchName={sermon.churchName}
                 sermonTitle={sermon.title}
@@ -518,8 +481,52 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 logoAvailable={logoAvailable}
               />
             }
+            post={
+              <section className="clip-studio-details stack-md">
+                <div className="section-heading-row">
+                  <div>
+                    <p className="kicker">Post</p>
+                    <h3>{hasPreparedMedia && !recoveryPlan.hasRecoverableIssue ? "Prepared video ready" : "Final video needs updating"}</h3>
+                  </div>
+                  <StatusBadge tone={hasPreparedMedia && !recoveryPlan.hasRecoverableIssue ? "success" : "warning"}>
+                    {hasPreparedMedia ? "Prepared" : "Not prepared"}
+                  </StatusBadge>
+                </div>
+                <p className="muted small">
+                  {hasPreparedMedia && !recoveryPlan.hasRecoverableIssue
+                    ? "Prepared media is ready for the ready-to-post package."
+                    : "Use Prepare for Posting to save this composition, approve the clip, and update the final video."}
+                </p>
+                {recoveryPlan.hasRecoverableIssue ? <p className="muted small">{recoveryPlan.summary}</p> : null}
+              </section>
+            }
             evidence={
               <section className="clip-studio-details stack-md">
+                <div className="section-heading-row">
+                  <div>
+                    <p className="kicker">Clip intelligence</p>
+                    <h3>Why this clip works</h3>
+                  </div>
+                  <StatusBadge tone={clip.score >= 7 ? "success" : clip.score >= 4 ? "accent" : "warning"}>
+                    {clip.score.toFixed(1)}
+                  </StatusBadge>
+                </div>
+                <div className="stat-grid">
+                  <StatCard label="Category" value={clip.smartClipCategory ?? "Uncategorized"} tone="neutral" />
+                  {hasMinistryScore ? (
+                    <StatCard label={ministryScore.label} value={ministryScore.value} tone={ministryScore.tone} />
+                  ) : null}
+                  {hasSocialScore ? (
+                    <StatCard label={socialScore.label} value={socialScore.value} tone={socialScore.tone} />
+                  ) : null}
+                  <StatCard
+                    label="Audience"
+                    value={clip.intendedAudience || "General"}
+                    tone="accent"
+                  />
+                </div>
+                {clip.recommendationReason ? <p className="muted">{clip.recommendationReason}</p> : null}
+
                 {clip.ministryMoment ? (
                   <div className="stack-md">
                     <div className="stack-sm">
@@ -553,7 +560,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 ) : null}
 
                 {!hasCaptionPackage(captionPackage) ? (
-                  <p className="muted">No caption package exists yet. Add and save captions in the editor above.</p>
+                  <p className="muted">No caption package exists yet. Add captions in the Clip inspector before preparing.</p>
                 ) : null}
 
                 {languageHints ? (
@@ -581,6 +588,42 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                     <blockquote className="transcript-quote">{transcriptExcerpt}</blockquote>
                   </div>
                 ) : null}
+              </section>
+            }
+            advanced={
+              <section className="clip-studio-details stack-md">
+                <div className="section-heading-row">
+                  <div>
+                    <p className="kicker">Advanced</p>
+                    <h3>Diagnostics</h3>
+                  </div>
+                  <StatusBadge tone="neutral">Hidden by default</StatusBadge>
+                </div>
+                <p className="muted small">
+                  Frame checks, subject tracking, crop stability, safe-area snapshots, and raw render details stay inside diagnostics instead of the main editor.
+                </p>
+                <dl className="data-list stack-sm">
+                  <div className="data-list-row">
+                    <dt className="muted small">Frame check</dt>
+                    <dd>{clip.visualQualityScore !== null ? `${clip.visualQualityScore.toFixed(1)}/10` : "Prepare video to check framing quality."}</dd>
+                  </div>
+                  <div className="data-list-row">
+                    <dt className="muted small">Speaker tracking</dt>
+                    <dd>{videoSubjectTracks.length > 0 ? `${videoSubjectTracks.length} track${videoSubjectTracks.length === 1 ? "" : "s"}` : "Speaker tracking not ready"}</dd>
+                  </div>
+                  {clip.renderError ? (
+                    <div className="data-list-row">
+                      <dt className="muted small">Render issue</dt>
+                      <dd>{clip.renderError}</dd>
+                    </div>
+                  ) : null}
+                  {clip.smartCropDebugError ? (
+                    <div className="data-list-row">
+                      <dt className="muted small">Frame diagnostic</dt>
+                      <dd>{clip.smartCropDebugError}</dd>
+                    </div>
+                  ) : null}
+                </dl>
               </section>
             }
           />

@@ -268,7 +268,7 @@ describe("preview helpers", () => {
     });
 
     expect(summary).toContain("Ready-to-post style:");
-    expect(summary).toContain("Instagram Reels");
+    expect(summary).toContain("Reels");
   });
 
   it("separates platform and format when they do not match", () => {
@@ -282,7 +282,7 @@ describe("preview helpers", () => {
     });
 
     expect(summary).toContain("Download style:");
-    expect(summary).toContain("Chosen platform: Instagram Reels");
+    expect(summary).toContain("Chosen platform: Reels");
   });
 
   it("shows vertical crop warnings", () => {

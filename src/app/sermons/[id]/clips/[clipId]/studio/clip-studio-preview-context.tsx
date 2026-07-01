@@ -70,6 +70,7 @@ function sameExportSettings(a: ExportSettings, b: ExportSettings): boolean {
     a.platformPreset === b.platformPreset &&
     a.primaryFormat === b.primaryFormat &&
     a.framingMode === b.framingMode &&
+    a.framingPersonality === b.framingPersonality &&
     a.backgroundMode === b.backgroundMode &&
     a.selectedFormats.length === b.selectedFormats.length &&
     a.selectedFormats.every((format, index) => format === b.selectedFormats[index])
@@ -85,6 +86,9 @@ function sameBrandingConfig(a: ClipBrandingConfig, b: ClipBrandingConfig): boole
     a.showPreacherName === b.showPreacherName &&
     a.watermarkEnabled === b.watermarkEnabled &&
     a.lowerThirdEnabled === b.lowerThirdEnabled &&
+    a.introEnabled === b.introEnabled &&
+    a.outroEnabled === b.outroEnabled &&
+    a.backgroundStyle === b.backgroundStyle &&
     a.themeColor === b.themeColor
   );
 }

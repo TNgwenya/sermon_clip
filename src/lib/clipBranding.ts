@@ -17,19 +17,20 @@ import type { ClipExportFormat } from "@prisma/client";
 // ─── Presets ──────────────────────────────────────────────────────────────────
 
 export type BrandingPreset = "CLEAN_LOWER_THIRD" | "MINIMAL_WATERMARK" | "SERMON_IDENTITY" | "NO_BRANDING";
+export type BrandBackgroundStyle = "NONE" | "SOFT_GRADIENT" | "SOLID_BRAND" | "BLURRED_TINT";
 
 export const BRANDING_PRESET_LABELS: Record<BrandingPreset, string> = {
   CLEAN_LOWER_THIRD: "Clean lower third",
   MINIMAL_WATERMARK: "Minimal watermark",
   SERMON_IDENTITY: "Sermon identity",
-  NO_BRANDING: "No branding",
+  NO_BRANDING: "Clean",
 };
 
 export const BRANDING_PRESET_DESCRIPTIONS: Record<BrandingPreset, string> = {
   CLEAN_LOWER_THIRD: "Shows church name, sermon title, and preacher name near the bottom.",
   MINIMAL_WATERMARK: "Shows a small church name watermark in the corner.",
   SERMON_IDENTITY: "Shows sermon title and preacher name prominently.",
-  NO_BRANDING: "Renders the clip without any overlays.",
+  NO_BRANDING: "Keeps the clip free of overlays.",
 };
 
 export const SELECTABLE_BRANDING_PRESETS: BrandingPreset[] = [
@@ -51,6 +52,9 @@ export type ClipBrandingConfig = {
   showPreacherName: boolean;
   watermarkEnabled: boolean;
   lowerThirdEnabled: boolean;
+  introEnabled: boolean;
+  outroEnabled: boolean;
+  backgroundStyle: BrandBackgroundStyle;
   themeColor: string | null;
 };
 
@@ -69,6 +73,9 @@ export const DEFAULT_CLIP_BRANDING: ClipBrandingConfig = {
   showPreacherName: true,
   watermarkEnabled: false,
   lowerThirdEnabled: true,
+  introEnabled: false,
+  outroEnabled: false,
+  backgroundStyle: "NONE",
   themeColor: null,
 };
 
@@ -103,6 +110,10 @@ function safeNullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function isValidBrandBackgroundStyle(value: unknown): value is BrandBackgroundStyle {
+  return typeof value === "string" && ["NONE", "SOFT_GRADIENT", "SOLID_BRAND", "BLURRED_TINT"].includes(value);
+}
+
 /**
  * Parses clip-level branding config from the captionData JSON blob.
  * Returns defaults when config is absent or invalid.
@@ -130,6 +141,9 @@ export function resolveBrandingConfig(captionData: unknown): ClipBrandingConfig 
     showPreacherName: safeBoolean(data["showPreacherName"], DEFAULT_CLIP_BRANDING.showPreacherName),
     watermarkEnabled: safeBoolean(data["watermarkEnabled"], DEFAULT_CLIP_BRANDING.watermarkEnabled),
     lowerThirdEnabled: safeBoolean(data["lowerThirdEnabled"], DEFAULT_CLIP_BRANDING.lowerThirdEnabled),
+    introEnabled: safeBoolean(data["introEnabled"], DEFAULT_CLIP_BRANDING.introEnabled),
+    outroEnabled: safeBoolean(data["outroEnabled"], DEFAULT_CLIP_BRANDING.outroEnabled),
+    backgroundStyle: isValidBrandBackgroundStyle(data["backgroundStyle"]) ? data["backgroundStyle"] : DEFAULT_CLIP_BRANDING.backgroundStyle,
     themeColor: safeNullableString(data["themeColor"]),
   };
 }
@@ -148,7 +162,7 @@ type BrandingContext = {
  */
 export function buildBrandingSummary(config: ClipBrandingConfig, context: BrandingContext): string {
   if (!config.enabled || config.preset === "NO_BRANDING") {
-    return "No branding will be applied to this clip.";
+    return "Brand layers are off for this clip.";
   }
 
   const presetLabel = BRANDING_PRESET_LABELS[config.preset];
@@ -170,6 +184,10 @@ export function buildBrandingSummary(config: ClipBrandingConfig, context: Brandi
 
   if (config.watermarkEnabled || config.preset === "MINIMAL_WATERMARK") {
     elements.push(context.logoPath ? "logo watermark" : "church name watermark");
+  }
+
+  if (config.backgroundStyle !== "NONE") {
+    elements.push("background style");
   }
 
   if (elements.length === 0) {

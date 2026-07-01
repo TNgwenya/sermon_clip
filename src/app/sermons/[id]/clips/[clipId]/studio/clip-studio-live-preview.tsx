@@ -5,7 +5,7 @@ import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState }
 import { EmptyState, StatusBadge } from "@/components/ui";
 import { BRANDING_PRESET_LABELS } from "@/lib/clipBranding";
 import { resolveCaptionStylePreset } from "@/lib/captionStylePresets";
-import { FORMAT_LABELS, FRAMING_LABELS, PLATFORM_PRESET_LABELS } from "@/lib/clipExportSettings";
+import { FRAMING_LABELS } from "@/lib/clipExportSettings";
 import {
   buildSpeechCleanupPreviewPlan,
   mapCleanedPreviewSecondsToSourceSeconds,
@@ -15,12 +15,9 @@ import {
   shouldShowHookOverlay,
 } from "@/lib/clipStudioPreviewTimeline";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
-import { ClipStudioDecisionBar } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-decision-bar";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
 
 type ClipStudioLivePreviewProps = {
-  clipId: string;
-  currentStatus: "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
   hasPreview: boolean;
   previewSrc: string | null;
   sourcePreviewSrc: string | null;
@@ -48,8 +45,6 @@ const frameClassName = {
 };
 
 export function ClipStudioLivePreview({
-  clipId,
-  currentStatus,
   hasPreview,
   previewSrc,
   sourcePreviewSrc,
@@ -77,6 +72,9 @@ export function ClipStudioLivePreview({
   const [sourcePreviewSeconds, setSourcePreviewSeconds] = useState(0);
   const [previewDurationSeconds, setPreviewDurationSeconds] = useState<number | null>(null);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+  const [previewErrorState, setPreviewErrorState] = useState<{ src: string; message: string } | null>(null);
+  const [previewReadySrc, setPreviewReadySrc] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const brandingEnabled = brandingConfig.enabled && brandingConfig.preset !== "NO_BRANDING";
   const captionsOverrideBranding = editPreview.applyCaptionsToClip && editPreview.captionCues.length > 0;
   const showWatermark = brandingEnabled && (brandingConfig.watermarkEnabled || brandingConfig.preset === "MINIMAL_WATERMARK");
@@ -86,6 +84,16 @@ export function ClipStudioLivePreview({
   const activePreviewSrc = sourcePreviewSrc ?? previewSrc;
   const canPreview = hasPreview || Boolean(sourcePreviewSrc);
   const hasSourcePreview = Boolean(sourcePreviewSrc);
+  const previewError = previewErrorState?.src === activePreviewSrc ? previewErrorState.message : "";
+  const playbackSrc = useMemo(() => {
+    if (!activePreviewSrc) {
+      return null;
+    }
+
+    const separator = activePreviewSrc.includes("?") ? "&" : "?";
+    return `${activePreviewSrc}${separator}retry=${retryNonce}`;
+  }, [activePreviewSrc, retryNonce]);
+  const previewMediaReady = Boolean(playbackSrc && previewReadySrc === playbackSrc && !previewError);
   const draftDurationSeconds = editPreview.durationSeconds;
   const draftStartSeconds = hasSourcePreview ? editPreview.startSeconds : 0;
   const draftEndSeconds = hasSourcePreview ? editPreview.endSeconds : draftDurationSeconds;
@@ -138,6 +146,7 @@ export function ClipStudioLivePreview({
   const previewStyle = {
     "--clip-brand-color": brandingConfig.themeColor ?? "#75d9b8",
   } as CSSProperties;
+  const backgroundStyleClass = `background-${brandingConfig.backgroundStyle.toLowerCase().replace(/_/g, "-")}`;
   const updatePreviewSeconds = useCallback(() => {
     const video = videoRef.current;
     const videoSeconds = video?.currentTime ?? 0;
@@ -293,20 +302,36 @@ export function ClipStudioLivePreview({
           <div
             className={`clip-studio-live-frame ${formatClassName[exportSettings.primaryFormat]} ${frameClassName[exportSettings.framingMode]} ${
               brandingEnabled ? "branding-on" : "branding-off"
-            }`}
+            } ${backgroundStyleClass}`}
             style={previewStyle}
           >
-            {canPreview && activePreviewSrc ? (
+            {canPreview && playbackSrc ? (
               <>
-                {exportSettings.backgroundMode === "BLURRED" && !hasSourcePreview ? (
-                  <video className="clip-studio-live-backdrop" muted playsInline preload="metadata" src={activePreviewSrc} />
+                {exportSettings.backgroundMode === "BLURRED" ? (
+                  <video className="clip-studio-live-backdrop" muted playsInline preload="metadata" src={playbackSrc} />
                 ) : null}
                 <video
                   ref={videoRef}
                   className="review-video clip-studio-video"
                   preload="metadata"
-                  src={activePreviewSrc}
-                  onLoadedMetadata={updatePreviewSeconds}
+                  src={playbackSrc}
+                  onLoadedMetadata={() => {
+                    setPreviewErrorState(null);
+                    setPreviewReadySrc(playbackSrc);
+                    updatePreviewSeconds();
+                  }}
+                  onLoadedData={() => {
+                    setPreviewErrorState(null);
+                    setPreviewReadySrc(playbackSrc);
+                  }}
+                  onError={() => {
+                    setPreviewErrorState({
+                      src: activePreviewSrc ?? "",
+                      message: "Preview media could not be loaded. Check the source video or retry the preview.",
+                    });
+                    setPreviewReadySrc(null);
+                    setIsPreviewPlaying(false);
+                  }}
                   onTimeUpdate={() => {
                     clampVideoToDraftWindow();
                     updatePreviewSeconds();
@@ -326,6 +351,39 @@ export function ClipStudioLivePreview({
                     updatePreviewSeconds();
                   }}
                 />
+                {previewError ? (
+                  <div className="clip-studio-preview-error" role="status">
+                    <strong>Preview could not load</strong>
+                    <span>{previewError}</span>
+                    <button
+                      type="button"
+                      className="button secondary"
+                      onClick={() => {
+                        setPreviewErrorState(null);
+                        setPreviewReadySrc(null);
+                        setRetryNonce((current) => current + 1);
+                      }}
+                    >
+                      Retry preview
+                    </button>
+                  </div>
+                ) : null}
+                {!previewError && !previewMediaReady ? (
+                  <div className="clip-studio-preview-error is-loading" role="status">
+                    <strong>Loading preview media</strong>
+                    <span>The video metadata is not ready yet, so overlays are paused until the media loads.</span>
+                    <button
+                      type="button"
+                      className="button secondary"
+                      onClick={() => {
+                        setPreviewReadySrc(null);
+                        setRetryNonce((current) => current + 1);
+                      }}
+                    >
+                      Retry preview
+                    </button>
+                  </div>
+                ) : null}
               </>
             ) : (
               <EmptyState
@@ -334,11 +392,15 @@ export function ClipStudioLivePreview({
               />
             )}
 
-            {showWatermark ? (
+            {previewMediaReady && showWatermark ? (
               <div className="clip-studio-live-watermark">{churchName ? churchName.slice(0, 2).toUpperCase() : "SC"}</div>
             ) : null}
 
-            {showLowerThird ? (
+            {previewMediaReady && brandingEnabled && brandingConfig.introEnabled ? (
+              <div className="clip-studio-live-brand-slate clip-studio-live-brand-slate-intro">Intro</div>
+            ) : null}
+
+            {previewMediaReady && showLowerThird ? (
               <div className="clip-studio-live-lower-third">
                 <strong>{brandingConfig.showSermonTitle ? sermonTitle || "Sermon title" : "Clip"}</strong>
                 <span>
@@ -351,7 +413,7 @@ export function ClipStudioLivePreview({
               </div>
             ) : null}
 
-            {showTimedHook ? (
+            {previewMediaReady && showTimedHook ? (
               <div
                 className={`clip-studio-live-hook hook-${hookOverlay.position} hook-${hookOverlay.animation} hook-${hookOverlay.size} ${
                   hookOverlay.bold ? "is-bold" : ""
@@ -361,7 +423,7 @@ export function ClipStudioLivePreview({
               </div>
             ) : null}
 
-            {captionPreviewText ? (
+            {previewMediaReady && captionPreviewText ? (
               <div className={`clip-studio-live-caption ${captionStyle.className}`}>
                 <span aria-label={captionPreviewText}>
                   {captionWords.map((word, index) => (
@@ -376,9 +438,13 @@ export function ClipStudioLivePreview({
                 </span>
               </div>
             ) : null}
+
+            {previewMediaReady && brandingEnabled && brandingConfig.outroEnabled ? (
+              <div className="clip-studio-live-brand-slate clip-studio-live-brand-slate-outro">Outro</div>
+            ) : null}
           </div>
 
-          {canPreview && activePreviewSrc ? (
+          {canPreview && playbackSrc ? (
             <div className="clip-studio-player-controls" aria-label="Live preview playback controls">
               <button type="button" className="button secondary" onClick={togglePreviewPlayback}>
                 {isPreviewPlaying ? "Pause" : "Play"}
@@ -401,25 +467,23 @@ export function ClipStudioLivePreview({
         </div>
 
         <div className="clip-studio-preview-control-stack">
-          <ClipStudioDecisionBar clipId={clipId} currentStatus={currentStatus} />
           <div className="clip-studio-preview-spec">
-            <p className="muted small">Previewing unsaved choices</p>
-            <strong>{FORMAT_LABELS[exportSettings.primaryFormat]}</strong>
-            <span>{PLATFORM_PRESET_LABELS[exportSettings.platformPreset]}</span>
-            <span>{FRAMING_LABELS[exportSettings.framingMode]}</span>
-            <span>
-              {brandingEnabled
-                ? captionsOverrideBranding && showWatermark
-                  ? `${BRANDING_PRESET_LABELS[brandingConfig.preset]} watermark`
-                  : captionsOverrideBranding
-                    ? "Brand lower third hidden by captions"
-                    : BRANDING_PRESET_LABELS[brandingConfig.preset]
-                : "No branding"}
-            </span>
-            <span>{editPreview.applyCaptionsToClip ? captionStyle.name : "Captions off"}</span>
-            <span>{speechCleanupPreviewPlan.enabled ? "Clean speech preview" : "Original speech timing"}</span>
-            <span>{isDraftTrimPreview ? "Live clipped preview" : "Rendered clip preview"}</span>
-            <span>{editPreview.isTimingValid ? "Draft timing ready" : "Draft timing needs review"}</span>
+            <div className="clip-studio-preview-state-line">
+              <strong>{editPreview.isTimingValid ? "Preview updated" : "Preview needs timing"}</strong>
+              <span>{FRAMING_LABELS[exportSettings.framingMode]}</span>
+            </div>
+            <div className="clip-studio-layer-chips" aria-label="Active preview layers">
+              {editPreview.applyCaptionsToClip ? <span>Captions On</span> : null}
+              {brandingEnabled ? (
+                <span>
+                  {captionsOverrideBranding && showWatermark
+                    ? "Branding On"
+                    : BRANDING_PRESET_LABELS[brandingConfig.preset]}
+                </span>
+              ) : null}
+              {speechCleanupPreviewPlan.enabled ? <span>Dead Air Removed</span> : null}
+              <span>{FRAMING_LABELS[exportSettings.framingMode]}</span>
+            </div>
           </div>
         </div>
       </div>

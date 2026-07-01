@@ -10,6 +10,9 @@ describe("resolveBrandingConfig", () => {
     expect(config.preset).toBe("CLEAN_LOWER_THIRD");
     expect(config.watermarkEnabled).toBe(false);
     expect(config.lowerThirdEnabled).toBe(true);
+    expect(config.introEnabled).toBe(false);
+    expect(config.outroEnabled).toBe(false);
+    expect(config.backgroundStyle).toBe("NONE");
   });
 
   it("loads and preserves valid branding settings", () => {
@@ -22,12 +25,17 @@ describe("resolveBrandingConfig", () => {
         showPreacherName: false,
         watermarkEnabled: true,
         lowerThirdEnabled: false,
+        introEnabled: true,
+        outroEnabled: false,
+        backgroundStyle: "SOFT_GRADIENT",
         themeColor: "#0F766E",
       },
     });
 
     expect(config.enabled).toBe(true);
     expect(config.preset).toBe("MINIMAL_WATERMARK");
+    expect(config.introEnabled).toBe(true);
+    expect(config.backgroundStyle).toBe("SOFT_GRADIENT");
     expect(config.themeColor).toBe("#0F766E");
   });
 
@@ -67,6 +75,9 @@ describe("preset summaries", () => {
         showPreacherName: true,
         watermarkEnabled: false,
         lowerThirdEnabled: true,
+        introEnabled: false,
+        outroEnabled: false,
+        backgroundStyle: "NONE",
         themeColor: null,
       },
       {
@@ -81,7 +92,7 @@ describe("preset summaries", () => {
     expect(summary).toContain("lower third");
   });
 
-  it("returns no branding summary when disabled", () => {
+  it("returns a brand-off summary when disabled", () => {
     const summary = __clipBrandingTestUtils.buildBrandingSummary(
       {
         enabled: false,
@@ -91,6 +102,9 @@ describe("preset summaries", () => {
         showPreacherName: true,
         watermarkEnabled: true,
         lowerThirdEnabled: true,
+        introEnabled: false,
+        outroEnabled: false,
+        backgroundStyle: "NONE",
         themeColor: null,
       },
       {
@@ -101,7 +115,7 @@ describe("preset summaries", () => {
       },
     );
 
-    expect(summary).toContain("No branding");
+    expect(summary).toContain("Brand layers are off");
   });
 });
 
@@ -116,6 +130,9 @@ describe("render filter generation", () => {
         showPreacherName: true,
         watermarkEnabled: false,
         lowerThirdEnabled: true,
+        introEnabled: false,
+        outroEnabled: false,
+        backgroundStyle: "NONE",
         themeColor: "#0F766E",
       },
       {
@@ -142,6 +159,9 @@ describe("render filter generation", () => {
         showPreacherName: false,
         watermarkEnabled: true,
         lowerThirdEnabled: false,
+        introEnabled: false,
+        outroEnabled: false,
+        backgroundStyle: "NONE",
         themeColor: null,
       },
       {
@@ -169,6 +189,9 @@ describe("render filter generation", () => {
         showPreacherName: true,
         watermarkEnabled: true,
         lowerThirdEnabled: true,
+        introEnabled: false,
+        outroEnabled: false,
+        backgroundStyle: "NONE",
         themeColor: null,
       },
       {
@@ -194,6 +217,9 @@ describe("render filter generation", () => {
         showPreacherName: true,
         watermarkEnabled: true,
         lowerThirdEnabled: true,
+        introEnabled: false,
+        outroEnabled: false,
+        backgroundStyle: "NONE",
         themeColor: "#0F766E",
       },
       {

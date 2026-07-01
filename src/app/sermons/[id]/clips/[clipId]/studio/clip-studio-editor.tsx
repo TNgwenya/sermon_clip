@@ -1,7 +1,6 @@
 "use client";
 
-import { type MouseEvent, useEffect, useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { type MouseEvent, useEffect, useMemo, useState } from "react";
 
 import { SectionCard, StatusBadge } from "@/components/ui";
 import { formatSecondsForPastorView, formatSecondsForTimestampInput } from "@/lib/sermonSegment";
@@ -12,14 +11,10 @@ import {
 } from "@/lib/clipStudioEditing";
 import { CAPTION_STYLE_PRESETS, resolveCaptionStylePreset } from "@/lib/captionStylePresets";
 import type { HookOverlayConfig, SpeechCleanupSettings } from "@/lib/clipStudio";
-import {
-  updateClipStudioEditsAction,
-  type UpdateClipStudioEditsState,
-} from "@/server/actions/sermons";
+import { buildSpeechCleanupPreviewPlan } from "@/lib/clipStudioPreviewTimeline";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
 
 type ClipStudioEditorProps = {
-  clipId: string;
   initialStartTimeSeconds: number;
   initialEndTimeSeconds: number;
   initialShortCaption: string;
@@ -29,7 +24,6 @@ type ClipStudioEditorProps = {
   initialApplyCaptionsToClip: boolean;
   initialCaptionStylePresetId: string;
   brandCaptionStylePresetId: string;
-  initialHook: string;
   suggestedHook: string;
   initialHookOverlay: HookOverlayConfig;
   initialSpeechCleanup: SpeechCleanupSettings;
@@ -122,7 +116,6 @@ function clampSeconds(value: number, min: number, max: number): number {
 }
 
 export function ClipStudioEditor({
-  clipId,
   initialStartTimeSeconds,
   initialEndTimeSeconds,
   initialShortCaption,
@@ -132,7 +125,6 @@ export function ClipStudioEditor({
   initialApplyCaptionsToClip,
   initialCaptionStylePresetId,
   brandCaptionStylePresetId,
-  initialHook,
   suggestedHook,
   initialHookOverlay,
   initialSpeechCleanup,
@@ -144,13 +136,10 @@ export function ClipStudioEditor({
   translationUncertainty,
   captionImprovementSuggestions,
 }: ClipStudioEditorProps) {
-  const router = useRouter();
   const { previewClock, seekPreviewTo, updateEditPreview } = useClipStudioPreview();
-  const [isPending, startTransition] = useTransition();
+  const isPending = false;
   const [statusMessage, setStatusMessage] = useState("");
   const [statusSuccess, setStatusSuccess] = useState(true);
-  const [fieldErrors, setFieldErrors] = useState<UpdateClipStudioEditsState["fieldErrors"]>({});
-  const [warnings, setWarnings] = useState<string[]>([]);
 
   const [startTimestamp, setStartTimestamp] = useState(
     formatSecondsForTimestampInput(initialStartTimeSeconds),
@@ -164,7 +153,6 @@ export function ClipStudioEditor({
   const [captionCues, setCaptionCues] = useState<EditableCaptionCue[]>(initialCaptionCues);
   const [applyCaptionsToClip, setApplyCaptionsToClip] = useState(initialApplyCaptionsToClip);
   const [captionStylePresetId, setCaptionStylePresetId] = useState(initialCaptionStylePresetId);
-  const [hook, setHook] = useState(initialHook);
   const [hookOverlay, setHookOverlay] = useState<HookOverlayConfig>(initialHookOverlay);
   const [speechCleanup, setSpeechCleanup] = useState<SpeechCleanupSettings>(initialSpeechCleanup);
   const initialFirstSegmentId = useMemo(
@@ -193,6 +181,10 @@ export function ClipStudioEditor({
       }),
     [startTimestamp, endTimestamp, knownDurationSeconds],
   );
+  const fieldErrors: typeof timingPreview.fieldErrors & {
+    captionCues?: string;
+    hook?: string;
+  } = timingPreview.fieldErrors;
 
   const durationLabel =
     timingPreview.durationSeconds !== null
@@ -268,6 +260,55 @@ export function ClipStudioEditor({
       label: formatSecondsForPastorView(absoluteSeconds),
     };
   }, [localTimeline.duration, localTimeline.end, localTimeline.start, previewClock.currentSeconds, timingPreview.startSeconds]);
+  const speechCleanupPreviewPlan = useMemo(
+    () =>
+      buildSpeechCleanupPreviewPlan({
+        captionCues,
+        durationSeconds: timingPreview.durationSeconds,
+        speechCleanup,
+      }),
+    [captionCues, speechCleanup, timingPreview.durationSeconds],
+  );
+  const deadAirCutMarkers = useMemo(() => {
+    if (!speechCleanupPreviewPlan.enabled || timingPreview.startSeconds === null) {
+      return [];
+    }
+
+    const selectedStartSeconds = timingPreview.startSeconds;
+    return speechCleanupPreviewPlan.cuts.flatMap((cut, index) => {
+      const absoluteStart = selectedStartSeconds + cut.startSeconds;
+      const absoluteEnd = selectedStartSeconds + cut.endSeconds;
+      if (absoluteEnd < localTimeline.start || absoluteStart > localTimeline.end) {
+        return [];
+      }
+
+      const leftPercent = clampSeconds(((absoluteStart - localTimeline.start) / localTimeline.duration) * 100, 0, 100);
+      const rightPercent = clampSeconds(((absoluteEnd - localTimeline.start) / localTimeline.duration) * 100, 0, 100);
+      return [{
+        id: `${index}-${cut.startSeconds}-${cut.endSeconds}`,
+        leftPercent,
+        widthPercent: Math.max(0.6, rightPercent - leftPercent),
+        label: `${formatSecondsForPastorView(cut.removedSeconds)} removed`,
+      }];
+    });
+  }, [localTimeline.duration, localTimeline.end, localTimeline.start, speechCleanupPreviewPlan, timingPreview.startSeconds]);
+  const aiBoundaryMarkers = useMemo(
+    () =>
+      [
+        { id: "ai-start", seconds: initialStartTimeSeconds, label: "AI start" },
+        { id: "ai-end", seconds: initialEndTimeSeconds, label: "AI end" },
+      ].flatMap((marker) => {
+        if (marker.seconds < localTimeline.start || marker.seconds > localTimeline.end) {
+          return [];
+        }
+
+        return [{
+          ...marker,
+          percent: clampSeconds(((marker.seconds - localTimeline.start) / localTimeline.duration) * 100, 0, 100),
+        }];
+      }),
+    [initialEndTimeSeconds, initialStartTimeSeconds, localTimeline.duration, localTimeline.end, localTimeline.start],
+  );
 
   const transcriptClipBlocks = useMemo(
     () =>
@@ -374,48 +415,7 @@ export function ClipStudioEditor({
   }, [editPreview, updateEditPreview]);
 
   function clearFeedback() {
-    setFieldErrors({});
-    setWarnings([]);
     setStatusMessage("");
-  }
-
-  function submitChanges() {
-    clearFeedback();
-
-    if (!timingPreview.isValid) {
-      setFieldErrors(timingPreview.fieldErrors);
-      setWarnings(timingPreview.warnings);
-      setStatusSuccess(false);
-      setStatusMessage("Could not save clip changes. Please check the highlighted fields.");
-      return;
-    }
-
-    startTransition(async () => {
-      const result = await updateClipStudioEditsAction({
-        clipId,
-        startTimestamp,
-        endTimestamp,
-        mainCaption: onVideoCaptionText,
-        shortCaption,
-        platformCaption,
-        hashtags,
-        captionCues,
-        applyCaptionsToClip,
-        captionStylePresetId,
-        hook,
-        hookOverlay,
-        speechCleanup,
-      });
-
-      setFieldErrors(result.fieldErrors ?? {});
-      setWarnings(result.warnings ?? []);
-      setStatusSuccess(result.success);
-      setStatusMessage(result.message);
-
-      if (result.success) {
-        router.refresh();
-      }
-    });
   }
 
   function applyTranscriptTrim() {
@@ -437,7 +437,7 @@ export function ClipStudioEditor({
     setStartTimestamp(formatSecondsForTimestampInput(firstSegment.startTimeSeconds));
     setEndTimestamp(formatSecondsForTimestampInput(lastSegment.endTimeSeconds));
     setStatusSuccess(true);
-    setStatusMessage("Trim updated from transcript text. Save changes when it looks right.");
+    setStatusMessage("Trim updated from transcript text. Preview updated.");
   }
 
   function applyBoundaryFromSegment(segment: TranscriptSegmentOption, boundary: "start" | "end") {
@@ -515,7 +515,7 @@ export function ClipStudioEditor({
     setFirstSegmentId(firstSegment?.id ?? segment.id);
     setLastSegmentId(lastSegment?.id ?? segment.id);
     setStatusSuccess(true);
-    setStatusMessage(`${targetDurationSeconds}s draft built around the selected spoken line. Save when it feels right.`);
+    setStatusMessage(`${targetDurationSeconds}s draft built around the selected spoken line. Preview updated.`);
   }
 
   function setDurationFromCurrentStart(targetDurationSeconds: number) {
@@ -545,7 +545,7 @@ export function ClipStudioEditor({
     setLastSegmentId(initialLastSegmentId);
     setFocusedSegmentId(initialFirstSegmentId);
     setStatusSuccess(true);
-    setStatusMessage("Timing reset to the saved clip boundaries.");
+    setStatusMessage("Timing reset to the AI suggestion.");
   }
 
   function snapToNearestSpokenLines() {
@@ -568,7 +568,7 @@ export function ClipStudioEditor({
     setStartTimestamp(formatSecondsForTimestampInput(firstSegment.startTimeSeconds));
     setEndTimestamp(formatSecondsForTimestampInput(lastSegment.endTimeSeconds));
     setStatusSuccess(true);
-    setStatusMessage("Timing snapped to the nearest spoken lines. Save changes when it looks right.");
+    setStatusMessage("Timing snapped to the nearest spoken lines. Preview updated.");
   }
 
   function nudgeBoundary(boundary: "start" | "end", deltaSeconds: number) {
@@ -634,7 +634,6 @@ export function ClipStudioEditor({
       return;
     }
 
-    setHook(suggestedHook);
     setHookOverlay((current) => ({
       ...current,
       enabled: true,
@@ -642,6 +641,17 @@ export function ClipStudioEditor({
       durationSeconds: current.durationSeconds || 6,
     }));
   }
+
+  const speechCleanupRemovedSeconds = speechCleanupPreviewPlan.cuts.reduce((total, cut) => total + cut.removedSeconds, 0);
+  const speechCleanupSummary = speechCleanupPreviewPlan.enabled
+    ? `${speechCleanupPreviewPlan.cuts.length} pause${speechCleanupPreviewPlan.cuts.length === 1 ? "" : "s"} marked · ${formatSecondsForPastorView(
+        speechCleanupRemovedSeconds,
+      )} saved`
+    : "Natural pacing kept";
+  const hookCaptionWarning =
+    hookOverlay.enabled && applyCaptionsToClip && hookOverlay.position === "lower"
+      ? "Hook and captions can compete in the lower safe area. Move the hook higher before preparing."
+      : null;
 
   return (
     <section className="stack-lg">
@@ -652,7 +662,7 @@ export function ClipStudioEditor({
         </div>
         <div className="clip-studio-effect-note">
           <StatusBadge tone="success">Live preview</StatusBadge>
-          <p>Timing changes update the preview window immediately. Save changes, then re-render to update the downloadable video.</p>
+          <p>Timing changes update the preview immediately. Prepare when the preview looks right.</p>
         </div>
 
         <div className="clip-studio-simple-timing">
@@ -703,9 +713,6 @@ export function ClipStudioEditor({
                 </button>
               ))}
             </div>
-            <button type="button" className="button primary" onClick={submitChanges} disabled={isPending}>
-              Save changes
-            </button>
           </div>
         </div>
 
@@ -753,6 +760,22 @@ export function ClipStudioEditor({
                 className="clip-studio-timeline-selection"
                 style={{ left: `${trimTrack.startPercent}%`, width: `${trimTrack.widthPercent}%` }}
               />
+              {deadAirCutMarkers.map((cut) => (
+                <span
+                  key={cut.id}
+                  className="clip-studio-timeline-dead-air"
+                  style={{ left: `${cut.leftPercent}%`, width: `${cut.widthPercent}%` }}
+                  title={cut.label}
+                />
+              ))}
+              {aiBoundaryMarkers.map((marker) => (
+                <span
+                  key={marker.id}
+                  className="clip-studio-timeline-ai-marker"
+                  style={{ left: `${marker.percent}%` }}
+                  title={marker.label}
+                />
+              ))}
               <span
                 className="clip-studio-timeline-handle"
                 style={{ left: `${trimTrack.startPercent}%` }}
@@ -884,10 +907,10 @@ export function ClipStudioEditor({
           </div>
           <div className="actions-row">
             <button type="button" className="button secondary" onClick={snapToNearestSpokenLines} disabled={isPending || transcriptSegments.length === 0}>
-              Snap to spoken lines
+              Snap to Sentence
             </button>
             <button type="button" className="button secondary" onClick={resetTiming} disabled={isPending}>
-              Reset timing
+              Reset to AI
             </button>
           </div>
         </div>
@@ -935,15 +958,16 @@ export function ClipStudioEditor({
 
       <details className="clip-studio-editor-disclosure" open>
         <summary>
-          <span>Speech cleanup</span>
-          <span className="muted small">Live preview cleanup</span>
+          <span>Audio</span>
+          <span className="muted small">Polish</span>
         </summary>
-      <SectionCard title="Speech cleanup" description="Choose whether the rendered preview should be tightened.">
+      <SectionCard title="Audio" description="Polish speech pacing without changing the original sermon clip.">
         <div className="stack-md">
           <div className="clip-studio-effect-note">
             <StatusBadge tone="success">Live preview</StatusBadge>
-            <p>The preview skips leading/trailing dead air and long transcript gaps when cleanup is on. Save and re-render to update the downloadable video.</p>
+            <p>The preview skips dead air and long transcript gaps immediately. Prepare when the pacing feels right.</p>
           </div>
+          <p className="status-help">{speechCleanupSummary}</p>
           <label className="clip-studio-toggle-row">
             <input
               type="checkbox"
@@ -985,10 +1009,14 @@ export function ClipStudioEditor({
 
           <div className="clip-studio-boundary-readout">
             <article>
-              <span className="kicker">Saved render mode</span>
-              <strong>{speechCleanup.removeDeadAir && speechCleanup.tightenLongPauses ? "Clean preview" : "Original timing"}</strong>
+              <span className="kicker">Preview duration</span>
+              <strong>
+                {speechCleanupPreviewPlan.enabled
+                  ? formatSecondsForPastorView(speechCleanupPreviewPlan.cleanedDurationSeconds)
+                  : durationLabel}
+              </strong>
               <p className="muted small">
-                The live preview shows the cleaned timing immediately. Re-render from Output to make the prepared file match.
+                The final video uses this same audio setting.
               </p>
             </article>
             <article>
@@ -998,8 +1026,8 @@ export function ClipStudioEditor({
             </article>
             <article>
               <span className="kicker">Long pauses</span>
-              <strong>{speechCleanup.tightenLongPauses ? "Will tighten" : "Kept"}</strong>
-              <p className="muted small">Clear internal silent gaps are collapsed while leaving a natural breath.</p>
+              <strong>{speechCleanup.tightenLongPauses ? `${speechCleanupPreviewPlan.cuts.length} marked` : "Kept"}</strong>
+              <p className="muted small">Clear internal silent gaps collapse while leaving a natural breath.</p>
             </article>
           </div>
         </div>
@@ -1010,7 +1038,7 @@ export function ClipStudioEditor({
         <div className="stack-md clip-studio-caption-form">
           <div className="clip-studio-effect-note">
             <StatusBadge tone="success">Live preview</StatusBadge>
-            <p>Caption visibility, caption text, caption style, and hook changes update the preview overlay immediately. Save before preparing the final video.</p>
+            <p>Caption visibility, text, style, and hook changes update the preview immediately.</p>
           </div>
           <div className="clip-studio-effect-note is-transcript-source">
             <StatusBadge tone="accent">Transcript</StatusBadge>
@@ -1019,14 +1047,14 @@ export function ClipStudioEditor({
           <label className="clip-studio-toggle-row">
             <input
               type="checkbox"
-              aria-label="Apply captions to this clip"
+              aria-label="Captions"
               checked={applyCaptionsToClip}
               onChange={(event) => setApplyCaptionsToClip(event.target.checked)}
               disabled={isPending}
             />
             <span>
-              <strong>Apply captions to this clip</strong>
-              <small>When captions are applied, these lines are saved into the subtitle file used for burn-in.</small>
+              <strong>Captions</strong>
+              <small>Uses the sermon transcript and timing.</small>
             </span>
           </label>
 
@@ -1039,7 +1067,7 @@ export function ClipStudioEditor({
               </span>
               <span className="clip-studio-caption-dropdown-meta">
                 <StatusBadge tone={applyCaptionsToClip ? "success" : "neutral"}>
-                  {applyCaptionsToClip ? "Burn-in on" : "Off"}
+                  {applyCaptionsToClip ? "On" : "Off"}
                 </StatusBadge>
                 <span aria-hidden="true" className="clip-studio-caption-dropdown-chevron">v</span>
               </span>
@@ -1193,7 +1221,6 @@ export function ClipStudioEditor({
                 className="clip-studio-caption-textarea"
                 value={hookOverlay.text}
                 onChange={(event) => {
-                  setHook(event.target.value);
                   setHookOverlay((current) => ({ ...current, text: event.target.value }));
                 }}
                 disabled={isPending || !hookOverlay.enabled}
@@ -1202,6 +1229,7 @@ export function ClipStudioEditor({
             {fieldErrors?.hook ? (
               <span className="error-text small">{fieldErrors.hook}</span>
             ) : null}
+            {hookCaptionWarning ? <p className="warning-banner">{hookCaptionWarning}</p> : null}
             {suggestedHook.trim() ? (
               <button type="button" className="button secondary" onClick={useSuggestedHook} disabled={isPending}>
                 Use suggested hook
@@ -1347,28 +1375,15 @@ export function ClipStudioEditor({
 
       <div className="clip-studio-save-strip">
         <div>
-          <p className="muted small">Timing and caption edits</p>
-          <p className="clip-studio-save-title">Save changes when the live preview looks right.</p>
-          <p className="muted small">Saved edits still need a re-render before downloads and posting packages use them.</p>
-        </div>
-        <div className="actions-row">
-          <button type="button" className="button primary" onClick={submitChanges} disabled={isPending}>
-            Save changes
-          </button>
+          <p className="muted small">Studio draft</p>
+          <p className="clip-studio-save-title">Preview updated</p>
+          <p className="muted small">Prepare for Posting saves this composition and renders the final video.</p>
         </div>
 
         {statusMessage ? (
           <p className={statusSuccess ? "success-banner" : "error-banner"} role="status" aria-live="polite">
             {statusMessage}
           </p>
-        ) : null}
-
-        {warnings.length > 0 ? (
-          <ul className="warning-list">
-            {warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
-            ))}
-          </ul>
         ) : null}
       </div>
     </section>

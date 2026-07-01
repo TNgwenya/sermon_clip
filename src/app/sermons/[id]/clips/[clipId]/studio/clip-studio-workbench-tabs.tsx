@@ -2,7 +2,7 @@
 
 import { type ReactNode, useState } from "react";
 
-type StudioTabId = "edit" | "format" | "branding" | "evidence";
+type StudioTabId = "edit" | "format" | "branding" | "post" | "evidence" | "advanced";
 
 type StudioTab = {
   id: StudioTabId;
@@ -15,29 +15,35 @@ type ClipStudioWorkbenchTabsProps = {
   edit: ReactNode;
   format: ReactNode;
   branding: ReactNode;
+  post: ReactNode;
   evidence: ReactNode;
+  advanced: ReactNode;
 };
 
 export function ClipStudioWorkbenchTabs({
   edit,
   format,
   branding,
+  post,
   evidence,
+  advanced,
 }: ClipStudioWorkbenchTabsProps) {
   const [activeTab, setActiveTab] = useState<StudioTabId>("edit");
 
   const tabs: StudioTab[] = [
-    { id: "edit", label: "Edit", eyebrow: "Timing and captions", content: edit },
-    { id: "format", label: "Output", eyebrow: "Format and downloads", content: format },
-    { id: "branding", label: "Branding", eyebrow: "Church identity", content: branding },
-    { id: "evidence", label: "Evidence", eyebrow: "AI reasoning", content: evidence },
+    { id: "edit", label: "Clip", eyebrow: "Clip tools", content: edit },
+    { id: "format", label: "Framing", eyebrow: "Format and crop", content: format },
+    { id: "branding", label: "Brand", eyebrow: "Church identity", content: branding },
+    { id: "post", label: "Post", eyebrow: "Prepared media state", content: post },
+    { id: "evidence", label: "Why", eyebrow: "Why this clip works", content: evidence },
+    { id: "advanced", label: "Advanced", eyebrow: "Diagnostics", content: advanced },
   ];
 
   return (
     <section className="clip-studio-workbench stack-md">
       <div className="clip-studio-workbench-head">
         <div>
-          <p className="kicker">Workbench</p>
+          <p className="kicker">Tool rail</p>
           <h2>{tabs.find((tab) => tab.id === activeTab)?.eyebrow}</h2>
         </div>
         <div className="clip-studio-tabs" role="tablist" aria-label="Clip Studio tools">

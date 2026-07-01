@@ -26,8 +26,8 @@ describe("caption style presets", () => {
     expect(resolveCaptionStylePreset("cinematic-testimony").motion).toBe("Slow dissolve");
   });
 
-  it("falls back to the elegant lower caption style", () => {
+  it("falls back to the clean lower caption style", () => {
     expect(resolveCaptionStylePreset(undefined).id).toBe("clean-lower");
-    expect(resolveCaptionStylePreset("unknown").name).toBe("Elegant lower captions");
+    expect(resolveCaptionStylePreset("unknown").name).toBe("Clean Lower");
   });
 });

@@ -768,6 +768,9 @@ export async function renderClipOverlay(
         showPreacherName: true,
         watermarkEnabled: true,
         lowerThirdEnabled: !captionsOverrideBranding,
+        introEnabled: false,
+        outroEnabled: false,
+        backgroundStyle: "NONE",
         themeColor: branding?.primaryBrandColor ?? null,
       },
       {

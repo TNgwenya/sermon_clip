@@ -42,8 +42,8 @@ describe("clip asset recovery", () => {
     expect(plan.hasRecoverableIssue).toBe(true);
     expect(plan.failedLabels).toEqual([]);
     expect(plan.staleLabels).toEqual(["Captions", "Caption burn", "Export"]);
-    expect(plan.summary).toBe("Needs rebuild: Captions, Caption burn, Export");
-    expect(plan.actionLabel).toBe("Rebuild media");
+    expect(plan.summary).toBe("Final video needs updating.");
+    expect(plan.actionLabel).toBe("Prepare for Posting");
   });
 
   it("reports ready media when every stage is healthy", () => {

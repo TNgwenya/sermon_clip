@@ -7,52 +7,36 @@ import { useRouter } from "next/navigation";
 
 import { SectionCard, StatusBadge } from "@/components/ui";
 import {
-  PLATFORM_PRESET_LABELS,
   FORMAT_LABELS,
   FRAMING_DESCRIPTIONS,
   FRAMING_LABELS,
   FRAMING_PERSONALITY_DESCRIPTIONS,
   FRAMING_PERSONALITY_LABELS,
+  PLATFORM_PRESET_LABELS,
   SELECTABLE_FORMATS,
-  SELECTABLE_FRAMING_PERSONALITIES,
-  SELECTABLE_FRAMING_MODES,
-  summarizeExportSettings,
   buildFramingWarnings,
-  mapPlatformPresetToFormat,
   isValidExportFormat,
-  exportStatusTone,
-  toPastorFriendlyExportStatus,
-  type ClipStudioExportRecord,
+  mapPlatformPresetToFormat,
+  summarizeExportSettings,
+  type ExportSettings,
   type FramingPersonality,
   type PlatformPreset,
-  type ExportSettings,
 } from "@/lib/clipExportSettings";
-import { pastorFriendlyError } from "@/lib/pastorFriendlyErrors";
 import {
   generateSmartCropDebugSnapshotAction,
-  renderClipStudioExportsAction,
-  retryClipStudioExportAction,
   refreshClipVideoTrackingAction,
   resetManualCropCorrectionAction,
   saveManualCropCorrectionAction,
-  updateClipExportSettingsAction,
+  type ClipVideoTrackingActionState,
   type ManualCropActionState,
   type SmartCropDebugActionState,
-  type ClipVideoTrackingActionState,
-  type ClipStudioRenderActionState,
-  type UpdateClipExportSettingsState,
 } from "@/server/actions/sermons";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
 
 type ClipStudioFormatFramingProps = {
   clipId: string;
+  clipDurationSeconds: number | null;
   initialSettings: ExportSettings;
-  exportHistory: Array<ClipStudioExportRecord & { fileExists: boolean }>;
-  currentExport: {
-    format: ClipExportFormat;
-    outputPath: string;
-    fileExists: boolean;
-  } | null;
   videoSubjectTracks: Array<{
     id: string;
     kind: string;
@@ -78,30 +62,54 @@ type ClipStudioFormatFramingProps = {
 
 const PLATFORM_PRESETS = Object.keys(PLATFORM_PRESET_LABELS) as PlatformPreset[];
 
-function summarizeBrandingSnapshot(snapshot: Record<string, unknown> | null): string | null {
-  if (!snapshot || typeof snapshot !== "object") {
-    return null;
-  }
-
-  const enabled = snapshot["enabled"] === true;
-  if (!enabled) {
-    return "Branding: disabled";
-  }
-
-  const preset = typeof snapshot["preset"] === "string" ? snapshot["preset"] : "Unknown preset";
-  const watermarkEnabled = snapshot["watermarkEnabled"] === true;
-  const lowerThirdEnabled = snapshot["lowerThirdEnabled"] === true;
-
-  return `Branding: ${preset}, watermark ${watermarkEnabled ? "on" : "off"}, lower third ${
-    lowerThirdEnabled ? "on" : "off"
-  }`;
-}
+const FRAMING_MODE_CARDS: Array<{
+  label: string;
+  description: string;
+  personality: FramingPersonality;
+  mode: ExportSettings["framingMode"];
+}> = [
+  {
+    label: "Auto Intelligent",
+    description: "Best automatic choice for this sermon moment.",
+    personality: "AUTO_INTELLIGENT",
+    mode: "SMART_CROP",
+  },
+  {
+    label: "Speaker Focus",
+    description: "Keeps the pastor steady and centered.",
+    personality: "SPEAKER_FOCUS",
+    mode: "SMART_CROP",
+  },
+  {
+    label: "Worship Wide",
+    description: "Leaves more stage and worship context.",
+    personality: "WORSHIP_WIDE",
+    mode: "FIT_BLURRED_BACKGROUND",
+  },
+  {
+    label: "Full Stage",
+    description: "Prioritizes not cutting anyone off.",
+    personality: "SAFE_FULL_STAGE",
+    mode: "FIT_BLURRED_BACKGROUND",
+  },
+  {
+    label: "Center Crop",
+    description: "Simple centered crop for stable shots.",
+    personality: "AUTO_INTELLIGENT",
+    mode: "CENTER_CROP",
+  },
+  {
+    label: "Blurred Background",
+    description: "Fits the full frame into the output.",
+    personality: "SAFE_FULL_STAGE",
+    mode: "FIT_BLURRED_BACKGROUND",
+  },
+];
 
 export function ClipStudioFormatFraming({
   clipId,
+  clipDurationSeconds,
   initialSettings,
-  exportHistory,
-  currentExport,
   videoSubjectTracks,
   manualCropKeyframes,
   manualCropUpdatedAt,
@@ -125,13 +133,6 @@ export function ClipStudioFormatFraming({
   const [framingPersonality, setFramingPersonality] = useState<FramingPersonality>(initialSettings.framingPersonality);
   const [selectedFormats, setSelectedFormats] = useState<ClipExportFormat[]>(initialSettings.selectedFormats);
 
-  const [statusMessage, setStatusMessage] = useState("");
-  const [statusSuccess, setStatusSuccess] = useState(true);
-  const [fieldErrors, setFieldErrors] = useState<UpdateClipExportSettingsState["fieldErrors"]>({});
-
-  const [renderMessage, setRenderMessage] = useState("");
-  const [renderSuccess, setRenderSuccess] = useState(true);
-  const [lastRenderResults, setLastRenderResults] = useState<ClipStudioRenderActionState["results"]>([]);
   const [trackingMessage, setTrackingMessage] = useState("");
   const [trackingSuccess, setTrackingSuccess] = useState(true);
   const [cropMessage, setCropMessage] = useState("");
@@ -153,13 +154,17 @@ export function ClipStudioFormatFraming({
 
   const previewSummary = summarizeExportSettings(previewSettings);
   const warnings = buildFramingWarnings(previewSettings);
+  const manualCropCount = Array.isArray(manualCropKeyframes) ? manualCropKeyframes.length : 0;
+  const activeModeLabel =
+    FRAMING_MODE_CARDS.find((card) => card.mode === framingMode && card.personality === framingPersonality)?.label ??
+    FRAMING_LABELS[framingMode];
   const frameQualitySummary = useMemo(() => {
     if (framingDecisionSummary) {
       return framingDecisionSummary;
     }
 
     if (visualQualityScore === null) {
-      return "Render once to score pastor visibility, crop stability, and caption-safe framing.";
+      return "Prepare video to check framing quality.";
     }
 
     if (visualQualityScore >= 7.8 && (speakerVisiblePercentage ?? 0) >= 70 && (cropStabilityScore ?? 0) >= 7) {
@@ -167,17 +172,11 @@ export function ClipStudioFormatFraming({
     }
 
     if (visualQualityScore < 6.5 || (speakerVisiblePercentage ?? 100) < 70 || (cropStabilityScore ?? 10) < 6.5) {
-      return "Manual crop recommended: framing is usable for review but not premium enough for posting.";
+      return "Manual adjust recommended: framing is usable for review but not premium enough for posting.";
     }
 
     return "Frame quality: Review. Usable framing, but check the pastor before publishing.";
   }, [cropStabilityScore, framingDecisionSummary, speakerVisiblePercentage, visualQualityScore]);
-  const latestDownloads = exportHistory.filter(
-    (record) => record.status === "COMPLETED" && record.outputPath && record.fileExists && record.isLatest,
-  );
-  const currentExportAlreadyInHistory = Boolean(
-    currentExport && exportHistory.some((record) => record.outputPath === currentExport.outputPath),
-  );
 
   useEffect(() => {
     updateExportSettings(previewSettings);
@@ -199,8 +198,7 @@ export function ClipStudioFormatFraming({
 
         const next = current.filter((item) => item !== format);
         if (!next.includes(primaryFormat)) {
-          const nextPrimary = next[0] ?? format;
-          setPrimaryFormat(nextPrimary);
+          setPrimaryFormat(next[0] ?? format);
         }
         return next;
       }
@@ -209,109 +207,9 @@ export function ClipStudioFormatFraming({
     });
   }
 
-  function saveSettings() {
-    setStatusMessage("");
-    setFieldErrors({});
-
-    startTransition(async () => {
-      const result = await updateClipExportSettingsAction({
-        clipId,
-        platformPreset,
-        primaryFormat,
-        framingMode,
-        framingPersonality,
-        selectedFormats,
-      });
-
-      setFieldErrors(result.fieldErrors ?? {});
-      setStatusSuccess(result.success);
-      setStatusMessage(result.message);
-
-      if (result.success) {
-        router.refresh();
-      }
-    });
-  }
-
-  function applyFramingMode(nextFramingMode: typeof framingMode) {
-    setStatusMessage("");
-    setFieldErrors({});
-    setFramingMode(nextFramingMode);
-
-    startTransition(async () => {
-      const result = await updateClipExportSettingsAction({
-        clipId,
-        platformPreset,
-        primaryFormat,
-        framingMode: nextFramingMode,
-        framingPersonality,
-        selectedFormats,
-      });
-
-      setFieldErrors(result.fieldErrors ?? {});
-      setStatusSuccess(result.success);
-      setStatusMessage(result.message);
-
-      if (result.success) {
-        router.refresh();
-      }
-    });
-  }
-
-  function applyFramingPersonality(nextPersonality: FramingPersonality, nextFramingMode = framingMode) {
-    setStatusMessage("");
-    setFieldErrors({});
-    setFramingPersonality(nextPersonality);
-    setFramingMode(nextFramingMode);
-
-    startTransition(async () => {
-      const result = await updateClipExportSettingsAction({
-        clipId,
-        platformPreset,
-        primaryFormat,
-        framingMode: nextFramingMode,
-        framingPersonality: nextPersonality,
-        selectedFormats,
-      });
-
-      setFieldErrors(result.fieldErrors ?? {});
-      setStatusSuccess(result.success);
-      setStatusMessage(result.message);
-
-      if (result.success) {
-        router.refresh();
-      }
-    });
-  }
-
-  function renderSelectedFormats() {
-    setRenderMessage("");
-    startTransition(async () => {
-      const result = await renderClipStudioExportsAction({
-        clipId,
-        selectedFormats,
-      });
-
-      setRenderSuccess(result.success);
-      setRenderMessage(result.message);
-      setLastRenderResults(result.results);
-      router.refresh();
-    });
-  }
-
-  function retryExport(recordId: string) {
-    setRenderMessage("");
-    startTransition(async () => {
-      const result = await retryClipStudioExportAction({
-        clipId,
-        exportRecordId: recordId,
-      });
-
-      setRenderSuccess(result.success);
-      setRenderMessage(result.message);
-      setLastRenderResults(result.results);
-      router.refresh();
-    });
+  function applyFraming(personality: FramingPersonality, mode: ExportSettings["framingMode"]) {
+    setFramingPersonality(personality);
+    setFramingMode(mode);
   }
 
   function refreshTracking() {
@@ -324,7 +222,11 @@ export function ClipStudioFormatFraming({
     });
   }
 
-  function saveManualCrop(input: { direction?: "left" | "center" | "right"; nudge?: "left" | "right" }) {
+  function saveManualCrop(input: {
+    direction?: "left" | "center" | "right";
+    nudge?: "left" | "right";
+    keyframes?: Array<{ timeSeconds: number; centerX: number; centerY?: number; zoom?: number }>;
+  }) {
     setCropMessage("");
     startTransition(async () => {
       const result: ManualCropActionState = await saveManualCropCorrectionAction({
@@ -339,6 +241,22 @@ export function ClipStudioFormatFraming({
         setFramingMode("SMART_CROP");
         router.refresh();
       }
+    });
+  }
+
+  function saveManualKeyframes(input: { centerX?: number; centerY?: number; zoom?: number }) {
+    const durationSeconds = Math.max(0, clipDurationSeconds ?? 0);
+    const keyframe = {
+      timeSeconds: 0,
+      centerX: input.centerX ?? 0.5,
+      centerY: input.centerY ?? 0.5,
+      zoom: input.zoom ?? 1,
+    };
+
+    saveManualCrop({
+      keyframes: durationSeconds > 0
+        ? [keyframe, { ...keyframe, timeSeconds: durationSeconds }]
+        : [keyframe],
     });
   }
 
@@ -368,33 +286,29 @@ export function ClipStudioFormatFraming({
     });
   }
 
-  const manualCropCount = Array.isArray(manualCropKeyframes) ? manualCropKeyframes.length : 0;
-
   return (
-    <SectionCard title="Posting Format" description="Choose where this clip will be shared and how the pastor should stay framed on screen.">
+    <SectionCard title="Framing" description="Choose the platform, shape, and speaker crop for the current preview.">
       <div className="stack-md">
         <div className="clip-studio-effect-note">
-          <StatusBadge tone="success">Live preview</StatusBadge>
-          <p>Platform, download style, and pastor framing update the preview immediately. Save and re-render to create matching downloads.</p>
+          <StatusBadge tone="success">Preview updated</StatusBadge>
+          <p>Format and framing changes apply to the preview now. Prepare for Posting renders this exact setup.</p>
         </div>
 
         <label className="stack-sm">
-          Intended platform or preset
+          Platform
           <select
             value={platformPreset}
             onChange={(event) => onPlatformPresetChange(event.target.value as PlatformPreset)}
             disabled={isPending}
-            aria-invalid={Boolean(fieldErrors?.platformPreset)}
           >
             {PLATFORM_PRESETS.map((preset) => (
               <option key={preset} value={preset}>{PLATFORM_PRESET_LABELS[preset]}</option>
             ))}
           </select>
-          {fieldErrors?.platformPreset ? <span className="error-text small">{fieldErrors.platformPreset}</span> : null}
         </label>
 
         <label className="stack-sm">
-          Download style
+          Output shape
           <select
             value={primaryFormat}
             onChange={(event) => {
@@ -404,17 +318,15 @@ export function ClipStudioFormatFraming({
               }
             }}
             disabled={isPending}
-            aria-invalid={Boolean(fieldErrors?.primaryFormat)}
           >
             {SELECTABLE_FORMATS.map((format) => (
               <option key={format} value={format}>{FORMAT_LABELS[format]}</option>
             ))}
           </select>
-          {fieldErrors?.primaryFormat ? <span className="error-text small">{fieldErrors.primaryFormat}</span> : null}
         </label>
 
-        <fieldset className="stack-sm" aria-invalid={Boolean(fieldErrors?.selectedFormats)}>
-          <legend className="muted small">Optional extra downloads to create</legend>
+        <fieldset className="stack-sm">
+          <legend className="muted small">Final formats</legend>
           {SELECTABLE_FORMATS.map((format) => (
             <label key={format} className="review-checkbox-row">
               <input
@@ -426,82 +338,59 @@ export function ClipStudioFormatFraming({
               <span>{FORMAT_LABELS[format]}</span>
             </label>
           ))}
-          {fieldErrors?.selectedFormats ? <span className="error-text small">{fieldErrors.selectedFormats}</span> : null}
         </fieldset>
 
-        <label className="stack-sm">
-          Pastor framing
-          <select
-            value={framingMode}
-            onChange={(event) => setFramingMode(event.target.value as typeof framingMode)}
-            disabled={isPending}
-            aria-invalid={Boolean(fieldErrors?.framingMode)}
-          >
-            {SELECTABLE_FRAMING_MODES.map((mode) => (
-              <option key={mode} value={mode}>{FRAMING_LABELS[mode]}</option>
-            ))}
-          </select>
-          {fieldErrors?.framingMode ? <span className="error-text small">{fieldErrors.framingMode}</span> : null}
-          <p className="muted small">{FRAMING_DESCRIPTIONS[framingMode]}</p>
-        </label>
-
-        <label className="stack-sm">
-          Framing personality
-          <select
-            value={framingPersonality}
-            onChange={(event) => applyFramingPersonality(event.target.value as FramingPersonality)}
-            disabled={isPending}
-            aria-invalid={Boolean(fieldErrors?.framingPersonality)}
-          >
-            {SELECTABLE_FRAMING_PERSONALITIES.map((personality) => (
-              <option key={personality} value={personality}>{FRAMING_PERSONALITY_LABELS[personality]}</option>
-            ))}
-          </select>
-          {fieldErrors?.framingPersonality ? <span className="error-text small">{fieldErrors.framingPersonality}</span> : null}
-          <p className="muted small">{FRAMING_PERSONALITY_DESCRIPTIONS[framingPersonality]}</p>
-        </label>
-
-        <div className="stack-sm pastor-insight">
+        <section className="stack-sm pastor-insight" aria-labelledby="framing-mode-heading">
           <div className="actions-row">
             <div>
-              <p className="kicker">Creative framing</p>
-              <p className="muted small">
-                Choose the story shape first. Mode changes show in the live preview; manual crop corrections are saved for the next render.
-              </p>
+              <p className="kicker">Mode</p>
+              <h3 id="framing-mode-heading">{activeModeLabel}</h3>
             </div>
-            <StatusBadge tone={framingMode === "FIT_BLURRED_BACKGROUND" ? "success" : framingMode === "SMART_CROP" ? "accent" : "neutral"}>
+            <StatusBadge tone={framingMode === "SMART_CROP" ? "accent" : framingMode === "FIT_BLURRED_BACKGROUND" ? "success" : "neutral"}>
               {FRAMING_PERSONALITY_LABELS[framingPersonality]}
             </StatusBadge>
           </div>
-          <div className="framing-control-grid">
-            <button type="button" className="button secondary" onClick={() => applyFramingPersonality("SPEAKER_FOCUS", "SMART_CROP")} disabled={isPending}>
-              Speaker focus
-            </button>
-            <button type="button" className="button secondary" onClick={() => applyFramingPersonality("CINEMATIC_CLOSE", "SMART_CROP")} disabled={isPending}>
-              Cinematic close
-            </button>
-            <button type="button" className="button secondary" onClick={() => applyFramingPersonality("SOCIAL_PUNCHY", "SMART_CROP")} disabled={isPending}>
-              Social punchy
-            </button>
-            <button type="button" className="button secondary" onClick={() => applyFramingPersonality("WORSHIP_WIDE", "FIT_BLURRED_BACKGROUND")} disabled={isPending}>
-              Worship wide
-            </button>
-            <button type="button" className="button secondary" onClick={() => applyFramingPersonality("SAFE_FULL_STAGE", "FIT_BLURRED_BACKGROUND")} disabled={isPending}>
-              Safe full-stage
-            </button>
+          <div className="framing-mode-card-grid">
+            {FRAMING_MODE_CARDS.map((card) => (
+              <button
+                key={`${card.personality}-${card.mode}-${card.label}`}
+                type="button"
+                className={
+                  framingMode === card.mode && framingPersonality === card.personality
+                    ? "framing-mode-card is-active"
+                    : "framing-mode-card"
+                }
+                onClick={() => applyFraming(card.personality, card.mode)}
+                disabled={isPending}
+              >
+                <strong>{card.label}</strong>
+                <span>{card.description}</span>
+              </button>
+            ))}
           </div>
-          <div className="framing-control-grid">
-            <button type="button" className="button secondary" onClick={() => applyFramingMode("SMART_CROP")} disabled={isPending}>
-              Auto track
-            </button>
+          <p className="muted small">{FRAMING_DESCRIPTIONS[framingMode]}</p>
+          <p className="muted small">{FRAMING_PERSONALITY_DESCRIPTIONS[framingPersonality]}</p>
+        </section>
+
+        <section className="stack-sm pastor-insight" aria-labelledby="manual-adjust-heading">
+          <div className="actions-row">
+            <div>
+              <p className="kicker">Manual Adjust</p>
+              <h3 id="manual-adjust-heading">Fine tune crop</h3>
+            </div>
+            <StatusBadge tone={manualCropCount > 0 ? "accent" : "neutral"}>
+              {manualCropCount > 0 ? `${manualCropCount} saved` : "Automatic"}
+            </StatusBadge>
+          </div>
+          <div className="framing-control-grid compact">
             <button type="button" className="button secondary" onClick={() => saveManualCrop({ direction: "left" })} disabled={isPending}>
-              Manual left
-            </button>
-            <button type="button" className="button secondary" onClick={() => saveManualCrop({ direction: "right" })} disabled={isPending}>
-              Manual right
+              Left
             </button>
             <button type="button" className="button secondary" onClick={() => saveManualCrop({ direction: "center" })} disabled={isPending}>
-              Manual center
+              Center
+            </button>
+            <button type="button" className="button secondary" onClick={() => saveManualCrop({ direction: "right" })} disabled={isPending}>
+              Right
             </button>
           </div>
           <div className="framing-nudge-row">
@@ -512,84 +401,93 @@ export function ClipStudioFormatFraming({
               Nudge right
             </button>
             <button type="button" className="button secondary" onClick={resetManualCrop} disabled={isPending || manualCropCount === 0}>
-              Reset manual crop
+              Reset
+            </button>
+          </div>
+          <div className="framing-nudge-row">
+            <button type="button" className="button secondary" onClick={() => saveManualKeyframes({ centerY: 0.42, zoom: 1.08 })} disabled={isPending}>
+              Nudge up
+            </button>
+            <button type="button" className="button secondary" onClick={() => saveManualKeyframes({ centerY: 0.58, zoom: 1.08 })} disabled={isPending}>
+              Nudge down
+            </button>
+            <button type="button" className="button secondary" onClick={() => saveManualKeyframes({ zoom: 1.18 })} disabled={isPending}>
+              Zoom in
+            </button>
+          </div>
+          <div className="framing-nudge-row compact-two">
+            <button type="button" className="button secondary" onClick={() => saveManualKeyframes({ zoom: 1 })} disabled={isPending}>
+              Zoom out
             </button>
           </div>
           <p className="muted small">
             {manualCropCount > 0
-              ? `${manualCropCount} manual crop keyframe${manualCropCount === 1 ? "" : "s"} saved${manualCropUpdatedAt ? ` ${new Date(manualCropUpdatedAt).toLocaleString()}` : ""}.`
-              : "No manual crop keyframes saved. Manual crop and nudge buttons affect the next render, not the current live preview pixels."}
+              ? `Framing updated${manualCropUpdatedAt ? ` ${new Date(manualCropUpdatedAt).toLocaleString()}` : ""}. Prepare again when ready.`
+              : "Manual adjust saves a crop correction for the final render."}
           </p>
           {cropMessage ? (
             <p className={cropSuccess ? "success-banner" : "error-banner"} role="status" aria-live="polite">
               {cropMessage}
             </p>
           ) : null}
-        </div>
+        </section>
 
-        <p className="muted small">
-          Auto pastor tracking uses saved face/body estimates. Refresh tracking when the pastor moves across the stage, then re-render to use the updated tracking in downloads.
-        </p>
-
-        <div className="stack-sm pastor-insight">
+        <details className="clip-studio-editor-disclosure">
+          <summary>
+            <span>Advanced diagnostics</span>
+            <span className="muted small">Frame check, tracking, debug snapshot</span>
+          </summary>
+          <div className="stack-md">
+        <section className="stack-sm pastor-insight" aria-labelledby="frame-quality-heading">
           <div className="actions-row">
             <div>
-              <p className="kicker">Frame quality</p>
-              <p className="muted small">
-                {frameQualitySummary}
-              </p>
+              <p className="kicker">Quality</p>
+              <h3 id="frame-quality-heading">Frame check</h3>
             </div>
             <StatusBadge tone={(visualQualityScore ?? 0) >= 8 ? "success" : (visualQualityScore ?? 0) >= 6.5 ? "warning" : "neutral"}>
-              {visualQualityScore !== null ? `${visualQualityScore.toFixed(1)}/10` : "Not scored"}
+              {visualQualityScore !== null ? `${visualQualityScore.toFixed(1)}/10` : "Pending"}
             </StatusBadge>
           </div>
+          <p className="muted small">{frameQualitySummary}</p>
           <div className="posting-draft-list">
             <article className="posting-draft-card">
               <strong>Tracking</strong>
               <p className="muted small">
-                Confidence {averageTrackingConfidence !== null ? averageTrackingConfidence.toFixed(2) : "N/A"} · Stability {cropStabilityScore !== null ? cropStabilityScore.toFixed(1) : "N/A"}/10
+                {averageTrackingConfidence !== null || cropStabilityScore !== null
+                  ? [
+                      averageTrackingConfidence !== null ? `Confidence ${averageTrackingConfidence.toFixed(2)}` : null,
+                      cropStabilityScore !== null ? `Stability ${cropStabilityScore.toFixed(1)}/10` : null,
+                    ].filter(Boolean).join(" · ")
+                  : "Tracking quality appears after diagnostics run."}
               </p>
             </article>
             <article className="posting-draft-card">
               <strong>Readiness</strong>
               <p className="muted small">
-                {visualReadinessScore !== null
-                  ? `${visualReadinessScore.toFixed(1)}/10 after the last render.`
-                  : "Pending first render."}
+                {visualReadinessScore !== null ? `${visualReadinessScore.toFixed(1)}/10` : "Pending"}
               </p>
             </article>
           </div>
-        </div>
+        </section>
 
-        <div className="stack-sm pastor-insight">
+        <section className="stack-sm pastor-insight" aria-labelledby="tracking-heading">
           <div className="actions-row">
             <div>
-              <p className="kicker">Video face/body tracking</p>
-              <p className="muted small">
-                {videoSubjectTracks.length > 0
-                  ? `${videoSubjectTracks.length} track${videoSubjectTracks.length === 1 ? "" : "s"} ready for Auto pastor tracking.`
-                  : "No video tracking prepared yet."}
-              </p>
+              <p className="kicker">Tracking</p>
+              <h3 id="tracking-heading">{videoSubjectTracks.length > 0 ? `${videoSubjectTracks.length} subject track${videoSubjectTracks.length === 1 ? "" : "s"}` : "Speaker tracking not ready"}</h3>
             </div>
             <button type="button" className="button secondary" onClick={refreshTracking} disabled={isPending}>
-              {isPending ? "Refreshing..." : "Refresh tracking"}
+              {isPending ? "Refreshing..." : "Refresh"}
             </button>
           </div>
           {videoSubjectTracks.length > 0 ? (
             <div className="posting-draft-list">
-              {videoSubjectTracks.map((track) => (
+              {videoSubjectTracks.slice(0, 3).map((track) => (
                 <article key={track.id} className="posting-draft-card">
-                  <div>
-                    <strong>{track.kind.toLowerCase().replace(/_/g, " ")}</strong>
-                    <p className="muted small">{track.label}</p>
-                    <p className="muted small">
-                      {Math.round(track.confidenceScore * 100)}% confidence · {track.sampleCount} samples
-                    </p>
-                    <p className="muted small">
-                      Center {Math.round(track.centerX * 100)}% across, {Math.round(track.centerY * 100)}% down
-                    </p>
-                  </div>
-                  <span className="status-pill">{track.source.toLowerCase().replace(/_/g, " ")}</span>
+                  <strong>{track.kind.toLowerCase().replace(/_/g, " ")}</strong>
+                  <p className="muted small">
+                    {Math.round(track.confidenceScore * 100)}% · center {Math.round(track.centerX * 100)}% across
+                  </p>
                 </article>
               ))}
             </div>
@@ -599,18 +497,16 @@ export function ClipStudioFormatFraming({
               {trackingMessage}
             </p>
           ) : null}
-        </div>
+        </section>
 
-        <div className="stack-sm pastor-insight">
+        <section className="stack-sm pastor-insight" aria-labelledby="framing-diagnostic-heading">
           <div className="actions-row">
             <div>
-              <p className="kicker">Framing diagnostic</p>
-              <p className="muted small">
-                Generate a still image with the smart-crop safe area and pastor center line.
-              </p>
+              <p className="kicker">Diagnostic</p>
+              <h3 id="framing-diagnostic-heading">Safe area frame</h3>
             </div>
             <button type="button" className="button secondary" onClick={generateDebugSnapshot} disabled={isPending}>
-              {isPending ? "Generating..." : "Check frame"}
+              {isPending ? "Checking..." : "Check frame"}
             </button>
           </div>
           {hasSmartCropDebugSnapshot ? (
@@ -633,10 +529,12 @@ export function ClipStudioFormatFraming({
               {debugMessage}
             </p>
           ) : null}
-        </div>
+        </section>
+          </div>
+        </details>
 
         <div className="stack-sm">
-          <p className="muted small">Sharing preview guidance</p>
+          <p className="muted small">Current setup</p>
           <p>{previewSummary}</p>
           {warnings.length > 0 ? (
             <ul className="warning-list">
@@ -644,121 +542,6 @@ export function ClipStudioFormatFraming({
                 <li key={warning}>{warning}</li>
               ))}
             </ul>
-          ) : null}
-        </div>
-
-        <div className="actions-row">
-          <div className="clip-studio-action-explain">
-            <button type="button" className="button secondary" onClick={saveSettings} disabled={isPending}>
-              Save sharing settings
-            </button>
-            <span>Stores the preview choices.</span>
-          </div>
-          <div className="clip-studio-action-explain">
-            <button type="button" className="button primary" onClick={renderSelectedFormats} disabled={isPending}>
-              Re-render videos
-            </button>
-            <span>Updates the downloadable files.</span>
-          </div>
-        </div>
-
-        {statusMessage ? (
-          <p className={statusSuccess ? "success-banner" : "error-banner"} role="status" aria-live="polite">
-            {statusMessage}
-          </p>
-        ) : null}
-
-        {renderMessage ? (
-          <p className={renderSuccess ? "success-banner" : "error-banner"} role="status" aria-live="polite">
-            {renderMessage}
-          </p>
-        ) : null}
-
-        {lastRenderResults.length > 0 ? (
-          <ul className="warning-list">
-            {lastRenderResults.map((result) => (
-              <li key={result.recordId}>
-                {FORMAT_LABELS[result.format]}: {toPastorFriendlyExportStatus(result.status)}
-                {result.errorMessage ? ` (${result.errorMessage})` : ""}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        <div className="stack-sm">
-          <h3>Ready Downloads</h3>
-          {currentExport || latestDownloads.length > 0 ? (
-            <div className="stack-sm success-banner">
-              <p><strong>Latest downloadable files</strong></p>
-              {currentExport && !currentExportAlreadyInHistory ? (
-                <a href={`/api/clips/${clipId}/download?variant=vertical`} className="button secondary">
-                  Download current {FORMAT_LABELS[currentExport.format]}
-                </a>
-              ) : null}
-              {latestDownloads.map((record) => (
-                <a key={record.id} href={`/api/clips/${clipId}/download?historyId=${encodeURIComponent(record.id)}`} className="button secondary">
-                  Download latest {FORMAT_LABELS[record.format]}
-                </a>
-              ))}
-              {currentExport && !currentExport.fileExists ? (
-                <p className="error-banner">A current download is listed, but the video file could not be found.</p>
-              ) : null}
-            </div>
-          ) : null}
-
-          {exportHistory.length === 0 && !currentExport ? (
-            <p className="muted">No downloads yet. Prepare this clip to create ready-to-post videos.</p>
-          ) : exportHistory.length > 0 ? (
-            <div className="stack-sm">
-              {exportHistory.map((record) => (
-                <article key={record.id} className="card stack-sm">
-                  <div className="actions-row">
-                    <p>
-                      <strong>{FORMAT_LABELS[record.format]}</strong>
-                      {record.isLatest ? <span className="muted small"> (Latest)</span> : null}
-                    </p>
-                    <StatusBadge tone={exportStatusTone(record.status)}>{toPastorFriendlyExportStatus(record.status)}</StatusBadge>
-                  </div>
-
-                  <p className="muted small">
-                    Platform: {PLATFORM_PRESET_LABELS[record.platformPreset]} · Pastor framing: {FRAMING_LABELS[record.framingMode]}
-                  </p>
-
-                  {summarizeBrandingSnapshot(record.brandingSnapshot) ? (
-                    <p className="muted small">{summarizeBrandingSnapshot(record.brandingSnapshot)}</p>
-                  ) : null}
-
-                  {record.completedAt ? <p className="muted small">Completed: {new Date(record.completedAt).toLocaleString()}</p> : null}
-
-                  {record.status === "COMPLETED" && record.outputPath && record.fileExists ? (
-                    <a href={`/api/clips/${clipId}/download?historyId=${encodeURIComponent(record.id)}`} className="button secondary">
-                      Download video
-                    </a>
-                  ) : null}
-
-                  {record.status === "COMPLETED" && (!record.outputPath || !record.fileExists) ? (
-                    <p className="error-banner">This download is listed, but the video file could not be found.</p>
-                  ) : null}
-
-                  {record.status === "FAILED" ? (
-                    <div className="stack-sm">
-                      <p className="error-banner">
-                        {pastorFriendlyError(record.errorMessage)}
-                      </p>
-                      {record.errorMessage ? (
-                        <details className="muted small">
-                          <summary>Technical details</summary>
-                          <p>{record.errorMessage}</p>
-                        </details>
-                      ) : null}
-                      <button type="button" className="button secondary" onClick={() => retryExport(record.id)} disabled={isPending}>
-                        Prepare again
-                      </button>
-                    </div>
-                  ) : null}
-                </article>
-              ))}
-            </div>
           ) : null}
         </div>
       </div>

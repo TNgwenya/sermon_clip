@@ -27,7 +27,7 @@ export const DEFAULT_CAPTION_STYLE_PRESET_ID: CaptionStylePresetId = "clean-lowe
 export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
   {
     id: "bold-sermon",
-    name: "Sermon bold",
+    name: "Sermon Emphasis",
     description: "Strong social captions with a warm highlight for the most important words.",
     personality: "Confident and premium",
     motion: "Word pop",
@@ -49,7 +49,7 @@ export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
   },
   {
     id: "creator-highlight",
-    name: "Premium highlight",
+    name: "Bold Highlight",
     description: "Glass-style social captions with a crisp highlight for the active phrase.",
     personality: "Beautiful and modern",
     motion: "Highlight glow",
@@ -71,7 +71,7 @@ export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
   },
   {
     id: "clean-lower",
-    name: "Elegant lower captions",
+    name: "Clean Lower",
     description: "A refined lower-third with soft contrast, brand color, and readable weight.",
     personality: "Elegant and pastoral",
     motion: "Smooth rise",
@@ -104,7 +104,7 @@ export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
   },
   {
     id: "minimal-church",
-    name: "Minimal church captions",
+    name: "Minimal White",
     description: "Simple captions that keep the sermon video understated.",
     personality: "Quiet reverence",
     motion: "Soft fade",

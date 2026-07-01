@@ -9,7 +9,7 @@ export type PlatformPreset =
   | "WEBSITE_HORIZONTAL";
 
 export const PLATFORM_PRESET_LABELS: Record<PlatformPreset, string> = {
-  INSTAGRAM_REELS: "Instagram Reels",
+  INSTAGRAM_REELS: "Reels",
   TIKTOK: "TikTok",
   YOUTUBE_SHORTS: "YouTube Shorts",
   FACEBOOK_REELS: "Facebook Reels",
@@ -18,7 +18,7 @@ export const PLATFORM_PRESET_LABELS: Record<PlatformPreset, string> = {
 };
 
 export const FORMAT_LABELS: Record<ClipExportFormat, string> = {
-  VERTICAL_9_16: "Vertical video for Reels, TikTok, and Shorts",
+  VERTICAL_9_16: "Vertical 9:16",
   HORIZONTAL_16_9: "Horizontal video for YouTube or website",
   SQUARE_1_1: "Square video for Facebook or Instagram",
 };
@@ -28,7 +28,7 @@ export const FRAMING_LABELS: Record<ClipExportLayoutStrategy, string> = {
   LEFT_FOCUS: "Left crop",
   RIGHT_FOCUS: "Right crop",
   FIT_BLURRED_BACKGROUND: "Fit with blurred background",
-  SMART_CROP: "Auto pastor tracking",
+  SMART_CROP: "Auto Intelligent",
 };
 
 export const FRAMING_DESCRIPTIONS: Record<ClipExportLayoutStrategy, string> = {
@@ -37,7 +37,7 @@ export const FRAMING_DESCRIPTIONS: Record<ClipExportLayoutStrategy, string> = {
   RIGHT_FOCUS: "Use when the pastor is usually on the right side.",
   FIT_BLURRED_BACKGROUND:
     "Keeps the full video visible with a blurred background, useful when the pastor moves around.",
-  SMART_CROP: "Uses saved face/body tracking to keep the pastor near the center.",
+  SMART_CROP: "Chooses a steady crop from saved speaker tracking and stage activity.",
 };
 
 export const SELECTABLE_FORMATS: ClipExportFormat[] = [
@@ -384,7 +384,7 @@ export function buildFramingWarnings(settings: ExportSettings): string[] {
   }
 
   if (settings.primaryFormat === "VERTICAL_9_16" && settings.framingMode === "SMART_CROP") {
-    warnings.push("Refresh video tracking before preparing the download so Auto pastor tracking has the latest face/body estimate.");
+    warnings.push("Refresh video tracking before preparing the final video so Auto Intelligent framing has the latest speaker estimate.");
   }
 
   return warnings;
