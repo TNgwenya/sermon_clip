@@ -1,4 +1,5 @@
-import { appendFile, mkdir } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { appendFile, mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -7,6 +8,10 @@ import {
 } from "@/server/runtime/workerRuntime";
 
 const DEFAULT_STORAGE_ROOT = path.join(/* turbopackIgnore: true */ process.cwd(), "storage");
+const SERMON_FOLDER_MANIFEST_FILE = ".sermon-folders.json";
+const MAX_SERMON_FOLDER_SLUG_LENGTH = 80;
+
+type SermonFolderManifest = Record<string, string>;
 
 function assertPathSegment(value: string, label: string): string {
   const trimmed = value.trim();
@@ -21,9 +26,102 @@ export function getStorageRoot(): string {
   return configured && configured.length > 0 ? configured : DEFAULT_STORAGE_ROOT;
 }
 
+function getSermonsRoot(): string {
+  return path.join(/* turbopackIgnore: true */ getStorageRoot(), "sermons");
+}
+
+function getSermonFolderManifestPath(): string {
+  return path.join(getSermonsRoot(), SERMON_FOLDER_MANIFEST_FILE);
+}
+
+function readSermonFolderManifestSync(): SermonFolderManifest {
+  try {
+    const parsed = JSON.parse(readFileSync(/* turbopackIgnore: true */ getSermonFolderManifestPath(), "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] => (
+        typeof entry[0] === "string"
+        && typeof entry[1] === "string"
+        && entry[0].trim().length > 0
+        && entry[1].trim().length > 0
+        && !entry[1].includes("/")
+        && !entry[1].includes("\\")
+      )),
+    );
+  } catch {
+    return {};
+  }
+}
+
+async function readSermonFolderManifest(): Promise<SermonFolderManifest> {
+  return readSermonFolderManifestSync();
+}
+
+async function writeSermonFolderManifest(manifest: SermonFolderManifest): Promise<void> {
+  await mkdir(/* turbopackIgnore: true */ getSermonsRoot(), { recursive: true });
+  await writeFile(
+    /* turbopackIgnore: true */ getSermonFolderManifestPath(),
+    `${JSON.stringify(Object.fromEntries(Object.entries(manifest).sort()), null, 2)}\n`,
+    "utf8",
+  );
+}
+
+export function buildSermonFolderSlug(title: string): string {
+  const slug = title
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, MAX_SERMON_FOLDER_SLUG_LENGTH)
+    .replace(/-+$/g, "");
+
+  return slug || "sermon";
+}
+
+export async function registerSermonStorageFolder(sermonId: string, title: string): Promise<string> {
+  assertLocalStorageAvailable("Local sermon storage");
+  const safeSermonId = assertPathSegment(sermonId, "sermonId");
+  const manifest = await readSermonFolderManifest();
+  const existing = manifest[safeSermonId];
+  if (existing) {
+    return existing;
+  }
+
+  await mkdir(/* turbopackIgnore: true */ getSermonsRoot(), { recursive: true });
+  const existingFolders = new Set(
+    (await readdir(/* turbopackIgnore: true */ getSermonsRoot(), { withFileTypes: true }).catch(() => []))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name),
+  );
+  const usedFolders = new Set(Object.values(manifest));
+  const baseSlug = buildSermonFolderSlug(title);
+  let folderName = baseSlug;
+  if (usedFolders.has(folderName) || existingFolders.has(folderName)) {
+    folderName = `${baseSlug}-${safeSermonId.slice(0, 8)}`;
+  }
+
+  manifest[safeSermonId] = folderName;
+  await writeSermonFolderManifest(manifest);
+  return folderName;
+}
+
+export function getLegacySermonStoragePath(sermonId: string): string {
+  const safeSermonId = assertPathSegment(sermonId, "sermonId");
+  return path.join(/* turbopackIgnore: true */ getSermonsRoot(), safeSermonId);
+}
+
 export function getSermonStoragePath(sermonId: string): string {
   const safeSermonId = assertPathSegment(sermonId, "sermonId");
-  return path.join(/* turbopackIgnore: true */ getStorageRoot(), "sermons", safeSermonId);
+  const manifestFolder = readSermonFolderManifestSync()[safeSermonId];
+  if (manifestFolder) {
+    return path.join(/* turbopackIgnore: true */ getSermonsRoot(), manifestFolder);
+  }
+
+  return getLegacySermonStoragePath(safeSermonId);
 }
 
 export function getSourceVideoPath(sermonId: string): string {
@@ -145,8 +243,11 @@ function assertLocalStorageAvailable(action: string): void {
   }
 }
 
-export async function ensureSermonFolders(sermonId: string): Promise<void> {
+export async function ensureSermonFolders(sermonId: string, title?: string): Promise<void> {
   assertLocalStorageAvailable("Local sermon storage");
+  if (title?.trim()) {
+    await registerSermonStorageFolder(sermonId, title);
+  }
   const sermonRoot = getSermonStoragePath(sermonId);
 
   await Promise.all([
@@ -176,5 +277,5 @@ export async function appendPipelineLog(sermonId: string, message: string): Prom
 
 export async function ensureLocalStorageDirs(): Promise<void> {
   assertLocalStorageAvailable("Local media storage setup");
-  await mkdir(/* turbopackIgnore: true */ path.join(getStorageRoot(), "sermons"), { recursive: true });
+  await mkdir(/* turbopackIgnore: true */ getSermonsRoot(), { recursive: true });
 }

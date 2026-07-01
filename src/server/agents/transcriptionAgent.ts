@@ -1592,7 +1592,7 @@ export async function transcribeSermonAudio(
     throw new Error(`Sermon ${sermonId} was not found.`);
   }
 
-  await ensureSermonFolders(sermon.id);
+  await ensureSermonFolders(sermon.id, sermon.title);
 
   const audioPath = getAudioPath(sermon.id);
   const transcriptJsonPath = getTranscriptJsonPath(sermon.id);

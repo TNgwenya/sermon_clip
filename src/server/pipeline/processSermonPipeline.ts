@@ -136,7 +136,7 @@ export async function processSermonPipeline(
     throw new Error(`Sermon ${normalizedSermonId} was not found.`);
   }
 
-  await ensureSermonFolders(sermon.id);
+  await ensureSermonFolders(sermon.id, sermon.title);
 
   const parentJob = await createProcessingJob(sermon.id, "PROCESS_SERMON");
   const steps: PipelineStepResult[] = [];

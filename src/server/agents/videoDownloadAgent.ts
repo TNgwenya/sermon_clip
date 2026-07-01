@@ -285,6 +285,7 @@ export async function downloadSermonVideo(
     where: { id: sermonId },
     select: {
       id: true,
+      title: true,
       youtubeUrl: true,
       rightsConfirmed: true,
       sourceVideoPath: true,
@@ -294,7 +295,7 @@ export async function downloadSermonVideo(
   if (!sermon) {
     throw new Error(`Sermon ${sermonId} was not found.`);
   }
-  await ensureSermonFolders(sermon.id);
+  await ensureSermonFolders(sermon.id, sermon.title);
   const sourceVideoPath = getSourceVideoPath(sermon.id);
   const job = await createProcessingJob(sermon.id, "DOWNLOAD_VIDEO");
 

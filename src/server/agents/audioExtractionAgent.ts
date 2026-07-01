@@ -102,6 +102,7 @@ export async function extractSermonAudio(
     where: { id: sermonId },
     select: {
       id: true,
+      title: true,
       sourceVideoPath: true,
       audioPath: true,
     },
@@ -111,7 +112,7 @@ export async function extractSermonAudio(
     throw new Error(`Sermon ${sermonId} was not found.`);
   }
 
-  await ensureSermonFolders(sermon.id);
+  await ensureSermonFolders(sermon.id, sermon.title);
 
   const sourceVideoPath = getSourceVideoPath(sermon.id);
   const audioPath = getAudioPath(sermon.id);

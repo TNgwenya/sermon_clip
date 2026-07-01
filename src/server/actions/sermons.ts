@@ -1101,6 +1101,7 @@ export async function createSermonAction(
       },
       select: {
         id: true,
+        title: true,
       },
     });
 
@@ -1126,7 +1127,7 @@ export async function createSermonAction(
     }
 
     try {
-      await ensureSermonFolders(sermon.id);
+      await ensureSermonFolders(sermon.id, sermon.title);
       const sourceVideoPath = getSourceVideoPath(sermon.id);
       let uploadedDurationSeconds: number | null = null;
       if (hasUploadedVideo) {
