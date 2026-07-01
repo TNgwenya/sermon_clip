@@ -10,6 +10,7 @@ type UploadedRemotePreview = {
 };
 
 let client: S3Client | null = null;
+const DEFAULT_REMOTE_PREVIEW_UPLOAD_TIMEOUT_MS = 30_000;
 
 function cleanPathSegment(value: string): string {
   const cleaned = value.trim().replace(/[^A-Za-z0-9._-]/g, "-").replace(/-+/g, "-");
@@ -71,7 +72,23 @@ function getR2Client(): S3Client {
   return client;
 }
 
+function resolveRemotePreviewUploadTimeoutMs(): number {
+  const configured = process.env.R2_PREVIEW_UPLOAD_TIMEOUT_MS?.trim();
+  if (!configured) {
+    return DEFAULT_REMOTE_PREVIEW_UPLOAD_TIMEOUT_MS;
+  }
+
+  const timeoutMs = Number(configured);
+  return Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : DEFAULT_REMOTE_PREVIEW_UPLOAD_TIMEOUT_MS;
+}
+
 export function remotePreviewStorageConfigured(): boolean {
+  if (process.env.R2_PREVIEW_UPLOAD_DISABLED === "true") {
+    return false;
+  }
+
   return Boolean(
     envValue("R2_ACCOUNT_ID") &&
     envValue("R2_ACCESS_KEY_ID") &&
@@ -116,13 +133,23 @@ export async function uploadClipPreviewToR2(input: {
     filename: input.videoPath,
   });
 
-  await getR2Client().send(new PutObjectCommand({
-    Bucket: requiredEnv("R2_BUCKET"),
-    Key: objectKey,
-    Body: createReadStream(input.videoPath),
-    ContentLength: input.videoSize,
-    ContentType: input.contentType ?? "video/mp4",
-  }));
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), resolveRemotePreviewUploadTimeoutMs());
+
+  try {
+    await getR2Client().send(
+      new PutObjectCommand({
+        Bucket: requiredEnv("R2_BUCKET"),
+        Key: objectKey,
+        Body: createReadStream(input.videoPath),
+        ContentLength: input.videoSize,
+        ContentType: input.contentType ?? "video/mp4",
+      }),
+      { abortSignal: abortController.signal },
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
 
   return {
     objectKey,
