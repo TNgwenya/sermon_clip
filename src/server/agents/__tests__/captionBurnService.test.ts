@@ -90,18 +90,18 @@ describe("caption burn service validation", () => {
     expect(metadata.captionBurnError).toBeNull();
     expect(metadata.subtitlesBurned).toBe(true);
     expect(metadata.captionData).toMatchObject({
-      captionStylePresetId: "bold-sermon",
+      captionStylePresetId: "clean-lower",
     });
   });
 
   it("builds distinct caption force styles from presets", () => {
-    expect(__captionBurnTestUtils.buildCaptionForceStyle("kinetic-pop")).toContain("FontSize=28");
-    expect(__captionBurnTestUtils.buildCaptionForceStyle("creator-highlight")).toContain("BackColour=&H7A22D3EE");
+    expect(__captionBurnTestUtils.buildCaptionForceStyle("kinetic-pop")).toContain("FontSize=29");
+    expect(__captionBurnTestUtils.buildCaptionForceStyle("creator-highlight")).toContain("BackColour=&H8822D3EE");
     expect(__captionBurnTestUtils.buildCaptionForceStyle("soft-bubble")).toContain("BackColour=&HEEFFFFFF");
     expect(__captionBurnTestUtils.buildCaptionForceStyle("high-contrast")).toContain("PrimaryColour=&H0000FFFF");
-    expect(__captionBurnTestUtils.buildCaptionForceStyle("minimal-church")).toContain("FontSize=16");
+    expect(__captionBurnTestUtils.buildCaptionForceStyle("minimal-church")).toContain("FontSize=17");
     expect(__captionBurnTestUtils.buildCaptionForceStyle("scripture-focus")).toContain("FontName=Georgia");
-    expect(__captionBurnTestUtils.buildCaptionForceStyle("cinematic-testimony")).toContain("Shadow=1");
+    expect(__captionBurnTestUtils.buildCaptionForceStyle("cinematic-testimony")).toContain("Shadow=2");
   });
 
   it("uses per-clip caption style overrides", () => {

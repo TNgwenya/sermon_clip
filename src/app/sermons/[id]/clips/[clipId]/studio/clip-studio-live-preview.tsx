@@ -6,7 +6,14 @@ import { EmptyState, StatusBadge } from "@/components/ui";
 import { BRANDING_PRESET_LABELS } from "@/lib/clipBranding";
 import { resolveCaptionStylePreset } from "@/lib/captionStylePresets";
 import { FORMAT_LABELS, FRAMING_LABELS, PLATFORM_PRESET_LABELS } from "@/lib/clipExportSettings";
-import { resolveActiveCaptionCueText, shouldShowHookOverlay } from "@/lib/clipStudioPreviewTimeline";
+import {
+  buildSpeechCleanupPreviewPlan,
+  mapCleanedPreviewSecondsToSourceSeconds,
+  mapSourceSecondsToCleanedPreviewSeconds,
+  resolveActiveCaptionCueText,
+  resolveSpeechCleanupJumpTarget,
+  shouldShowHookOverlay,
+} from "@/lib/clipStudioPreviewTimeline";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
 import { ClipStudioDecisionBar } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-decision-bar";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
@@ -67,12 +74,14 @@ export function ClipStudioLivePreview({
   } = useClipStudioPreview();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [previewSeconds, setPreviewSeconds] = useState(0);
+  const [sourcePreviewSeconds, setSourcePreviewSeconds] = useState(0);
   const [previewDurationSeconds, setPreviewDurationSeconds] = useState<number | null>(null);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const brandingEnabled = brandingConfig.enabled && brandingConfig.preset !== "NO_BRANDING";
+  const captionsOverrideBranding = editPreview.applyCaptionsToClip && editPreview.captionCues.length > 0;
   const showWatermark = brandingEnabled && (brandingConfig.watermarkEnabled || brandingConfig.preset === "MINIMAL_WATERMARK");
   const showLowerThird =
-    brandingEnabled && brandingConfig.lowerThirdEnabled && brandingConfig.preset !== "MINIMAL_WATERMARK";
+    brandingEnabled && brandingConfig.lowerThirdEnabled && brandingConfig.preset !== "MINIMAL_WATERMARK" && !captionsOverrideBranding;
   const captionStyle = resolveCaptionStylePreset(editPreview.captionStylePresetId);
   const activePreviewSrc = sourcePreviewSrc ?? previewSrc;
   const canPreview = hasPreview || Boolean(sourcePreviewSrc);
@@ -81,7 +90,19 @@ export function ClipStudioLivePreview({
   const draftStartSeconds = hasSourcePreview ? editPreview.startSeconds : 0;
   const draftEndSeconds = hasSourcePreview ? editPreview.endSeconds : draftDurationSeconds;
   const isDraftTrimPreview = Boolean(activePreviewSrc && draftDurationSeconds !== null);
-  const windowKey = `${hasSourcePreview ? "source" : "rendered"}:${draftStartSeconds ?? "x"}:${draftEndSeconds ?? "x"}`;
+  const speechCleanupPreviewPlan = useMemo(
+    () =>
+      buildSpeechCleanupPreviewPlan({
+        captionCues: editPreview.captionCues,
+        durationSeconds: draftDurationSeconds,
+        speechCleanup: editPreview.speechCleanup,
+      }),
+    [draftDurationSeconds, editPreview.captionCues, editPreview.speechCleanup],
+  );
+  const cleanupWindowKey = `${speechCleanupPreviewPlan.sourceStartSeconds}:${speechCleanupPreviewPlan.sourceEndSeconds}:${speechCleanupPreviewPlan.cuts
+    .map((cut) => `${cut.startSeconds}-${cut.endSeconds}`)
+    .join(",")}`;
+  const windowKey = `${hasSourcePreview ? "source" : "rendered"}:${draftStartSeconds ?? "x"}:${draftEndSeconds ?? "x"}:${cleanupWindowKey}`;
   const hookOverlay = editPreview.hookOverlay;
   const showTimedHook = shouldShowHookOverlay(hookOverlay, previewSeconds);
   const activeCaptionCue = useMemo(() => {
@@ -92,18 +113,18 @@ export function ClipStudioLivePreview({
     return editPreview.captionCues.find(
       (cue) =>
         cue.text.trim().length > 0 &&
-        previewSeconds >= cue.startSeconds &&
-        previewSeconds <= cue.endSeconds,
+        sourcePreviewSeconds >= cue.startSeconds &&
+        sourcePreviewSeconds <= cue.endSeconds,
     ) ?? null;
-  }, [editPreview.applyCaptionsToClip, editPreview.captionCues, previewSeconds]);
+  }, [editPreview.applyCaptionsToClip, editPreview.captionCues, sourcePreviewSeconds]);
   const captionPreviewText = useMemo(() => {
     return resolveActiveCaptionCueText({
       applyCaptionsToClip: editPreview.applyCaptionsToClip,
       captionCues: editPreview.captionCues,
       fallbackText: editPreview.onVideoCaptionText,
-      previewSeconds,
+      previewSeconds: sourcePreviewSeconds,
     });
-  }, [editPreview.applyCaptionsToClip, editPreview.captionCues, editPreview.onVideoCaptionText, previewSeconds]);
+  }, [editPreview.applyCaptionsToClip, editPreview.captionCues, editPreview.onVideoCaptionText, sourcePreviewSeconds]);
   const captionWords = useMemo(() => captionPreviewText.split(/\s+/).filter(Boolean).slice(0, 18), [captionPreviewText]);
   const activeCaptionWordIndex = useMemo(() => {
     if (!activeCaptionCue || captionWords.length === 0) {
@@ -111,9 +132,9 @@ export function ClipStudioLivePreview({
     }
 
     const cueDurationSeconds = Math.max(0.1, activeCaptionCue.endSeconds - activeCaptionCue.startSeconds);
-    const cueProgress = Math.max(0, Math.min(0.999, (previewSeconds - activeCaptionCue.startSeconds) / cueDurationSeconds));
+    const cueProgress = Math.max(0, Math.min(0.999, (sourcePreviewSeconds - activeCaptionCue.startSeconds) / cueDurationSeconds));
     return Math.min(captionWords.length - 1, Math.floor(cueProgress * captionWords.length));
-  }, [activeCaptionCue, captionWords.length, previewSeconds]);
+  }, [activeCaptionCue, captionWords.length, sourcePreviewSeconds]);
   const previewStyle = {
     "--clip-brand-color": brandingConfig.themeColor ?? "#75d9b8",
   } as CSSProperties;
@@ -121,19 +142,26 @@ export function ClipStudioLivePreview({
     const video = videoRef.current;
     const videoSeconds = video?.currentTime ?? 0;
     const startSeconds = hasSourcePreview ? draftStartSeconds ?? 0 : 0;
-    const currentSeconds = isDraftTrimPreview
+    const sourceSeconds = isDraftTrimPreview
       ? Math.max(0, Math.min(draftDurationSeconds ?? Number.POSITIVE_INFINITY, videoSeconds - startSeconds))
       : videoSeconds;
+    const currentSeconds = speechCleanupPreviewPlan.enabled
+      ? mapSourceSecondsToCleanedPreviewSeconds(sourceSeconds, speechCleanupPreviewPlan)
+      : sourceSeconds;
     const nativeDurationSeconds = video && Number.isFinite(video.duration) ? video.duration : null;
-    const durationSeconds = isDraftTrimPreview
+    const unclippedDurationSeconds = isDraftTrimPreview
       ? hasSourcePreview
         ? draftDurationSeconds
         : nativeDurationSeconds !== null && draftDurationSeconds !== null
           ? Math.min(nativeDurationSeconds, draftDurationSeconds)
           : draftDurationSeconds
       : nativeDurationSeconds;
+    const durationSeconds = speechCleanupPreviewPlan.enabled && unclippedDurationSeconds !== null
+      ? speechCleanupPreviewPlan.cleanedDurationSeconds
+      : unclippedDurationSeconds;
     const isPlaying = Boolean(video && !video.paused && !video.ended);
 
+    setSourcePreviewSeconds(sourceSeconds);
     setPreviewSeconds(currentSeconds);
     setPreviewDurationSeconds(durationSeconds);
     setIsPreviewPlaying(isPlaying);
@@ -142,7 +170,7 @@ export function ClipStudioLivePreview({
       durationSeconds,
       isPlaying,
     });
-  }, [draftDurationSeconds, draftStartSeconds, hasSourcePreview, isDraftTrimPreview, updatePreviewClock]);
+  }, [draftDurationSeconds, draftStartSeconds, hasSourcePreview, isDraftTrimPreview, speechCleanupPreviewPlan, updatePreviewClock]);
 
   const clampVideoToDraftWindow = useCallback((options?: { restartAtEnd?: boolean }) => {
     const video = videoRef.current;
@@ -150,8 +178,23 @@ export function ClipStudioLivePreview({
       return;
     }
 
-    const startSeconds = Math.max(0, draftStartSeconds);
-    const endSeconds = draftEndSeconds !== null && draftEndSeconds > startSeconds ? draftEndSeconds : null;
+    const startSeconds = Math.max(0, draftStartSeconds + (speechCleanupPreviewPlan.enabled ? speechCleanupPreviewPlan.sourceStartSeconds : 0));
+    const rawEndSeconds = draftEndSeconds !== null && draftEndSeconds > draftStartSeconds
+      ? draftEndSeconds
+      : null;
+    const endSeconds = rawEndSeconds !== null
+      ? draftStartSeconds + (speechCleanupPreviewPlan.enabled ? speechCleanupPreviewPlan.sourceEndSeconds : rawEndSeconds - draftStartSeconds)
+      : null;
+    const relativeSourceSeconds = Math.max(0, video.currentTime - draftStartSeconds);
+    const cleanupJumpTarget = speechCleanupPreviewPlan.enabled
+      ? resolveSpeechCleanupJumpTarget(relativeSourceSeconds, speechCleanupPreviewPlan)
+      : null;
+
+    if (cleanupJumpTarget !== null && cleanupJumpTarget < speechCleanupPreviewPlan.sourceEndSeconds) {
+      video.currentTime = draftStartSeconds + cleanupJumpTarget;
+      updatePreviewSeconds();
+      return;
+    }
 
     if (video.currentTime < startSeconds || (endSeconds !== null && video.currentTime > endSeconds + 0.05)) {
       video.currentTime = startSeconds;
@@ -170,7 +213,7 @@ export function ClipStudioLivePreview({
         video.pause();
       }
     }
-  }, [draftEndSeconds, draftStartSeconds, isDraftTrimPreview, updatePreviewSeconds]);
+  }, [draftEndSeconds, draftStartSeconds, isDraftTrimPreview, speechCleanupPreviewPlan, updatePreviewSeconds]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -180,13 +223,18 @@ export function ClipStudioLivePreview({
 
     const maxSeconds = Number.isFinite(video.duration) ? video.duration : Number.POSITIVE_INFINITY;
     const sourceStartSeconds = hasSourcePreview ? draftStartSeconds ?? 0 : 0;
-    const sourceEndSeconds = draftEndSeconds ?? maxSeconds;
-    const targetSeconds = hasSourcePreview
-      ? sourceStartSeconds + Math.min(seekRequest.seconds, Math.max(0, sourceEndSeconds - sourceStartSeconds))
+    const sourceEndSeconds = speechCleanupPreviewPlan.enabled
+      ? sourceStartSeconds + speechCleanupPreviewPlan.sourceEndSeconds
+      : draftEndSeconds ?? maxSeconds;
+    const seekSourceSeconds = speechCleanupPreviewPlan.enabled
+      ? mapCleanedPreviewSecondsToSourceSeconds(seekRequest.seconds, speechCleanupPreviewPlan)
       : seekRequest.seconds;
+    const targetSeconds = hasSourcePreview
+      ? sourceStartSeconds + Math.min(seekSourceSeconds, Math.max(0, sourceEndSeconds - sourceStartSeconds))
+      : seekSourceSeconds;
     video.currentTime = Math.max(0, Math.min(maxSeconds, Math.min(targetSeconds, sourceEndSeconds)));
     updatePreviewSeconds();
-  }, [draftEndSeconds, draftStartSeconds, hasSourcePreview, seekRequest, updatePreviewSeconds]);
+  }, [draftEndSeconds, draftStartSeconds, hasSourcePreview, seekRequest, speechCleanupPreviewPlan, updatePreviewSeconds]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -195,7 +243,7 @@ export function ClipStudioLivePreview({
     }
 
     const seekToDraftStart = () => {
-      video.currentTime = Math.max(0, draftStartSeconds);
+      video.currentTime = Math.max(0, draftStartSeconds + (speechCleanupPreviewPlan.enabled ? speechCleanupPreviewPlan.sourceStartSeconds : 0));
       updatePreviewSeconds();
     };
 
@@ -206,7 +254,7 @@ export function ClipStudioLivePreview({
 
     video.addEventListener("loadedmetadata", seekToDraftStart, { once: true });
     return () => video.removeEventListener("loadedmetadata", seekToDraftStart);
-  }, [draftStartSeconds, isDraftTrimPreview, updatePreviewSeconds, windowKey]);
+  }, [draftStartSeconds, isDraftTrimPreview, speechCleanupPreviewPlan, updatePreviewSeconds, windowKey]);
 
   const togglePreviewPlayback = useCallback(() => {
     const video = videoRef.current;
@@ -359,8 +407,17 @@ export function ClipStudioLivePreview({
             <strong>{FORMAT_LABELS[exportSettings.primaryFormat]}</strong>
             <span>{PLATFORM_PRESET_LABELS[exportSettings.platformPreset]}</span>
             <span>{FRAMING_LABELS[exportSettings.framingMode]}</span>
-            <span>{brandingEnabled ? BRANDING_PRESET_LABELS[brandingConfig.preset] : "No branding"}</span>
-            <span>{editPreview.applyCaptionsToClip ? `${captionStyle.name} captions` : "Captions off"}</span>
+            <span>
+              {brandingEnabled
+                ? captionsOverrideBranding && showWatermark
+                  ? `${BRANDING_PRESET_LABELS[brandingConfig.preset]} watermark`
+                  : captionsOverrideBranding
+                    ? "Brand lower third hidden by captions"
+                    : BRANDING_PRESET_LABELS[brandingConfig.preset]
+                : "No branding"}
+            </span>
+            <span>{editPreview.applyCaptionsToClip ? captionStyle.name : "Captions off"}</span>
+            <span>{speechCleanupPreviewPlan.enabled ? "Clean speech preview" : "Original speech timing"}</span>
             <span>{isDraftTrimPreview ? "Live clipped preview" : "Rendered clip preview"}</span>
             <span>{editPreview.isTimingValid ? "Draft timing ready" : "Draft timing needs review"}</span>
           </div>

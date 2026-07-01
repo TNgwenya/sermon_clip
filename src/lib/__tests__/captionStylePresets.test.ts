@@ -20,9 +20,14 @@ describe("caption style presets", () => {
 
   it("resolves the new creative styles", () => {
     expect(resolveCaptionStylePreset("kinetic-pop").name).toBe("Kinetic pop");
-    expect(resolveCaptionStylePreset("creator-highlight").motion).toBe("Highlight sweep");
+    expect(resolveCaptionStylePreset("creator-highlight").motion).toBe("Highlight glow");
     expect(resolveCaptionStylePreset("soft-bubble").personality).toBe("Warm and readable");
     expect(resolveCaptionStylePreset("scripture-focus").name).toBe("Scripture focus");
     expect(resolveCaptionStylePreset("cinematic-testimony").motion).toBe("Slow dissolve");
+  });
+
+  it("falls back to the elegant lower caption style", () => {
+    expect(resolveCaptionStylePreset(undefined).id).toBe("clean-lower");
+    expect(resolveCaptionStylePreset("unknown").name).toBe("Elegant lower captions");
   });
 });

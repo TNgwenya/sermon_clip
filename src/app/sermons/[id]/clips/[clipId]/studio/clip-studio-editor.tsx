@@ -345,6 +345,7 @@ export function ClipStudioEditor({
       applyCaptionsToClip,
       captionStylePresetId: resolvedCaptionStyle.id,
       hookOverlay,
+      speechCleanup,
       hashtags,
       isTimingValid: timingPreview.isValid,
     }),
@@ -360,6 +361,7 @@ export function ClipStudioEditor({
       shortCaption,
       startTimestamp,
       hookOverlay,
+      speechCleanup,
       timingPreview.durationSeconds,
       timingPreview.endSeconds,
       timingPreview.isValid,
@@ -931,16 +933,16 @@ export function ClipStudioEditor({
         ) : null}
       </SectionCard>
 
-      <details className="clip-studio-editor-disclosure">
+      <details className="clip-studio-editor-disclosure" open>
         <summary>
           <span>Speech cleanup</span>
-          <span className="muted small">Render-only cleanup</span>
+          <span className="muted small">Live preview cleanup</span>
         </summary>
       <SectionCard title="Speech cleanup" description="Choose whether the rendered preview should be tightened.">
         <div className="stack-md">
-          <div className="clip-studio-effect-note is-render-only">
-            <StatusBadge tone="warning">Needs re-render</StatusBadge>
-            <p>Speech cleanup does not change the live preview. It is applied to the next prepared video after you save and re-render.</p>
+          <div className="clip-studio-effect-note">
+            <StatusBadge tone="success">Live preview</StatusBadge>
+            <p>The preview skips leading/trailing dead air and long transcript gaps when cleanup is on. Save and re-render to update the downloadable video.</p>
           </div>
           <label className="clip-studio-toggle-row">
             <input
@@ -957,8 +959,8 @@ export function ClipStudioEditor({
               disabled={isPending}
             />
             <span>
-              <strong>Remove dead air and long pauses on render</strong>
-              <small>Off by default. When saved, the next render/rerender creates a tightened preview for review.</small>
+              <strong>Remove dead air and long pauses</strong>
+              <small>Preview playback skips quiet transcript gaps now; render uses audio silence detection for the prepared video.</small>
             </span>
           </label>
 
@@ -986,7 +988,7 @@ export function ClipStudioEditor({
               <span className="kicker">Saved render mode</span>
               <strong>{speechCleanup.removeDeadAir && speechCleanup.tightenLongPauses ? "Clean preview" : "Original timing"}</strong>
               <p className="muted small">
-                Save changes, then rerender from Format to compare the prepared video output.
+                The live preview shows the cleaned timing immediately. Re-render from Output to make the prepared file match.
               </p>
             </article>
             <article>
@@ -1009,6 +1011,10 @@ export function ClipStudioEditor({
           <div className="clip-studio-effect-note">
             <StatusBadge tone="success">Live preview</StatusBadge>
             <p>Caption visibility, caption text, caption style, and hook changes update the preview overlay immediately. Save before preparing the final video.</p>
+          </div>
+          <div className="clip-studio-effect-note is-transcript-source">
+            <StatusBadge tone="accent">Transcript</StatusBadge>
+            <p>On-video captions are built from the sermon transcription. When captions are on, they override the branding lower-third so the words stay readable.</p>
           </div>
           <label className="clip-studio-toggle-row">
             <input

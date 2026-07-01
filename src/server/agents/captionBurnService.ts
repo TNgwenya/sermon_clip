@@ -119,21 +119,22 @@ function withCaptionSafeArea(style: string, safeArea: CaptionSafeArea): string {
 function buildCaptionForceStyle(presetId: string | null | undefined, safeArea: CaptionSafeArea = "STANDARD"): string {
   const preset = resolveCaptionStylePreset(presetId);
   const base = "FontName=Arial,BorderStyle=1,Shadow=0";
+  const boxedBase = base.replace("BorderStyle=1", "BorderStyle=3");
 
   if (preset.id === "clean-lower") {
-    return withCaptionSafeArea(`${base},FontSize=18,PrimaryColour=&H00111111,OutlineColour=&H00FFFFFF,BackColour=&HCCFFFFFF,Outline=1,Alignment=2,MarginV=56`, safeArea);
+    return withCaptionSafeArea(`${boxedBase},FontSize=21,PrimaryColour=&H00111111,OutlineColour=&H00FFFFFF,BackColour=&HEEFFFFFF,Outline=2,Shadow=1,Alignment=2,MarginV=58`, safeArea);
   }
 
   if (preset.id === "kinetic-pop") {
-    return withCaptionSafeArea(`${base},FontSize=28,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=5,Shadow=2,Alignment=2,MarginV=70`, safeArea);
+    return withCaptionSafeArea(`${base},FontSize=29,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=5,Shadow=2,Alignment=2,MarginV=70`, safeArea);
   }
 
   if (preset.id === "creator-highlight") {
-    return withCaptionSafeArea(`${base},FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00111827,BackColour=&H7A22D3EE,Outline=3,Shadow=1,Alignment=2,MarginV=66`, safeArea);
+    return withCaptionSafeArea(`${base},FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00111827,BackColour=&H8822D3EE,Outline=3,Shadow=2,Alignment=2,MarginV=66`, safeArea);
   }
 
   if (preset.id === "soft-bubble") {
-    return withCaptionSafeArea(`${base},FontSize=20,PrimaryColour=&H00111827,OutlineColour=&H00FFFFFF,BackColour=&HEEFFFFFF,Outline=2,Shadow=1,Alignment=2,MarginV=58`, safeArea);
+    return withCaptionSafeArea(`${boxedBase},FontSize=21,PrimaryColour=&H00111827,OutlineColour=&H00FFFFFF,BackColour=&HEEFFFFFF,Outline=2,Shadow=1,Alignment=2,MarginV=58`, safeArea);
   }
 
   if (preset.id === "high-contrast") {
@@ -145,15 +146,15 @@ function buildCaptionForceStyle(presetId: string | null | undefined, safeArea: C
   }
 
   if (preset.id === "minimal-church") {
-    return withCaptionSafeArea(`${base},FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H66000000,Outline=1,Alignment=2,MarginV=42`, safeArea);
+    return withCaptionSafeArea(`${base},FontSize=17,PrimaryColour=&H00FFFFFF,OutlineColour=&H66000000,Outline=1,Shadow=1,Alignment=2,MarginV=42`, safeArea);
   }
 
   if (preset.id === "scripture-focus") {
-    return withCaptionSafeArea(`${base.replace("FontName=Arial", "FontName=Georgia")},FontSize=20,PrimaryColour=&H00111111,OutlineColour=&H00FACC15,BackColour=&HEEFFFFFF,Outline=1,Alignment=2,MarginV=60`, safeArea);
+    return withCaptionSafeArea(`${boxedBase.replace("FontName=Arial", "FontName=Georgia")},FontSize=20,PrimaryColour=&H00111111,OutlineColour=&H00FACC15,BackColour=&HEEFFFFFF,Outline=1,Shadow=1,Alignment=2,MarginV=60`, safeArea);
   }
 
   if (preset.id === "cinematic-testimony") {
-    return withCaptionSafeArea(`${base},FontSize=19,PrimaryColour=&H00F8FAFC,OutlineColour=&H00111827,BackColour=&HAA111827,Outline=2,Shadow=1,Alignment=2,MarginV=54`, safeArea);
+    return withCaptionSafeArea(`${base},FontSize=20,PrimaryColour=&H00F8FAFC,OutlineColour=&H00111827,BackColour=&HAA111827,Outline=2,Shadow=2,Alignment=2,MarginV=54`, safeArea);
   }
 
   return withCaptionSafeArea(`${base},FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=3,Alignment=2,MarginV=64`, safeArea);

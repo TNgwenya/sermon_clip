@@ -54,6 +54,7 @@ import {
   buildSrtFromEditableCues,
   type EditableCaptionCue,
   parseHashtagEditorInput,
+  validateCaptionCuesFromTranscript,
   validateEditableCaptionCues,
   validateClipStudioTiming,
 } from "@/lib/clipStudioEditing";
@@ -3818,6 +3819,7 @@ export async function updateClipStudioEditsAction(
       hook: true,
       caption: true,
       hashtags: true,
+      transcriptText: true,
       captionData: true,
       captionBurnStatus: true,
       exportStatus: true,
@@ -3916,6 +3918,18 @@ export async function updateClipStudioEditsAction(
   }
 
   const normalizedCaptionCues = captionCueValidation.cues;
+  const transcriptGroundingValidation = validateCaptionCuesFromTranscript(normalizedCaptionCues, clip.transcriptText);
+  if (input.applyCaptionsToClip && !transcriptGroundingValidation.isValid) {
+    return {
+      success: false,
+      message: "Could not save clip changes. Captions must come from the sermon transcription.",
+      fieldErrors: {
+        captionCues: transcriptGroundingValidation.errors[0],
+      },
+      warnings: combinedWarnings,
+    };
+  }
+
   const normalizedCaptionStylePresetId = normalizeClipStudioCaptionStylePresetId(input.captionStylePresetId);
   const normalizedHookOverlay = normalizeHookOverlay(input.hookOverlay);
   const normalizedSpeechCleanup = {

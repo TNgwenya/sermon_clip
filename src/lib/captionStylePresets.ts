@@ -22,12 +22,14 @@ export type CaptionStylePreset = {
   className: string;
 };
 
+export const DEFAULT_CAPTION_STYLE_PRESET_ID: CaptionStylePresetId = "clean-lower";
+
 export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
   {
     id: "bold-sermon",
-    name: "Bold sermon",
-    description: "Large stacked captions with strong outline and word emphasis.",
-    personality: "Confident and direct",
+    name: "Sermon bold",
+    description: "Strong social captions with a warm highlight for the most important words.",
+    personality: "Confident and premium",
     motion: "Word pop",
     bestFor: "Reels, Shorts, TikTok",
     sampleText: "God is not finished with you.",
@@ -47,10 +49,10 @@ export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
   },
   {
     id: "creator-highlight",
-    name: "Creator highlight",
-    description: "Clean white captions with highlighted key words for social edits.",
-    personality: "Polished social",
-    motion: "Highlight sweep",
+    name: "Premium highlight",
+    description: "Glass-style social captions with a crisp highlight for the active phrase.",
+    personality: "Beautiful and modern",
+    motion: "Highlight glow",
     bestFor: "Teaching clips, Opus-style moments",
     sampleText: "Grace changes everything.",
     emphasisWords: ["Grace"],
@@ -69,10 +71,10 @@ export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
   },
   {
     id: "clean-lower",
-    name: "Clean lower captions",
-    description: "A calm lower-third caption style for church announcements and teaching.",
-    personality: "Clear and pastoral",
-    motion: "Gentle slide up",
+    name: "Elegant lower captions",
+    description: "A refined lower-third with soft contrast, brand color, and readable weight.",
+    personality: "Elegant and pastoral",
+    motion: "Smooth rise",
     bestFor: "Facebook, sermon recaps",
     sampleText: "Grace meets you in the middle.",
     emphasisWords: ["Grace"],
@@ -136,5 +138,9 @@ export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
 ];
 
 export function resolveCaptionStylePreset(id: string | null | undefined): CaptionStylePreset {
-  return CAPTION_STYLE_PRESETS.find((preset) => preset.id === id) ?? CAPTION_STYLE_PRESETS[0];
+  return (
+    CAPTION_STYLE_PRESETS.find((preset) => preset.id === id) ??
+    CAPTION_STYLE_PRESETS.find((preset) => preset.id === DEFAULT_CAPTION_STYLE_PRESET_ID) ??
+    CAPTION_STYLE_PRESETS[0]
+  );
 }

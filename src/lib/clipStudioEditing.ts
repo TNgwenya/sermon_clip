@@ -167,6 +167,44 @@ function normalizeCaptionCueText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function normalizeTranscriptGroundingText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function validateCaptionCuesFromTranscript(
+  cues: EditableCaptionCue[],
+  transcriptText: string,
+): { isValid: boolean; errors: string[] } {
+  const normalizedTranscript = normalizeTranscriptGroundingText(transcriptText);
+
+  if (!normalizedTranscript) {
+    return {
+      isValid: false,
+      errors: ["Caption source transcription is missing. Regenerate captions from the transcript before saving burned-in captions."],
+    };
+  }
+
+  const errors = cues.flatMap((cue) => {
+    const normalizedCueText = normalizeTranscriptGroundingText(cue.text);
+    if (!normalizedCueText) {
+      return [];
+    }
+
+    return normalizedTranscript.includes(normalizedCueText)
+      ? []
+      : [`Caption ${cue.index} must use words from the sermon transcription.`];
+  });
+
+  return {
+    isValid: errors.length === 0,
+    errors,
+  };
+}
+
 function formatSrtTimestamp(seconds: number): string {
   const clampedMilliseconds = Math.max(0, Math.round(seconds * 1000));
   const hours = Math.floor(clampedMilliseconds / 3600000);

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveActiveCaptionCueText, shouldShowHookOverlay } from "@/lib/clipStudioPreviewTimeline";
+import {
+  buildSpeechCleanupPreviewPlan,
+  mapCleanedPreviewSecondsToSourceSeconds,
+  mapSourceSecondsToCleanedPreviewSeconds,
+  resolveActiveCaptionCueText,
+  resolveSpeechCleanupJumpTarget,
+  shouldShowHookOverlay,
+} from "@/lib/clipStudioPreviewTimeline";
 
 const baseHook = {
   enabled: true,
@@ -89,5 +96,69 @@ describe("resolveActiveCaptionCueText", () => {
         previewSeconds: 1,
       }),
     ).toBe("Fallback caption");
+  });
+});
+
+describe("speech cleanup preview timeline", () => {
+  it("trims edge dead air and collapses long caption gaps", () => {
+    const plan = buildSpeechCleanupPreviewPlan({
+      captionCues: [
+        { index: 1, startSeconds: 1.4, endSeconds: 4, text: "Opening words" },
+        { index: 2, startSeconds: 7, endSeconds: 10, text: "Closing words" },
+      ],
+      durationSeconds: 12,
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+      },
+    });
+
+    expect(plan.enabled).toBe(true);
+    expect(plan.sourceStartSeconds).toBe(1.28);
+    expect(plan.sourceEndSeconds).toBe(10.12);
+    expect(plan.cuts).toEqual([
+      { startSeconds: 4.18, endSeconds: 6.82, removedSeconds: 2.64 },
+    ]);
+    expect(plan.cleanedDurationSeconds).toBe(6.2);
+  });
+
+  it("maps between cleaned preview time and source video time", () => {
+    const plan = buildSpeechCleanupPreviewPlan({
+      captionCues: [
+        { index: 1, startSeconds: 1.4, endSeconds: 4, text: "Opening words" },
+        { index: 2, startSeconds: 7, endSeconds: 10, text: "Closing words" },
+      ],
+      durationSeconds: 12,
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+      },
+    });
+
+    expect(mapSourceSecondsToCleanedPreviewSeconds(1.28, plan)).toBe(0);
+    expect(mapCleanedPreviewSecondsToSourceSeconds(3, plan)).toBe(6.92);
+    expect(resolveSpeechCleanupJumpTarget(5, plan)).toBe(6.82);
+  });
+
+  it("does not enable speech cleanup preview without transcript timing", () => {
+    const plan = buildSpeechCleanupPreviewPlan({
+      captionCues: [],
+      durationSeconds: 12,
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+      },
+    });
+
+    expect(plan).toEqual({
+      enabled: false,
+      sourceStartSeconds: 0,
+      sourceEndSeconds: 12,
+      cleanedDurationSeconds: 12,
+      cuts: [],
+    });
   });
 });

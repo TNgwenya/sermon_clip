@@ -3,7 +3,7 @@
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
 
 import type { ClipBrandingConfig } from "@/lib/clipBranding";
-import type { HookOverlayConfig } from "@/lib/clipStudio";
+import type { HookOverlayConfig, SpeechCleanupSettings } from "@/lib/clipStudio";
 import type { ExportSettings } from "@/lib/clipExportSettings";
 
 export type ClipStudioEditPreview = {
@@ -26,6 +26,7 @@ export type ClipStudioEditPreview = {
   applyCaptionsToClip: boolean;
   captionStylePresetId: string;
   hookOverlay: HookOverlayConfig;
+  speechCleanup: SpeechCleanupSettings;
   hashtags: string;
   isTimingValid: boolean;
 };
@@ -121,6 +122,9 @@ function sameEditPreview(a: ClipStudioEditPreview, b: ClipStudioEditPreview): bo
     a.hookOverlay.animation === b.hookOverlay.animation &&
     a.hookOverlay.size === b.hookOverlay.size &&
     a.hookOverlay.bold === b.hookOverlay.bold &&
+    a.speechCleanup.removeDeadAir === b.speechCleanup.removeDeadAir &&
+    a.speechCleanup.tightenLongPauses === b.speechCleanup.tightenLongPauses &&
+    a.speechCleanup.flagFillerWords === b.speechCleanup.flagFillerWords &&
     a.hashtags === b.hashtags &&
     a.isTimingValid === b.isTimingValid
   );

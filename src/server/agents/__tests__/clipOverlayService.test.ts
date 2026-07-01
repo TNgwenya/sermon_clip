@@ -236,6 +236,21 @@ describe("buildOverlayFilter — metadata persistence", () => {
     expect(filter).toContain("0xFFFFFF");
   });
 
+  it("lets burned-in captions override the branding lower third", () => {
+    expect(
+      __clipOverlayTestUtils.shouldBrandingLowerThirdYieldToCaptions({
+        applyCaptionsToClip: true,
+        cues: [{ text: "Sermon words", startSeconds: 0, endSeconds: 2 }],
+      }),
+    ).toBe(true);
+    expect(
+      __clipOverlayTestUtils.shouldBrandingLowerThirdYieldToCaptions({
+        applyCaptionsToClip: false,
+        cues: [{ text: "Sermon words", startSeconds: 0, endSeconds: 2 }],
+      }),
+    ).toBe(false);
+  });
+
   it("includes a drawbox background element", () => {
     const filter = buildOverlayFilter(sermon, null);
 

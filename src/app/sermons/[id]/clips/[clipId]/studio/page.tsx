@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 
 import { prisma } from "@/lib/prisma";
 import { StatCard, StatusBadge } from "@/components/ui";
+import { DEFAULT_CAPTION_STYLE_PRESET_ID } from "@/lib/captionStylePresets";
 import {
   extractCaptionPackage,
   extractCaptionGuidance,
@@ -265,8 +266,9 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     onVideoCaptionText: onVideoCaptionCues.map((cue) => cue.text).join(" "),
     captionCues: onVideoCaptionCues,
     applyCaptionsToClip,
-    captionStylePresetId: captionStyleOverride || appBranding?.defaultCaptionStyleName || "bold-sermon",
+    captionStylePresetId: captionStyleOverride || appBranding?.defaultCaptionStyleName || DEFAULT_CAPTION_STYLE_PRESET_ID,
     hookOverlay,
+    speechCleanup: speechCleanupSettings,
     hashtags: captionPackage.hashtags.join(" "),
     isTimingValid: true,
   };
@@ -471,7 +473,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 initialCaptionCues={onVideoCaptionCues}
                 initialApplyCaptionsToClip={applyCaptionsToClip}
                 initialCaptionStylePresetId={captionStyleOverride}
-                brandCaptionStylePresetId={appBranding?.defaultCaptionStyleName ?? "bold-sermon"}
+                brandCaptionStylePresetId={appBranding?.defaultCaptionStyleName ?? DEFAULT_CAPTION_STYLE_PRESET_ID}
                 initialHook={clip.hook}
                 suggestedHook={clip.suggestedHook ?? ""}
                 initialHookOverlay={hookOverlay}

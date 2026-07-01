@@ -4,6 +4,7 @@ import {
   buildSrtFromEditableCues,
   hashtagsToEditorInput,
   parseHashtagEditorInput,
+  validateCaptionCuesFromTranscript,
   validateEditableCaptionCues,
   validateClipStudioTiming,
 } from "@/lib/clipStudioEditing";
@@ -215,6 +216,36 @@ describe("validateEditableCaptionCues", () => {
     expect(result.isValid).toBe(true);
     expect(result.warnings).toContain("On-video captions have a noticeable timing gap.");
     expect(result.maxGapSeconds).toBe(31);
+  });
+});
+
+describe("validateCaptionCuesFromTranscript", () => {
+  it("accepts caption text grounded in the sermon transcription", () => {
+    const result = validateCaptionCuesFromTranscript([
+      { index: 1, startSeconds: 0, endSeconds: 3, text: "God is faithful" },
+      { index: 2, startSeconds: 3, endSeconds: 6, text: "through every season" },
+    ], "Church, God is faithful through every season.");
+
+    expect(result.isValid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("rejects caption text that is not from the transcription", () => {
+    const result = validateCaptionCuesFromTranscript([
+      { index: 1, startSeconds: 0, endSeconds: 3, text: "Follow us for more" },
+    ], "God is faithful through every season.");
+
+    expect(result.isValid).toBe(false);
+    expect(result.errors).toContain("Caption 1 must use words from the sermon transcription.");
+  });
+
+  it("rejects burned-in captions when transcription text is missing", () => {
+    const result = validateCaptionCuesFromTranscript([
+      { index: 1, startSeconds: 0, endSeconds: 3, text: "God is faithful" },
+    ], "");
+
+    expect(result.isValid).toBe(false);
+    expect(result.errors[0]).toContain("Caption source transcription is missing");
   });
 });
 

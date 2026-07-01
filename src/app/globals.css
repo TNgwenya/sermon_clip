@@ -807,11 +807,15 @@ select:focus-visible {
 }
 
 .caption-style-bold-sermon {
-  background: rgba(15, 23, 42, 0.84);
+  background:
+    linear-gradient(135deg, rgba(250, 204, 21, 0.18), transparent 38%),
+    rgba(15, 23, 42, 0.9);
   color: #ffffff;
   font-size: 1rem;
   text-transform: uppercase;
   letter-spacing: 0;
+  border: 1px solid rgba(250, 204, 21, 0.34);
+  box-shadow: 0 14px 30px rgba(2, 6, 23, 0.34);
 }
 
 .caption-style-kinetic-pop {
@@ -825,10 +829,12 @@ select:focus-visible {
 }
 
 .caption-style-creator-highlight {
-  background: rgba(2, 6, 23, 0.88);
+  background:
+    linear-gradient(135deg, rgba(34, 211, 238, 0.22), rgba(2, 6, 23, 0.92) 42%),
+    rgba(2, 6, 23, 0.88);
   color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  box-shadow: 0 14px 30px rgba(2, 6, 23, 0.32);
+  border: 1px solid rgba(125, 211, 252, 0.38);
+  box-shadow: 0 16px 34px rgba(2, 6, 23, 0.34);
 }
 
 .caption-style-soft-bubble {
@@ -841,9 +847,12 @@ select:focus-visible {
 
 .caption-style-clean-lower {
   align-self: end;
-  background: rgba(255, 255, 255, 0.92);
+  background:
+    linear-gradient(90deg, rgba(15, 118, 110, 0.14), rgba(255, 255, 255, 0.96) 18%),
+    rgba(255, 255, 255, 0.94);
   color: #0f172a;
-  border: 2px solid #0f766e;
+  border: 1px solid rgba(15, 118, 110, 0.42);
+  box-shadow: 0 15px 32px rgba(15, 23, 42, 0.18);
 }
 
 .caption-style-high-contrast {
@@ -887,9 +896,10 @@ select:focus-visible {
 
 .caption-emphasis-mark {
   border-radius: 6px;
-  background: color-mix(in srgb, var(--brand-secondary, #1d4ed8), transparent 78%);
+  background: color-mix(in srgb, var(--brand-secondary, #1d4ed8), transparent 76%);
   color: color-mix(in srgb, var(--brand-secondary, #1d4ed8), white 34%);
-  padding: 0 0.12em;
+  padding: 0.05rem 0.18rem;
+  box-shadow: inset 0 -0.12em rgba(255, 255, 255, 0.18);
 }
 
 .mock-watermark {
@@ -8138,20 +8148,24 @@ textarea::placeholder {
     display: flex;
     max-width: 100%;
     flex-wrap: wrap;
-    gap: 0.2em 0.32em;
+    gap: 0.2em 0.34em;
     justify-content: center;
     align-items: center;
     overflow: hidden;
-    border-radius: 10px;
-    background: rgba(2, 6, 23, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 12px;
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.1), transparent 44%),
+      rgba(2, 6, 23, 0.78);
     box-decoration-break: clone;
     color: #f8fafc;
-    font-size: 0.94rem;
+    font-size: 0.98rem;
     font-weight: 900;
     line-height: 1.12;
-    padding: 0.38rem 0.56rem;
+    padding: 0.44rem 0.64rem;
     text-wrap: balance;
-    text-shadow: 0 1px 8px rgba(0, 0, 0, 0.52);
+    text-shadow: 0 1px 10px rgba(0, 0, 0, 0.56);
+    box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
   }
 
   .clip-studio-live-caption-word {
@@ -8166,7 +8180,10 @@ textarea::placeholder {
   }
 
   .clip-studio-live-caption.caption-style-bold-sermon > span {
-    background: rgba(3, 7, 18, 0.78);
+    background:
+      linear-gradient(135deg, rgba(250, 204, 21, 0.2), rgba(3, 7, 18, 0.78) 42%),
+      rgba(3, 7, 18, 0.82);
+    border-color: rgba(250, 204, 21, 0.3);
     text-transform: uppercase;
     text-shadow:
       0 2px 0 #000000,
@@ -8201,16 +8218,19 @@ textarea::placeholder {
   }
 
   .clip-studio-live-caption.caption-style-creator-highlight > span {
-    background: rgba(2, 6, 23, 0.68);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    box-shadow: 0 12px 28px rgba(2, 6, 23, 0.28);
+    background:
+      linear-gradient(135deg, rgba(34, 211, 238, 0.22), rgba(2, 6, 23, 0.8) 46%),
+      rgba(2, 6, 23, 0.72);
+    border: 1px solid rgba(125, 211, 252, 0.38);
+    box-shadow: 0 18px 36px rgba(2, 6, 23, 0.34);
   }
 
   .clip-studio-live-caption.caption-style-creator-highlight .clip-studio-live-caption-word.is-active {
-    background: #22d3ee;
+    background: linear-gradient(135deg, #67e8f9, #22d3ee);
     color: #07111f;
     padding-inline: 0.16em;
     text-shadow: none;
+    box-shadow: 0 0 18px rgba(34, 211, 238, 0.32);
   }
 
   .clip-studio-live-caption.caption-style-soft-bubble > span {
@@ -8247,8 +8267,18 @@ textarea::placeholder {
   }
 
   .clip-studio-live-caption.caption-style-clean-lower > span {
-    background: rgba(255, 255, 255, 0.92);
-    outline: 2px solid var(--clip-brand-color);
+    background:
+      linear-gradient(90deg, color-mix(in srgb, var(--clip-brand-color), transparent 82%), rgba(255, 255, 255, 0.96) 20%),
+      rgba(255, 255, 255, 0.94);
+    border-color: color-mix(in srgb, var(--clip-brand-color), transparent 54%);
+    box-shadow: 0 16px 34px rgba(15, 23, 42, 0.2);
+  }
+
+  .clip-studio-live-caption.caption-style-clean-lower .clip-studio-live-caption-word.is-active {
+    background: color-mix(in srgb, var(--clip-brand-color), white 34%);
+    color: #0f172a;
+    padding-inline: 0.15em;
+    text-shadow: none;
   }
 
   .clip-studio-live-caption.caption-style-minimal-church > span {
@@ -9104,9 +9134,6 @@ textarea::placeholder {
   }
 
   .clip-studio-save-strip {
-    position: sticky;
-    bottom: 0.75rem;
-    z-index: 8;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.75rem;
@@ -9167,6 +9194,11 @@ textarea::placeholder {
   .clip-studio-effect-note.is-render-only {
     border-color: rgba(251, 191, 36, 0.28);
     background: rgba(251, 191, 36, 0.08);
+  }
+
+  .clip-studio-effect-note.is-transcript-source {
+    border-color: rgba(96, 165, 250, 0.28);
+    background: rgba(96, 165, 250, 0.08);
   }
 
   .clip-studio-effect-note p {

@@ -343,6 +343,17 @@ function extractHookOverlaySpec(captionData: unknown): HookOverlaySpec | null {
   };
 }
 
+function shouldBrandingLowerThirdYieldToCaptions(captionData: unknown): boolean {
+  if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
+    return false;
+  }
+
+  const record = captionData as Record<string, unknown>;
+  const applyCaptionsToClip = record["applyCaptionsToClip"] !== false;
+  const cues = Array.isArray(record["cues"]) ? record["cues"] : [];
+  return applyCaptionsToClip && cues.length > 0;
+}
+
 function escapeSvgText(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -452,6 +463,7 @@ export const __clipOverlayTestUtils = {
   buildOverlayFilter,
   buildHookOverlayFilter,
   extractHookOverlaySpec,
+  shouldBrandingLowerThirdYieldToCaptions,
   buildHookOverlaySvg,
   buildOverlayFilterComplex,
   validateOverlayEligibility,
@@ -741,6 +753,7 @@ export async function renderClipOverlay(
     const overlayDimensions = getBrandingOverlayDimensions("VERTICAL_9_16");
     const brandingOverlayPath = getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".branding.png");
     const hookOverlaySpec = extractHookOverlaySpec(clip.captionData);
+    const captionsOverrideBranding = shouldBrandingLowerThirdYieldToCaptions(clip.captionData);
     const hookOverlayPath = hookOverlaySpec
       ? getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".hook.png")
       : null;
@@ -754,7 +767,7 @@ export async function renderClipOverlay(
         showSermonTitle: true,
         showPreacherName: true,
         watermarkEnabled: true,
-        lowerThirdEnabled: true,
+        lowerThirdEnabled: !captionsOverrideBranding,
         themeColor: branding?.primaryBrandColor ?? null,
       },
       {
