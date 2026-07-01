@@ -4,7 +4,7 @@ import { type MouseEvent, useEffect, useMemo, useState, useTransition } from "re
 import { useRouter } from "next/navigation";
 
 import { SectionCard, StatusBadge } from "@/components/ui";
-import { formatSecondsForPastorView } from "@/lib/sermonSegment";
+import { formatSecondsForPastorView, formatSecondsForTimestampInput } from "@/lib/sermonSegment";
 import {
   type EditableCaptionCue,
   hashtagsToEditorInput,
@@ -153,10 +153,10 @@ export function ClipStudioEditor({
   const [warnings, setWarnings] = useState<string[]>([]);
 
   const [startTimestamp, setStartTimestamp] = useState(
-    formatSecondsForPastorView(initialStartTimeSeconds),
+    formatSecondsForTimestampInput(initialStartTimeSeconds),
   );
   const [endTimestamp, setEndTimestamp] = useState(
-    formatSecondsForPastorView(initialEndTimeSeconds),
+    formatSecondsForTimestampInput(initialEndTimeSeconds),
   );
   const shortCaption = initialShortCaption;
   const platformCaption = initialPlatformCaption;
@@ -434,8 +434,8 @@ export function ClipStudioEditor({
       return;
     }
 
-    setStartTimestamp(formatSecondsForPastorView(firstSegment.startTimeSeconds));
-    setEndTimestamp(formatSecondsForPastorView(lastSegment.endTimeSeconds));
+    setStartTimestamp(formatSecondsForTimestampInput(firstSegment.startTimeSeconds));
+    setEndTimestamp(formatSecondsForTimestampInput(lastSegment.endTimeSeconds));
     setStatusSuccess(true);
     setStatusMessage("Trim updated from transcript text. Save changes when it looks right.");
   }
@@ -446,7 +446,7 @@ export function ClipStudioEditor({
     if (boundary === "start") {
       const currentEnd = timingPreview.endSeconds ?? initialEndTimeSeconds;
       const nextStart = Math.min(segment.startTimeSeconds, Math.max(0, currentEnd - 0.1));
-      setStartTimestamp(formatSecondsForPastorView(nextStart));
+      setStartTimestamp(formatSecondsForTimestampInput(nextStart));
       setFirstSegmentId(segment.id);
       setStatusMessage("Start point set from the selected spoken line.");
       setStatusSuccess(true);
@@ -456,7 +456,7 @@ export function ClipStudioEditor({
     const currentStart = timingPreview.startSeconds ?? initialStartTimeSeconds;
     const hardEnd = knownDurationSeconds && knownDurationSeconds > 0 ? knownDurationSeconds : segment.endTimeSeconds;
     const nextEnd = clampSeconds(segment.endTimeSeconds, currentStart + 0.1, hardEnd);
-    setEndTimestamp(formatSecondsForPastorView(nextEnd));
+    setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
     setLastSegmentId(segment.id);
     setStatusMessage("End point set from the selected spoken line.");
     setStatusSuccess(true);
@@ -510,8 +510,8 @@ export function ClipStudioEditor({
     const firstSegment = findClosestTranscriptSegment(transcriptSegments, nextStart, "start");
     const lastSegment = findClosestTranscriptSegment(transcriptSegments, nextEnd, "end");
 
-    setStartTimestamp(formatSecondsForPastorView(firstSegment?.startTimeSeconds ?? nextStart));
-    setEndTimestamp(formatSecondsForPastorView(lastSegment?.endTimeSeconds ?? nextEnd));
+    setStartTimestamp(formatSecondsForTimestampInput(firstSegment?.startTimeSeconds ?? nextStart));
+    setEndTimestamp(formatSecondsForTimestampInput(lastSegment?.endTimeSeconds ?? nextEnd));
     setFirstSegmentId(firstSegment?.id ?? segment.id);
     setLastSegmentId(lastSegment?.id ?? segment.id);
     setStatusSuccess(true);
@@ -528,7 +528,7 @@ export function ClipStudioEditor({
     const nextEnd = clampSeconds(currentStart + targetDurationSeconds, currentStart + 0.1, hardEnd);
     const lastSegment = findClosestTranscriptSegment(transcriptSegments, nextEnd, "end");
 
-    setEndTimestamp(formatSecondsForPastorView(lastSegment?.endTimeSeconds ?? nextEnd));
+    setEndTimestamp(formatSecondsForTimestampInput(lastSegment?.endTimeSeconds ?? nextEnd));
     if (lastSegment) {
       setLastSegmentId(lastSegment.id);
     }
@@ -539,8 +539,8 @@ export function ClipStudioEditor({
 
   function resetTiming() {
     clearFeedback();
-    setStartTimestamp(formatSecondsForPastorView(initialStartTimeSeconds));
-    setEndTimestamp(formatSecondsForPastorView(initialEndTimeSeconds));
+    setStartTimestamp(formatSecondsForTimestampInput(initialStartTimeSeconds));
+    setEndTimestamp(formatSecondsForTimestampInput(initialEndTimeSeconds));
     setFirstSegmentId(initialFirstSegmentId);
     setLastSegmentId(initialLastSegmentId);
     setFocusedSegmentId(initialFirstSegmentId);
@@ -565,8 +565,8 @@ export function ClipStudioEditor({
 
     setFirstSegmentId(firstSegment.id);
     setLastSegmentId(lastSegment.id);
-    setStartTimestamp(formatSecondsForPastorView(firstSegment.startTimeSeconds));
-    setEndTimestamp(formatSecondsForPastorView(lastSegment.endTimeSeconds));
+    setStartTimestamp(formatSecondsForTimestampInput(firstSegment.startTimeSeconds));
+    setEndTimestamp(formatSecondsForTimestampInput(lastSegment.endTimeSeconds));
     setStatusSuccess(true);
     setStatusMessage("Timing snapped to the nearest spoken lines. Save changes when it looks right.");
   }
@@ -579,25 +579,25 @@ export function ClipStudioEditor({
     if (boundary === "start") {
       const maxStart = Math.max(0, currentEnd - 0.1);
       const nextStart = Math.max(0, Math.min(maxStart, currentStart + deltaSeconds));
-      setStartTimestamp(formatSecondsForPastorView(nextStart));
+      setStartTimestamp(formatSecondsForTimestampInput(nextStart));
       return;
     }
 
     const minEnd = Math.max(0.1, currentStart + 0.1);
     const nextEnd = Math.max(minEnd, Math.min(maxKnownEnd, currentEnd + deltaSeconds));
-    setEndTimestamp(formatSecondsForPastorView(nextEnd));
+    setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
   }
 
   function onStartSliderChange(rawValue: number) {
     const maxStart = Math.max(0, sliderEndSeconds - 0.1);
     const nextStart = clampSeconds(rawValue, localTimeline.start, Math.min(localTimeline.end, maxStart));
-    setStartTimestamp(formatSecondsForPastorView(nextStart));
+    setStartTimestamp(formatSecondsForTimestampInput(nextStart));
   }
 
   function onEndSliderChange(rawValue: number) {
     const minEnd = Math.min(localTimeline.end, sliderStartSeconds + 0.1);
     const nextEnd = clampSeconds(rawValue, minEnd, localTimeline.end);
-    setEndTimestamp(formatSecondsForPastorView(nextEnd));
+    setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
   }
 
   function updateCaptionCue(index: number, patch: Partial<EditableCaptionCue>) {

@@ -23,7 +23,8 @@ function parseTimestampParts(value: string): number[] | null {
     return null;
   }
 
-  if (!parts.every((part) => /^\d+$/.test(part))) {
+  const lastPartIndex = parts.length - 1;
+  if (!parts.every((part, index) => (index === lastPartIndex ? /^\d+(?:\.\d{1,3})?$/.test(part) : /^\d+$/.test(part)))) {
     return null;
   }
 
@@ -80,6 +81,23 @@ export function formatSecondsForPastorView(seconds: number): string {
   }
 
   return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+export function formatSecondsForTimestampInput(seconds: number): string {
+  const safeMilliseconds = Math.max(0, Math.round(seconds * 1000));
+  const hours = Math.floor(safeMilliseconds / 3600000);
+  const minutes = Math.floor((safeMilliseconds % 3600000) / 60000);
+  const wholeSeconds = Math.floor((safeMilliseconds % 60000) / 1000);
+  const milliseconds = safeMilliseconds % 1000;
+  const secondsLabel = milliseconds > 0
+    ? `${String(wholeSeconds).padStart(2, "0")}.${String(milliseconds).padStart(3, "0").replace(/0+$/g, "")}`
+    : String(wholeSeconds).padStart(2, "0");
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${secondsLabel}`;
+  }
+
+  return `${minutes}:${secondsLabel}`;
 }
 
 export function validateSermonSegmentRange(input: SegmentValidationInput): SegmentValidationResult {

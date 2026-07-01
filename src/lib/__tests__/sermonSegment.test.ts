@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatSecondsForPastorView,
+  formatSecondsForTimestampInput,
   hasSermonSegmentWindow,
   parseSermonTimestampInput,
   shouldShowLongRecordingWarning,
@@ -14,6 +15,11 @@ describe("sermon segment timestamp helpers", () => {
     expect(parseSermonTimestampInput("52:30")).toEqual({ seconds: 3150 });
     expect(parseSermonTimestampInput("1:12:45")).toEqual({ seconds: 4365 });
     expect(parseSermonTimestampInput("00:52:30")).toEqual({ seconds: 3150 });
+  });
+
+  it("parses decimal seconds for precise clip editing", () => {
+    expect(parseSermonTimestampInput("15:09.72")).toEqual({ seconds: 909.72 });
+    expect(parseSermonTimestampInput("1:00:05.125")).toEqual({ seconds: 3605.125 });
   });
 
   it("returns friendly parsing errors for invalid input", () => {
@@ -68,5 +74,11 @@ describe("sermon segment timestamp helpers", () => {
   it("formats time values for pastor-facing display", () => {
     expect(formatSecondsForPastorView(3150)).toBe("52:30");
     expect(formatSecondsForPastorView(4365)).toBe("1:12:45");
+  });
+
+  it("formats time values for editable timestamp inputs without losing milliseconds", () => {
+    expect(formatSecondsForTimestampInput(909.72001953125)).toBe("15:09.72");
+    expect(formatSecondsForTimestampInput(966.1)).toBe("16:06.1");
+    expect(formatSecondsForTimestampInput(3605.125)).toBe("1:00:05.125");
   });
 });

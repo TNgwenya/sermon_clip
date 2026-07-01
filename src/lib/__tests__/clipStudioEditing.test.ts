@@ -60,6 +60,19 @@ describe("validateClipStudioTiming", () => {
     expect(result.endSeconds).toBe(2560);
   });
 
+  it("preserves decimal seconds from clip studio timestamp inputs", () => {
+    const result = validateClipStudioTiming({
+      startTimestamp: "15:09.72",
+      endTimestamp: "16:06.1",
+      knownDurationSeconds: null,
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.startSeconds).toBe(909.72);
+    expect(result.endSeconds).toBe(966.1);
+    expect(result.durationSeconds).toBeCloseTo(56.38);
+  });
+
   it("rejects invalid input", () => {
     const result = validateClipStudioTiming({
       startTimestamp: "bad-value",
