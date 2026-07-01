@@ -1,3 +1,5 @@
+import { stat } from "node:fs/promises";
+
 import Link from "next/link";
 
 import {
@@ -6,6 +8,7 @@ import {
   StatCard,
 } from "@/components/ui";
 import { HomeTopClipCard } from "@/app/home-top-clip-card";
+import { listBestPreviewCandidates } from "@/lib/clipPreview";
 import { prisma } from "@/lib/prisma";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
 import { getOperationalMetrics } from "@/server/workflow/operationsDiagnostics";
@@ -67,6 +70,8 @@ type SearchParams = {
   query?: string;
 };
 
+type HomeClip = SermonListItem["clipCandidates"][number];
+
 const processingStatuses: SermonStatus[] = [
   "DOWNLOADING",
   "AUDIO_EXTRACTING",
@@ -74,6 +79,32 @@ const processingStatuses: SermonStatus[] = [
   "GENERATING_CLIPS",
   "EXPORTING",
 ];
+
+async function fileHasBytes(filePath: string): Promise<boolean> {
+  try {
+    const fileStat = await stat(/* turbopackIgnore: true */ filePath);
+    return fileStat.isFile() && fileStat.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function canPreviewClipVideo(clip: Pick<
+  HomeClip,
+  "remotePreviewUrl" | "exportedFilePath" | "captionedVideoPath" | "overlayVideoPath" | "renderedFilePath"
+>): Promise<boolean> {
+  if (clip.remotePreviewUrl?.trim()) {
+    return true;
+  }
+
+  const candidates = listBestPreviewCandidates(clip);
+  if (candidates.length === 0) {
+    return false;
+  }
+
+  const candidateReadiness = await Promise.all(candidates.map((candidate) => fileHasBytes(candidate)));
+  return candidateReadiness.some(Boolean);
+}
 
 function qualityLabelText(value: ClipQualityLabel | null | undefined): string {
   if (value === "POST_READY") return "Post-ready";
@@ -187,11 +218,21 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
   const needsEditingCount = allClips.filter((clip) => (clip.qualityLabel ?? clip.postReadyStatus) === "NEEDS_EDITING").length;
   const exportedCount = allClips.filter((clip) => clip.exportStatus === "COMPLETED" || clip.status === "EXPORTED").length;
   const processingCount = sermons.filter((sermon) => processingStatuses.includes(sermon.status)).length + metrics.runningOperations;
-  const needsAttentionCount = sermons.filter((sermon) => sermon.status === "FAILED").length + metrics.failedOperations + metrics.outdatedAssets;
+  const failedSermons = sermons.filter((sermon) => sermon.status === "FAILED");
+  const failedSermonCount = failedSermons.length;
+  const failedOperationCount = metrics.failedOperations;
+  const outdatedAssetCount = metrics.outdatedAssets;
+  const needsAttentionCount = failedSermonCount + failedOperationCount + outdatedAssetCount;
   const topClips = allClips
     .filter((clip) => clip.status !== "REJECTED")
     .sort((a, b) => (b.finalQualityScore ?? b.score) - (a.finalQualityScore ?? a.score))
     .slice(0, 4);
+  const previewableTopClipIds = new Set(
+    (await Promise.all(
+      topClips.map(async (clip) => (await canPreviewClipVideo(clip) ? clip.id : null)),
+    )).filter((clipId): clipId is string => Boolean(clipId)),
+  );
+  const firstFailedSermon = failedSermons[0] ?? null;
   const firstActionableSermon = sermons.find((sermon) => sermon.status !== "FAILED") ?? sermons[0] ?? null;
   const priorityState = needsAttentionCount > 0
     ? "attention"
@@ -200,27 +241,40 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
       : firstActionableSermon
         ? "resume"
         : "empty";
-  const priorityActionHref = priorityState === "ready"
+  const priorityActionHref = priorityState === "attention"
+    ? failedSermonCount > 0 && firstFailedSermon
+      ? `/sermons/${firstFailedSermon.id}`
+      : "/health"
+    : priorityState === "ready"
     ? "/ready-to-post"
     : firstActionableSermon
       ? `/sermons/${firstActionableSermon.id}`
       : "/sermons/new";
   const priorityActionLabel = priorityState === "attention"
-    ? "Open Sermon"
+    ? failedSermonCount > 0
+      ? "Open sermon"
+      : "Open health check"
     : priorityState === "ready"
       ? "Open publishing desk"
       : priorityState === "resume"
         ? "Continue sermon"
         : "Create clips";
+  const attentionDetail = failedOperationCount > 0
+    ? outdatedAssetCount > 0
+      ? "A failed job and stale clip media need recovery before posting."
+      : "A background job or clip asset failed. Open Health to inspect and retry it."
+    : outdatedAssetCount > 0
+      ? "Some approved clip media is stale. Refresh it before posting."
+      : "A sermon failed while processing. Open it to retry the failed step.";
   const priorityTitle = priorityState === "attention"
-    ? "One item needs attention."
+    ? `${needsAttentionCount} ${needsAttentionCount === 1 ? "item needs" : "items need"} attention.`
     : priorityState === "ready"
       ? "Prepared clips are ready."
       : priorityState === "resume"
         ? workflowStatusText(firstActionableSermon.status)
         : "Create sermon clips.";
   const priorityDetail = priorityState === "attention"
-    ? "Repair stale media before posting."
+    ? attentionDetail
     : priorityState === "ready"
       ? "Download, copy captions, or schedule the next post."
       : priorityState === "resume"
@@ -326,13 +380,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
               const label = clip.qualityLabel ?? clip.postReadyStatus;
               const score = clip.finalQualityScore ?? clip.score;
               const hookLine = shortHookLine(clip.suggestedHook ?? clip.hook ?? clip.reasonSelected);
-              const canPreviewVideo = Boolean(
-                clip.remotePreviewUrl ||
-                clip.exportedFilePath ||
-                clip.captionedVideoPath ||
-                clip.overlayVideoPath ||
-                clip.renderedFilePath,
-              );
               return (
                 <HomeTopClipCard
                   key={clip.id}
@@ -347,7 +394,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
                   timecodeLabel={`Starts ${formatSecondsForPastorView(clip.startTimeSeconds)}`}
                   clipTypeLabel={clipTypeText(clip.clipType)}
                   hookLine={hookLine}
-                  canPreviewVideo={canPreviewVideo}
+                  canPreviewVideo={previewableTopClipIds.has(clip.id)}
                   priority={index === 0}
                 />
               );

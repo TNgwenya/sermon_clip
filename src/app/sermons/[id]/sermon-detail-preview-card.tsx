@@ -22,6 +22,7 @@ type SermonDetailPreviewCardProps = {
     overlayVideoPath?: string | null;
   };
   localMediaAvailable: boolean;
+  canPreviewVideo: boolean;
 };
 
 const HOVER_PREVIEW_SECONDS = 5;
@@ -47,17 +48,12 @@ export function SermonDetailPreviewCard({
   sermonId,
   clip,
   localMediaAvailable,
+  canPreviewVideo,
 }: SermonDetailPreviewCardProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [isHoverPreviewing, setIsHoverPreviewing] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
-  const hasPreviewMedia = Boolean(
-    clip.overlayVideoPath ||
-    clip.captionedVideoPath ||
-    clip.exportedFilePath ||
-    clip.renderedFilePath,
-  );
-  const canPreview = localMediaAvailable && hasPreviewMedia && !previewFailed;
+  const canPreview = canPreviewVideo && !previewFailed;
   const hookLine = clip.suggestedHook?.trim() || clip.hook;
   const actionLabel = clip.status === "EXPORTED" ? "Ready" : clip.status === "APPROVED" ? "Open studio" : "Review";
 

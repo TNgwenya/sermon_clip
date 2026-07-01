@@ -7839,8 +7839,9 @@ textarea::placeholder {
   }
 
   .clip-studio-video-shell {
-    display: flex;
-    justify-content: center;
+    display: grid;
+    justify-items: center;
+    gap: 0.52rem;
     min-width: 0;
   }
 
@@ -7900,6 +7901,35 @@ textarea::placeholder {
     border-radius: 10px;
     object-fit: contain;
     box-shadow: 0 12px 34px rgba(0, 0, 0, 0.38);
+  }
+
+  .clip-studio-player-controls {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.5rem;
+    width: min(100%, 420px);
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 10px;
+    background: rgba(9, 10, 14, 0.82);
+    padding: 0.42rem;
+  }
+
+  .clip-studio-player-controls .button {
+    min-height: 2rem;
+    padding: 0.28rem 0.62rem;
+  }
+
+  .clip-studio-player-controls input[type="range"] {
+    min-width: 0;
+    accent-color: #75d9b8;
+  }
+
+  .clip-studio-player-controls span {
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 800;
+    white-space: nowrap;
   }
 
   .clip-studio-live-frame.frame-smart::after {

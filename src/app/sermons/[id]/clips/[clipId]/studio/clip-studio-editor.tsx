@@ -49,6 +49,8 @@ type ClipStudioEditorProps = {
 
 type TranscriptSegmentOption = ClipStudioEditorProps["transcriptSegments"][number];
 
+const QUICK_CLIP_LENGTH_SECONDS = [30, 45, 60, 90];
+
 function findClosestTranscriptSegment(
   segments: TranscriptSegmentOption[],
   timeSeconds: number,
@@ -528,6 +530,7 @@ export function ClipStudioEditor({
     if (lastSegment) {
       setLastSegmentId(lastSegment.id);
     }
+    seekPreviewTo(0);
     setStatusSuccess(true);
     setStatusMessage(`${targetDurationSeconds}s clip length drafted from the current start.`);
   }
@@ -682,15 +685,17 @@ export function ClipStudioEditor({
 
           <div className="clip-studio-simple-actions">
             <div className="clip-studio-quick-lengths" aria-label="Quick clip lengths">
-              <button type="button" className="button secondary" onClick={() => setDurationFromCurrentStart(45)} disabled={isPending}>
-                45s
-              </button>
-              <button type="button" className="button secondary" onClick={() => setDurationFromCurrentStart(60)} disabled={isPending}>
-                60s
-              </button>
-              <button type="button" className="button secondary" onClick={() => setDurationFromCurrentStart(90)} disabled={isPending}>
-                90s
-              </button>
+              {QUICK_CLIP_LENGTH_SECONDS.map((lengthSeconds) => (
+                <button
+                  key={lengthSeconds}
+                  type="button"
+                  className="button secondary"
+                  onClick={() => setDurationFromCurrentStart(lengthSeconds)}
+                  disabled={isPending}
+                >
+                  {lengthSeconds}s
+                </button>
+              ))}
             </div>
             <button type="button" className="button primary" onClick={submitChanges} disabled={isPending}>
               Save changes
@@ -718,15 +723,17 @@ export function ClipStudioEditor({
               </div>
             </div>
             <div className="clip-studio-quick-lengths" aria-label="Quick clip lengths">
-              <button type="button" className="button secondary" onClick={() => setDurationFromCurrentStart(45)} disabled={isPending}>
-                45s
-              </button>
-              <button type="button" className="button secondary" onClick={() => setDurationFromCurrentStart(60)} disabled={isPending}>
-                60s
-              </button>
-              <button type="button" className="button secondary" onClick={() => setDurationFromCurrentStart(90)} disabled={isPending}>
-                90s
-              </button>
+              {QUICK_CLIP_LENGTH_SECONDS.map((lengthSeconds) => (
+                <button
+                  key={lengthSeconds}
+                  type="button"
+                  className="button secondary"
+                  onClick={() => setDurationFromCurrentStart(lengthSeconds)}
+                  disabled={isPending}
+                >
+                  {lengthSeconds}s
+                </button>
+              ))}
             </div>
             <div className="clip-studio-timeline-track clip-studio-timeline-track-interactive" aria-label="Clip trim timeline" onClick={onTimelineClick}>
               {playhead ? (
