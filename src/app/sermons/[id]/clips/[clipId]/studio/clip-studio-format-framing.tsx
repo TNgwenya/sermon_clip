@@ -373,6 +373,11 @@ export function ClipStudioFormatFraming({
   return (
     <SectionCard title="Posting Format" description="Choose where this clip will be shared and how the pastor should stay framed on screen.">
       <div className="stack-md">
+        <div className="clip-studio-effect-note">
+          <StatusBadge tone="success">Live preview</StatusBadge>
+          <p>Platform, download style, and pastor framing update the preview immediately. Save and re-render to create matching downloads.</p>
+        </div>
+
         <label className="stack-sm">
           Intended platform or preset
           <select
@@ -461,7 +466,7 @@ export function ClipStudioFormatFraming({
             <div>
               <p className="kicker">Creative framing</p>
               <p className="muted small">
-                Choose the story shape first. The app still falls back safely if tracking is not reliable.
+                Choose the story shape first. Mode changes show in the live preview; manual crop corrections are saved for the next render.
               </p>
             </div>
             <StatusBadge tone={framingMode === "FIT_BLURRED_BACKGROUND" ? "success" : framingMode === "SMART_CROP" ? "accent" : "neutral"}>
@@ -513,7 +518,7 @@ export function ClipStudioFormatFraming({
           <p className="muted small">
             {manualCropCount > 0
               ? `${manualCropCount} manual crop keyframe${manualCropCount === 1 ? "" : "s"} saved${manualCropUpdatedAt ? ` ${new Date(manualCropUpdatedAt).toLocaleString()}` : ""}.`
-              : "No manual crop keyframes saved."}
+              : "No manual crop keyframes saved. Manual crop and nudge buttons affect the next render, not the current live preview pixels."}
           </p>
           {cropMessage ? (
             <p className={cropSuccess ? "success-banner" : "error-banner"} role="status" aria-live="polite">
@@ -523,7 +528,7 @@ export function ClipStudioFormatFraming({
         </div>
 
         <p className="muted small">
-          Auto pastor tracking uses saved face/body estimates. Refresh tracking when the pastor moves across the stage.
+          Auto pastor tracking uses saved face/body estimates. Refresh tracking when the pastor moves across the stage, then re-render to use the updated tracking in downloads.
         </p>
 
         <div className="stack-sm pastor-insight">
@@ -643,12 +648,18 @@ export function ClipStudioFormatFraming({
         </div>
 
         <div className="actions-row">
-          <button type="button" className="button secondary" onClick={saveSettings} disabled={isPending}>
-            Save sharing settings
-          </button>
-          <button type="button" className="button primary" onClick={renderSelectedFormats} disabled={isPending}>
-            Re-render videos
-          </button>
+          <div className="clip-studio-action-explain">
+            <button type="button" className="button secondary" onClick={saveSettings} disabled={isPending}>
+              Save sharing settings
+            </button>
+            <span>Stores the preview choices.</span>
+          </div>
+          <div className="clip-studio-action-explain">
+            <button type="button" className="button primary" onClick={renderSelectedFormats} disabled={isPending}>
+              Re-render videos
+            </button>
+            <span>Updates the downloadable files.</span>
+          </div>
         </div>
 
         {statusMessage ? (

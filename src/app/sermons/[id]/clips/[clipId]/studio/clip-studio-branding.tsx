@@ -3,7 +3,7 @@
 import { type CSSProperties, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
-import { SectionCard } from "@/components/ui";
+import { SectionCard, StatusBadge } from "@/components/ui";
 import {
   BRANDING_PRESET_DESCRIPTIONS,
   BRANDING_PRESET_LABELS,
@@ -122,6 +122,11 @@ export function ClipStudioBranding({
       description="Add simple church identity to your rendered clip without using a design editor."
     >
       <div className="stack-md">
+        <div className="clip-studio-effect-note">
+          <StatusBadge tone="success">Live preview</StatusBadge>
+          <p>Branding choices update the preview overlay immediately. Save and re-render before using the downloadable video.</p>
+        </div>
+
         <label className="review-checkbox-row">
           <input
             type="checkbox"

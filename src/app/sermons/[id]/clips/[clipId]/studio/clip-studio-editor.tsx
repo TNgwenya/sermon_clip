@@ -648,6 +648,10 @@ export function ClipStudioEditor({
           <p className="muted small">Times are based on the original sermon video.</p>
           <StatusBadge tone={timingGuidance.tone}>{timingGuidance.label}</StatusBadge>
         </div>
+        <div className="clip-studio-effect-note">
+          <StatusBadge tone="success">Live preview</StatusBadge>
+          <p>Timing changes update the preview window immediately. Save changes, then re-render to update the downloadable video.</p>
+        </div>
 
         <div className="clip-studio-simple-timing">
           <div className="review-edit-grid">
@@ -930,10 +934,14 @@ export function ClipStudioEditor({
       <details className="clip-studio-editor-disclosure">
         <summary>
           <span>Speech cleanup</span>
-          <span className="muted small">Dead air and filler-word options</span>
+          <span className="muted small">Render-only cleanup</span>
         </summary>
       <SectionCard title="Speech cleanup" description="Choose whether the rendered preview should be tightened.">
         <div className="stack-md">
+          <div className="clip-studio-effect-note is-render-only">
+            <StatusBadge tone="warning">Needs re-render</StatusBadge>
+            <p>Speech cleanup does not change the live preview. It is applied to the next prepared video after you save and re-render.</p>
+          </div>
           <label className="clip-studio-toggle-row">
             <input
               type="checkbox"
@@ -998,6 +1006,10 @@ export function ClipStudioEditor({
 
       <SectionCard title="On-video captions & hook" description="Edit what appears on the prepared clip.">
         <div className="stack-md clip-studio-caption-form">
+          <div className="clip-studio-effect-note">
+            <StatusBadge tone="success">Live preview</StatusBadge>
+            <p>Caption visibility, caption text, caption style, and hook changes update the preview overlay immediately. Save before preparing the final video.</p>
+          </div>
           <label className="clip-studio-toggle-row">
             <input
               type="checkbox"
@@ -1330,7 +1342,8 @@ export function ClipStudioEditor({
       <div className="clip-studio-save-strip">
         <div>
           <p className="muted small">Timing and caption edits</p>
-          <p className="clip-studio-save-title">Save changes when the clip reads and starts cleanly.</p>
+          <p className="clip-studio-save-title">Save changes when the live preview looks right.</p>
+          <p className="muted small">Saved edits still need a re-render before downloads and posting packages use them.</p>
         </div>
         <div className="actions-row">
           <button type="button" className="button primary" onClick={submitChanges} disabled={isPending}>

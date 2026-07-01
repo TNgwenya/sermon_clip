@@ -9154,6 +9154,41 @@ textarea::placeholder {
     margin-bottom: 0.7rem;
   }
 
+  .clip-studio-effect-note {
+    display: flex;
+    gap: 0.65rem;
+    align-items: flex-start;
+    border: 1px solid rgba(117, 217, 184, 0.22);
+    border-radius: 10px;
+    background: rgba(117, 217, 184, 0.07);
+    padding: 0.68rem 0.75rem;
+  }
+
+  .clip-studio-effect-note.is-render-only {
+    border-color: rgba(251, 191, 36, 0.28);
+    background: rgba(251, 191, 36, 0.08);
+  }
+
+  .clip-studio-effect-note p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.86rem;
+    line-height: 1.45;
+  }
+
+  .clip-studio-action-explain {
+    display: grid;
+    gap: 0.28rem;
+    min-width: min(100%, 12rem);
+  }
+
+  .clip-studio-action-explain span {
+    color: var(--muted);
+    font-size: 0.76rem;
+    font-weight: 750;
+    line-height: 1.25;
+  }
+
   .clip-studio-brand-preview {
     border: 1px solid var(--border);
     border-radius: 12px;
@@ -9264,6 +9299,15 @@ textarea::placeholder {
   }
 
   @media (max-width: 760px) {
+    .clip-studio-effect-note {
+      display: grid;
+      gap: 0.45rem;
+    }
+
+    .clip-studio-action-explain {
+      width: 100%;
+    }
+
     .framing-control-grid,
     .framing-nudge-row {
       grid-template-columns: repeat(2, minmax(0, 1fr));
