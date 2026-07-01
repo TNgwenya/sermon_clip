@@ -90,6 +90,9 @@ function asNumber(value: unknown): number | null {
 function isCaptionStylePresetId(value: unknown): value is CaptionStylePresetId {
   return (
     value === "bold-sermon" ||
+    value === "kinetic-pop" ||
+    value === "creator-highlight" ||
+    value === "soft-bubble" ||
     value === "clean-lower" ||
     value === "high-contrast" ||
     value === "youth-social" ||

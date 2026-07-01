@@ -84,6 +84,18 @@ export function ClipStudioLivePreview({
   const windowKey = `${hasSourcePreview ? "source" : "rendered"}:${draftStartSeconds ?? "x"}:${draftEndSeconds ?? "x"}`;
   const hookOverlay = editPreview.hookOverlay;
   const showTimedHook = shouldShowHookOverlay(hookOverlay, previewSeconds);
+  const activeCaptionCue = useMemo(() => {
+    if (!editPreview.applyCaptionsToClip) {
+      return null;
+    }
+
+    return editPreview.captionCues.find(
+      (cue) =>
+        cue.text.trim().length > 0 &&
+        previewSeconds >= cue.startSeconds &&
+        previewSeconds <= cue.endSeconds,
+    ) ?? null;
+  }, [editPreview.applyCaptionsToClip, editPreview.captionCues, previewSeconds]);
   const captionPreviewText = useMemo(() => {
     return resolveActiveCaptionCueText({
       applyCaptionsToClip: editPreview.applyCaptionsToClip,
@@ -92,6 +104,16 @@ export function ClipStudioLivePreview({
       previewSeconds,
     });
   }, [editPreview.applyCaptionsToClip, editPreview.captionCues, editPreview.onVideoCaptionText, previewSeconds]);
+  const captionWords = useMemo(() => captionPreviewText.split(/\s+/).filter(Boolean).slice(0, 18), [captionPreviewText]);
+  const activeCaptionWordIndex = useMemo(() => {
+    if (!activeCaptionCue || captionWords.length === 0) {
+      return captionWords.length > 0 ? 0 : -1;
+    }
+
+    const cueDurationSeconds = Math.max(0.1, activeCaptionCue.endSeconds - activeCaptionCue.startSeconds);
+    const cueProgress = Math.max(0, Math.min(0.999, (previewSeconds - activeCaptionCue.startSeconds) / cueDurationSeconds));
+    return Math.min(captionWords.length - 1, Math.floor(cueProgress * captionWords.length));
+  }, [activeCaptionCue, captionWords.length, previewSeconds]);
   const previewStyle = {
     "--clip-brand-color": brandingConfig.themeColor ?? "#75d9b8",
   } as CSSProperties;
@@ -293,7 +315,17 @@ export function ClipStudioLivePreview({
 
             {captionPreviewText ? (
               <div className={`clip-studio-live-caption ${captionStyle.className}`}>
-                <span>{captionPreviewText}</span>
+                <span aria-label={captionPreviewText}>
+                  {captionWords.map((word, index) => (
+                    <span
+                      key={`${word}-${index}`}
+                      aria-hidden="true"
+                      className={index === activeCaptionWordIndex ? "clip-studio-live-caption-word is-active" : "clip-studio-live-caption-word"}
+                    >
+                      {word}
+                    </span>
+                  ))}
+                </span>
               </div>
             ) : null}
           </div>

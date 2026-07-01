@@ -3755,6 +3755,9 @@ function normalizeClipStudioCaptionStylePresetId(value: string): CaptionStylePre
   const trimmed = value.trim();
   if (
     trimmed === "bold-sermon" ||
+    trimmed === "kinetic-pop" ||
+    trimmed === "creator-highlight" ||
+    trimmed === "soft-bubble" ||
     trimmed === "clean-lower" ||
     trimmed === "high-contrast" ||
     trimmed === "youth-social" ||

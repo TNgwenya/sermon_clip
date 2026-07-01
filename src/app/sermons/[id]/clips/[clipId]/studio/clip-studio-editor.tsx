@@ -1100,7 +1100,12 @@ export function ClipStudioEditor({
               </span>
               <div>
                 <strong>{resolvedCaptionStyle.name}</strong>
-                <p className="muted small">{resolvedCaptionStyle.motion}</p>
+                <p className="muted small">{resolvedCaptionStyle.description}</p>
+                <div className="clip-studio-caption-style-meta" aria-label="Selected caption style details">
+                  <span>{resolvedCaptionStyle.personality}</span>
+                  <span>{resolvedCaptionStyle.motion}</span>
+                  <span>{resolvedCaptionStyle.bestFor}</span>
+                </div>
               </div>
             </div>
 
@@ -1119,6 +1124,7 @@ export function ClipStudioEditor({
                 >
                   <strong>Brand Kit default</strong>
                   <span>{resolveCaptionStylePreset(brandCaptionStylePresetId).name}</span>
+                  <span>{resolveCaptionStylePreset(brandCaptionStylePresetId).bestFor}</span>
                 </button>
                 {CAPTION_STYLE_PRESETS.map((preset) => (
                   <button
@@ -1132,6 +1138,7 @@ export function ClipStudioEditor({
                     <span className={`clip-studio-caption-style-preview ${preset.className}`}>{preset.sampleText}</span>
                     <strong>{preset.name}</strong>
                     <span>{preset.motion}</span>
+                    <span>{preset.bestFor}</span>
                   </button>
                 ))}
               </div>

@@ -1,5 +1,8 @@
 export type CaptionStylePresetId =
   | "bold-sermon"
+  | "kinetic-pop"
+  | "creator-highlight"
+  | "soft-bubble"
   | "clean-lower"
   | "high-contrast"
   | "youth-social"
@@ -22,14 +25,47 @@ export type CaptionStylePreset = {
 export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
   {
     id: "bold-sermon",
-    name: "Bold sermon captions",
-    description: "Large centered captions for teaching and encouragement clips.",
-    personality: "Punchy declaration",
-    motion: "Word-by-word pop",
+    name: "Bold sermon",
+    description: "Large stacked captions with strong outline and word emphasis.",
+    personality: "Confident and direct",
+    motion: "Word pop",
     bestFor: "Reels, Shorts, TikTok",
     sampleText: "God is not finished with you.",
     emphasisWords: ["God", "finished"],
     className: "caption-style-bold-sermon",
+  },
+  {
+    id: "kinetic-pop",
+    name: "Kinetic pop",
+    description: "Big creator-style captions with a thick outline and animated word focus.",
+    personality: "Fast and punchy",
+    motion: "Active word punch",
+    bestFor: "Hooks, punchlines, youth clips",
+    sampleText: "This is your reminder.",
+    emphasisWords: ["reminder"],
+    className: "caption-style-kinetic-pop",
+  },
+  {
+    id: "creator-highlight",
+    name: "Creator highlight",
+    description: "Clean white captions with highlighted key words for social edits.",
+    personality: "Polished social",
+    motion: "Highlight sweep",
+    bestFor: "Teaching clips, Opus-style moments",
+    sampleText: "Grace changes everything.",
+    emphasisWords: ["Grace"],
+    className: "caption-style-creator-highlight",
+  },
+  {
+    id: "soft-bubble",
+    name: "Soft bubble",
+    description: "Rounded caption bubble with friendly contrast for warm ministry moments.",
+    personality: "Warm and readable",
+    motion: "Soft lift",
+    bestFor: "Encouragement, testimony, pastoral care",
+    sampleText: "You are not alone today.",
+    emphasisWords: ["alone"],
+    className: "caption-style-soft-bubble",
   },
   {
     id: "clean-lower",

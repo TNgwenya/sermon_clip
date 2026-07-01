@@ -124,6 +124,18 @@ function buildCaptionForceStyle(presetId: string | null | undefined, safeArea: C
     return withCaptionSafeArea(`${base},FontSize=18,PrimaryColour=&H00111111,OutlineColour=&H00FFFFFF,BackColour=&HCCFFFFFF,Outline=1,Alignment=2,MarginV=56`, safeArea);
   }
 
+  if (preset.id === "kinetic-pop") {
+    return withCaptionSafeArea(`${base},FontSize=28,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=5,Shadow=2,Alignment=2,MarginV=70`, safeArea);
+  }
+
+  if (preset.id === "creator-highlight") {
+    return withCaptionSafeArea(`${base},FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00111827,BackColour=&H7A22D3EE,Outline=3,Shadow=1,Alignment=2,MarginV=66`, safeArea);
+  }
+
+  if (preset.id === "soft-bubble") {
+    return withCaptionSafeArea(`${base},FontSize=20,PrimaryColour=&H00111827,OutlineColour=&H00FFFFFF,BackColour=&HEEFFFFFF,Outline=2,Shadow=1,Alignment=2,MarginV=58`, safeArea);
+  }
+
   if (preset.id === "high-contrast") {
     return withCaptionSafeArea(`${base},FontSize=22,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,Outline=4,Alignment=2,MarginV=64`, safeArea);
   }
@@ -172,6 +184,9 @@ function resolveClipCaptionStylePresetId(
   const value = (captionData as Record<string, unknown>)["captionStylePresetId"];
   if (
     value === "bold-sermon" ||
+    value === "kinetic-pop" ||
+    value === "creator-highlight" ||
+    value === "soft-bubble" ||
     value === "clean-lower" ||
     value === "high-contrast" ||
     value === "youth-social" ||

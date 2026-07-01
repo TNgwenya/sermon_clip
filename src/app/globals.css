@@ -814,6 +814,31 @@ select:focus-visible {
   letter-spacing: 0;
 }
 
+.caption-style-kinetic-pop {
+  background: #f8fafc;
+  color: #07070a;
+  border: 3px solid #050505;
+  box-shadow: 0 7px 0 #050505, 0 16px 34px rgba(0, 0, 0, 0.3);
+  font-size: 1.05rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.caption-style-creator-highlight {
+  background: rgba(2, 6, 23, 0.88);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 14px 30px rgba(2, 6, 23, 0.32);
+}
+
+.caption-style-soft-bubble {
+  background: rgba(255, 255, 255, 0.93);
+  color: #111827;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  border-radius: 999px;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.18);
+}
+
 .caption-style-clean-lower {
   align-self: end;
   background: rgba(255, 255, 255, 0.92);
@@ -3419,18 +3444,49 @@ textarea::placeholder {
 }
 
 .brand-caption-option-preview.caption-style-bold-sermon,
+.brand-caption-option-preview.caption-style-kinetic-pop,
+.brand-caption-option-preview.caption-style-creator-highlight,
+.brand-caption-option-preview.caption-style-soft-bubble,
 .brand-caption-option-preview.caption-style-youth-social,
 .brand-caption-option-preview.caption-style-high-contrast,
 .brand-caption-option-preview.caption-style-cinematic-testimony,
 .brand-caption-option-preview.caption-style-clean-lower,
 .brand-caption-option-preview.caption-style-minimal-church,
 .brand-caption-option-preview.caption-style-scripture-focus {
-  color: inherit;
   font-size: 0.82rem;
 }
 
 .brand-caption-option-preview .caption-emphasis-mark {
   font: inherit;
+}
+
+.brand-caption-option-preview.caption-style-bold-sermon,
+.brand-caption-option-preview.caption-style-youth-social,
+.brand-caption-option-preview.caption-style-creator-highlight,
+.brand-caption-option-preview.caption-style-cinematic-testimony,
+.clip-studio-caption-style-preview.caption-style-bold-sermon,
+.clip-studio-caption-style-preview.caption-style-youth-social,
+.clip-studio-caption-style-preview.caption-style-creator-highlight,
+.clip-studio-caption-style-preview.caption-style-cinematic-testimony {
+  color: #ffffff;
+}
+
+.brand-caption-option-preview.caption-style-kinetic-pop,
+.brand-caption-option-preview.caption-style-soft-bubble,
+.brand-caption-option-preview.caption-style-clean-lower,
+.brand-caption-option-preview.caption-style-minimal-church,
+.brand-caption-option-preview.caption-style-scripture-focus,
+.clip-studio-caption-style-preview.caption-style-kinetic-pop,
+.clip-studio-caption-style-preview.caption-style-soft-bubble,
+.clip-studio-caption-style-preview.caption-style-clean-lower,
+.clip-studio-caption-style-preview.caption-style-minimal-church,
+.clip-studio-caption-style-preview.caption-style-scripture-focus {
+  color: #111827;
+}
+
+.brand-caption-option-preview.caption-style-high-contrast,
+.clip-studio-caption-style-preview.caption-style-high-contrast {
+  color: #facc15;
 }
 
 .brand-caption-option strong {
@@ -8078,59 +8134,135 @@ textarea::placeholder {
     border: 2px solid color-mix(in srgb, var(--clip-brand-color), white 28%);
   }
 
-  .clip-studio-live-caption span {
-    display: -webkit-box;
+  .clip-studio-live-caption > span {
+    display: flex;
     max-width: 100%;
+    flex-wrap: wrap;
+    gap: 0.2em 0.32em;
+    justify-content: center;
+    align-items: center;
     overflow: hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    border-radius: 8px;
+    border-radius: 10px;
     background: rgba(2, 6, 23, 0.72);
     box-decoration-break: clone;
     color: #f8fafc;
-    font-size: 0.92rem;
+    font-size: 0.94rem;
     font-weight: 900;
-    line-height: 1.18;
-    padding: 0.34rem 0.54rem;
+    line-height: 1.12;
+    padding: 0.38rem 0.56rem;
     text-wrap: balance;
     text-shadow: 0 1px 8px rgba(0, 0, 0, 0.52);
   }
 
-  .clip-studio-live-caption.caption-style-clean-lower span,
-  .clip-studio-live-caption.caption-style-minimal-church span,
-  .clip-studio-live-caption.caption-style-scripture-focus span {
+  .clip-studio-live-caption-word {
+    display: inline-block;
+    border-radius: 0.28em;
+    padding: 0.02em 0.03em;
+    transition: background 120ms ease, color 120ms ease, transform 120ms ease, text-shadow 120ms ease;
+  }
+
+  .clip-studio-live-caption-word.is-active {
+    transform: translateY(-0.04em) scale(1.04);
+  }
+
+  .clip-studio-live-caption.caption-style-bold-sermon > span {
+    background: rgba(3, 7, 18, 0.78);
+    text-transform: uppercase;
+    text-shadow:
+      0 2px 0 #000000,
+      0 0 18px rgba(0, 0, 0, 0.48);
+  }
+
+  .clip-studio-live-caption.caption-style-bold-sermon .clip-studio-live-caption-word.is-active {
+    background: #facc15;
     color: #111827;
     text-shadow: none;
   }
 
-  .clip-studio-live-caption.caption-style-high-contrast span {
+  .clip-studio-live-caption.caption-style-kinetic-pop > span {
+    background: transparent;
+    color: #ffffff;
+    font-size: 1.02rem;
+    font-weight: 950;
+    text-transform: uppercase;
+    text-shadow:
+      -2px -2px 0 #020617,
+      2px -2px 0 #020617,
+      -2px 2px 0 #020617,
+      2px 2px 0 #020617,
+      0 7px 18px rgba(0, 0, 0, 0.5);
+  }
+
+  .clip-studio-live-caption.caption-style-kinetic-pop .clip-studio-live-caption-word.is-active {
+    background: #facc15;
+    color: #111827;
+    padding-inline: 0.14em;
+    text-shadow: none;
+  }
+
+  .clip-studio-live-caption.caption-style-creator-highlight > span {
+    background: rgba(2, 6, 23, 0.68);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 12px 28px rgba(2, 6, 23, 0.28);
+  }
+
+  .clip-studio-live-caption.caption-style-creator-highlight .clip-studio-live-caption-word.is-active {
+    background: #22d3ee;
+    color: #07111f;
+    padding-inline: 0.16em;
+    text-shadow: none;
+  }
+
+  .clip-studio-live-caption.caption-style-soft-bubble > span {
+    border: 1px solid rgba(255, 255, 255, 0.72);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.9);
+    color: #111827;
+    box-shadow: 0 18px 34px rgba(2, 6, 23, 0.22);
+    text-shadow: none;
+  }
+
+  .clip-studio-live-caption.caption-style-soft-bubble .clip-studio-live-caption-word.is-active {
+    background: #d9f99d;
+    color: #1f2937;
+    padding-inline: 0.16em;
+  }
+
+  .clip-studio-live-caption.caption-style-clean-lower > span,
+  .clip-studio-live-caption.caption-style-minimal-church > span,
+  .clip-studio-live-caption.caption-style-scripture-focus > span {
+    color: #111827;
+    text-shadow: none;
+  }
+
+  .clip-studio-live-caption.caption-style-high-contrast > span {
     background: #000000;
     color: #facc15;
     outline: 2px solid #ffffff;
   }
 
-  .clip-studio-live-caption.caption-style-youth-social span {
+  .clip-studio-live-caption.caption-style-youth-social > span {
     background: #1d4ed8;
     box-shadow: 0 7px 0 rgba(15, 23, 42, 0.35);
   }
 
-  .clip-studio-live-caption.caption-style-clean-lower span {
+  .clip-studio-live-caption.caption-style-clean-lower > span {
     background: rgba(255, 255, 255, 0.92);
     outline: 2px solid var(--clip-brand-color);
   }
 
-  .clip-studio-live-caption.caption-style-minimal-church span {
+  .clip-studio-live-caption.caption-style-minimal-church > span {
     background: rgba(255, 255, 255, 0.86);
     font-weight: 750;
   }
 
-  .clip-studio-live-caption.caption-style-scripture-focus span {
+  .clip-studio-live-caption.caption-style-scripture-focus > span {
     background: rgba(255, 255, 255, 0.94);
     outline: 1px solid rgba(250, 204, 21, 0.72);
     font-family: Georgia, "Times New Roman", serif;
   }
 
-  .clip-studio-live-caption.caption-style-cinematic-testimony span {
+  .clip-studio-live-caption.caption-style-cinematic-testimony > span {
     background: rgba(3, 7, 18, 0.88);
     outline: 1px solid rgba(226, 232, 240, 0.22);
   }
@@ -8925,6 +9057,13 @@ textarea::placeholder {
     line-height: 1.22;
   }
 
+  .clip-studio-caption-style-option .clip-studio-caption-style-preview,
+  .clip-studio-selected-style .clip-studio-caption-style-preview {
+    font-size: 0.86rem;
+    font-weight: 900;
+    line-height: 1.1;
+  }
+
   .clip-studio-caption-style-option.is-active {
     border-color: rgba(117, 217, 184, 0.5);
     background:
@@ -8939,6 +9078,23 @@ textarea::placeholder {
     border-radius: 8px;
     padding: 0.38rem 0.45rem;
     text-align: center;
+  }
+
+  .clip-studio-caption-style-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.32rem;
+  }
+
+  .clip-studio-caption-style-meta span {
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.045);
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 750;
+    line-height: 1.2;
+    padding: 0.18rem 0.42rem;
   }
 
   .clip-studio-hook-grid {

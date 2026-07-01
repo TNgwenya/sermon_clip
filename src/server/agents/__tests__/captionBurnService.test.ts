@@ -95,6 +95,9 @@ describe("caption burn service validation", () => {
   });
 
   it("builds distinct caption force styles from presets", () => {
+    expect(__captionBurnTestUtils.buildCaptionForceStyle("kinetic-pop")).toContain("FontSize=28");
+    expect(__captionBurnTestUtils.buildCaptionForceStyle("creator-highlight")).toContain("BackColour=&H7A22D3EE");
+    expect(__captionBurnTestUtils.buildCaptionForceStyle("soft-bubble")).toContain("BackColour=&HEEFFFFFF");
     expect(__captionBurnTestUtils.buildCaptionForceStyle("high-contrast")).toContain("PrimaryColour=&H0000FFFF");
     expect(__captionBurnTestUtils.buildCaptionForceStyle("minimal-church")).toContain("FontSize=16");
     expect(__captionBurnTestUtils.buildCaptionForceStyle("scripture-focus")).toContain("FontName=Georgia");
