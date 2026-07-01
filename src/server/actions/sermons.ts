@@ -51,6 +51,7 @@ import {
   type ClipAssetKind,
 } from "@/server/regeneration/dependencies";
 import {
+  buildEditableCaptionCuesFromTranscriptSegments,
   buildSrtFromEditableCues,
   type EditableCaptionCue,
   parseHashtagEditorInput,
@@ -3901,10 +3902,49 @@ export async function updateClipStudioEditsAction(
           flagFillerWords: true,
         };
 
-  const mainCaption = input.mainCaption.trim();
+  const boundariesChanged =
+    clip.startTimeSeconds !== timing.startSeconds || clip.endTimeSeconds !== timing.endSeconds;
+  const selectedTranscriptSegments = boundariesChanged
+    ? await prisma.transcriptSegment.findMany({
+        where: {
+          sermonId: clip.sermonId,
+          startTimeSeconds: { lt: timing.endSeconds },
+          endTimeSeconds: { gt: timing.startSeconds },
+        },
+        orderBy: { startTimeSeconds: "asc" },
+        select: {
+          startTimeSeconds: true,
+          endTimeSeconds: true,
+          text: true,
+        },
+      })
+    : [];
+  const selectedTranscriptText = boundariesChanged
+    ? selectedTranscriptSegments.map((segment) => segment.text.replace(/\s+/g, " ").trim()).filter(Boolean).join(" ")
+    : clip.transcriptText;
+
+  if (boundariesChanged && !selectedTranscriptText) {
+    return {
+      success: false,
+      message: "Could not save clip changes. The selected timing has no transcript text.",
+      fieldErrors: {
+        endTimestamp: "Choose a clip range that overlaps the sermon transcription.",
+      },
+      warnings: timing.warnings,
+    };
+  }
+
   const shortCaption = input.shortCaption.trim();
   const platformCaption = input.platformCaption.trim();
-  const captionCueValidation = validateEditableCaptionCues(input.captionCues, timing.durationSeconds);
+  const draftCaptionCues =
+    boundariesChanged && input.applyCaptionsToClip
+      ? buildEditableCaptionCuesFromTranscriptSegments({
+          startTimeSeconds: timing.startSeconds,
+          endTimeSeconds: timing.endSeconds,
+          segments: selectedTranscriptSegments,
+        })
+      : input.captionCues;
+  const captionCueValidation = validateEditableCaptionCues(draftCaptionCues, timing.durationSeconds);
   const combinedWarnings = [...timing.warnings, ...captionCueValidation.warnings];
   if (input.applyCaptionsToClip && !captionCueValidation.isValid) {
     return {
@@ -3918,7 +3958,7 @@ export async function updateClipStudioEditsAction(
   }
 
   const normalizedCaptionCues = captionCueValidation.cues;
-  const transcriptGroundingValidation = validateCaptionCuesFromTranscript(normalizedCaptionCues, clip.transcriptText);
+  const transcriptGroundingValidation = validateCaptionCuesFromTranscript(normalizedCaptionCues, selectedTranscriptText);
   if (input.applyCaptionsToClip && !transcriptGroundingValidation.isValid) {
     return {
       success: false,
@@ -3929,6 +3969,10 @@ export async function updateClipStudioEditsAction(
       warnings: combinedWarnings,
     };
   }
+  const mainCaption =
+    boundariesChanged && input.applyCaptionsToClip
+      ? normalizedCaptionCues.map((cue) => cue.text).join(" ").trim()
+      : input.mainCaption.trim();
 
   const normalizedCaptionStylePresetId = normalizeClipStudioCaptionStylePresetId(input.captionStylePresetId);
   const normalizedHookOverlay = normalizeHookOverlay(input.hookOverlay);
@@ -3962,8 +4006,6 @@ export async function updateClipStudioEditsAction(
     ? clip.hashtags.filter((item): item is string => typeof item === "string")
     : [];
 
-  const boundariesChanged =
-    clip.startTimeSeconds !== timing.startSeconds || clip.endTimeSeconds !== timing.endSeconds;
   const captionChanged =
     clip.caption !== mainCaption ||
     JSON.stringify(previousCues) !== JSON.stringify(normalizedCaptionCues) ||
@@ -3983,6 +4025,7 @@ export async function updateClipStudioEditsAction(
       durationSeconds: timing.durationSeconds,
       adjustedStartTimeSeconds: timing.startSeconds,
       adjustedEndTimeSeconds: timing.endSeconds,
+      transcriptText: selectedTranscriptText,
       boundaryQuality: "NEEDS_REVIEW",
       boundaryAdjustmentReason: `Clip boundaries were manually edited to ${timing.startSeconds.toFixed(2)}-${timing.endSeconds.toFixed(2)}s. Re-review recommended.`,
       caption: mainCaption,
@@ -4037,9 +4080,20 @@ export async function updateClipStudioEditsAction(
       clip.id,
       `Boundaries changed to ${timing.startSeconds.toFixed(2)}-${timing.endSeconds.toFixed(2)}s from Clip Studio.`,
     );
+    if (input.applyCaptionsToClip) {
+      await prisma.clipCandidate.update({
+        where: { id: clip.id },
+        data: {
+          captionFreshness: "UP_TO_DATE",
+          captionAssetVersion: { increment: 1 },
+        },
+      });
+    }
     await appendPipelineLog(
       clip.sermonId,
-      `Regeneration invalidation completed for clip ${clip.id}: render/caption/burn/overlay/export freshness updated.`,
+      input.applyCaptionsToClip
+        ? `Regeneration invalidation completed for clip ${clip.id}: render/burn/overlay/export freshness updated; captions rebuilt from selected transcript.`
+        : `Regeneration invalidation completed for clip ${clip.id}: render/caption/burn/overlay/export freshness updated.`,
     );
   } else if (speechCleanupChanged) {
     await appendPipelineLog(clip.sermonId, `Regeneration invalidation started for clip ${clip.id}: speech cleanup setting change from Clip Studio.`);

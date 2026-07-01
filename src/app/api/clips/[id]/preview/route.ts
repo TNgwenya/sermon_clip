@@ -39,6 +39,10 @@ export async function GET(
       exportedFilePath: true,
       captionedVideoPath: true,
       remotePreviewUrl: true,
+      renderFreshness: true,
+      captionBurnFreshness: true,
+      overlayFreshness: true,
+      exportFreshness: true,
     },
   });
 

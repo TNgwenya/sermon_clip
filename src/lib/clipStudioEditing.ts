@@ -154,6 +154,12 @@ export type EditableCaptionCue = {
   text: string;
 };
 
+export type CaptionSourceSegment = {
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+  text: string;
+};
+
 export type CaptionCueValidationResult = {
   isValid: boolean;
   cues: EditableCaptionCue[];
@@ -165,6 +171,43 @@ export type CaptionCueValidationResult = {
 
 function normalizeCaptionCueText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+export function buildEditableCaptionCuesFromTranscriptSegments({
+  startTimeSeconds,
+  endTimeSeconds,
+  segments,
+}: {
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+  segments: CaptionSourceSegment[];
+}): EditableCaptionCue[] {
+  const clipDurationSeconds = Math.max(0, Number((endTimeSeconds - startTimeSeconds).toFixed(3)));
+  const cues: EditableCaptionCue[] = [];
+
+  for (const segment of segments) {
+    const overlapStart = Math.max(startTimeSeconds, segment.startTimeSeconds);
+    const overlapEnd = Math.min(endTimeSeconds, segment.endTimeSeconds);
+    const relativeStart = Math.max(0, Number((overlapStart - startTimeSeconds).toFixed(3)));
+    const relativeEnd = Math.min(
+      clipDurationSeconds,
+      Number((overlapEnd - startTimeSeconds).toFixed(3)),
+    );
+    const text = normalizeCaptionCueText(segment.text);
+
+    if (!text || relativeEnd <= relativeStart) {
+      continue;
+    }
+
+    cues.push({
+      index: cues.length + 1,
+      startSeconds: relativeStart,
+      endSeconds: relativeEnd,
+      text,
+    });
+  }
+
+  return cues;
 }
 
 function normalizeTranscriptGroundingText(value: string): string {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildEditableCaptionCuesFromTranscriptSegments,
   buildSrtFromEditableCues,
   hashtagsToEditorInput,
   parseHashtagEditorInput,
@@ -216,6 +217,42 @@ describe("validateEditableCaptionCues", () => {
     expect(result.isValid).toBe(true);
     expect(result.warnings).toContain("On-video captions have a noticeable timing gap.");
     expect(result.maxGapSeconds).toBe(31);
+  });
+});
+
+describe("buildEditableCaptionCuesFromTranscriptSegments", () => {
+  it("builds clip-relative caption cues from overlapping transcript segments", () => {
+    const cues = buildEditableCaptionCuesFromTranscriptSegments({
+      startTimeSeconds: 100,
+      endTimeSeconds: 112,
+      segments: [
+        { startTimeSeconds: 96, endTimeSeconds: 101.5, text: "Opening context" },
+        { startTimeSeconds: 103, endTimeSeconds: 107, text: "The selected sermon words" },
+        { startTimeSeconds: 111, endTimeSeconds: 116, text: "Closing phrase" },
+      ],
+    });
+
+    expect(cues).toEqual([
+      { index: 1, startSeconds: 0, endSeconds: 1.5, text: "Opening context" },
+      { index: 2, startSeconds: 3, endSeconds: 7, text: "The selected sermon words" },
+      { index: 3, startSeconds: 11, endSeconds: 12, text: "Closing phrase" },
+    ]);
+  });
+
+  it("skips empty or non-overlapping transcript segments", () => {
+    const cues = buildEditableCaptionCuesFromTranscriptSegments({
+      startTimeSeconds: 10,
+      endTimeSeconds: 20,
+      segments: [
+        { startTimeSeconds: 0, endTimeSeconds: 5, text: "Before clip" },
+        { startTimeSeconds: 12, endTimeSeconds: 13, text: "   " },
+        { startTimeSeconds: 14, endTimeSeconds: 16, text: "  Inside   clip  " },
+      ],
+    });
+
+    expect(cues).toEqual([
+      { index: 1, startSeconds: 4, endSeconds: 6, text: "Inside clip" },
+    ]);
   });
 });
 

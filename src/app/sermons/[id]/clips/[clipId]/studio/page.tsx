@@ -37,6 +37,7 @@ import { buildClipAssetRecoveryPlan } from "@/lib/clipAssetRecovery";
 import { ClipAssetRecoveryButton } from "@/components/clip-asset-recovery-button";
 import { getBrandingSettings } from "@/server/branding/settings";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+import { resolveBestPreviewCandidate } from "@/lib/clipPreview";
 
 type ClipStudioPageParams = {
   params: Promise<{ id: string; clipId: string }>;
@@ -314,23 +315,13 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     };
   });
 
-  const bestPreviewVariant = clip.captionedVideoPath
-    ? "captioned"
-    : clip.overlayVideoPath
-      ? "overlay"
-      : clip.exportedFilePath
-        ? "exported"
-        : clip.renderedFilePath
-          ? "rendered"
-          : null;
-  const bestPreviewPath =
-    clip.captionedVideoPath ?? clip.overlayVideoPath ?? clip.exportedFilePath ?? clip.renderedFilePath ?? null;
+  const bestPreview = resolveBestPreviewCandidate(clip);
   const hasRemotePreview = Boolean(clip.remotePreviewUrl);
-  const hasPreview = (localMediaAvailable && Boolean(bestPreviewPath)) || hasRemotePreview;
+  const hasPreview = (localMediaAvailable && Boolean(bestPreview)) || hasRemotePreview;
   const previewSrc = hasRemotePreview
     ? `/api/clips/${clip.id}/preview?variant=best`
-    : localMediaAvailable && bestPreviewVariant
-      ? `/api/clips/${clip.id}/preview?variant=${bestPreviewVariant}`
+    : localMediaAvailable && bestPreview
+      ? `/api/clips/${clip.id}/preview?variant=${bestPreview.variant}`
       : null;
 
   const clipStatus = clip.status as "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";

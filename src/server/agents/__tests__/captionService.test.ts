@@ -216,6 +216,32 @@ describe("caption service helpers", () => {
     }
   });
 
+  it("does not reuse existing subtitle files when caption freshness is stale", () => {
+    expect(
+      __captionServiceTestUtils.shouldReuseExistingCaptionAsset(
+        {
+          subtitlesGenerated: true,
+          captionStatus: "GENERATED",
+          captionFreshness: "NEEDS_REGENERATION",
+        },
+        undefined,
+        true,
+      ),
+    ).toBe(false);
+
+    expect(
+      __captionServiceTestUtils.shouldReuseExistingCaptionAsset(
+        {
+          subtitlesGenerated: true,
+          captionStatus: "GENERATED",
+          captionFreshness: "UP_TO_DATE",
+        },
+        undefined,
+        true,
+      ),
+    ).toBe(true);
+  });
+
   it("writes subtitle files atomically before captions are marked generated", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caption-atomic-"));
     try {

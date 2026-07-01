@@ -40,6 +40,7 @@ type ClipForCaption = Pick<
   | "srtPath"
   | "subtitlesGenerated"
   | "captionStatus"
+  | "captionFreshness"
 >;
 
 type TranscriptSegment = {
@@ -320,6 +321,20 @@ async function fileHasBytes(filePath: string): Promise<boolean> {
   }
 }
 
+function shouldReuseExistingCaptionAsset(
+  clip: Pick<ClipForCaption, "subtitlesGenerated" | "captionStatus" | "captionFreshness">,
+  options: CaptionGenerationOptions | undefined,
+  subtitleFileHasBytes: boolean,
+): boolean {
+  return Boolean(
+    !options?.force &&
+    clip.subtitlesGenerated &&
+    clip.captionStatus === "GENERATED" &&
+    clip.captionFreshness === "UP_TO_DATE" &&
+    subtitleFileHasBytes,
+  );
+}
+
 function getTempSrtPath(srtPath: string): string {
   return srtPath.replace(/\.srt$/i, ".partial.srt");
 }
@@ -364,6 +379,7 @@ async function loadClipForCaption(clipId: string): Promise<ClipForCaption> {
       srtPath: true,
       subtitlesGenerated: true,
       captionStatus: true,
+      captionFreshness: true,
     },
   });
 
@@ -496,11 +512,7 @@ async function generateCaptionsForClipCore(
   }
 
   const srtPath = getClipSrtPath(clip.sermonId, clip.id);
-  const canReuse =
-    !options?.force &&
-    clip.subtitlesGenerated &&
-    clip.captionStatus === "GENERATED" &&
-    (await fileHasBytes(srtPath));
+  const canReuse = shouldReuseExistingCaptionAsset(clip, options, await fileHasBytes(srtPath));
 
   if (canReuse) {
     const generatedAt = new Date();
@@ -696,6 +708,7 @@ export async function generateCaptionsForApprovedClips(
       srtPath: true,
       subtitlesGenerated: true,
       captionStatus: true,
+      captionFreshness: true,
     },
   });
 
@@ -790,6 +803,7 @@ export const __captionServiceTestUtils = {
   assessCaptionTranscriptFidelity,
   validateCaptionCueTiming,
   validateCaptionGenerationEligibility,
+  shouldReuseExistingCaptionAsset,
   fileHasBytes,
   writeCaptionFileAtomically,
 };
