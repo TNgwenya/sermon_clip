@@ -314,6 +314,7 @@ function simplifyCropPoints(points: Array<{ timeSeconds: number; cropX: number }
 export function buildVerticalFramingFilter(
   preset: FramingPreset,
   options?: {
+    inputLabel?: string;
     sourceWidth?: number | null;
     sourceHeight?: number | null;
     subjectCenterX?: number | null;
@@ -321,20 +322,22 @@ export function buildVerticalFramingFilter(
     zoom?: number | null;
   },
 ): string {
+  const inputLabel = options?.inputLabel ?? "0:v";
+
   switch (preset) {
     case "LEFT_FOCUS":
       // Scale to fill 1080x1920, crop from the left side (x=0).
-      return "[0:v]setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:0:0,setsar=1,format=yuv420p[v]";
+      return `[${inputLabel}]setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:0:0,setsar=1,format=yuv420p[v]`;
 
     case "RIGHT_FOCUS":
       // Scale to fill 1080x1920, crop from the right side (x=iw-ow).
-      return "[0:v]setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:iw-ow:0,setsar=1,format=yuv420p[v]";
+      return `[${inputLabel}]setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:iw-ow:0,setsar=1,format=yuv420p[v]`;
 
     case "FIT_BLURRED_BACKGROUND":
       // Scale the source to fill 1080x1920 and blur it as background.
       // Then overlay the original scaled-to-fit video centered on top.
       return (
-        "[0:v]setpts=PTS-STARTPTS,split=2[base_bg][base_fg];" +
+        `[${inputLabel}]setpts=PTS-STARTPTS,split=2[base_bg][base_fg];` +
         "[base_bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:1[bg];" +
         "[base_fg]scale=1080:-2:force_original_aspect_ratio=decrease[fg];" +
         "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p[v]"
@@ -370,15 +373,15 @@ export function buildVerticalFramingFilter(
         const cropXExpression = escapeFfmpegExpression(`min(max(${safeCropXExpression},0),${maxX})`);
         const cropY = Math.max(0, Math.min(maxY, Math.round(maxY * 0.18)));
 
-        return `[0:v]setpts=PTS-STARTPTS,scale=${scaledWidth}:${scaledHeight},crop=1080:1920:${cropXExpression}:${cropY},setsar=1,format=yuv420p[v]`;
+        return `[${inputLabel}]setpts=PTS-STARTPTS,scale=${scaledWidth}:${scaledHeight},crop=1080:1920:${cropXExpression}:${cropY},setsar=1,format=yuv420p[v]`;
       }
 
-      return "[0:v]setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,format=yuv420p[v]";
+      return `[${inputLabel}]setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,format=yuv420p[v]`;
 
     case "CENTER_CROP":
     default:
       // Scale to fill 1080x1920, crop from the center (default FFmpeg crop behaviour).
-      return "[0:v]setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,format=yuv420p[v]";
+      return `[${inputLabel}]setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,format=yuv420p[v]`;
   }
 }
 

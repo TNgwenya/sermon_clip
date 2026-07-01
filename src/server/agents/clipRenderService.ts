@@ -62,6 +62,9 @@ type ClipWithSermon = Pick<
   | "adjustedEndTimeSeconds"
   | "durationSeconds"
   | "transcriptText"
+  | "captionData"
+  | "silenceAtBeginningSeconds"
+  | "silenceAtEndSeconds"
   | "renderStatus"
   | "renderedFilePath"
   | "exportLayoutStrategy"
@@ -108,6 +111,26 @@ type InternalSilenceCleanup = {
   cuts: InternalSilenceCut[];
 };
 
+type RenderSpeechCleanupSettings = {
+  removeDeadAir: boolean;
+  tightenLongPauses: boolean;
+};
+
+type DetectedSilenceEvent = {
+  start: number;
+  end: number;
+  duration: number;
+};
+
+type RenderSmartCrop = {
+  sourceWidth: number;
+  sourceHeight: number;
+  subjectCenterX: number;
+  subjectCenters?: Array<{ timeSeconds: number; centerX: number }>;
+};
+
+type BatchRenderClip = Pick<ClipCandidate, "renderStatus" | "renderFreshness">;
+
 const FALLBACK_VIDEO_ENCODER = "libx264";
 const HARDWARE_VIDEO_ENCODER = "h264_videotoolbox";
 const EDGE_SPEECH_PAD_SECONDS = 0.12;
@@ -117,6 +140,19 @@ const MIN_INTERNAL_SILENCE_SECONDS = 1.2;
 
 function commandFor(binaryPath?: string): string {
   return binaryPath?.trim() || "ffmpeg";
+}
+
+function getBatchRenderDecision(clip: BatchRenderClip, force = false): {
+  shouldRender: boolean;
+  forceRender: boolean;
+} {
+  const needsFreshRender = clip.renderFreshness !== "UP_TO_DATE";
+  const forceRender = force || needsFreshRender;
+
+  return {
+    shouldRender: clip.renderStatus !== "COMPLETED" || forceRender,
+    forceRender,
+  };
 }
 
 function roundSeconds(value: number): number {
@@ -193,6 +229,28 @@ function resolveRenderBoundaries(clip: Pick<ClipWithSermon, "startTimeSeconds" |
   const startTimeSeconds = clip.adjustedStartTimeSeconds ?? clip.startTimeSeconds;
   const endTimeSeconds = clip.adjustedEndTimeSeconds ?? clip.endTimeSeconds;
   return { startTimeSeconds, endTimeSeconds };
+}
+
+function resolveRenderSpeechCleanupSettings(captionData: unknown): RenderSpeechCleanupSettings {
+  if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
+    return {
+      removeDeadAir: false,
+      tightenLongPauses: false,
+    };
+  }
+
+  const speechCleanup = (captionData as Record<string, unknown>)["speechCleanup"];
+  if (!speechCleanup || typeof speechCleanup !== "object" || Array.isArray(speechCleanup)) {
+    return {
+      removeDeadAir: false,
+      tightenLongPauses: false,
+    };
+  }
+
+  return {
+    removeDeadAir: Boolean((speechCleanup as Record<string, unknown>)["removeDeadAir"]),
+    tightenLongPauses: Boolean((speechCleanup as Record<string, unknown>)["tightenLongPauses"]),
+  };
 }
 
 export function validateRenderEligibility(input: RenderEligibilityInput): RenderEligibility {
@@ -341,15 +399,95 @@ function buildInternalSilenceCleanup(input: {
   };
 }
 
+function parseSilenceDetectEvents(output: string, clipDurationSeconds: number): DetectedSilenceEvent[] {
+  const events: DetectedSilenceEvent[] = [];
+  let activeStart: number | null = null;
+  const lines = output.split(/\r?\n/);
+
+  for (const line of lines) {
+    const startMatch = line.match(/silence_start:\s*([0-9.]+)/);
+    if (startMatch) {
+      activeStart = Number(startMatch[1]);
+      continue;
+    }
+
+    const endMatch = line.match(/silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)/);
+    if (!endMatch || activeStart === null) {
+      continue;
+    }
+
+    const end = Number(endMatch[1]);
+    const duration = Number(endMatch[2]);
+    if (Number.isFinite(activeStart) && Number.isFinite(end) && Number.isFinite(duration) && end > activeStart) {
+      events.push({
+        start: roundSeconds(Math.max(0, activeStart)),
+        end: roundSeconds(Math.min(clipDurationSeconds, end)),
+        duration: roundSeconds(duration),
+      });
+    }
+    activeStart = null;
+  }
+
+  return events;
+}
+
+function resolveDetectedEdgeSilence(events: DetectedSilenceEvent[], clipDurationSeconds: number): {
+  silenceAtBeginningSeconds: number | null;
+  silenceAtEndSeconds: number | null;
+} {
+  const beginning = events.find((event) => event.start <= 0.15);
+  const ending = [...events].reverse().find((event) => event.end >= clipDurationSeconds - 0.15);
+
+  return {
+    silenceAtBeginningSeconds: beginning ? roundSeconds(beginning.end) : null,
+    silenceAtEndSeconds: ending ? roundSeconds(clipDurationSeconds - ending.start) : null,
+  };
+}
+
+function mapInternalSilenceEvents(input: {
+  events: DetectedSilenceEvent[];
+  originalStartTimeSeconds: number;
+  effectiveStartTimeSeconds: number;
+  effectiveEndTimeSeconds: number;
+}): Array<{ start: number; end: number; duration: number }> {
+  const effectiveDurationSeconds = input.effectiveEndTimeSeconds - input.effectiveStartTimeSeconds;
+
+  return input.events.flatMap((event) => {
+    const absoluteStart = input.originalStartTimeSeconds + event.start;
+    const absoluteEnd = input.originalStartTimeSeconds + event.end;
+    if (
+      absoluteStart <= input.effectiveStartTimeSeconds + 0.05 ||
+      absoluteEnd >= input.effectiveEndTimeSeconds - 0.05 ||
+      absoluteEnd <= input.effectiveStartTimeSeconds ||
+      absoluteStart >= input.effectiveEndTimeSeconds
+    ) {
+      return [];
+    }
+
+    const start = roundSeconds(Math.max(0, absoluteStart - input.effectiveStartTimeSeconds));
+    const end = roundSeconds(Math.min(effectiveDurationSeconds, absoluteEnd - input.effectiveStartTimeSeconds));
+    if (end <= start) {
+      return [];
+    }
+
+    return [{
+      start,
+      end,
+      duration: roundSeconds(end - start),
+    }];
+  });
+}
+
 function buildRenderFilter(input: {
   framingPreset: FramingPreset;
   startTimeSeconds: number;
+  smartCrop?: RenderSmartCrop | null;
   internalSilenceCleanup?: InternalSilenceCleanup | null;
 }): { filterComplex: string; videoMap: string; audioMap: string } {
   const cuts = input.internalSilenceCleanup?.applied ? input.internalSilenceCleanup.cuts : [];
   if (cuts.length === 0) {
     return {
-      filterComplex: buildVerticalFramingFilter(input.framingPreset),
+      filterComplex: buildVerticalFramingFilter(input.framingPreset, input.smartCrop ?? undefined),
       videoMap: "[v]",
       audioMap: "0:a?",
     };
@@ -366,13 +504,71 @@ function buildRenderFilter(input: {
   return {
     filterComplex: [
       `[0:v]select=not(${exclusion})[silence_v]`,
-      "[silence_v]setpts=PTS-STARTPTS[v]",
+      "[silence_v]setpts=PTS-STARTPTS[trimmed_v]",
       `[0:a]aselect=not(${exclusion})[silence_a]`,
       "[silence_a]asetpts=PTS-STARTPTS[a]",
+      buildVerticalFramingFilter(input.framingPreset, {
+        ...(input.smartCrop ?? {}),
+        inputLabel: "trimmed_v",
+      }),
     ].join(";"),
     videoMap: "[v]",
     audioMap: "[silence_a]",
   };
+}
+
+async function detectSilenceEventsForClip(input: {
+  sourceVideoPath: string;
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+  ffmpegPath?: string;
+  jobId: string;
+}): Promise<DetectedSilenceEvent[]> {
+  const command = commandFor(input.ffmpegPath);
+  const clipDurationSeconds = roundSeconds(input.endTimeSeconds - input.startTimeSeconds);
+  const args = [
+    "-hide_banner",
+    "-ss",
+    String(input.startTimeSeconds),
+    "-t",
+    String(clipDurationSeconds),
+    "-i",
+    input.sourceVideoPath,
+    "-vn",
+    "-af",
+    "silencedetect=noise=-35dB:d=0.3",
+    "-f",
+    "null",
+    "-",
+  ];
+
+  return new Promise<DetectedSilenceEvent[]>((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ["ignore", "ignore", "pipe"],
+      shell: false,
+    });
+
+    let stderr = "";
+
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+
+    child.on("error", (error) => {
+      reject(new Error(`Failed to start FFmpeg silence detection: ${error.message}`));
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`FFmpeg silence detection failed with code ${code ?? "unknown"}. ${stderr.trim().slice(-800)}`.trim()));
+        return;
+      }
+
+      const events = parseSilenceDetectEvents(stderr, clipDurationSeconds);
+      void appendJobLog(input.jobId, `Speech cleanup probe detected ${events.length} silence event(s).`);
+      resolve(events);
+    });
+  });
 }
 
 async function runFfmpegRender(input: {
@@ -384,15 +580,16 @@ async function runFfmpegRender(input: {
   ffmpegPath?: string;
   jobId: string;
   framingPreset: FramingPreset;
-  smartCrop?: {
-    sourceWidth: number;
-    sourceHeight: number;
-    subjectCenterX: number;
-    subjectCenters?: Array<{ timeSeconds: number; centerX: number }>;
-  } | null;
+  smartCrop?: RenderSmartCrop | null;
+  internalSilenceCleanup?: InternalSilenceCleanup | null;
 }): Promise<void> {
   const command = commandFor(input.ffmpegPath);
-  const framingFilter = buildVerticalFramingFilter(input.framingPreset, input.smartCrop ?? undefined);
+  const renderFilter = buildRenderFilter({
+    framingPreset: input.framingPreset,
+    startTimeSeconds: input.startTimeSeconds,
+    smartCrop: input.smartCrop ?? null,
+    internalSilenceCleanup: input.internalSilenceCleanup ?? null,
+  });
   const videoEncoderArgs = buildVideoEncoderArgs(resolvePreferredVideoEncoder());
   const args = [
     "-y",
@@ -403,11 +600,11 @@ async function runFfmpegRender(input: {
     "-i",
     input.sourceVideoPath,
     "-filter_complex",
-    framingFilter,
+    renderFilter.filterComplex,
     "-map",
-    "[v]",
+    renderFilter.videoMap,
     "-map",
-    "0:a?",
+    renderFilter.audioMap,
     ...videoEncoderArgs,
     "-c:a",
     "aac",
@@ -475,6 +672,9 @@ async function loadClipForRender(clipCandidateId: string): Promise<ClipWithSermo
       adjustedEndTimeSeconds: true,
       durationSeconds: true,
       transcriptText: true,
+      captionData: true,
+      silenceAtBeginningSeconds: true,
+      silenceAtEndSeconds: true,
       renderStatus: true,
       renderedFilePath: true,
       exportLayoutStrategy: true,
@@ -623,12 +823,80 @@ export async function renderApprovedClip(
     }
 
     const framingPreset = resolveFramingPreset(clip.exportLayoutStrategy);
+    const speechCleanup = resolveRenderSpeechCleanupSettings(clip.captionData);
+    let effectiveBoundaries = boundaries;
+    let internalSilenceCleanup: InternalSilenceCleanup | null = null;
+    let detectedSilenceEvents: DetectedSilenceEvent[] = [];
+
+    if (speechCleanup.removeDeadAir || speechCleanup.tightenLongPauses) {
+      try {
+        detectedSilenceEvents = await detectSilenceEventsForClip({
+          sourceVideoPath,
+          startTimeSeconds: boundaries.startTimeSeconds,
+          endTimeSeconds: boundaries.endTimeSeconds,
+          ffmpegPath: options?.ffmpegPath,
+          jobId: job.id,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown silence detection error.";
+        await appendJobLog(job.id, `Speech cleanup probe skipped: ${message}`);
+        await appendPipelineLog(clip.sermonId, `Speech cleanup probe skipped for clip ${clip.id}: ${message}`);
+      }
+    }
+
+    if (speechCleanup.removeDeadAir) {
+      const clipDurationSeconds = boundaries.endTimeSeconds - boundaries.startTimeSeconds;
+      const detectedEdgeSilence = resolveDetectedEdgeSilence(detectedSilenceEvents, clipDurationSeconds);
+      const edgeCleanup = buildEdgeSilenceCleanup({
+        startTimeSeconds: boundaries.startTimeSeconds,
+        endTimeSeconds: boundaries.endTimeSeconds,
+        silenceAtBeginningSeconds: clip.silenceAtBeginningSeconds ?? detectedEdgeSilence.silenceAtBeginningSeconds,
+        silenceAtEndSeconds: clip.silenceAtEndSeconds ?? detectedEdgeSilence.silenceAtEndSeconds,
+      });
+
+      if (edgeCleanup.applied) {
+        effectiveBoundaries = {
+          startTimeSeconds: edgeCleanup.startTimeSeconds,
+          endTimeSeconds: edgeCleanup.endTimeSeconds,
+        };
+        await appendJobLog(
+          job.id,
+          `Removed edge dead air: start +${edgeCleanup.startTrimSeconds}s, end -${edgeCleanup.endTrimSeconds}s.`,
+        );
+      } else {
+        await appendJobLog(job.id, "No eligible edge dead air found, or trimming would make the clip too short.");
+      }
+    }
+
+    if (speechCleanup.tightenLongPauses && detectedSilenceEvents.length > 0) {
+      const internalSilenceEvents = mapInternalSilenceEvents({
+        events: detectedSilenceEvents,
+        originalStartTimeSeconds: boundaries.startTimeSeconds,
+        effectiveStartTimeSeconds: effectiveBoundaries.startTimeSeconds,
+        effectiveEndTimeSeconds: effectiveBoundaries.endTimeSeconds,
+      });
+      internalSilenceCleanup = buildInternalSilenceCleanup({
+        startTimeSeconds: effectiveBoundaries.startTimeSeconds,
+        endTimeSeconds: effectiveBoundaries.endTimeSeconds,
+        silenceEvents: internalSilenceEvents,
+      });
+
+      if (internalSilenceCleanup.applied) {
+        await appendJobLog(
+          job.id,
+          `Collapsed ${internalSilenceCleanup.cuts.length} long pause(s), removing ${internalSilenceCleanup.totalTrimSeconds}s.`,
+        );
+      } else {
+        await appendJobLog(job.id, "No eligible long internal pauses found, or cleanup would make the clip too short.");
+      }
+    }
+
     const smartCrop =
       framingPreset === "SMART_CROP"
         ? await Promise.all([
             getMediaDimensions(sourceVideoPath, options?.ffmpegPath).catch(() => null),
             resolveSmartCropCenter(clip.id),
-            resolveSmartCropTimeline(clip.id, boundaries),
+            resolveSmartCropTimeline(clip.id, effectiveBoundaries),
           ]).then(([dimensions, center, timeline]) => (
             dimensions && center
               ? {
@@ -647,17 +915,20 @@ export async function renderApprovedClip(
       sermonId: clip.sermonId,
       sourceVideoPath,
       outputPath: tempOutputPath,
-      startTimeSeconds: boundaries.startTimeSeconds,
-      endTimeSeconds: boundaries.endTimeSeconds,
+      startTimeSeconds: effectiveBoundaries.startTimeSeconds,
+      endTimeSeconds: effectiveBoundaries.endTimeSeconds,
       ffmpegPath: options?.ffmpegPath,
       jobId: job.id,
       framingPreset,
       smartCrop,
+      internalSilenceCleanup,
     });
 
     await rename(tempOutputPath, outputPath);
 
-    const renderedDurationSeconds = Number((boundaries.endTimeSeconds - boundaries.startTimeSeconds).toFixed(2));
+    const renderedDurationSeconds = internalSilenceCleanup?.applied
+      ? internalSilenceCleanup.renderedDurationSeconds
+      : Number((effectiveBoundaries.endTimeSeconds - effectiveBoundaries.startTimeSeconds).toFixed(2));
     const outputStats = await stat(outputPath);
     const metadata = buildRenderMetadata({
       outputPath,
@@ -719,6 +990,7 @@ export async function renderApprovedClipsForSermon(
       id: true,
       status: true,
       renderStatus: true,
+      renderFreshness: true,
     },
   });
 
@@ -737,7 +1009,8 @@ export async function renderApprovedClipsForSermon(
       continue;
     }
 
-    if (clip.renderStatus === "COMPLETED" && !options?.force) {
+    const renderDecision = getBatchRenderDecision(clip, options?.force);
+    if (!renderDecision.shouldRender) {
       summary.skipped += 1;
       continue;
     }
@@ -747,8 +1020,8 @@ export async function renderApprovedClipsForSermon(
     try {
       await renderApprovedClip(clip.id, {
         ffmpegPath: options?.ffmpegPath,
-        allowRerender: Boolean(options?.force),
-        force: options?.force,
+        allowRerender: renderDecision.forceRender,
+        force: renderDecision.forceRender,
       });
       summary.completed += 1;
     } catch (error) {
@@ -775,6 +1048,11 @@ export const __clipRenderTestUtils = {
   buildRenderMetadata,
   buildVideoEncoderArgs,
   fileHasBytes,
+  getBatchRenderDecision,
+  mapInternalSilenceEvents,
+  parseSilenceDetectEvents,
+  resolveDetectedEdgeSilence,
+  resolveRenderSpeechCleanupSettings,
   resolveRenderConcurrency,
   resolveRenderBoundaries,
 };

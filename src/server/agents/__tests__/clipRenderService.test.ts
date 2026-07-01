@@ -145,6 +145,26 @@ describe("clip render service validation", () => {
     expect(__clipRenderTestUtils.resolveRenderConcurrency(9)).toBe(3);
   });
 
+  it("rerenders completed clips when the render asset is stale", () => {
+    expect(__clipRenderTestUtils.getBatchRenderDecision({
+      renderStatus: "COMPLETED",
+      renderFreshness: "OUTDATED",
+    })).toEqual({
+      shouldRender: true,
+      forceRender: true,
+    });
+  });
+
+  it("skips completed clips only when the render asset is fresh", () => {
+    expect(__clipRenderTestUtils.getBatchRenderDecision({
+      renderStatus: "COMPLETED",
+      renderFreshness: "UP_TO_DATE",
+    })).toEqual({
+      shouldRender: false,
+      forceRender: false,
+    });
+  });
+
   it("trims clear edge silence while leaving a small speech pad", () => {
     const cleanup = __clipRenderTestUtils.buildEdgeSilenceCleanup({
       startTimeSeconds: 100,
@@ -190,6 +210,48 @@ describe("clip render service validation", () => {
     expect(cleanup.applied).toBe(false);
     expect(cleanup.startTimeSeconds).toBe(10);
     expect(cleanup.endTimeSeconds).toBe(34);
+  });
+
+  it("reads Studio speech cleanup settings from caption data", () => {
+    expect(__clipRenderTestUtils.resolveRenderSpeechCleanupSettings({
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+      },
+    })).toEqual({
+      removeDeadAir: true,
+      tightenLongPauses: true,
+    });
+
+    expect(__clipRenderTestUtils.resolveRenderSpeechCleanupSettings(null)).toEqual({
+      removeDeadAir: false,
+      tightenLongPauses: false,
+    });
+  });
+
+  it("parses detected silence into edge and internal cleanup inputs", () => {
+    const events = __clipRenderTestUtils.parseSilenceDetectEvents(`
+      [silencedetect @ abc] silence_start: 0
+      [silencedetect @ abc] silence_end: 1.4 | silence_duration: 1.4
+      [silencedetect @ abc] silence_start: 14
+      [silencedetect @ abc] silence_end: 16.1 | silence_duration: 2.1
+      [silencedetect @ abc] silence_start: 58.5
+      [silencedetect @ abc] silence_end: 60 | silence_duration: 1.5
+    `, 60);
+
+    expect(__clipRenderTestUtils.resolveDetectedEdgeSilence(events, 60)).toEqual({
+      silenceAtBeginningSeconds: 1.4,
+      silenceAtEndSeconds: 1.5,
+    });
+
+    expect(__clipRenderTestUtils.mapInternalSilenceEvents({
+      events,
+      originalStartTimeSeconds: 100,
+      effectiveStartTimeSeconds: 101.28,
+      effectiveEndTimeSeconds: 158.62,
+    })).toEqual([
+      { start: 12.72, end: 14.82, duration: 2.1 },
+    ]);
   });
 
   it("collapses long internal silence while leaving a natural breath", () => {
@@ -254,7 +316,8 @@ describe("clip render service validation", () => {
     expect(filter.audioMap).toBe("[silence_a]");
     expect(filter.filterComplex).toContain("[0:v]select=not(between(t\\,10.17\\,11.82))");
     expect(filter.filterComplex).toContain("[0:a]aselect=not(between(t\\,10.17\\,11.82))");
-    expect(filter.filterComplex).toContain("[silence_v]setpts=PTS-STARTPTS");
+    expect(filter.filterComplex).toContain("[silence_v]setpts=PTS-STARTPTS[trimmed_v]");
+    expect(filter.filterComplex).toContain("[trimmed_v]setpts=PTS-STARTPTS,scale=1080:1920");
   });
 
   it("does not treat empty rendered video files as reusable media", async () => {
