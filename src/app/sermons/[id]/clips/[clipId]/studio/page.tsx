@@ -51,7 +51,7 @@ import { resolveBrandingConfig } from "@/lib/clipBranding";
 import { buildClipAssetRecoveryPlan } from "@/lib/clipAssetRecovery";
 import { getBrandingSettings } from "@/server/branding/settings";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
-import { resolveBestPreviewCandidate } from "@/lib/clipPreview";
+import { isFreshRemotePreview, resolveBestPreviewCandidate } from "@/lib/clipPreview";
 import { detectClipStudioAudioSilenceEvents } from "@/server/agents/clipStudioAudioReviewService";
 import { extractSpeechCleanupEdits } from "@/lib/speechCleanupPlan";
 
@@ -215,7 +215,9 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       smartCropDebugError: true,
       renderStatus: true,
       renderedFilePath: true,
+      renderedAt: true,
       remotePreviewUrl: true,
+      remotePreviewUploadedAt: true,
       renderError: true,
       renderFreshness: true,
       captionStatus: true,
@@ -441,7 +443,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   });
 
   const bestPreview = resolveBestPreviewCandidate(clip);
-  const hasRemotePreview = Boolean(clip.remotePreviewUrl);
+  const hasRemotePreview = isFreshRemotePreview(clip);
   const hasPreview = (localMediaAvailable && Boolean(bestPreview)) || hasRemotePreview;
   const previewSrc = hasRemotePreview
     ? `/api/clips/${clip.id}/preview?variant=best`

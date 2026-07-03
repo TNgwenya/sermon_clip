@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { listBestPreviewCandidates, resolveBestPreviewCandidate } from "@/lib/clipPreview";
+import {
+  hasPreviewMetadata,
+  isFreshRemotePreview,
+  listBestPreviewCandidates,
+  resolveBestPreviewCandidate,
+} from "@/lib/clipPreview";
 
 describe("clip preview helpers", () => {
   it("orders best preview candidates from most polished to plain render", () => {
@@ -59,5 +64,38 @@ describe("clip preview helpers", () => {
       variant: "captioned",
       path: "/tmp/captioned.mp4",
     });
+  });
+
+  it("accepts remote previews uploaded after the current render", () => {
+    expect(
+      isFreshRemotePreview({
+        remotePreviewUrl: "https://cdn.example.com/clip.mp4",
+        renderedAt: "2026-07-03T08:00:00.000Z",
+        remotePreviewUploadedAt: "2026-07-03T08:01:00.000Z",
+        renderFreshness: "UP_TO_DATE",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects stale remote previews from older renders", () => {
+    expect(
+      isFreshRemotePreview({
+        remotePreviewUrl: "https://cdn.example.com/clip.mp4",
+        renderedAt: "2026-07-03T08:01:00.000Z",
+        remotePreviewUploadedAt: "2026-07-03T08:00:00.000Z",
+        renderFreshness: "UP_TO_DATE",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects remote previews when the render asset is stale", () => {
+    expect(
+      hasPreviewMetadata({
+        remotePreviewUrl: "https://cdn.example.com/clip.mp4",
+        renderedAt: "2026-07-03T08:00:00.000Z",
+        remotePreviewUploadedAt: "2026-07-03T08:01:00.000Z",
+        renderFreshness: "NEEDS_REGENERATION",
+      }),
+    ).toBe(false);
   });
 });

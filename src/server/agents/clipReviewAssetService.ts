@@ -1,8 +1,9 @@
 import { stat } from "node:fs/promises";
 
-import type { ClipRenderStatus } from "@prisma/client";
+import type { AssetFreshness, ClipRenderStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { isFreshRemotePreview } from "@/lib/clipPreview";
 import { appendPipelineLog } from "@/server/agents/storage";
 import { renderApprovedClip } from "@/server/agents/clipRenderService";
 import {
@@ -15,7 +16,10 @@ type ReviewAssetClip = {
   renderStatus: ClipRenderStatus;
   renderedFilePath: string | null;
   renderedSizeBytes: number | null;
+  renderedAt: Date | null;
   remotePreviewUrl: string | null;
+  remotePreviewUploadedAt: Date | null;
+  renderFreshness: AssetFreshness;
   exportLayoutStrategy: "CENTER_CROP" | "LEFT_FOCUS" | "RIGHT_FOCUS" | "FIT_BLURRED_BACKGROUND" | "SMART_CROP" | null;
 };
 
@@ -33,14 +37,17 @@ function shouldPreparePreview(clip: Pick<ReviewAssetClip, "renderStatus">, force
 }
 
 function shouldUploadRemotePreview(
-  clip: Pick<ReviewAssetClip, "renderStatus" | "renderedFilePath" | "remotePreviewUrl">,
+  clip: Pick<
+    ReviewAssetClip,
+    "renderStatus" | "renderedFilePath" | "remotePreviewUrl" | "remotePreviewUploadedAt" | "renderedAt" | "renderFreshness"
+  >,
   force?: boolean,
 ): boolean {
   return (
     remotePreviewStorageConfigured() &&
     clip.renderStatus === "COMPLETED" &&
     Boolean(clip.renderedFilePath) &&
-    (Boolean(force) || !clip.remotePreviewUrl)
+    (Boolean(force) || !isFreshRemotePreview(clip))
   );
 }
 
@@ -164,7 +171,10 @@ export async function prepareGeneratedClipReviewAssets(input: {
       renderStatus: true,
       renderedFilePath: true,
       renderedSizeBytes: true,
+      renderedAt: true,
       remotePreviewUrl: true,
+      remotePreviewUploadedAt: true,
+      renderFreshness: true,
       exportLayoutStrategy: true,
     },
   });

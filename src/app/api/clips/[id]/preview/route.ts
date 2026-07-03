@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
-import { listBestPreviewCandidates } from "@/lib/clipPreview";
+import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
 import { videoFileResponse } from "@/server/http/videoFileResponse";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
@@ -14,10 +14,6 @@ async function fileHasBytes(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function isHttpsUrl(value: string | null | undefined): value is string {
-  return typeof value === "string" && /^https:\/\//i.test(value);
 }
 
 export async function GET(
@@ -39,6 +35,8 @@ export async function GET(
       exportedFilePath: true,
       captionedVideoPath: true,
       remotePreviewUrl: true,
+      remotePreviewUploadedAt: true,
+      renderedAt: true,
       renderFreshness: true,
       captionBurnFreshness: true,
       overlayFreshness: true,
@@ -53,8 +51,8 @@ export async function GET(
   const url = new URL(request.url);
   const variant = (url.searchParams.get("variant") ?? "rendered").toLowerCase();
   const remotePreviewUrl =
-    (variant === "best" || variant === "rendered") && isHttpsUrl(clip.remotePreviewUrl)
-      ? clip.remotePreviewUrl
+    (variant === "best" || variant === "rendered") && isFreshRemotePreview(clip)
+      ? clip.remotePreviewUrl?.trim() ?? null
       : null;
 
   if (!canRunLocalMediaProcessing()) {

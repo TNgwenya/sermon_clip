@@ -12,6 +12,7 @@ import { ReadyQueueExperience } from "@/app/ready-to-post/ready-queue-experience
 import { ReadyQueueLiveRefresh } from "@/app/ready-to-post/ready-queue-live-refresh";
 import { ClipAssetRecoveryButton } from "@/components/clip-asset-recovery-button";
 import { buildClipAssetRecoveryPlan } from "@/lib/clipAssetRecovery";
+import { isFreshRemotePreview } from "@/lib/clipPreview";
 import { resolveReadyMedia } from "@/lib/readyMedia";
 
 export const dynamic = "force-dynamic";
@@ -152,7 +153,10 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         overlayVideoPath: true,
         captionedVideoPath: true,
         renderedFilePath: true,
+        renderedAt: true,
         remotePreviewUrl: true,
+        remotePreviewUploadedAt: true,
+        renderFreshness: true,
         sermon: {
           select: {
             id: true,
@@ -262,7 +266,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         intendedAudience: clip.intendedAudience,
         mediaReady: media.mediaReady,
         estimatedBytes: media.estimatedBytes,
-        remotePreviewUrl: clip.remotePreviewUrl,
+        remotePreviewUrl: isFreshRemotePreview(clip) ? clip.remotePreviewUrl?.trim() ?? null : null,
         sermon: clip.sermon,
       };
     }),

@@ -8,7 +8,7 @@ import {
   StatCard,
 } from "@/components/ui";
 import { HomeTopClipCard } from "@/app/home-top-clip-card";
-import { listBestPreviewCandidates } from "@/lib/clipPreview";
+import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
 import { prisma } from "@/lib/prisma";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
 import { getOperationalMetrics } from "@/server/workflow/operationsDiagnostics";
@@ -59,10 +59,16 @@ type SermonListItem = {
     suggestedHook: string | null;
     reasonSelected: string;
     renderedFilePath: string | null;
+    renderedAt: Date | null;
     exportedFilePath: string | null;
     captionedVideoPath: string | null;
     overlayVideoPath: string | null;
     remotePreviewUrl: string | null;
+    remotePreviewUploadedAt: Date | null;
+    renderFreshness: "UP_TO_DATE" | "OUTDATED" | "NEEDS_REGENERATION" | "FAILED";
+    captionBurnFreshness: "UP_TO_DATE" | "OUTDATED" | "NEEDS_REGENERATION" | "FAILED";
+    overlayFreshness: "UP_TO_DATE" | "OUTDATED" | "NEEDS_REGENERATION" | "FAILED";
+    exportFreshness: "UP_TO_DATE" | "OUTDATED" | "NEEDS_REGENERATION" | "FAILED";
   }>;
 };
 
@@ -91,9 +97,19 @@ async function fileHasBytes(filePath: string): Promise<boolean> {
 
 async function canPreviewClipVideo(clip: Pick<
   HomeClip,
-  "remotePreviewUrl" | "exportedFilePath" | "captionedVideoPath" | "overlayVideoPath" | "renderedFilePath"
+  | "remotePreviewUrl"
+  | "remotePreviewUploadedAt"
+  | "renderedAt"
+  | "renderFreshness"
+  | "exportedFilePath"
+  | "captionedVideoPath"
+  | "overlayVideoPath"
+  | "renderedFilePath"
+  | "exportFreshness"
+  | "captionBurnFreshness"
+  | "overlayFreshness"
 >): Promise<boolean> {
-  if (clip.remotePreviewUrl?.trim()) {
+  if (isFreshRemotePreview(clip)) {
     return true;
   }
 
@@ -195,10 +211,16 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
             suggestedHook: true,
             reasonSelected: true,
             renderedFilePath: true,
+            renderedAt: true,
             exportedFilePath: true,
             captionedVideoPath: true,
             overlayVideoPath: true,
             remotePreviewUrl: true,
+            remotePreviewUploadedAt: true,
+            renderFreshness: true,
+            captionBurnFreshness: true,
+            overlayFreshness: true,
+            exportFreshness: true,
           },
           orderBy: [
             { finalQualityScore: "desc" },

@@ -1,7 +1,10 @@
+import { stat } from "node:fs/promises";
+
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { prisma } from "@/lib/prisma";
+import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
 import { ReviewExperience } from "@/app/sermons/[id]/review/review-experience";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
@@ -48,10 +51,17 @@ type ReviewPageData = {
     status: "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
     boundaryQuality: "GOOD" | "NEEDS_REVIEW" | "BAD";
     renderStatus: "NOT_RENDERED" | "QUEUED" | "RENDERING" | "COMPLETED" | "FAILED";
+    renderedAt: Date | null;
+    renderedFilePath: string | null;
     captionStatus: "NOT_GENERATED" | "GENERATING" | "GENERATED" | "FAILED";
     captionBurnStatus: "NOT_BURNED" | "BURNING" | "COMPLETED" | "FAILED";
+    captionedVideoPath: string | null;
     overlayStatus: "NOT_RENDERED" | "RENDERING" | "COMPLETED" | "FAILED";
     exportStatus: "NOT_EXPORTED" | "QUEUED" | "EXPORTING" | "COMPLETED" | "FAILED";
+    exportFreshness: "UP_TO_DATE" | "OUTDATED" | "NEEDS_REGENERATION" | "FAILED";
+    renderFreshness: "UP_TO_DATE" | "OUTDATED" | "NEEDS_REGENERATION" | "FAILED";
+    captionBurnFreshness: "UP_TO_DATE" | "OUTDATED" | "NEEDS_REGENERATION" | "FAILED";
+    overlayFreshness: "UP_TO_DATE" | "OUTDATED" | "NEEDS_REGENERATION" | "FAILED";
     exportLayoutStrategy: "CENTER_CROP" | "LEFT_FOCUS" | "RIGHT_FOCUS" | "FIT_BLURRED_BACKGROUND" | "SMART_CROP" | null;
     manualCropKeyframes: unknown;
     manualCropUpdatedAt: Date | null;
@@ -62,6 +72,7 @@ type ReviewPageData = {
     subtitleFilePath: string | null;
     overlayVideoPath: string | null;
     remotePreviewUrl: string | null;
+    remotePreviewUploadedAt: Date | null;
     createdAt: Date;
   }>;
 };
@@ -72,6 +83,48 @@ function normalizeStringArray(value: unknown): string[] {
   }
 
   return value.filter((item): item is string => typeof item === "string");
+}
+
+const SERVER_ONLY_PREVIEW_KEYS = new Set<string>([
+  "renderedAt",
+  "renderedFilePath",
+  "captionedVideoPath",
+  "exportedFilePath",
+  "remotePreviewUploadedAt",
+  "renderFreshness",
+  "captionBurnFreshness",
+  "overlayFreshness",
+  "exportFreshness",
+]);
+
+async function fileHasBytes(filePath: string): Promise<boolean> {
+  try {
+    const fileStat = await stat(/* turbopackIgnore: true */ filePath);
+    return fileStat.isFile() && fileStat.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function canPreviewClipVideo(
+  clip: ReviewPageData["clipCandidates"][number],
+  localMediaAvailable: boolean,
+): Promise<boolean> {
+  if (isFreshRemotePreview(clip)) {
+    return true;
+  }
+
+  if (!localMediaAvailable) {
+    return false;
+  }
+
+  const candidates = listBestPreviewCandidates(clip);
+  if (candidates.length === 0) {
+    return false;
+  }
+
+  const candidateReadiness = await Promise.all(candidates.map((candidate) => fileHasBytes(candidate)));
+  return candidateReadiness.some(Boolean);
 }
 
 export default async function SermonReviewPage({ params }: { params: Promise<{ id: string }> }) {
@@ -125,10 +178,17 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
           status: true,
           boundaryQuality: true,
           renderStatus: true,
+          renderedAt: true,
+          renderedFilePath: true,
           captionStatus: true,
           captionBurnStatus: true,
+          captionedVideoPath: true,
           overlayStatus: true,
           exportStatus: true,
+          exportFreshness: true,
+          renderFreshness: true,
+          captionBurnFreshness: true,
+          overlayFreshness: true,
           exportLayoutStrategy: true,
           manualCropKeyframes: true,
           manualCropUpdatedAt: true,
@@ -139,6 +199,7 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
           subtitleFilePath: true,
           overlayVideoPath: true,
           remotePreviewUrl: true,
+          remotePreviewUploadedAt: true,
           createdAt: true,
         },
       },
@@ -149,18 +210,26 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
     notFound();
   }
 
-  const clips = sermon.clipCandidates.map((clip) => ({
-    ...clip,
-    hashtags: normalizeStringArray(clip.hashtags),
-    riskReasons: normalizeStringArray(clip.riskReasons),
-    qualityWarnings: normalizeStringArray(clip.qualityWarnings),
-    postReadyBlockers: normalizeStringArray(clip.postReadyBlockers),
-    qualityReviewedAt: clip.qualityReviewedAt?.toISOString() ?? null,
-    manualCropUpdatedAt: clip.manualCropUpdatedAt?.toISOString() ?? null,
-    smartCropDebugGeneratedAt: clip.smartCropDebugGeneratedAt?.toISOString() ?? null,
-    suggestedHook: clip.suggestedHook ?? null,
-    suggestedCaption: clip.suggestedCaption ?? null,
-    createdAt: clip.createdAt.toISOString(),
+  const clips = await Promise.all(sermon.clipCandidates.map(async (clip) => {
+    const clientClip = { ...clip };
+    for (const key of SERVER_ONLY_PREVIEW_KEYS) {
+      delete (clientClip as Record<string, unknown>)[key];
+    }
+
+    return {
+      ...clientClip,
+      hashtags: normalizeStringArray(clip.hashtags),
+      riskReasons: normalizeStringArray(clip.riskReasons),
+      qualityWarnings: normalizeStringArray(clip.qualityWarnings),
+      postReadyBlockers: normalizeStringArray(clip.postReadyBlockers),
+      qualityReviewedAt: clip.qualityReviewedAt?.toISOString() ?? null,
+      manualCropUpdatedAt: clip.manualCropUpdatedAt?.toISOString() ?? null,
+      smartCropDebugGeneratedAt: clip.smartCropDebugGeneratedAt?.toISOString() ?? null,
+      suggestedHook: clip.suggestedHook ?? null,
+      suggestedCaption: clip.suggestedCaption ?? null,
+      canPreviewVideo: await canPreviewClipVideo(clip, localMediaAvailable),
+      createdAt: clip.createdAt.toISOString(),
+    };
   }));
 
   return (

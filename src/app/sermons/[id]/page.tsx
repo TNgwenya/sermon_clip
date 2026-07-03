@@ -17,7 +17,7 @@ import { RetryFailedJobButton } from "@/app/sermons/[id]/retry-failed-job-button
 import { RepairFailedClipOperationsButton } from "@/app/sermons/[id]/repair-failed-clip-operations-button";
 import { SermonLiveRefresh } from "@/app/sermons/[id]/sermon-live-refresh";
 import { SermonDetailPreviewCard } from "@/app/sermons/[id]/sermon-detail-preview-card";
-import { listBestPreviewCandidates } from "@/lib/clipPreview";
+import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
 import { getAudioPath, getLogPath, getSourceVideoPath } from "@/server/agents/storage";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import { pastorFriendlyError } from "@/lib/pastorFriendlyErrors";
@@ -54,6 +54,8 @@ type RawClipCandidate = {
   renderedFilePath: string | null;
   renderedDurationSeconds: number | null;
   renderedSizeBytes: number | null;
+  remotePreviewUrl: string | null;
+  remotePreviewUploadedAt: Date | null;
   exportFormat: ClipExportFormat | null;
   exportStatus: ClipExportStatus;
   exportLayoutStrategy: ClipExportLayoutStrategy | null;
@@ -203,8 +205,22 @@ async function doesFileExist(filePath: string): Promise<boolean> {
 
 async function hasClipPreviewMedia(clip: Pick<
   RawClipCandidate,
-  "exportedFilePath" | "captionedVideoPath" | "overlayVideoPath" | "renderedFilePath"
+  | "remotePreviewUrl"
+  | "remotePreviewUploadedAt"
+  | "renderedAt"
+  | "renderFreshness"
+  | "exportedFilePath"
+  | "captionedVideoPath"
+  | "overlayVideoPath"
+  | "renderedFilePath"
+  | "exportFreshness"
+  | "captionBurnFreshness"
+  | "overlayFreshness"
 >): Promise<boolean> {
+  if (isFreshRemotePreview(clip)) {
+    return true;
+  }
+
   const candidates = listBestPreviewCandidates(clip);
   if (candidates.length === 0) {
     return false;
@@ -750,6 +766,8 @@ export default async function SermonDetailPage({
           renderedFilePath: true,
           renderedDurationSeconds: true,
           renderedSizeBytes: true,
+          remotePreviewUrl: true,
+          remotePreviewUploadedAt: true,
           exportFormat: true,
           exportStatus: true,
           exportLayoutStrategy: true,

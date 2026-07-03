@@ -84,6 +84,7 @@ type ClipReviewItem = {
   subtitleFilePath: string | null;
   overlayVideoPath: string | null;
   remotePreviewUrl: string | null;
+  canPreviewVideo: boolean;
   createdAt: string;
 };
 
@@ -558,7 +559,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             const isSmartCrop = clip.exportLayoutStrategy === "SMART_CROP";
             const manualFramingApplied = hasManualFraming(clip);
             const isFallbackClip = isDeterministicFallbackClip(clip);
-            const canPreviewVideo = localMediaAvailable || Boolean(clip.remotePreviewUrl);
+            const canPreviewVideo = clip.canPreviewVideo;
             const isApprovedState = clip.status === "APPROVED" || clip.status === "EXPORTED";
             const isPostReady = clip.status === "EXPORTED" || clip.exportStatus === "COMPLETED";
             const visibleSignal =
@@ -596,7 +597,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                         />
                       ) : (
                         <div className="review-video empty-video-state">
-                          <span>Preview on Mac app</span>
+                          <span>{localMediaAvailable ? "Preview media not ready yet" : "Preview on Mac app"}</span>
                         </div>
                       )}
                     </div>

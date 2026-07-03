@@ -111,13 +111,14 @@ export function buildClipPreviewObjectKey(input: {
   ].join("/");
 }
 
-export function buildR2PublicUrl(objectKey: string): string {
+export function buildR2PublicUrl(objectKey: string, version?: string | number): string {
   const baseUrl = requiredEnv("R2_PUBLIC_BASE_URL").replace(/\/$/, "");
   if (!/^https:\/\//i.test(baseUrl)) {
     throw new Error("R2_PUBLIC_BASE_URL must be an HTTPS public bucket URL or custom domain.");
   }
 
-  return `${baseUrl}/${objectKey.split("/").map(encodeURIComponent).join("/")}`;
+  const publicUrl = `${baseUrl}/${objectKey.split("/").map(encodeURIComponent).join("/")}`;
+  return version === undefined ? publicUrl : `${publicUrl}?v=${encodeURIComponent(String(version))}`;
 }
 
 export async function uploadClipPreviewToR2(input: {
@@ -151,9 +152,11 @@ export async function uploadClipPreviewToR2(input: {
     clearTimeout(timeout);
   }
 
+  const uploadedAt = new Date();
+
   return {
     objectKey,
-    publicUrl: buildR2PublicUrl(objectKey),
-    uploadedAt: new Date(),
+    publicUrl: buildR2PublicUrl(objectKey, uploadedAt.getTime()),
+    uploadedAt,
   };
 }
