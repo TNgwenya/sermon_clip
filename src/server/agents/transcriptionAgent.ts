@@ -123,6 +123,7 @@ const MIN_EXPECTED_DURATION_FOR_COVERAGE_CHECK_SECONDS = 180;
 const DEGRADED_MULTILINGUAL_MIN_DISTINCT_SERMON_TOKENS = 32;
 const DEGRADED_MULTILINGUAL_MAX_REPEATED_SEGMENT_RATIO = 0.28;
 const DEGRADED_MULTILINGUAL_MAX_REPEATED_PHRASE_RATIO = 0.13;
+const TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE = 500;
 
 const TRANSCRIPTION_LANGUAGE_ALIASES: Array<{ code: string; aliases: string[] }> = [
   { code: "xh", aliases: ["xhosa", "isixhosa", "isi xhosa"] },
@@ -231,6 +232,56 @@ function isCachedChunkTranscriptPayload(value: unknown): value is CachedChunkTra
     (typeof payload.languageCode === "string" || payload.languageCode === null) &&
     isNormalizedTranscriptLike(payload.transcript)
   );
+}
+
+async function replaceTranscriptRecords(input: {
+  sermonId: string;
+  fullText: string;
+  provider: string;
+  language: string;
+  transcriptJsonPath: string;
+  segments: NormalizedTranscript["segments"];
+}): Promise<void> {
+  const transcript = await prisma.transcript.upsert({
+    where: { sermonId: input.sermonId },
+    update: {
+      fullText: input.fullText,
+      provider: input.provider,
+      language: input.language,
+      rawJsonPath: input.transcriptJsonPath,
+    },
+    create: {
+      sermonId: input.sermonId,
+      fullText: input.fullText,
+      provider: input.provider,
+      language: input.language,
+      rawJsonPath: input.transcriptJsonPath,
+    },
+  });
+
+  await prisma.transcriptSegment.deleteMany({
+    where: { sermonId: input.sermonId },
+  });
+
+  for (let index = 0; index < input.segments.length; index += TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE) {
+    const batch = input.segments.slice(index, index + TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE);
+    await prisma.transcriptSegment.createMany({
+      data: batch.map((segment) => ({
+        sermonId: input.sermonId,
+        transcriptId: transcript.id,
+        startTimeSeconds: segment.startTimeSeconds,
+        endTimeSeconds: segment.endTimeSeconds,
+        text: segment.text,
+      })),
+    });
+  }
+
+  await prisma.sermon.update({
+    where: { id: input.sermonId },
+    data: {
+      transcriptJsonPath: input.transcriptJsonPath,
+    },
+  });
 }
 
 function buildChunkTranscriptCachePath(cacheDir: string, chunkPath: string): string {
@@ -1918,44 +1969,13 @@ export async function transcribeSermonAudio(
 
     await writeFile(transcriptJsonPath, JSON.stringify(rawPayload, null, 2), "utf8");
 
-    await prisma.$transaction(async (tx) => {
-      await tx.transcriptSegment.deleteMany({
-        where: { sermonId: sermon.id },
-      });
-
-      const transcript = await tx.transcript.upsert({
-        where: { sermonId: sermon.id },
-        update: {
-          fullText: transcriptWindowed.transcript.fullText,
-          provider: normalizedTranscript.provider,
-          language: storedTranscriptLanguage,
-          rawJsonPath: transcriptJsonPath,
-        },
-        create: {
-          sermonId: sermon.id,
-          fullText: transcriptWindowed.transcript.fullText,
-          provider: transcriptWindowed.transcript.provider,
-          language: storedTranscriptLanguage,
-          rawJsonPath: transcriptJsonPath,
-        },
-      });
-
-      await tx.transcriptSegment.createMany({
-        data: transcriptWindowed.transcript.segments.map((segment) => ({
-          sermonId: sermon.id,
-          transcriptId: transcript.id,
-          startTimeSeconds: segment.startTimeSeconds,
-          endTimeSeconds: segment.endTimeSeconds,
-          text: segment.text,
-        })),
-      });
-
-      await tx.sermon.update({
-        where: { id: sermon.id },
-        data: {
-          transcriptJsonPath,
-        },
-      });
+    await replaceTranscriptRecords({
+      sermonId: sermon.id,
+      fullText: transcriptWindowed.transcript.fullText,
+      provider: normalizedTranscript.provider,
+      language: storedTranscriptLanguage,
+      transcriptJsonPath,
+      segments: transcriptWindowed.transcript.segments,
     });
 
     await updateSermonStatus(sermon.id, "TRANSCRIBED");

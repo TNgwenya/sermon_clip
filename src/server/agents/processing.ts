@@ -12,17 +12,19 @@ type RetryableStepOptions = {
   run: () => Promise<void>;
 };
 
+const PROCESSING_JOB_DB_RETRY_DELAYS_MS = [500, 1_500, 3_000];
+
 export async function createProcessingJob(
   sermonId: string,
   type: ProcessingJobType,
 ): Promise<ProcessingJob> {
-  return prisma.processingJob.create({
+  return retryProcessingJobDbWrite(() => prisma.processingJob.create({
     data: {
       sermonId,
       type,
       status: "PENDING",
     },
-  });
+  }));
 }
 
 function timestampedMessage(message: string): string {
@@ -43,17 +45,59 @@ async function mergeLogs(jobId: string, logs?: string): Promise<string | undefin
   return existing?.logs ? `${existing.logs}\n${nextChunk}` : nextChunk;
 }
 
-export async function appendJobLog(jobId: string, message: string): Promise<void> {
-  const logs = await mergeLogs(jobId, message);
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-  await prisma.processingJob.update({
-    where: { id: jobId },
-    data: { logs: logs ?? null },
-  });
+function isTransientDatabaseError(error: unknown): boolean {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code ?? "")
+    : "";
+  const message = error instanceof Error ? error.message : String(error);
+
+  return (
+    code === "P1001" ||
+    code === "P1002" ||
+    message.includes("Can't reach database server") ||
+    message.includes("Timed out fetching a new connection")
+  );
+}
+
+async function retryProcessingJobDbWrite<T>(operation: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= PROCESSING_JOB_DB_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientDatabaseError(error) || attempt === PROCESSING_JOB_DB_RETRY_DELAYS_MS.length) {
+        break;
+      }
+      await sleep(PROCESSING_JOB_DB_RETRY_DELAYS_MS[attempt] ?? 0);
+    }
+  }
+
+  throw lastError;
+}
+
+export async function appendJobLog(jobId: string, message: string): Promise<void> {
+  try {
+    const logs = await retryProcessingJobDbWrite(() => mergeLogs(jobId, message));
+
+    await retryProcessingJobDbWrite(() => prisma.processingJob.update({
+      where: { id: jobId },
+      data: { logs: logs ?? null },
+    }));
+  } catch (error) {
+    if (!isTransientDatabaseError(error)) {
+      throw error;
+    }
+    console.warn(`Processing job log append skipped for ${jobId}: ${message}`);
+  }
 }
 
 export async function markJobRunning(jobId: string): Promise<void> {
-  await prisma.processingJob.update({
+  await retryProcessingJobDbWrite(() => prisma.processingJob.update({
     where: { id: jobId },
     data: {
       status: "RUNNING",
@@ -61,13 +105,13 @@ export async function markJobRunning(jobId: string): Promise<void> {
       completedAt: null,
       errorMessage: null,
     },
-  });
+  }));
 }
 
 export async function markJobSucceeded(jobId: string, logs?: string): Promise<void> {
-  const mergedLogs = await mergeLogs(jobId, logs);
+  const mergedLogs = await retryProcessingJobDbWrite(() => mergeLogs(jobId, logs));
 
-  await prisma.processingJob.update({
+  await retryProcessingJobDbWrite(() => prisma.processingJob.update({
     where: { id: jobId },
     data: {
       status: "SUCCEEDED",
@@ -75,7 +119,7 @@ export async function markJobSucceeded(jobId: string, logs?: string): Promise<vo
       logs: mergedLogs,
       errorMessage: null,
     },
-  });
+  }));
 }
 
 export async function markJobFailed(
@@ -83,9 +127,9 @@ export async function markJobFailed(
   errorMessage: string,
   logs?: string,
 ): Promise<void> {
-  const mergedLogs = await mergeLogs(jobId, logs);
+  const mergedLogs = await retryProcessingJobDbWrite(() => mergeLogs(jobId, logs));
 
-  await prisma.processingJob.update({
+  await retryProcessingJobDbWrite(() => prisma.processingJob.update({
     where: { id: jobId },
     data: {
       status: "FAILED",
@@ -93,7 +137,7 @@ export async function markJobFailed(
       errorMessage,
       logs: mergedLogs,
     },
-  });
+  }));
 }
 
 export async function executeRetryableStep({

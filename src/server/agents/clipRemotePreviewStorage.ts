@@ -10,7 +10,7 @@ type UploadedRemotePreview = {
 };
 
 let client: S3Client | null = null;
-const DEFAULT_REMOTE_PREVIEW_UPLOAD_TIMEOUT_MS = 30_000;
+const DEFAULT_REMOTE_PREVIEW_UPLOAD_TIMEOUT_MS = 5 * 60_000;
 
 function cleanPathSegment(value: string): string {
   const cleaned = value.trim().replace(/[^A-Za-z0-9._-]/g, "-").replace(/-+/g, "-");
