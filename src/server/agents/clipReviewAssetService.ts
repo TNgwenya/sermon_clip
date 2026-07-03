@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 
-import type { AssetFreshness, ClipRenderStatus } from "@prisma/client";
+import type { AssetFreshness, ClipRenderStatus, ClipStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { isFreshRemotePreview } from "@/lib/clipPreview";
@@ -13,6 +13,8 @@ import {
 
 type ReviewAssetClip = {
   id: string;
+  status: ClipStatus;
+  isAiGenerated: boolean;
   renderStatus: ClipRenderStatus;
   renderedFilePath: string | null;
   renderedSizeBytes: number | null;
@@ -34,6 +36,13 @@ function shouldPreparePreview(clip: Pick<ReviewAssetClip, "renderStatus">, force
   const renderInProgress = clip.renderStatus === "QUEUED" || clip.renderStatus === "RENDERING";
   const previewAlreadyReady = clip.renderStatus === "COMPLETED";
   return !renderInProgress && (Boolean(force) || !previewAlreadyReady);
+}
+
+function shouldRenderReviewPreview(
+  clip: Pick<ReviewAssetClip, "status" | "isAiGenerated" | "renderStatus">,
+  force?: boolean,
+): boolean {
+  return clip.status === "SUGGESTED" && clip.isAiGenerated && shouldPreparePreview(clip, force);
 }
 
 function shouldUploadRemotePreview(
@@ -161,13 +170,31 @@ export async function prepareGeneratedClipReviewAssets(input: {
   const clips = await prisma.clipCandidate.findMany({
     where: {
       sermonId: input.sermonId,
-      status: "SUGGESTED",
-      isAiGenerated: true,
-      ...(input.onlyFailed ? { renderStatus: "FAILED" } : {}),
+      ...(input.onlyFailed
+        ? {
+            status: "SUGGESTED",
+            isAiGenerated: true,
+            renderStatus: "FAILED",
+          }
+        : {
+            OR: [
+              {
+                status: "SUGGESTED",
+                isAiGenerated: true,
+              },
+              {
+                status: { in: ["SUGGESTED", "APPROVED", "EXPORTED"] },
+                renderStatus: "COMPLETED",
+                renderedFilePath: { not: null },
+              },
+            ],
+          }),
     },
     orderBy: [{ overallPostScore: "desc" }, { score: "desc" }, { startTimeSeconds: "asc" }],
     select: {
       id: true,
+      status: true,
+      isAiGenerated: true,
       renderStatus: true,
       renderedFilePath: true,
       renderedSizeBytes: true,
@@ -188,10 +215,10 @@ export async function prepareGeneratedClipReviewAssets(input: {
   let failed = 0;
   let skipped = 0;
 
-  await appendPipelineLog(input.sermonId, `Preparing preview assets for ${clips.length} generated clip(s).`);
+  await appendPipelineLog(input.sermonId, `Preparing preview assets for ${clips.length} clip(s).`);
 
   for (const clip of clips) {
-    if (!shouldPreparePreview(clip, input.force)) {
+    if (!shouldRenderReviewPreview(clip, input.force)) {
       if (shouldUploadRemotePreview(clip, input.force) && clip.renderedFilePath) {
         const uploaded = await uploadRemotePreviewBestEffort({
           sermonId: input.sermonId,
@@ -235,4 +262,5 @@ export async function prepareGeneratedClipReviewAssets(input: {
 
 export const __clipReviewAssetServiceTestUtils = {
   shouldPreparePreview,
+  shouldRenderReviewPreview,
 };
