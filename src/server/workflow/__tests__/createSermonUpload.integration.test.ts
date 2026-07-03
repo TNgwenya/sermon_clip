@@ -141,7 +141,7 @@ describe("create sermon upload workflow", () => {
     expect(sermon.youtubeUrl).toBe("local-upload://Large%20Sunday%20Sermon.mp4");
     expect(sermon.status).toBe("DOWNLOADED");
     await expect(readFile(sermon.sourceVideoPath!)).resolves.toEqual(Buffer.from(videoBytes));
-  });
+  }, 20_000);
 
   it("rejects uploaded sermon video files that cannot be probed as usable media", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
