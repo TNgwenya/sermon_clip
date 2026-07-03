@@ -42,6 +42,13 @@ import type { ClipQualityRefreshSummary } from "@/server/agents/clipQualityRefre
 import type { ClipSuggestionCurationSummary } from "@/server/agents/clipSuggestionCurationService";
 import { prepareGeneratedClipReviewAssets } from "@/server/agents/clipReviewAssetService";
 import {
+  deleteClipPreviewFromR2,
+  deletePostingMediaFromR2,
+  isClipPreviewObjectKeyForSermon,
+  isPostingMediaObjectKeyForScheduledPost,
+  r2MediaStorageConfigured,
+} from "@/server/agents/clipRemotePreviewStorage";
+import {
   computeRegenerableAssetsForClip,
   detectClipEditImpact,
   invalidateAfterBoundaryOrCropChange,
@@ -387,6 +394,12 @@ export type DeleteSermonProjectState = {
   message: string;
   deletedSermonId?: string;
   deletedClipCount?: number;
+  deletedRemotePreviewObjects?: number;
+  deletedRemotePostingMediaObjects?: number;
+  failedRemotePreviewObjects?: number;
+  failedRemotePostingMediaObjects?: number;
+  skippedRemotePreviewObjects?: number;
+  skippedRemotePostingMediaObjects?: number;
   clearedDrafts?: number;
   clearedScheduledPosts?: number;
   clearedPredictions?: number;
@@ -1145,6 +1158,75 @@ function isActiveClipOperation(clip: {
   });
 }
 
+function isActiveScheduledPostOperation(post: {
+  status: string;
+  workerStatus: string;
+  claimedAt: Date | null;
+  updatedAt: Date;
+}): boolean {
+  const hasActiveStatus =
+    post.status === "POSTING" ||
+    post.workerStatus === "CLAIMED" ||
+    post.workerStatus === "POSTING";
+
+  if (!hasActiveStatus) {
+    return false;
+  }
+
+  return !isStaleActiveProcessingJob({
+    type: "POSTING",
+    status: "RUNNING",
+    updatedAt: post.claimedAt ?? post.updatedAt,
+  }, new Date(), 20 * 60_000);
+}
+
+function selectRemotePreviewObjectKeysForDeletion(
+  sermonId: string,
+  clips: Array<{ remotePreviewObjectKey: string | null }>,
+): { objectKeys: string[]; skipped: number } {
+  const objectKeys = new Set<string>();
+  let skipped = 0;
+
+  for (const clip of clips) {
+    const objectKey = clip.remotePreviewObjectKey?.trim();
+    if (!objectKey) {
+      continue;
+    }
+
+    if (!isClipPreviewObjectKeyForSermon({ sermonId, objectKey })) {
+      skipped += 1;
+      continue;
+    }
+
+    objectKeys.add(objectKey);
+  }
+
+  return { objectKeys: Array.from(objectKeys), skipped };
+}
+
+function selectPostingMediaObjectKeysForDeletion(
+  posts: Array<{ id: string; mediaObjectKey: string | null }>,
+): { objectKeys: Array<{ scheduledPostId: string; objectKey: string }>; skipped: number } {
+  const objectKeys = new Map<string, { scheduledPostId: string; objectKey: string }>();
+  let skipped = 0;
+
+  for (const post of posts) {
+    const objectKey = post.mediaObjectKey?.trim();
+    if (!objectKey) {
+      continue;
+    }
+
+    if (!isPostingMediaObjectKeyForScheduledPost({ scheduledPostId: post.id, objectKey })) {
+      skipped += 1;
+      continue;
+    }
+
+    objectKeys.set(`${post.id}:${objectKey}`, { scheduledPostId: post.id, objectKey });
+  }
+
+  return { objectKeys: Array.from(objectKeys.values()), skipped };
+}
+
 async function prepareGeneratedClipPreviews(input: {
   sermonId: string;
   force: boolean;
@@ -1177,6 +1259,7 @@ export async function deleteSermonProjectAction(input: {
           captionBurnStatus: true,
           overlayStatus: true,
           exportStatus: true,
+          remotePreviewObjectKey: true,
           updatedAt: true,
         },
       },
@@ -1218,6 +1301,11 @@ export async function deleteSermonProjectAction(input: {
 
   const clipIds = sermon.clipCandidates.map((clip) => clip.id);
   const clipIdSet = new Set(clipIds);
+  const remotePreviewPlan = selectRemotePreviewObjectKeysForDeletion(sermon.id, sermon.clipCandidates);
+  let postingMediaPlan: ReturnType<typeof selectPostingMediaObjectKeysForDeletion> = {
+    objectKeys: [],
+    skipped: 0,
+  };
   const storagePaths = Array.from(new Set([
     getSermonStoragePath(sermon.id),
     getLegacySermonStoragePath(sermon.id),
@@ -1227,10 +1315,24 @@ export async function deleteSermonProjectAction(input: {
   let clearedPredictions = 0;
   let clearedGrowthRecommendations = 0;
   let clearedPackages = 0;
+  let deletedRemotePreviewObjects = 0;
+  let deletedRemotePostingMediaObjects = 0;
+  let failedRemotePreviewObjects = 0;
+  let failedRemotePostingMediaObjects = 0;
+  const skippedRemotePreviewObjects = remotePreviewPlan.skipped;
+  let skippedRemotePostingMediaObjects = 0;
 
   try {
     let drafts: Array<{ id: string; clipIdsJson: Prisma.JsonValue }> = [];
-    let scheduledPosts: Array<{ id: string; clipIdsJson: Prisma.JsonValue }> = [];
+    let scheduledPosts: Array<{
+      id: string;
+      clipIdsJson: Prisma.JsonValue;
+      status: string;
+      workerStatus: string;
+      claimedAt: Date | null;
+      updatedAt: Date;
+      mediaObjectKey: string | null;
+    }> = [];
     let predictions: Array<{ id: string; clipIdsJson: Prisma.JsonValue }> = [];
 
     if (clipIds.length > 0) {
@@ -1239,7 +1341,15 @@ export async function deleteSermonProjectAction(input: {
           select: { id: true, clipIdsJson: true },
         }),
         prisma.scheduledPost.findMany({
-          select: { id: true, clipIdsJson: true },
+          select: {
+            id: true,
+            clipIdsJson: true,
+            status: true,
+            workerStatus: true,
+            claimedAt: true,
+            updatedAt: true,
+            mediaObjectKey: true,
+          },
         }),
         prisma.postPerformancePrediction.findMany({
           select: { id: true, clipIdsJson: true },
@@ -1250,12 +1360,22 @@ export async function deleteSermonProjectAction(input: {
     const draftIdsToDelete = drafts
       .filter((draft) => jsonStringArrayIncludesAny(draft.clipIdsJson, clipIdSet))
       .map((draft) => draft.id);
-    const scheduledPostIdsToDelete = scheduledPosts
-      .filter((post) => jsonStringArrayIncludesAny(post.clipIdsJson, clipIdSet))
-      .map((post) => post.id);
+    const scheduledPostsToDelete = scheduledPosts
+      .filter((post) => jsonStringArrayIncludesAny(post.clipIdsJson, clipIdSet));
+    const scheduledPostIdsToDelete = scheduledPostsToDelete.map((post) => post.id);
+    const activeScheduledPost = scheduledPostsToDelete.find(isActiveScheduledPostOperation);
     const predictionIdsToDelete = predictions
       .filter((prediction) => jsonStringArrayIncludesAny(prediction.clipIdsJson, clipIdSet))
       .map((prediction) => prediction.id);
+    postingMediaPlan = selectPostingMediaObjectKeysForDeletion(scheduledPostsToDelete);
+    skippedRemotePostingMediaObjects = postingMediaPlan.skipped;
+
+    if (activeScheduledPost) {
+      return {
+        success: false,
+        message: "This project still has an active posting worker job. Wait for it to finish, then delete the project.",
+      };
+    }
 
     await prisma.$transaction(async (tx) => {
       if (predictionIdsToDelete.length > 0) {
@@ -1303,6 +1423,33 @@ export async function deleteSermonProjectAction(input: {
     };
   }
 
+  if (remotePreviewPlan.objectKeys.length > 0) {
+    if (!r2MediaStorageConfigured()) {
+      failedRemotePreviewObjects = remotePreviewPlan.objectKeys.length;
+    } else {
+      const remoteResults = await Promise.allSettled(
+        remotePreviewPlan.objectKeys.map((objectKey) => deleteClipPreviewFromR2({
+          sermonId: sermon.id,
+          objectKey,
+        })),
+      );
+      deletedRemotePreviewObjects = remoteResults.filter((result) => result.status === "fulfilled").length;
+      failedRemotePreviewObjects = remoteResults.length - deletedRemotePreviewObjects;
+    }
+  }
+
+  if (postingMediaPlan.objectKeys.length > 0) {
+    if (!r2MediaStorageConfigured()) {
+      failedRemotePostingMediaObjects = postingMediaPlan.objectKeys.length;
+    } else {
+      const remoteResults = await Promise.allSettled(
+        postingMediaPlan.objectKeys.map((objectKey) => deletePostingMediaFromR2(objectKey)),
+      );
+      deletedRemotePostingMediaObjects = remoteResults.filter((result) => result.status === "fulfilled").length;
+      failedRemotePostingMediaObjects = remoteResults.length - deletedRemotePostingMediaObjects;
+    }
+  }
+
   let deletedStorage = false;
   try {
     await Promise.all(storagePaths.map((storagePath) => rm(/* turbopackIgnore: true */ storagePath, { recursive: true, force: true })));
@@ -1319,13 +1466,29 @@ export async function deleteSermonProjectAction(input: {
   revalidatePath("/growth");
   revalidatePath("/opportunities");
 
+  const cleanupWarnings = [
+    ...(!deletedStorage ? ["Local media cleanup may need a manual check."] : []),
+    ...(failedRemotePreviewObjects > 0 ||
+      skippedRemotePreviewObjects > 0 ||
+      failedRemotePostingMediaObjects > 0 ||
+      skippedRemotePostingMediaObjects > 0
+      ? ["Remote media cleanup may need a manual check."]
+      : []),
+  ];
+
   return {
     success: true,
-    message: deletedStorage
-      ? `Deleted "${sermon.title}" and its local media files.`
-      : `Deleted "${sermon.title}". Local media cleanup may need a manual check.`,
+    message: cleanupWarnings.length > 0
+      ? `Deleted "${sermon.title}". ${cleanupWarnings.join(" ")}`
+      : `Deleted "${sermon.title}" and its media files.`,
     deletedSermonId: sermon.id,
     deletedClipCount: clipIds.length,
+    deletedRemotePreviewObjects,
+    deletedRemotePostingMediaObjects,
+    failedRemotePreviewObjects,
+    failedRemotePostingMediaObjects,
+    skippedRemotePreviewObjects,
+    skippedRemotePostingMediaObjects,
     clearedDrafts,
     clearedScheduledPosts,
     clearedPredictions,

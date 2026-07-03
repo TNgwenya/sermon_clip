@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import path from "node:path";
 
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 type UploadedRemotePreview = {
   objectKey: string;
@@ -89,6 +89,10 @@ export function remotePreviewStorageConfigured(): boolean {
     return false;
   }
 
+  return r2MediaStorageConfigured();
+}
+
+export function r2MediaStorageConfigured(): boolean {
   return Boolean(
     envValue("R2_ACCOUNT_ID") &&
     envValue("R2_ACCESS_KEY_ID") &&
@@ -111,6 +115,22 @@ export function buildClipPreviewObjectKey(input: {
   ].join("/");
 }
 
+export function isClipPreviewObjectKeyForSermon(input: {
+  sermonId: string;
+  objectKey: string | null | undefined;
+}): boolean {
+  const objectKey = input.objectKey?.trim();
+  if (!objectKey) {
+    return false;
+  }
+
+  try {
+    return objectKey.startsWith(`clip-previews/${cleanPathSegment(input.sermonId)}/`);
+  } catch {
+    return false;
+  }
+}
+
 export function buildR2PublicUrl(objectKey: string, version?: string | number): string {
   const baseUrl = requiredEnv("R2_PUBLIC_BASE_URL").replace(/\/$/, "");
   if (!/^https:\/\//i.test(baseUrl)) {
@@ -119,6 +139,22 @@ export function buildR2PublicUrl(objectKey: string, version?: string | number): 
 
   const publicUrl = `${baseUrl}/${objectKey.split("/").map(encodeURIComponent).join("/")}`;
   return version === undefined ? publicUrl : `${publicUrl}?v=${encodeURIComponent(String(version))}`;
+}
+
+export function isPostingMediaObjectKeyForScheduledPost(input: {
+  scheduledPostId: string;
+  objectKey: string | null | undefined;
+}): boolean {
+  const objectKey = input.objectKey?.trim();
+  if (!objectKey) {
+    return false;
+  }
+
+  try {
+    return objectKey.startsWith(`posting-temp/${cleanPathSegment(input.scheduledPostId)}/`);
+  } catch {
+    return false;
+  }
 }
 
 export async function uploadClipPreviewToR2(input: {
@@ -159,4 +195,53 @@ export async function uploadClipPreviewToR2(input: {
     publicUrl: buildR2PublicUrl(objectKey, uploadedAt.getTime()),
     uploadedAt,
   };
+}
+
+async function deleteR2Object(objectKey: string): Promise<void> {
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), resolveRemotePreviewUploadTimeoutMs());
+
+  try {
+    await getR2Client().send(
+      new DeleteObjectCommand({
+        Bucket: requiredEnv("R2_BUCKET"),
+        Key: objectKey,
+      }),
+      { abortSignal: abortController.signal },
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function deleteClipPreviewFromR2(input: {
+  sermonId: string;
+  objectKey: string;
+}): Promise<void> {
+  if (!r2MediaStorageConfigured()) {
+    return;
+  }
+
+  const objectKey = input.objectKey.trim();
+  if (!isClipPreviewObjectKeyForSermon({ sermonId: input.sermonId, objectKey })) {
+    throw new Error("Refusing to delete an R2 preview object outside this sermon project.");
+  }
+
+  await deleteR2Object(objectKey);
+}
+
+export async function deletePostingMediaFromR2(input: {
+  scheduledPostId: string;
+  objectKey: string;
+}): Promise<void> {
+  if (!r2MediaStorageConfigured()) {
+    return;
+  }
+
+  const objectKey = input.objectKey.trim();
+  if (!isPostingMediaObjectKeyForScheduledPost({ scheduledPostId: input.scheduledPostId, objectKey })) {
+    throw new Error("Refusing to delete an R2 posting media object outside this scheduled post.");
+  }
+
+  await deleteR2Object(objectKey);
 }
