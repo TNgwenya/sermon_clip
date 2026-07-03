@@ -16,8 +16,71 @@ function groundingSnapshot(score = 0.92, orderedFlowRatio = 0.95) {
 }
 
 function clip(overrides: Partial<CuratableClipSuggestion> = {}): CuratableClipSuggestion {
+  const id = overrides.id ?? "clip-1";
+  const numericIndex = Number(id.match(/\d+/)?.[0]);
+  const hashIndex = Number.isFinite(numericIndex)
+    ? numericIndex
+    : [...id].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const topic = id.replace(/[^a-z0-9]+/gi, " ").trim() || "faith";
+  const topicFixtures = [
+    {
+      title: "Walk By Faith",
+      hook: "Faith keeps walking when fear gets loud.",
+      transcriptText: "Faith keeps walking when fear gets loud. God has not abandoned the church in pressure, so this week take the obedient step in front of you and trust his grace to meet you there.",
+      smartClipCategory: "Best Faith Clip",
+      clipType: "inspirational",
+      ministryValue: "Encourages faith under pressure.",
+    },
+    {
+      title: "Pray Before You Panic",
+      hook: "Prayer gives anxiety somewhere holy to go.",
+      transcriptText: "Prayer gives anxiety somewhere holy to go. Bring the burden to Jesus before you carry it alone, because the peace of God strengthens the heart and teaches the church to trust again.",
+      smartClipCategory: "Best Prayer Clip",
+      clipType: "pastoral",
+      ministryValue: "Calls people into prayer.",
+    },
+    {
+      title: "Forgive With Grace",
+      hook: "Forgiveness is obedience before it is a feeling.",
+      transcriptText: "Forgiveness is obedience before it is a feeling. Grace has already met you, so this week forgive again and let mercy make enough room for families, neighbors, and hearts to heal.",
+      smartClipCategory: "Best Encouragement Clip",
+      clipType: "pastoral",
+      ministryValue: "Applies grace to relationships.",
+    },
+    {
+      title: "Scripture Gives Wisdom",
+      hook: "Scripture gives wisdom for the next step.",
+      transcriptText: "Scripture gives wisdom for the next step. Do not only admire the Word; obey what God has shown you, because discipleship becomes visible when truth turns into practice.",
+      smartClipCategory: "Best Scripture Explanation Clip",
+      clipType: "teaching",
+      ministryValue: "Connects scripture to obedience.",
+    },
+    {
+      title: "Hope Has A Name",
+      hook: "Hope has a name, and his name is Jesus.",
+      transcriptText: "Hope has a name, and his name is Jesus. When disappointment tries to write the ending, remember that resurrection power still gives courage, strength, and a future to weary people.",
+      smartClipCategory: "Best Encouragement Clip",
+      clipType: "inspirational",
+      ministryValue: "Encourages hope in Christ.",
+    },
+    {
+      title: "Invite Someone Home",
+      hook: "The invitation may be the doorway someone needs.",
+      transcriptText: "The invitation may be the doorway someone needs. Do not underestimate a simple act of love; invite someone to church this week and let them hear the good news of Jesus.",
+      smartClipCategory: "Best Sunday Promotion Clip",
+      clipType: "evangelistic",
+      ministryValue: "Encourages invitation and evangelism.",
+    },
+  ];
+  const fixture = topicFixtures[Math.abs(hashIndex) % topicFixtures.length];
+
   return {
-    id: "clip-1",
+    id,
+    title: `${fixture.title} ${topic}`,
+    hook: fixture.hook,
+    startTimeSeconds: hashIndex * 120,
+    endTimeSeconds: hashIndex * 120 + 60,
+    durationSeconds: 60,
     status: "SUGGESTED",
     isAiGenerated: true,
     isManuallyEdited: false,
@@ -31,7 +94,10 @@ function clip(overrides: Partial<CuratableClipSuggestion> = {}): CuratableClipSu
     riskLevel: "LOW",
     contextWarning: false,
     standaloneClarityScore: 7,
-    transcriptText: "God has placed a gift in you, and the church needs what is in your hand. Paul tells Timothy to stir up what was already given, so this week serve with courage and let faith move first.",
+    transcriptText: fixture.transcriptText,
+    smartClipCategory: fixture.smartClipCategory,
+    clipType: fixture.clipType,
+    ministryValue: fixture.ministryValue,
     qualityDebugSnapshot: groundingSnapshot(),
     createdAt: new Date("2026-06-20T10:00:00.000Z"),
     ...overrides,
@@ -77,13 +143,73 @@ describe("clip suggestion curation service", () => {
     ]);
   });
 
+  it("rejects duplicate sermon ideas before applying the review-board cap", () => {
+    const sharedTranscript = "God has placed a gift in you, and the church needs what is in your hand. So this week stir up the gift and serve with courage.";
+    const summary = planAiSuggestionCuration([
+      clip({
+        id: "gift-best",
+        title: "Use What God Gave You",
+        hook: "God placed a gift in your hand.",
+        transcriptText: sharedTranscript,
+        finalQualityScore: 8.8,
+        score: 8.8,
+        startTimeSeconds: 120,
+        endTimeSeconds: 180,
+        smartClipCategory: "Best Discipleship Clip",
+      }),
+      clip({
+        id: "gift-repeat",
+        title: "Stir Up Your Gift",
+        hook: "Do not bury what God placed in you.",
+        transcriptText: sharedTranscript,
+        finalQualityScore: 8.1,
+        score: 8.1,
+        startTimeSeconds: 600,
+        endTimeSeconds: 660,
+        smartClipCategory: "Best Discipleship Clip",
+      }),
+      clip({
+        id: "forgiveness",
+        title: "Forgive Again With Grace",
+        hook: "Forgiveness is obedience before it is a feeling.",
+        transcriptText: "Forgiveness is obedience before it is a feeling. So this week forgive again because grace has already met you and mercy keeps the heart free.",
+        finalQualityScore: 8.2,
+        score: 8.2,
+        startTimeSeconds: 900,
+        endTimeSeconds: 960,
+        smartClipCategory: "Best Encouragement Clip",
+      }),
+    ], { maxReviewSuggestions: 3 });
+
+    expect(summary.clipsKept).toBe(2);
+    expect(summary.decisions.find((decision) => decision.clipId === "gift-repeat")).toMatchObject({
+      action: "REJECT",
+      duplicateOfClipId: "gift-best",
+      reason: expect.stringContaining("repeats another suggested clip"),
+    });
+    expect(summary.decisions.find((decision) => decision.clipId === "forgiveness")).toMatchObject({ action: "KEEP" });
+  });
+
   it("rejects clips with weak hooks or incomplete arcs but keeps repairable pastor-grade warnings", () => {
     const summary = planAiSuggestionCuration([
       clip({ id: "strong", qualityLabel: "POST_READY", postReadyStatus: "POST_READY", finalQualityScore: 8.6, hookScore: 8, arcCompletenessScore: 8, completenessScore: 8 }),
       clip({ id: "weak-hook", qualityLabel: "POST_READY", postReadyStatus: "POST_READY", finalQualityScore: 8.7, hookScore: 4.9 }),
       clip({ id: "weak-arc", qualityLabel: "POST_READY", postReadyStatus: "POST_READY", finalQualityScore: 8.5, arcCompletenessScore: 5.9 }),
       clip({ id: "incomplete", qualityLabel: "POST_READY", postReadyStatus: "POST_READY", finalQualityScore: 8.5, completenessAction: "REJECT_INCOMPLETE" }),
-      clip({ id: "repairable-payoff", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", finalQualityScore: 8.9, qualityWarnings: ["PASTOR_GRADE_NO_PAYOFF_OR_APPLICATION"], recommendedAction: "TRIM_CLIP" }),
+      clip({
+        id: "repairable-payoff",
+        title: "Invite Someone Home",
+        hook: "The invitation may be the doorway someone needs.",
+        transcriptText: "The invitation may be the doorway someone needs. Do not underestimate a simple act of love; invite someone to church this week and let them hear the good news of Jesus.",
+        smartClipCategory: "Best Sunday Promotion Clip",
+        clipType: "evangelistic",
+        ministryValue: "Encourages invitation and evangelism.",
+        qualityLabel: "NEEDS_EDITING",
+        postReadyStatus: "NEEDS_EDITING",
+        finalQualityScore: 8.9,
+        qualityWarnings: ["PASTOR_GRADE_NO_PAYOFF_OR_APPLICATION"],
+        recommendedAction: "TRIM_CLIP",
+      }),
     ]);
 
     expect(summary.decisions.find((decision) => decision.clipId === "strong")).toMatchObject({ action: "KEEP" });
@@ -175,12 +301,12 @@ describe("clip suggestion curation service", () => {
 
   it("keeps grounded rescue and review clip types generated for pastor choice", () => {
     const clips = [
-      clip({ id: "missing-payoff", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", finalQualityScore: 7.4, qualityWarnings: ["PASTOR_GRADE_NO_PAYOFF_OR_APPLICATION"], recommendedAction: "TRIM_CLIP" }),
-      clip({ id: "setup-without-landing", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", finalQualityScore: 7.4, qualityWarnings: ["PASTOR_GRADE_SETUP_WITHOUT_LANDING"], recommendedAction: "TRIM_CLIP" }),
-      clip({ id: "bad-boundary", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", boundaryQuality: "BAD", finalQualityScore: 7.4, qualityWarnings: ["PASTOR_GRADE_BAD_BOUNDARY"], recommendedAction: "EXTEND_CONTEXT" }),
-      clip({ id: "dependent-opening", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", finalQualityScore: 7.4, qualityWarnings: ["PASTOR_GRADE_DEPENDENT_OPENING"], recommendedAction: "REVIEW_OPENING" }),
-      clip({ id: "dangling-ending", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", finalQualityScore: 7.4, qualityWarnings: ["PASTOR_GRADE_DANGLING_ENDING"], recommendedAction: "TRIM_CLIP" }),
-      clip({ id: "context-extension", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", finalQualityScore: 7.4, qualityWarnings: ["NEEDS_CONTEXT_EXTENSION"], recommendedAction: "EXTEND_CONTEXT" }),
+      clip({ id: "missing-payoff", title: "Walk By Faith", hook: "Faith keeps walking when fear gets loud.", transcriptText: "Faith keeps walking when fear gets loud. God has not abandoned the church in pressure, so this week take the obedient step in front of you and trust his grace to meet you there.", smartClipCategory: "Best Faith Clip", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", finalQualityScore: 7.4, qualityWarnings: ["PASTOR_GRADE_NO_PAYOFF_OR_APPLICATION"], recommendedAction: "TRIM_CLIP" }),
+      clip({ id: "setup-without-landing", title: "Pray Before You Panic", hook: "Prayer gives anxiety somewhere holy to go.", transcriptText: "Prayer gives anxiety somewhere holy to go. Bring the burden to Jesus before you carry it alone, because the peace of God strengthens the heart and teaches the church to trust again.", smartClipCategory: "Best Prayer Clip", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", finalQualityScore: 7.4, qualityWarnings: ["PASTOR_GRADE_SETUP_WITHOUT_LANDING"], recommendedAction: "TRIM_CLIP" }),
+      clip({ id: "bad-boundary", title: "Forgive With Grace", hook: "Forgiveness is obedience before it is a feeling.", transcriptText: "Forgiveness is obedience before it is a feeling. Grace has already met you, so this week forgive again and let mercy make enough room for families, neighbors, and hearts to heal.", smartClipCategory: "Best Encouragement Clip", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", boundaryQuality: "BAD", finalQualityScore: 7.4, qualityWarnings: ["PASTOR_GRADE_BAD_BOUNDARY"], recommendedAction: "EXTEND_CONTEXT" }),
+      clip({ id: "dependent-opening", title: "Scripture Gives Wisdom", hook: "Scripture gives wisdom for the next step.", transcriptText: "Scripture gives wisdom for the next step. Do not only admire the Word; obey what God has shown you, because discipleship becomes visible when truth turns into practice.", smartClipCategory: "Best Scripture Explanation Clip", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", finalQualityScore: 7.4, qualityWarnings: ["PASTOR_GRADE_DEPENDENT_OPENING"], recommendedAction: "REVIEW_OPENING" }),
+      clip({ id: "dangling-ending", title: "Hope Has A Name", hook: "Hope has a name, and his name is Jesus.", transcriptText: "Hope has a name, and his name is Jesus. When disappointment tries to write the ending, remember that resurrection power still gives courage, strength, and a future to weary people.", smartClipCategory: "Best Encouragement Clip", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", finalQualityScore: 7.4, qualityWarnings: ["PASTOR_GRADE_DANGLING_ENDING"], recommendedAction: "TRIM_CLIP" }),
+      clip({ id: "context-extension", title: "Invite Someone Home", hook: "The invitation may be the doorway someone needs.", transcriptText: "The invitation may be the doorway someone needs. Do not underestimate a simple act of love; invite someone to church this week and let them hear the good news of Jesus.", smartClipCategory: "Best Sunday Promotion Clip", qualityLabel: "NEEDS_EDITING", postReadyStatus: "NEEDS_EDITING", finalQualityScore: 7.4, qualityWarnings: ["NEEDS_CONTEXT_EXTENSION"], recommendedAction: "EXTEND_CONTEXT" }),
     ];
 
     const summary = planAiSuggestionCuration(clips);
@@ -209,6 +335,8 @@ describe("clip suggestion curation service", () => {
       qualityLabel: "NEEDS_EDITING",
       postReadyStatus: "NEEDS_EDITING",
       finalQualityScore: 7.4,
+      transcriptText: "God has placed a gift in you, and the church needs what is in your hand. Paul tells Timothy to stir up what was already given, so this week serve with courage and let faith move first.",
+      smartClipCategory: "Best Discipleship Clip",
       qualityWarnings: ["PASTOR_GRADE_NO_PAYOFF_OR_APPLICATION"],
       recommendedAction: "TRIM_CLIP",
     });

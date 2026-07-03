@@ -1,5 +1,6 @@
 import type { ClipWindow } from "@/server/agents/clipIntelligenceAgent";
 import { SMART_CLIP_CATEGORIES, type MinistryMomentRecord } from "@/server/ai/ministryMomentSchema";
+import type { ClipVolumeTarget } from "@/lib/clipVolumeTargets";
 
 type SermonIntelligenceContext = {
   title?: string | null;
@@ -66,7 +67,7 @@ export function buildClipSelectionSystemPrompt(): string {
     "Do not optimize only for viral content.",
     "Build a generous pastor review shortlist, not only a final post-ready list.",
     "Pastors want to see many good options before choosing what to publish. Return every genuinely useful clip candidate in the provided windows, up to the requested count.",
-    "A normal full sermon should usually produce 12-20 pastor-review-worthy options across worship, prayer, teaching, application, encouragement, scripture, testimony, quote-worthy moments, and calls to action.",
+    "Clip volume should scale with source length: short clips may yield 3-10 options, 10-30 minute sermons 8-20, 30-60 minute sermons 20-32, 60-120 minute sermons 32-42, and extended services 42-55 when the transcript contains enough distinct useful moments.",
     "Do not hide a useful clip just because it needs trimming, captions, or pastor review. Include it when the core sermon moment is strong and label risk/context honestly.",
     "Optimize for pastoral tone, scripture clarity, ministry value, clear standalone teaching, spiritual encouragement, and contextual safety.",
     "Prefer clips that serve a ministry outcome like prayer, encouragement, discipleship, leadership, testimony, salvation, evangelism, family, or Sunday invitation.",
@@ -158,6 +159,7 @@ export function buildClipSelectionUserPrompt(
   context?: {
     intelligence?: SermonIntelligenceContext;
     ministryMoments?: MinistryMomentRecord[];
+    volumeTarget?: Pick<ClipVolumeTarget, "durationSeconds" | "minReviewSuggestions" | "targetReviewSuggestions" | "maxReviewSuggestions" | "rangeLabel">;
   },
 ): string {
   const windowText = windows
@@ -186,6 +188,9 @@ export function buildClipSelectionUserPrompt(
     `Speaker Name: ${sermon.speakerName}`,
     `Church Name: ${sermon.churchName}`,
     `Language: ${sermon.language}`,
+    context?.volumeTarget
+      ? `Overall sermon review-board target: save about ${context.volumeTarget.targetReviewSuggestions} distinct pastor-review options for this sermon when available; acceptable range ${context.volumeTarget.rangeLabel}.`
+      : "",
     `Select up to ${requestedCount} strong or pastor-review-worthy clip candidates from these windows.`,
     "Treat the requested count as the target when the windows contain enough useful moments. Return fewer only when the candidates are genuinely weak or unsafe.",
     "Prefer strong quotes, clear teaching, scripture explanations, prayer moments, salvation invitations, testimony moments, pastoral encouragement, and calls to action.",

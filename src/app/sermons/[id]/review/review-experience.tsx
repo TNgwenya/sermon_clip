@@ -102,7 +102,7 @@ type Draft = {
   clipNotes: string;
 };
 
-const REVIEW_INITIAL_VISIBLE_COUNT = 8;
+const REVIEW_INITIAL_VISIBLE_COUNT = 12;
 
 function toDraft(clip: Pick<ClipReviewItem, "title" | "hook" | "caption" | "hashtags" | "clipNotes">): Draft {
   return {
@@ -910,7 +910,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                     : `Showing all ${visibleClips.length} clips`}
                 </strong>
                 <p className="muted small">
-                  Keep the first pass focused, then expand when you are ready for the full review queue.
+                  The full review queue stays available; start with the strongest options, then expand for more sermon moments.
                 </p>
               </div>
               <button

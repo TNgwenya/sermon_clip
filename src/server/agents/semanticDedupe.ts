@@ -295,9 +295,7 @@ export function semanticSimilarity(left: SemanticDedupeCandidate, right: Semanti
   const rightIdeaTokens = tokens(transcriptIdeaText(right));
   const ideaContainmentScore = containment(leftIdeaTokens, rightIdeaTokens);
   const ideaBigramScore = jaccard(bigrams(transcriptIdeaText(left)), bigrams(transcriptIdeaText(right)));
-  const sameContentLane =
-    normalize(left.smartClipCategory ?? "") === normalize(right.smartClipCategory ?? "") ||
-    normalize(left.clipType ?? "") === normalize(right.clipType ?? "");
+  const sameContentLane = normalize(left.smartClipCategory ?? "") === normalize(right.smartClipCategory ?? "");
   const conceptScore = containment(ministryConcepts(transcriptIdeaText(left)), ministryConcepts(transcriptIdeaText(right)));
   const ideaScore = sameContentLane
     ? Math.max(ideaContainmentScore * 0.82, ideaBigramScore * 0.9, conceptScore * 0.94)
@@ -371,12 +369,19 @@ function duplicateEvidence(
 
 export function semanticDedupeCandidates<T extends SemanticDedupeCandidate>(
   candidates: T[],
-  options?: { similarityThreshold?: number; overlapThreshold?: number; overlapSemanticFloor?: number },
+  options?: {
+    similarityThreshold?: number;
+    overlapThreshold?: number;
+    overlapSemanticFloor?: number;
+    preserveInputOrder?: boolean;
+  },
 ): SemanticDedupeResult<T> {
   const similarityThreshold = options?.similarityThreshold ?? 0.62;
   const overlapThreshold = options?.overlapThreshold ?? 0.5;
   const overlapSemanticFloor = options?.overlapSemanticFloor ?? 0.42;
-  const sorted = [...candidates].sort((left, right) => representativeScore(right) - representativeScore(left));
+  const sorted = options?.preserveInputOrder
+    ? [...candidates]
+    : [...candidates].sort((left, right) => representativeScore(right) - representativeScore(left));
   const kept: T[] = [];
   const duplicates: SemanticDedupeResult<T>["duplicates"] = [];
 

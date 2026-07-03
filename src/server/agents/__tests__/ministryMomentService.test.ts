@@ -296,8 +296,10 @@ describe("ministry-aware clip mapping", () => {
   });
 
   it("reuses existing suggestions only when force is false", () => {
-    expect(__clipIntelligenceTestUtils.shouldReuseExistingSuggestions(2, false)).toBe(true);
-    expect(__clipIntelligenceTestUtils.shouldReuseExistingSuggestions(2, true)).toBe(false);
+    expect(__clipIntelligenceTestUtils.shouldReuseExistingSuggestions(20, false, { minReviewSuggestions: 20 })).toBe(true);
+    expect(__clipIntelligenceTestUtils.shouldReuseExistingSuggestions(2, false, { minReviewSuggestions: 20 })).toBe(false);
+    expect(__clipIntelligenceTestUtils.shouldReuseExistingSuggestions(2, false, null)).toBe(true);
+    expect(__clipIntelligenceTestUtils.shouldReuseExistingSuggestions(20, true, { minReviewSuggestions: 20 })).toBe(false);
     expect(__clipIntelligenceTestUtils.shouldReuseExistingSuggestions(0, false)).toBe(false);
   });
 

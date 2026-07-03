@@ -6,9 +6,16 @@ import {
   isHardQualityWarning,
   isRepairableQualityWarning,
 } from "@/server/agents/clipCandidatePolicy";
+import { semanticDedupeCandidates } from "@/server/agents/semanticDedupe";
+import { resolveClipVolumeTarget } from "@/lib/clipVolumeTargets";
 
 export type CuratableClipSuggestion = {
   id: string;
+  title: string;
+  hook: string;
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+  durationSeconds: number;
   status: "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
   isAiGenerated: boolean;
   isManuallyEdited: boolean;
@@ -19,6 +26,7 @@ export type CuratableClipSuggestion = {
   overallPostScore: number | null;
   recommendedAction: string | null;
   boundaryQuality: "GOOD" | "NEEDS_REVIEW" | "BAD";
+  boundaryQualityScore?: number | null;
   riskLevel: "LOW" | "MEDIUM" | "HIGH";
   contextWarning: boolean;
   standaloneClarityScore: number | null;
@@ -27,7 +35,11 @@ export type CuratableClipSuggestion = {
   completenessScore?: number | null;
   completenessAction?: string | null;
   qualityWarnings?: string[] | null;
-  transcriptText?: string | null;
+  transcriptText: string;
+  smartClipCategory?: string | null;
+  clipType?: string | null;
+  ministryValue?: string | null;
+  visualConfidenceScore?: number | null;
   qualityDebugSnapshot?: unknown;
   createdAt: Date;
 };
@@ -36,6 +48,8 @@ export type ClipSuggestionCurationDecision = {
   clipId: string;
   action: "KEEP" | "REJECT";
   reason: string;
+  duplicateOfClipId?: string | null;
+  dedupeScore?: number | null;
 };
 
 export type ClipSuggestionCurationSummary = {
@@ -177,9 +191,29 @@ export function planAiSuggestionCuration(
 
     return left.createdAt.getTime() - right.createdAt.getTime();
   });
-  const keepIds = new Set(ranked.slice(0, maxReviewSuggestions).map((clip) => clip.id));
+  const semanticDedupe = semanticDedupeCandidates(ranked, { preserveInputOrder: true });
+  for (const duplicate of semanticDedupe.duplicates) {
+    decisions.set(duplicate.duplicate.id, {
+      clipId: duplicate.duplicate.id,
+      action: "REJECT",
+      reason: `Rejected because it repeats another suggested clip: ${duplicate.dedupeReason}.`,
+      duplicateOfClipId: duplicate.representative.id,
+      dedupeScore: duplicate.dedupeScore,
+    });
+  }
 
-  for (const clip of ranked) {
+  const dedupedRanked = semanticDedupe.kept.sort((left, right) => {
+    const rankDiff = qualityRank(left) - qualityRank(right);
+    if (rankDiff !== 0) return rankDiff;
+
+    const scoreDiff = scoreForRanking(right) - scoreForRanking(left);
+    if (scoreDiff !== 0) return scoreDiff;
+
+    return left.createdAt.getTime() - right.createdAt.getTime();
+  });
+  const keepIds = new Set(dedupedRanked.slice(0, maxReviewSuggestions).map((clip) => clip.id));
+
+  for (const clip of dedupedRanked) {
     if (keepIds.has(clip.id)) {
       decisions.set(clip.id, {
         clipId: clip.id,
@@ -221,6 +255,41 @@ function appendCurationNote(existing: string | null, reason: string): string {
   return `${existing.trim()}\n${note}`;
 }
 
+function clipSpanDurationSeconds(clips: Array<Pick<CuratableClipSuggestion, "startTimeSeconds" | "endTimeSeconds">>): number | null {
+  if (clips.length === 0) {
+    return null;
+  }
+
+  const starts = clips.map((clip) => clip.startTimeSeconds).filter((value) => Number.isFinite(value));
+  const ends = clips.map((clip) => clip.endTimeSeconds).filter((value) => Number.isFinite(value));
+  if (starts.length === 0 || ends.length === 0) {
+    return null;
+  }
+
+  return Math.max(0, Math.max(...ends) - Math.min(...starts));
+}
+
+function resolveCurationDurationSeconds(input: {
+  sourceDurationSeconds?: number | null;
+  sermonStartSeconds?: number | null;
+  sermonEndSeconds?: number | null;
+  clipSpanSeconds?: number | null;
+}): number {
+  if (
+    typeof input.sermonStartSeconds === "number" &&
+    typeof input.sermonEndSeconds === "number" &&
+    input.sermonEndSeconds > input.sermonStartSeconds
+  ) {
+    return input.sermonEndSeconds - input.sermonStartSeconds;
+  }
+
+  if (typeof input.sourceDurationSeconds === "number" && input.sourceDurationSeconds > 0) {
+    return input.sourceDurationSeconds;
+  }
+
+  return typeof input.clipSpanSeconds === "number" && input.clipSpanSeconds > 0 ? input.clipSpanSeconds : 0;
+}
+
 export async function curateSermonAiSuggestions(input: {
   sermonId: string;
   maxReviewSuggestions?: number;
@@ -237,6 +306,14 @@ export async function curateSermonAiSuggestions(input: {
     };
   }
 
+  const sermon = await prisma.sermon.findUnique({
+    where: { id: sermonId },
+    select: {
+      sourceDurationSeconds: true,
+      sermonStartSeconds: true,
+      sermonEndSeconds: true,
+    },
+  });
   const clips = await prisma.clipCandidate.findMany({
     where: {
       sermonId,
@@ -247,6 +324,11 @@ export async function curateSermonAiSuggestions(input: {
     orderBy: { createdAt: "asc" },
     select: {
       id: true,
+      title: true,
+      hook: true,
+      startTimeSeconds: true,
+      endTimeSeconds: true,
+      durationSeconds: true,
       status: true,
       isAiGenerated: true,
       isManuallyEdited: true,
@@ -257,6 +339,7 @@ export async function curateSermonAiSuggestions(input: {
       overallPostScore: true,
       recommendedAction: true,
       boundaryQuality: true,
+      boundaryQualityScore: true,
       riskLevel: true,
       contextWarning: true,
       standaloneClarityScore: true,
@@ -266,6 +349,10 @@ export async function curateSermonAiSuggestions(input: {
       completenessAction: true,
       qualityWarnings: true,
       transcriptText: true,
+      smartClipCategory: true,
+      clipType: true,
+      ministryValue: true,
+      visualConfidenceScore: true,
       qualityDebugSnapshot: true,
       clipNotes: true,
       createdAt: true,
@@ -277,8 +364,15 @@ export async function curateSermonAiSuggestions(input: {
       ? clip.qualityWarnings.filter((warning): warning is string => typeof warning === "string")
       : [],
   }));
+  const durationSeconds = resolveCurationDurationSeconds({
+    sourceDurationSeconds: sermon?.sourceDurationSeconds,
+    sermonStartSeconds: sermon?.sermonStartSeconds,
+    sermonEndSeconds: sermon?.sermonEndSeconds,
+    clipSpanSeconds: clipSpanDurationSeconds(normalizedClips),
+  });
+  const volumeTarget = resolveClipVolumeTarget(durationSeconds);
   const summary = planAiSuggestionCuration(normalizedClips, {
-    maxReviewSuggestions: input.maxReviewSuggestions,
+    maxReviewSuggestions: input.maxReviewSuggestions ?? volumeTarget.maxReviewSuggestions,
   });
   const rejectDecisions = summary.decisions.filter((decision) => decision.action === "REJECT");
 
@@ -289,6 +383,9 @@ export async function curateSermonAiSuggestions(input: {
       data: {
         status: "REJECTED",
         clipNotes: appendCurationNote(clip?.clipNotes ?? null, decision.reason),
+        duplicateOfClipId: decision.duplicateOfClipId ?? undefined,
+        dedupeReason: decision.duplicateOfClipId ? decision.reason : undefined,
+        dedupeScore: decision.dedupeScore ?? undefined,
       },
     });
   }

@@ -34,11 +34,17 @@ import {
   isRepairableQualityWarning,
   transcriptGroundingSnapshot,
 } from "@/server/agents/clipCandidatePolicy";
+import { semanticDedupeCandidates } from "@/server/agents/semanticDedupe";
 import {
   analyzeClipCoherence,
   firstCoherenceSentence,
   hasCallingGiftStewardshipPayoff,
 } from "@/server/agents/clipCoherenceAnalysis";
+import {
+  resolveClipVolumeTarget,
+  shouldReuseClipSuggestionsForTarget,
+  type ClipVolumeTarget,
+} from "@/lib/clipVolumeTargets";
 import { type MinistryMomentRecord as PromptMinistryMomentRecord } from "@/server/ai/ministryMomentSchema";
 import { appendPipelineLog } from "@/server/agents/storage";
 import { updateSermonStatus } from "@/server/status/sermonStatus";
@@ -115,7 +121,7 @@ const WINDOW_STEP_SECONDS = 60;
 const MIN_WINDOW_SECONDS = 30;
 const MAX_WINDOW_SECONDS = 90;
 const BATCH_SIZE = 4;
-const MAX_BATCH_CLIPS = 3;
+const MAX_BATCH_CLIPS = 4;
 const WINDOW_TARGET_DURATIONS_SECONDS = [40, 60, 90] as const;
 const MAX_TRANSCRIPT_ISLAND_GAP_SECONDS = 12;
 const MAX_REPAIR_EXTENSION_SECONDS = 72;
@@ -1964,11 +1970,18 @@ async function callClipModel(
     context?: {
       intelligence?: ClipPromptIntelligenceContext;
       ministryMoments?: PromptMinistryMomentRecord[];
+      volumeTarget?: ClipVolumeTarget;
     };
+    requestedCount?: number;
   },
 ): Promise<ValidatedClipBatch> {
   const systemPrompt = buildClipSelectionSystemPrompt();
-  const userPrompt = buildClipSelectionUserPrompt(sermon, batch, MAX_BATCH_CLIPS, options?.context);
+  const userPrompt = buildClipSelectionUserPrompt(
+    sermon,
+    batch,
+    options?.requestedCount ?? MAX_BATCH_CLIPS,
+    options?.context,
+  );
 
   const rawResponse = options?.rawResponseOverride ?? (await (async () => {
     const client = getOpenAiClient();
@@ -2173,8 +2186,16 @@ export function shouldPreserveClipDuringRegeneration(clip: { status: string; isM
   return clip.status !== "SUGGESTED" || clip.isManuallyEdited === true;
 }
 
-export function shouldReuseExistingSuggestions(existingSuggestionCount: number, force?: boolean): boolean {
-  return existingSuggestionCount > 0 && !force;
+export function shouldReuseExistingSuggestions(
+  existingSuggestionCount: number,
+  force?: boolean,
+  target?: Pick<ClipVolumeTarget, "minReviewSuggestions"> | null,
+): boolean {
+  return shouldReuseClipSuggestionsForTarget({
+    existingSuggestionCount,
+    force,
+    target,
+  });
 }
 
 export function buildSuggestionDeleteWhere(sermonId: string, targetCategory?: string, includeRejected = false) {
@@ -2244,6 +2265,11 @@ export async function generateClipSuggestions(
     if (segments.length === 0) {
       throw new Error("Cannot generate clip suggestions because no transcript segments exist.");
     }
+    const clipVolumeTarget = resolveClipVolumeTarget(segmentDuration(segments));
+    await appendJobLog(
+      job.id,
+      `Clip volume target for transcript duration: ${clipVolumeTarget.rangeLabel} pastor-review options (target ${clipVolumeTarget.targetReviewSuggestions}).`,
+    );
 
     const momentsCount = await prisma.ministryMoment.count({ where: { sermonId: sermon.id, isAiGenerated: true } });
     if (momentsCount === 0 || options?.force) {
@@ -2310,10 +2336,20 @@ export async function generateClipSuggestions(
       },
     });
 
-    if (shouldReuseExistingSuggestions(existingSuggestionCount, options?.force)) {
+    if (shouldReuseExistingSuggestions(
+      existingSuggestionCount,
+      options?.force,
+      options?.targetCategory ? null : clipVolumeTarget,
+    )) {
       await updateSermonStatus(sermon.id, "CLIPS_GENERATED");
-      await markJobSucceeded(job.id, "Existing clip suggestions reused; skipped AI call.");
-      await appendPipelineLog(sermon.id, "Existing clip suggestions reused; skipped AI call.");
+      await markJobSucceeded(
+        job.id,
+        `Existing clip suggestions reused (${existingSuggestionCount} available; target range ${clipVolumeTarget.rangeLabel}); skipped AI call.`,
+      );
+      await appendPipelineLog(
+        sermon.id,
+        `Existing clip suggestions reused (${existingSuggestionCount} available; target range ${clipVolumeTarget.rangeLabel}); skipped AI call.`,
+      );
       return { clipCount: existingSuggestionCount, reusedExistingSuggestions: true };
     }
 
@@ -2338,9 +2374,11 @@ export async function generateClipSuggestions(
     for (const [index, batch] of batches.entries()) {
       await appendJobLog(job.id, `Generating clip suggestions for batch ${index + 1}/${batches.length}.`);
       const batchMinistryMoments = selectPromptMinistryMomentsForWindows(batch, ministryMoments);
+      const batchClipLimit = options?.targetCategory ? Math.min(3, MAX_BATCH_CLIPS) : clipVolumeTarget.batchClipLimit;
       const batchResult = await callClipModel(sermonContext, batch, {
         rawResponseOverride: index === 0 ? options?.responseOverride : undefined,
         repairResponseOverride: index === 0 ? options?.repairResponseOverride : undefined,
+        requestedCount: batchClipLimit,
         context: clipContext
           ? {
               intelligence: {
@@ -2368,6 +2406,7 @@ export async function generateClipSuggestions(
                 suggestedUsage: moment.suggestedUsage ?? "Use for sermon highlight",
                 clipCategory: (moment.clipCategory ?? undefined) as PromptMinistryMomentRecord["clipCategory"],
               })),
+              volumeTarget: clipVolumeTarget,
             }
           : undefined,
       });
@@ -2421,7 +2460,11 @@ export async function generateClipSuggestions(
       boundaryAdjusted.push(enrichCandidate(adjustedResult.candidate, ministryMoments));
     }
 
-    const dedupedWithBoundaryFields = dedupeCandidates(boundaryAdjusted)
+    const overlapDeduped = dedupeCandidates(boundaryAdjusted);
+    const semanticDedupeResult = semanticDedupeCandidates(overlapDeduped);
+    const overlapDuplicateCount = Math.max(0, boundaryAdjusted.length - overlapDeduped.length);
+    const semanticDuplicateCount = semanticDedupeResult.duplicates.length;
+    const dedupedWithBoundaryFields = semanticDedupeResult.kept
       .sort((left, right) => right.score - left.score);
 
     if (dedupedWithBoundaryFields.length === 0) {
@@ -2481,7 +2524,11 @@ export async function generateClipSuggestions(
       "Preview rendering is handled by the review asset preparation step.",
       `Repair used in ${repairUsedCount} batch(es).`,
       `Target duration guidance ${TARGET_MIN_DURATION_SECONDS}-${TARGET_MAX_DURATION_SECONDS}s applied.`,
+      `Clip volume target was ${clipVolumeTarget.rangeLabel}; saved ${dedupedWithBoundaryFields.length} distinct option(s).`,
       `Boundary adjustments applied to ${boundaryAdjustedCount} candidate(s).`,
+      overlapDuplicateCount + semanticDuplicateCount > 0
+        ? `Removed ${overlapDuplicateCount + semanticDuplicateCount} duplicate candidate(s) before saving (${overlapDuplicateCount} timing, ${semanticDuplicateCount} semantic).`
+        : "No duplicate candidates were removed before saving.",
       boundaryRejected.length > 0
         ? `Rejected ${boundaryRejected.length} candidate(s) due to boundary checks: ${boundaryRejected.join(" | ")}`
         : "No candidates were rejected by boundary checks.",
