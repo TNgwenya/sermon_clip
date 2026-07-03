@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import type { PostingDraft } from "@/lib/postingDrafts";
 import type { SocialAccount } from "@/lib/socialAccounts";
-import { ScheduleDraftModal } from "@/app/ready-to-post/schedule-draft-modal";
+import { ScheduleDraftModal, type ScheduleDraftClipSummary } from "@/app/ready-to-post/schedule-draft-modal";
 import { SocialAccountModal } from "@/app/ready-to-post/social-account-modal";
 
 type ReadyQueueActionsProps = {
@@ -12,6 +12,7 @@ type ReadyQueueActionsProps = {
   selectedCount?: number;
   downloadHref?: string;
   selectedClipIds?: string[];
+  clipDetails?: ScheduleDraftClipSummary[];
   socialAccounts?: SocialAccount[];
   onSelectAll?: () => void;
   onClearSelection?: () => void;
@@ -26,6 +27,7 @@ export function ReadyQueueActions({
   selectedCount = 0,
   downloadHref = "/api/ready-to-post/download?clipIds=all",
   selectedClipIds = [],
+  clipDetails = [],
   socialAccounts = [],
   onSelectAll,
   onClearSelection,
@@ -70,7 +72,9 @@ export function ReadyQueueActions({
         <a href="/settings/branding" className="button secondary">Brand Kit</a>
       </div>
       <ScheduleDraftModal
+        key={scheduleClipIds.join(",")}
         clipIds={scheduleClipIds}
+        clipDetails={clipDetails.filter((clip) => scheduleClipIds.includes(clip.id))}
         socialAccounts={socialAccounts}
         open={scheduleOpen}
         onClose={() => setScheduleOpen(false)}
@@ -94,12 +98,13 @@ export function ReadyQueueActions({
 
 type SchedulePostButtonProps = {
   clipId: string;
+  clipDetails?: ScheduleDraftClipSummary[];
   label?: string;
   socialAccounts?: SocialAccount[];
   onDraftCreated?: (draft: PostingDraft) => void;
 };
 
-export function SchedulePostButton({ clipId, label = "Schedule post", socialAccounts = [], onDraftCreated }: SchedulePostButtonProps) {
+export function SchedulePostButton({ clipId, clipDetails = [], label = "Schedule post", socialAccounts = [], onDraftCreated }: SchedulePostButtonProps) {
   const [scheduleOpen, setScheduleOpen] = useState(false);
 
   return (
@@ -108,7 +113,9 @@ export function SchedulePostButton({ clipId, label = "Schedule post", socialAcco
         {label}
       </button>
       <ScheduleDraftModal
+        key={clipId}
         clipIds={[clipId]}
+        clipDetails={clipDetails.filter((clip) => clip.id === clipId)}
         socialAccounts={socialAccounts}
         open={scheduleOpen}
         onClose={() => setScheduleOpen(false)}

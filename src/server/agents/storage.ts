@@ -109,6 +109,18 @@ export async function registerSermonStorageFolder(sermonId: string, title: strin
   return folderName;
 }
 
+export async function unregisterSermonStorageFolder(sermonId: string): Promise<void> {
+  assertLocalStorageAvailable("Local sermon storage");
+  const safeSermonId = assertPathSegment(sermonId, "sermonId");
+  const manifest = await readSermonFolderManifest();
+  if (!manifest[safeSermonId]) {
+    return;
+  }
+
+  delete manifest[safeSermonId];
+  await writeSermonFolderManifest(manifest);
+}
+
 export function getLegacySermonStoragePath(sermonId: string): string {
   const safeSermonId = assertPathSegment(sermonId, "sermonId");
   return path.join(/* turbopackIgnore: true */ getSermonsRoot(), safeSermonId);

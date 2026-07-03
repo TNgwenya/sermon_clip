@@ -22,9 +22,6 @@ type ClipStudioBrandingProps = {
   logoAvailable: boolean;
 };
 
-const INTRO_ASSET_AVAILABLE = false;
-const OUTRO_ASSET_AVAILABLE = false;
-
 export function ClipStudioBranding({
   initialConfig,
   churchName,
@@ -56,8 +53,8 @@ export function ClipStudioBranding({
       showPreacherName,
       watermarkEnabled,
       lowerThirdEnabled,
-      introEnabled: INTRO_ASSET_AVAILABLE && introEnabled,
-      outroEnabled: OUTRO_ASSET_AVAILABLE && outroEnabled,
+      introEnabled,
+      outroEnabled,
       backgroundStyle,
       themeColor: themeColor.trim().length > 0 ? themeColor.trim() : null,
     }),
@@ -101,7 +98,7 @@ export function ClipStudioBranding({
           <p>Branding choices update the preview immediately. Prepare for Posting renders these layers.</p>
         </div>
 
-        {!logoAvailable || !INTRO_ASSET_AVAILABLE || !OUTRO_ASSET_AVAILABLE ? (
+        {!logoAvailable ? (
           <p className="warning-banner">
             Add your church logo and brand style in Brand settings.
           </p>
@@ -186,7 +183,6 @@ export function ClipStudioBranding({
               type="checkbox"
               checked={previewConfig.introEnabled}
               onChange={(event) => setIntroEnabled(event.target.checked)}
-              disabled={!INTRO_ASSET_AVAILABLE}
             />
             <span>Intro</span>
           </label>
@@ -196,7 +192,6 @@ export function ClipStudioBranding({
               type="checkbox"
               checked={previewConfig.outroEnabled}
               onChange={(event) => setOutroEnabled(event.target.checked)}
-              disabled={!OUTRO_ASSET_AVAILABLE}
             />
             <span>Outro</span>
           </label>

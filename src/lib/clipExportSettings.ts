@@ -1,4 +1,5 @@
 import type { ClipExportFormat, ClipExportLayoutStrategy, Prisma } from "@prisma/client";
+import { normalizeManualCropKeyframes, type ManualCropKeyframe } from "@/lib/manualCrop";
 
 export type PlatformPreset =
   | "INSTAGRAM_REELS"
@@ -75,6 +76,15 @@ export const FRAMING_PERSONALITY_LABELS: Record<FramingPersonality, string> = {
   SAFE_FULL_STAGE: "Safe full stage",
 };
 
+export const FRAMING_PERSONALITY_DISPLAY_LABELS: Record<FramingPersonality, string> = {
+  AUTO_INTELLIGENT: "Auto Intelligent",
+  SPEAKER_FOCUS: "Speaker Focus",
+  CINEMATIC_CLOSE: "Cinematic Close",
+  WORSHIP_WIDE: "Worship Wide",
+  SOCIAL_PUNCHY: "Social Punchy",
+  SAFE_FULL_STAGE: "Full Stage",
+};
+
 export const FRAMING_PERSONALITY_DESCRIPTIONS: Record<FramingPersonality, string> = {
   AUTO_INTELLIGENT: "Chooses the crop style from tracking, clip type, and stage activity.",
   SPEAKER_FOCUS: "Keeps the pastor framed in a steady medium crop.",
@@ -109,6 +119,7 @@ export type ExportSettings = {
   framingMode: ClipExportLayoutStrategy;
   framingPersonality: FramingPersonality;
   backgroundMode: "BLURRED" | "CROP";
+  manualCropKeyframes: ManualCropKeyframe[];
 };
 
 export type ClipStudioExportStatus = "WAITING" | "RENDERING" | "COMPLETED" | "FAILED";
@@ -157,6 +168,22 @@ export function mapPlatformPresetToFormat(preset: PlatformPreset): ClipExportFor
 
 export function deriveBackgroundMode(framingMode: ClipExportLayoutStrategy): "BLURRED" | "CROP" {
   return framingMode === "FIT_BLURRED_BACKGROUND" ? "BLURRED" : "CROP";
+}
+
+export function resolveFramingDisplayLabel(
+  settings: Pick<ExportSettings, "framingMode" | "framingPersonality">,
+): string {
+  if (settings.framingMode === "SMART_CROP") {
+    return FRAMING_PERSONALITY_DISPLAY_LABELS[settings.framingPersonality] ?? FRAMING_LABELS[settings.framingMode];
+  }
+
+  if (settings.framingMode === "FIT_BLURRED_BACKGROUND") {
+    if (settings.framingPersonality === "WORSHIP_WIDE") return "Worship Wide";
+    if (settings.framingPersonality === "SAFE_FULL_STAGE") return "Full Stage";
+    return "Blurred Background";
+  }
+
+  return FRAMING_LABELS[settings.framingMode];
 }
 
 function safeStringArray(value: unknown): string[] {
@@ -293,6 +320,7 @@ export function resolveExportSettings(input: {
   exportFormat: ClipExportFormat | null;
   exportLayoutStrategy: ClipExportLayoutStrategy | null;
   captionData: unknown;
+  manualCropKeyframes?: unknown;
 }): ExportSettings {
   const fallback: ExportSettings = {
     platformPreset: DEFAULT_PLATFORM_PRESET,
@@ -301,6 +329,7 @@ export function resolveExportSettings(input: {
     framingMode: input.exportLayoutStrategy ?? DEFAULT_FRAMING_MODE,
     framingPersonality: "AUTO_INTELLIGENT",
     backgroundMode: deriveBackgroundMode(input.exportLayoutStrategy ?? DEFAULT_FRAMING_MODE),
+    manualCropKeyframes: normalizeManualCropKeyframes(input.manualCropKeyframes),
   };
 
   if (!input.captionData || typeof input.captionData !== "object") {
@@ -308,6 +337,7 @@ export function resolveExportSettings(input: {
       ...fallback,
       primaryFormat: isValidExportFormat(fallback.primaryFormat) ? fallback.primaryFormat : DEFAULT_PRIMARY_FORMAT,
       framingMode: isValidFramingMode(fallback.framingMode) ? fallback.framingMode : DEFAULT_FRAMING_MODE,
+      manualCropKeyframes: normalizeManualCropKeyframes(input.manualCropKeyframes),
     };
   }
 
@@ -356,16 +386,17 @@ export function resolveExportSettings(input: {
     framingMode,
     framingPersonality,
     backgroundMode: deriveBackgroundMode(framingMode),
+    manualCropKeyframes: normalizeManualCropKeyframes(input.manualCropKeyframes),
   };
 }
 
 export function summarizeExportSettings(settings: ExportSettings): string {
   const mappedFormat = mapPlatformPresetToFormat(settings.platformPreset);
   if (mappedFormat !== settings.primaryFormat) {
-    return `Download style: ${FORMAT_LABELS[settings.primaryFormat]}. Chosen platform: ${PLATFORM_PRESET_LABELS[settings.platformPreset]}. Framing: ${FRAMING_LABELS[settings.framingMode].toLowerCase()}.`;
+    return `Download style: ${FORMAT_LABELS[settings.primaryFormat]}. Chosen platform: ${PLATFORM_PRESET_LABELS[settings.platformPreset]}. Framing: ${resolveFramingDisplayLabel(settings).toLowerCase()}.`;
   }
 
-  return `Ready-to-post style: ${FORMAT_LABELS[settings.primaryFormat]} for ${PLATFORM_PRESET_LABELS[settings.platformPreset]} using ${FRAMING_LABELS[settings.framingMode].toLowerCase()}.`;
+  return `Ready-to-post style: ${FORMAT_LABELS[settings.primaryFormat]} for ${PLATFORM_PRESET_LABELS[settings.platformPreset]} using ${resolveFramingDisplayLabel(settings).toLowerCase()}.`;
 }
 
 export function buildFramingWarnings(settings: ExportSettings): string[] {

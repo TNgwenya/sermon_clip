@@ -34,6 +34,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const title = typeof body?.title === "string" ? body.title.trim() : "";
   const note = typeof body?.note === "string" ? body.note.trim() : "";
   const socialAccountIdsByPlatform = normalizeSocialAccountIdsByPlatform(body?.socialAccountIdsByPlatform, platforms);
+  const clipCopyById = normalizeClipCopyById(body?.clipCopyById, clipIds);
 
   if (clipIds.length === 0) {
     return NextResponse.json({ error: "Select at least one finished clip to schedule." }, { status: 400 });
@@ -160,6 +161,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       caption,
       title,
       note,
+      clipCopyById,
     });
   } catch (error) {
     if (error instanceof PostingDraftValidationError) {
@@ -170,6 +172,37 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   return NextResponse.json({ draft }, { status: 201 });
+}
+
+function normalizeClipCopyById(
+  value: unknown,
+  clipIds: string[],
+): Record<string, { title?: string; caption?: string; note?: string }> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const allowedClipIds = new Set(clipIds);
+  const result: Record<string, { title?: string; caption?: string; note?: string }> = {};
+  Object.entries(value as Record<string, unknown>).forEach(([clipId, copy]) => {
+    if (!allowedClipIds.has(clipId) || !copy || typeof copy !== "object" || Array.isArray(copy)) {
+      return;
+    }
+
+    const record = copy as Record<string, unknown>;
+    const title = typeof record.title === "string" ? record.title.trim().slice(0, 180) : "";
+    const caption = typeof record.caption === "string" ? record.caption.trim().slice(0, 2200) : "";
+    const note = typeof record.note === "string" ? record.note.trim().slice(0, 500) : "";
+    if (title || caption || note) {
+      result[clipId] = {
+        ...(title ? { title } : {}),
+        ...(caption ? { caption } : {}),
+        ...(note ? { note } : {}),
+      };
+    }
+  });
+
+  return result;
 }
 
 function normalizeSocialAccountIdsByPlatform(

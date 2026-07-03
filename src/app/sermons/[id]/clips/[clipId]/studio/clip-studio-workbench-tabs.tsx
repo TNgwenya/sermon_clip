@@ -1,8 +1,8 @@
 "use client";
 
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 
-type StudioTabId = "edit" | "format" | "branding" | "post" | "evidence" | "advanced";
+type StudioTabId = "edit" | "format" | "branding" | "post" | "evidence";
 
 type StudioTab = {
   id: StudioTabId;
@@ -17,7 +17,7 @@ type ClipStudioWorkbenchTabsProps = {
   branding: ReactNode;
   post: ReactNode;
   evidence: ReactNode;
-  advanced: ReactNode;
+  advanced?: ReactNode;
 };
 
 export function ClipStudioWorkbenchTabs({
@@ -30,21 +30,25 @@ export function ClipStudioWorkbenchTabs({
 }: ClipStudioWorkbenchTabsProps) {
   const [activeTab, setActiveTab] = useState<StudioTabId>("edit");
 
-  const tabs: StudioTab[] = [
-    { id: "edit", label: "Clip", eyebrow: "Clip tools", content: edit },
-    { id: "format", label: "Framing", eyebrow: "Format and crop", content: format },
-    { id: "branding", label: "Brand", eyebrow: "Church identity", content: branding },
-    { id: "post", label: "Post", eyebrow: "Prepared media state", content: post },
-    { id: "evidence", label: "Why", eyebrow: "Why this clip works", content: evidence },
-    { id: "advanced", label: "Advanced", eyebrow: "Diagnostics", content: advanced },
-  ];
+  const tabs: StudioTab[] = useMemo(
+    () => [
+      { id: "edit", label: "Clip", eyebrow: "Clip tools", content: edit },
+      { id: "format", label: "Framing", eyebrow: "Format and crop", content: format },
+      { id: "branding", label: "Brand", eyebrow: "Church identity", content: branding },
+      { id: "post", label: "Post", eyebrow: "Prepared media state", content: post },
+      { id: "evidence", label: "Why", eyebrow: "Why this clip works", content: evidence },
+    ],
+    [branding, edit, evidence, format, post],
+  );
+
+  const activeEyebrow = tabs.find((tab) => tab.id === activeTab)?.eyebrow ?? "Clip tools";
 
   return (
     <section className="clip-studio-workbench stack-md">
       <div className="clip-studio-workbench-head">
         <div>
           <p className="kicker">Tool rail</p>
-          <h2>{tabs.find((tab) => tab.id === activeTab)?.eyebrow}</h2>
+          <h2>{activeEyebrow}</h2>
         </div>
         <div className="clip-studio-tabs" role="tablist" aria-label="Clip Studio tools">
           {tabs.map((tab) => (
@@ -67,6 +71,16 @@ export function ClipStudioWorkbenchTabs({
           {tab.content}
         </div>
       ))}
+
+      {advanced ? (
+        <details className="clip-studio-editor-disclosure clip-studio-diagnostics-disclosure">
+          <summary>
+            <span>Diagnostics</span>
+            <span className="muted small">Frame checks and render details</span>
+          </summary>
+          <div className="stack-md">{advanced}</div>
+        </details>
+      ) : null}
     </section>
   );
 }

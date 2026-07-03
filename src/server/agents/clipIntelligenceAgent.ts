@@ -1161,12 +1161,12 @@ function classifyTranscriptQualityForClipGeneration(readiness: TranscriptReadine
 function buildLowTranscriptTimedFallbackCandidates(
   segments: TranscriptSegmentRecord[],
   bounds?: { startTimeSeconds?: number; endTimeSeconds?: number },
-): ClipJsonCandidate[] {
+): ClipJsonCandidateWithRuntimeMetadata[] {
   const scoped = segments.filter((segment) => (
     (bounds?.startTimeSeconds === undefined || segment.endTimeSeconds >= bounds.startTimeSeconds) &&
     (bounds?.endTimeSeconds === undefined || segment.startTimeSeconds <= bounds.endTimeSeconds)
   ));
-  const candidates: ClipJsonCandidate[] = [];
+  const candidates: ClipJsonCandidateWithRuntimeMetadata[] = [];
 
   for (const island of splitTranscriptIslands(scoped)) {
     const islandSegments = scoped.slice(island.startIndex, island.endIndex + 1);
@@ -1211,8 +1211,8 @@ function buildLowTranscriptTimedFallbackCandidates(
       applicationTime: end,
       whyThisClipFeelsComplete: "The timed range contains the strongest available transcript island.",
       whatContextMightBeMissing: "Transcript confidence is low; pastor should review before posting.",
-      canonicalizationWarnings: ["LOW_TRANSCRIPT_TIMED_FALLBACK"] as never,
-    } as ClipJsonCandidate);
+      canonicalizationWarnings: ["LOW_TRANSCRIPT_TIMED_FALLBACK"],
+    });
   }
 
   return candidates;
@@ -1681,8 +1681,15 @@ type ValidatedClipBatch = {
   rejectedReasons: string[];
 };
 
+type ClipCandidateRuntimeMetadata = {
+  canonicalizationWarnings?: string[] | null;
+  responseFormat?: "INDEXED" | "LEGACY_TIMESTAMPS";
+};
+
+type ClipJsonCandidateWithRuntimeMetadata = ClipJsonCandidate & ClipCandidateRuntimeMetadata;
+
 type CandidateScopeResult = {
-  candidates: ClipJsonCandidate[];
+  candidates: ClipJsonCandidateWithRuntimeMetadata[];
   rejectedReasons: string[];
   formatWarnings: string[];
 };
@@ -2079,7 +2086,7 @@ function filterCandidatesToPromptWindows(
   candidates: ClipJsonCandidate[],
   windows: ClipWindow[],
 ): CandidateScopeResult {
-  const scoped: ClipJsonCandidate[] = [];
+  const scoped: ClipJsonCandidateWithRuntimeMetadata[] = [];
   const rejectedReasons: string[] = [];
   const formatWarnings: string[] = [];
 

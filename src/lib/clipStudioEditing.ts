@@ -160,6 +160,12 @@ export type CaptionSourceSegment = {
   text: string;
 };
 
+type TimedCaptionWord = {
+  text: string;
+  startSeconds: number;
+  endSeconds: number;
+};
+
 export type CaptionCueValidationResult = {
   isValid: boolean;
   cues: EditableCaptionCue[];
@@ -171,6 +177,11 @@ export type CaptionCueValidationResult = {
 
 function normalizeCaptionCueText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function splitCaptionWords(value: string): string[] {
+  const normalized = normalizeCaptionCueText(value);
+  return normalized ? normalized.split(" ").filter(Boolean) : [];
 }
 
 export function buildEditableCaptionCuesFromTranscriptSegments({
@@ -206,6 +217,170 @@ export function buildEditableCaptionCuesFromTranscriptSegments({
       text,
     });
   }
+
+  return cues;
+}
+
+const DEFAULT_TIMED_CAPTION_WORDS_PER_CUE = 1;
+const DEFAULT_TIMED_CAPTION_MAX_CUE_SECONDS = 1.4;
+const PUNCTUATION_PAUSE_WEIGHT = 0.45;
+
+function getCaptionWordWeight(word: string): number {
+  const spokenCharacterCount = word.replace(/[^\p{L}\p{N}]+/gu, "").length;
+  const punctuationWeight = /[.!?]["')\]]?$/.test(word)
+    ? PUNCTUATION_PAUSE_WEIGHT
+    : /[,;:]["')\]]?$/.test(word)
+      ? PUNCTUATION_PAUSE_WEIGHT / 2
+      : 0;
+
+  return Math.max(1, spokenCharacterCount) + punctuationWeight;
+}
+
+function estimateTimedCaptionWordsForSegment(
+  segment: CaptionSourceSegment,
+  clipStartSeconds: number,
+  clipEndSeconds: number,
+): TimedCaptionWord[] {
+  const words = splitCaptionWords(segment.text);
+  const segmentStartSeconds = Number(segment.startTimeSeconds);
+  const segmentEndSeconds = Number(segment.endTimeSeconds);
+
+  if (
+    words.length === 0 ||
+    !Number.isFinite(segmentStartSeconds) ||
+    !Number.isFinite(segmentEndSeconds) ||
+    segmentEndSeconds <= segmentStartSeconds ||
+    segmentEndSeconds <= clipStartSeconds ||
+    segmentStartSeconds >= clipEndSeconds
+  ) {
+    return [];
+  }
+
+  const weights = words.map(getCaptionWordWeight);
+  const totalWeight = weights.reduce((total, weight) => total + weight, 0);
+  if (totalWeight <= 0) {
+    return [];
+  }
+
+  const segmentDurationSeconds = segmentEndSeconds - segmentStartSeconds;
+  let cursorSeconds = segmentStartSeconds;
+  let cumulativeWeight = 0;
+
+  return words.flatMap((word, index) => {
+    const wordStartSeconds = cursorSeconds;
+    cumulativeWeight += weights[index];
+    const wordEndSeconds = index === words.length - 1
+      ? segmentEndSeconds
+      : segmentStartSeconds + segmentDurationSeconds * (cumulativeWeight / totalWeight);
+    cursorSeconds = wordEndSeconds;
+
+    const clippedStartSeconds = Math.max(clipStartSeconds, wordStartSeconds);
+    const clippedEndSeconds = Math.min(clipEndSeconds, wordEndSeconds);
+
+    if (clippedEndSeconds <= clippedStartSeconds) {
+      return [];
+    }
+
+    return [{
+      text: word,
+      startSeconds: Number((clippedStartSeconds - clipStartSeconds).toFixed(3)),
+      endSeconds: Number((clippedEndSeconds - clipStartSeconds).toFixed(3)),
+    }];
+  });
+}
+
+function shouldStartNextTimedCaptionCue({
+  currentWords,
+  nextWord,
+  maxWordsPerCue,
+  maxCueDurationSeconds,
+}: {
+  currentWords: TimedCaptionWord[];
+  nextWord: TimedCaptionWord;
+  maxWordsPerCue: number;
+  maxCueDurationSeconds: number;
+}): boolean {
+  if (currentWords.length === 0) {
+    return false;
+  }
+
+  const previousWord = currentWords[currentWords.length - 1];
+  const nextDurationSeconds = nextWord.endSeconds - currentWords[0].startSeconds;
+  const previousEndsSentence = /[.!?]["')\]]?$/.test(previousWord.text);
+
+  return (
+    currentWords.length >= maxWordsPerCue ||
+    nextDurationSeconds > maxCueDurationSeconds ||
+    previousEndsSentence
+  );
+}
+
+export function buildTimedCaptionCuesFromTranscriptSegments({
+  startTimeSeconds,
+  endTimeSeconds,
+  segments,
+  maxWordsPerCue = DEFAULT_TIMED_CAPTION_WORDS_PER_CUE,
+  maxCueDurationSeconds = DEFAULT_TIMED_CAPTION_MAX_CUE_SECONDS,
+}: {
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+  segments: CaptionSourceSegment[];
+  maxWordsPerCue?: number;
+  maxCueDurationSeconds?: number;
+}): EditableCaptionCue[] {
+  const clipDurationSeconds = Math.max(0, Number((endTimeSeconds - startTimeSeconds).toFixed(3)));
+  const normalizedMaxWordsPerCue = Number.isFinite(maxWordsPerCue)
+    ? Math.max(1, Math.min(8, Math.floor(maxWordsPerCue)))
+    : DEFAULT_TIMED_CAPTION_WORDS_PER_CUE;
+  const normalizedMaxCueDurationSeconds = Number.isFinite(maxCueDurationSeconds) && maxCueDurationSeconds > 0
+    ? Math.max(0.25, maxCueDurationSeconds)
+    : DEFAULT_TIMED_CAPTION_MAX_CUE_SECONDS;
+  const timedWords = segments
+    .flatMap((segment) => estimateTimedCaptionWordsForSegment(segment, startTimeSeconds, endTimeSeconds))
+    .sort((left, right) => left.startSeconds - right.startSeconds || left.endSeconds - right.endSeconds);
+  const cues: EditableCaptionCue[] = [];
+  let currentWords: TimedCaptionWord[] = [];
+
+  function flushCurrentCue(): void {
+    if (currentWords.length === 0) {
+      return;
+    }
+
+    const cueStartSeconds = Math.max(0, currentWords[0].startSeconds);
+    const cueEndSeconds = Math.min(
+      clipDurationSeconds,
+      Math.max(cueStartSeconds + 0.05, currentWords[currentWords.length - 1].endSeconds),
+    );
+    const text = normalizeCaptionCueText(currentWords.map((word) => word.text).join(" "));
+
+    if (text && cueEndSeconds > cueStartSeconds) {
+      cues.push({
+        index: cues.length + 1,
+        startSeconds: Number(cueStartSeconds.toFixed(3)),
+        endSeconds: Number(cueEndSeconds.toFixed(3)),
+        text,
+      });
+    }
+
+    currentWords = [];
+  }
+
+  for (const word of timedWords) {
+    if (
+      shouldStartNextTimedCaptionCue({
+        currentWords,
+        nextWord: word,
+        maxWordsPerCue: normalizedMaxWordsPerCue,
+        maxCueDurationSeconds: normalizedMaxCueDurationSeconds,
+      })
+    ) {
+      flushCurrentCue();
+    }
+
+    currentWords.push(word);
+  }
+
+  flushCurrentCue();
 
   return cues;
 }

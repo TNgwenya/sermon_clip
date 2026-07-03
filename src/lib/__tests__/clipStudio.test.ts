@@ -4,6 +4,9 @@ import {
   buildClipTimingDisplay,
   clipStatusTone,
   extractApplyCaptionsToClip,
+  extractBrollLayerConfig,
+  extractCaptionAppearanceSettings,
+  extractCaptionPosition,
   extractCaptionStyleOverride,
   extractCaptionGuidance,
   extractHookOverlayConfig,
@@ -17,6 +20,7 @@ import {
   formatSocialScore,
   formatTranscriptExcerpt,
   hasCaptionPackage,
+  normalizeBrollLayerConfig,
   renderStatusLabel,
 } from "@/lib/clipStudio";
 
@@ -267,9 +271,39 @@ describe("Studio on-video caption settings", () => {
     expect(extractCaptionStyleOverride({ captionStylePresetId: "unknown" })).toBe("");
   });
 
+  it("extracts caption position settings with a lower default", () => {
+    expect(extractCaptionPosition(null)).toBe("lower");
+    expect(extractCaptionPosition({ captionPosition: "middle" })).toBe("middle");
+    expect(extractCaptionPosition({ captionPosition: "sideways" })).toBe("lower");
+  });
+
   it("defaults captions to applied unless explicitly disabled", () => {
     expect(extractApplyCaptionsToClip(null)).toBe(true);
     expect(extractApplyCaptionsToClip({ applyCaptionsToClip: false })).toBe(false);
+  });
+
+  it("extracts caption appearance settings with safe defaults", () => {
+    expect(extractCaptionAppearanceSettings(null)).toEqual({
+      fontScale: "regular",
+      maxLines: 4,
+      uppercase: false,
+      verticalOffset: 0,
+    });
+    expect(
+      extractCaptionAppearanceSettings({
+        captionAppearance: {
+          fontScale: "large",
+          maxLines: 3,
+          uppercase: true,
+          verticalOffset: 120,
+        },
+      }),
+    ).toEqual({
+      fontScale: "large",
+      maxLines: 3,
+      uppercase: true,
+      verticalOffset: 48,
+    });
   });
 
   it("extracts hook overlay settings with defaults", () => {
@@ -301,6 +335,7 @@ describe("Studio on-video caption settings", () => {
       removeDeadAir: false,
       tightenLongPauses: false,
       flagFillerWords: true,
+      intensity: "normal",
     });
   });
 
@@ -310,12 +345,60 @@ describe("Studio on-video caption settings", () => {
         removeDeadAir: true,
         tightenLongPauses: true,
         flagFillerWords: false,
+        intensity: "strong",
       },
     })).toEqual({
       removeDeadAir: true,
       tightenLongPauses: true,
       flagFillerWords: false,
+      intensity: "strong",
     });
+  });
+
+  it("extracts and clamps B-roll cards from caption data", () => {
+    expect(
+      extractBrollLayerConfig({
+        brollLayer: {
+          enabled: true,
+          cards: [
+            {
+              id: "card-1",
+              enabled: true,
+              text: "  The promise still stands   ",
+              label: "Promise",
+              startSeconds: 28,
+              durationSeconds: 12,
+              tone: "scripture",
+              position: "upper",
+            },
+          ],
+        },
+      }, 30),
+    ).toEqual({
+      enabled: true,
+      cards: [
+        {
+          id: "card-1",
+          enabled: true,
+          text: "The promise still stands",
+          label: "Promise",
+          startSeconds: 28,
+          durationSeconds: 2,
+          tone: "scripture",
+          position: "upper",
+        },
+      ],
+    });
+  });
+
+  it("drops empty B-roll cards and defaults the layer to off", () => {
+    expect(
+      normalizeBrollLayerConfig({
+        cards: [
+          { id: "empty", text: "   ", startSeconds: 0, durationSeconds: 5 },
+        ],
+      }, 20),
+    ).toEqual({ enabled: false, cards: [] });
   });
 });
 

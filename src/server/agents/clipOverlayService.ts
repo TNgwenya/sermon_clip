@@ -40,6 +40,15 @@ import {
 } from "@/server/regeneration/dependencies";
 import { getBrandingOverlayDimensions, renderBrandingOverlayPng } from "@/server/agents/brandingOverlay";
 import { getSharp } from "@/server/agents/sharpClient";
+import {
+  extractSpeechCleanupCutPlan,
+  remapTimelineRangeToCleanedTime,
+} from "@/lib/speechCleanupPlan";
+import {
+  extractBrollLayerConfig,
+  type BrollCardPosition,
+  type BrollCardTone,
+} from "@/lib/clipStudio";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -81,6 +90,19 @@ type HookOverlaySpec = {
   animation: "fade" | "pan-in" | "pop" | "none";
   size: "small" | "medium" | "large";
   bold: boolean;
+  width: number;
+  height: number;
+};
+
+type BrollCardOverlaySpec = {
+  id: string;
+  text: string;
+  label: string;
+  tone: BrollCardTone;
+  position: BrollCardPosition;
+  startSeconds: number;
+  durationSeconds: number;
+  endSeconds: number;
   width: number;
   height: number;
 };
@@ -328,13 +350,19 @@ function extractHookOverlaySpec(captionData: unknown): HookOverlaySpec | null {
     ? Math.min(20, Math.max(1, record["durationSeconds"]))
     : 6;
   const endSeconds = startSeconds + durationSeconds;
+  const cleanupPlan = extractSpeechCleanupCutPlan(captionData);
+  const remappedRange = remapTimelineRangeToCleanedTime({ startSeconds, endSeconds, plan: cleanupPlan });
+  if (!remappedRange) {
+    return null;
+  }
+  const remappedDurationSeconds = remappedRange.endSeconds - remappedRange.startSeconds;
 
   return {
     text: record["text"].trim(),
     position,
-    startSeconds,
-    durationSeconds,
-    endSeconds,
+    startSeconds: remappedRange.startSeconds,
+    durationSeconds: remappedDurationSeconds,
+    endSeconds: remappedRange.endSeconds,
     animation,
     size,
     bold: record["bold"] !== false,
@@ -424,8 +452,106 @@ function buildHookOverlayPosition(spec: HookOverlaySpec): string {
   return "x=(W-w)/2:y=(H-h)/2";
 }
 
+function extractBrollOverlaySpecs(captionData: unknown): BrollCardOverlaySpec[] {
+  const layer = extractBrollLayerConfig(captionData);
+  if (!layer.enabled || layer.cards.length === 0) {
+    return [];
+  }
+
+  const cleanupPlan = extractSpeechCleanupCutPlan(captionData);
+  return layer.cards.flatMap((card): BrollCardOverlaySpec[] => {
+    if (!card.enabled || !card.text.trim()) {
+      return [];
+    }
+
+    const startSeconds = Math.max(0, card.startSeconds);
+    const durationSeconds = Math.min(12, Math.max(1, card.durationSeconds));
+    const endSeconds = startSeconds + durationSeconds;
+    const remappedRange = remapTimelineRangeToCleanedTime({ startSeconds, endSeconds, plan: cleanupPlan });
+    if (!remappedRange) {
+      return [];
+    }
+
+    const isFull = card.position === "full";
+    return [{
+      id: card.id,
+      text: card.text.trim(),
+      label: card.label.trim() || "Key moment",
+      tone: card.tone,
+      position: card.position,
+      startSeconds: remappedRange.startSeconds,
+      durationSeconds: remappedRange.endSeconds - remappedRange.startSeconds,
+      endSeconds: remappedRange.endSeconds,
+      width: isFull ? 920 : 860,
+      height: isFull ? 620 : 300,
+    }];
+  });
+}
+
+function brollToneColors(tone: BrollCardTone): { background: string; border: string; accent: string } {
+  switch (tone) {
+    case "scripture":
+      return { background: "#101820", border: "#75D9B8", accent: "#75D9B8" };
+    case "application":
+      return { background: "#162015", border: "#FACC15", accent: "#FACC15" };
+    case "context":
+      return { background: "#151827", border: "#93C5FD", accent: "#93C5FD" };
+    case "quote":
+    default:
+      return { background: "#17151F", border: "#F0ABFC", accent: "#F0ABFC" };
+  }
+}
+
+function buildBrollCardSvg(spec: BrollCardOverlaySpec): string {
+  const colors = brollToneColors(spec.tone);
+  const isFull = spec.position === "full";
+  const fontSize = isFull ? 50 : 38;
+  const labelFontSize = isFull ? 22 : 18;
+  const lineHeight = Math.round(fontSize * 1.16);
+  const lines = wrapOverlayText(spec.text, isFull ? 26 : 34);
+  const textBlockHeight = lines.length * lineHeight;
+  const firstLineY = Math.round((spec.height - textBlockHeight) / 2) + (isFull ? 26 : 18);
+
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${spec.width}" height="${spec.height}" viewBox="0 0 ${spec.width} ${spec.height}">
+      <rect x="0" y="0" width="${spec.width}" height="${spec.height}" rx="36" fill="${colors.background}" fill-opacity="0.86" />
+      <rect x="18" y="18" width="${spec.width - 36}" height="${spec.height - 36}" rx="28" fill="none" stroke="${colors.border}" stroke-opacity="0.52" stroke-width="3" />
+      <rect x="0" y="0" width="${spec.width}" height="${spec.height}" rx="36" fill="url(#cardSheen)" fill-opacity="0.18" />
+      <defs>
+        <linearGradient id="cardSheen" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.34" />
+          <stop offset="44%" stop-color="#FFFFFF" stop-opacity="0" />
+        </linearGradient>
+      </defs>
+      <text x="${spec.width / 2}" y="${isFull ? 54 : 38}" font-family="Arial, Helvetica, sans-serif" font-size="${labelFontSize}" font-weight="800" fill="${colors.accent}" text-anchor="middle" letter-spacing="0">${escapeSvgText(spec.label.toUpperCase())}</text>
+      ${lines.map((line, index) => (
+        `<text x="${spec.width / 2}" y="${firstLineY + index * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="900" fill="#FFFFFF" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="#000000" stroke-opacity="0.55" stroke-width="8" stroke-linejoin="round">${escapeSvgText(line)}</text>`
+      )).join("\n      ")}
+    </svg>
+  `;
+}
+
+async function renderBrollOverlayPng(outputPath: string, spec: BrollCardOverlaySpec): Promise<void> {
+  const sharp = await getSharp();
+  await sharp(Buffer.from(buildBrollCardSvg(spec))).png().toFile(/* turbopackIgnore: true */ outputPath);
+}
+
+function buildBrollOverlayPosition(spec: BrollCardOverlaySpec): string {
+  if (spec.position === "upper") {
+    return "x=(W-w)/2:y=180";
+  }
+
+  if (spec.position === "lower") {
+    return "x=(W-w)/2:y=H-h-430";
+  }
+
+  return "x=(W-w)/2:y=(H-h)/2";
+}
+
 function buildOverlayFilterComplex(input: {
   hasBrandingOverlay: boolean;
+  brollOverlaySpecs: BrollCardOverlaySpec[];
+  brollOverlayInputStartIndex: number | null;
   hookOverlaySpec: HookOverlaySpec | null;
   hookOverlayInputIndex: number | null;
 }): string {
@@ -436,6 +562,25 @@ function buildOverlayFilterComplex(input: {
     parts.push(`${current}[1:v]overlay=0:0:shortest=1:format=auto[branded]`);
     current = "[branded]";
   }
+
+  input.brollOverlaySpecs.forEach((spec, index) => {
+    if (input.brollOverlayInputStartIndex === null) {
+      return;
+    }
+
+    const inputIndex = input.brollOverlayInputStartIndex + index;
+    const fadeDuration = Math.min(0.35, Math.max(0.12, spec.durationSeconds / 6));
+    const fadeOutStart = Math.max(spec.startSeconds, spec.endSeconds - fadeDuration);
+    const brollLabel = `[brollOverlay${index}]`;
+    const outputLabel = `[brollLayer${index}]`;
+    parts.push(
+      `[${inputIndex}:v]format=rgba,fade=t=in:st=${spec.startSeconds.toFixed(3)}:d=${fadeDuration.toFixed(3)}:alpha=1,fade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeDuration.toFixed(3)}:alpha=1${brollLabel}`,
+    );
+    parts.push(
+      `${current}${brollLabel}overlay=${buildBrollOverlayPosition(spec)}:enable='between(t,${spec.startSeconds.toFixed(3)},${spec.endSeconds.toFixed(3)})':eof_action=pass${outputLabel}`,
+    );
+    current = outputLabel;
+  });
 
   if (input.hookOverlaySpec && input.hookOverlayInputIndex !== null) {
     const spec = input.hookOverlaySpec;
@@ -463,8 +608,10 @@ export const __clipOverlayTestUtils = {
   buildOverlayFilter,
   buildHookOverlayFilter,
   extractHookOverlaySpec,
+  extractBrollOverlaySpecs,
   shouldBrandingLowerThirdYieldToCaptions,
   buildHookOverlaySvg,
+  buildBrollCardSvg,
   buildOverlayFilterComplex,
   validateOverlayEligibility,
   fileHasBytes,
@@ -579,6 +726,7 @@ async function runFfmpegOverlay(input: {
   outputPath: string;
   filterComplex: string;
   brandingOverlayPath?: string;
+  brollOverlayPaths?: string[];
   hookOverlayPath?: string;
   ffmpegPath?: string;
   jobId: string;
@@ -592,6 +740,10 @@ async function runFfmpegOverlay(input: {
 
   if (input.brandingOverlayPath) {
     args.push("-loop", "1", "-i", input.brandingOverlayPath);
+  }
+
+  for (const brollOverlayPath of input.brollOverlayPaths ?? []) {
+    args.push("-loop", "1", "-i", brollOverlayPath);
   }
 
   if (input.hookOverlayPath) {
@@ -753,7 +905,11 @@ export async function renderClipOverlay(
     const overlayDimensions = getBrandingOverlayDimensions("VERTICAL_9_16");
     const brandingOverlayPath = getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".branding.png");
     const hookOverlaySpec = extractHookOverlaySpec(clip.captionData);
+    const brollOverlaySpecs = extractBrollOverlaySpecs(clip.captionData);
     const captionsOverrideBranding = shouldBrandingLowerThirdYieldToCaptions(clip.captionData);
+    const brollOverlayPaths = brollOverlaySpecs.map((_, index) =>
+      getTempOverlayPath(outputPath).replace(/\.mp4$/i, `.broll-${index + 1}.png`),
+    );
     const hookOverlayPath = hookOverlaySpec
       ? getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".hook.png")
       : null;
@@ -788,11 +944,21 @@ export async function renderClipOverlay(
     if (hookOverlaySpec && hookOverlayPath) {
       await renderHookOverlayPng(hookOverlayPath, hookOverlaySpec);
     }
+    await Promise.all(
+      brollOverlaySpecs.map((spec, index) => renderBrollOverlayPng(brollOverlayPaths[index], spec)),
+    );
+
+    const brollOverlayInputStartIndex = brollOverlaySpecs.length > 0 ? (overlayEnabled ? 2 : 1) : null;
+    const hookOverlayInputIndex = hookOverlaySpec
+      ? 1 + (overlayEnabled ? 1 : 0) + brollOverlaySpecs.length
+      : null;
 
     const fullFilter = buildOverlayFilterComplex({
       hasBrandingOverlay: overlayEnabled,
+      brollOverlaySpecs,
+      brollOverlayInputStartIndex,
       hookOverlaySpec,
-      hookOverlayInputIndex: hookOverlaySpec ? (overlayEnabled ? 2 : 1) : null,
+      hookOverlayInputIndex,
     });
 
     const tempOutputPath = getTempOverlayPath(outputPath);
@@ -808,6 +974,7 @@ export async function renderClipOverlay(
       outputPath: tempOutputPath,
       filterComplex: fullFilter,
       brandingOverlayPath: overlayEnabled ? brandingOverlayPath : undefined,
+      brollOverlayPaths,
       hookOverlayPath: hookOverlayPath ?? undefined,
       ffmpegPath: options?.ffmpegPath,
       jobId: job.id,
@@ -823,6 +990,7 @@ export async function renderClipOverlay(
     if (hookOverlayPath) {
       await unlink(/* turbopackIgnore: true */ hookOverlayPath).catch(() => undefined);
     }
+    await Promise.all(brollOverlayPaths.map((overlayPath) => unlink(/* turbopackIgnore: true */ overlayPath).catch(() => undefined)));
 
     const renderedAt = new Date();
     await prisma.clipCandidate.update({
@@ -855,6 +1023,9 @@ export async function renderClipOverlay(
     }
     await unlink(/* turbopackIgnore: true */ tempOutputPath.replace(/\.mp4$/i, ".branding.png")).catch(() => undefined);
     await unlink(/* turbopackIgnore: true */ tempOutputPath.replace(/\.mp4$/i, ".hook.png")).catch(() => undefined);
+    await Promise.all(
+      [1, 2, 3, 4].map((index) => unlink(/* turbopackIgnore: true */ tempOutputPath.replace(/\.mp4$/i, `.broll-${index}.png`)).catch(() => undefined)),
+    );
 
     await failOverlayRender(clip.id, message);
     await markJobFailed(job.id, message, "Overlay render failed.");

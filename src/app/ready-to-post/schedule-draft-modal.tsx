@@ -3,17 +3,17 @@
 import { useMemo, useState } from "react";
 
 import type { PostingAutomationMode, PostingDraft, PostingPlatform } from "@/lib/postingDrafts";
-import { formatScheduleInterval, suggestScheduleIntervalMinutes } from "@/lib/postingSchedule";
+import { formatScheduleInterval, suggestScheduleIntervalMinutes, toDateTimeLocalInputValue } from "@/lib/postingSchedule";
 import type { SocialAccount } from "@/lib/socialAccounts";
 
 const platforms: PostingPlatform[] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
 const postingSlots = ["Sunday recap", "Midweek encouragement", "Prayer invitation", "Weekend invite"];
 type AccountSelectionsByPlatform = Partial<Record<PostingPlatform, string[]>>;
-
-function formatDateTimeLocal(date: Date): string {
-  const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return offsetDate.toISOString().slice(0, 16);
-}
+export type ScheduleDraftClipSummary = {
+  id: string;
+  title: string;
+  caption: string;
+};
 
 function formatPlanTime(date: Date): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -27,7 +27,11 @@ function formatPlanTime(date: Date): string {
 
 type ScheduleDraftModalProps = {
   clipIds: string[];
+  clipDetails?: ScheduleDraftClipSummary[];
   socialAccounts?: SocialAccount[];
+  initialAutomationMode?: PostingAutomationMode;
+  initialPostingSlot?: string | null;
+  initialScheduledFor?: string | null;
   open: boolean;
   onClose: () => void;
   onCreated: (draft: PostingDraft) => void;
@@ -83,7 +87,23 @@ function buildPlatformHint(input: {
   return input.automationMode === "AUTOMATIC" ? "Configured channel" : "Media team handoff";
 }
 
-export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose, onCreated }: ScheduleDraftModalProps) {
+export function ScheduleDraftModal({
+  clipIds,
+  clipDetails = [],
+  socialAccounts = [],
+  initialAutomationMode,
+  initialPostingSlot,
+  initialScheduledFor,
+  open,
+  onClose,
+  onCreated,
+}: ScheduleDraftModalProps) {
+  const clipDetailsById = useMemo(() => new Map(clipDetails.map((clip) => [clip.id, clip])), [clipDetails]);
+  const fallbackClipDetails = useMemo(() => clipIds.map((clipId, index) => ({
+    id: clipId,
+    title: clipDetailsById.get(clipId)?.title || `Clip ${index + 1}`,
+    caption: clipDetailsById.get(clipId)?.caption || "",
+  })), [clipDetailsById, clipIds]);
   const automaticPlatforms = buildAutomaticPlatforms(socialAccounts);
   const accountsByPlatform = useMemo(() => platforms.reduce((accumulator, platform) => ({
     ...accumulator,
@@ -96,10 +116,14 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
       ? "TikTok"
       : "YouTube Shorts";
   const [selectedPlatforms, setSelectedPlatforms] = useState<PostingPlatform[]>([defaultAutomaticPlatform]);
+  const [orderedClipIds, setOrderedClipIds] = useState(() => clipIds);
+  const [clipCopyById, setClipCopyById] = useState<Record<string, { title: string; caption: string }>>(() => (
+    Object.fromEntries(fallbackClipDetails.map((clip) => [clip.id, { title: clip.title, caption: clip.caption }]))
+  ));
   const [selectedSocialAccountIdsByPlatform, setSelectedSocialAccountIdsByPlatform] = useState<AccountSelectionsByPlatform>(() => (
     buildDefaultAccountSelections(socialAccounts)
   ));
-  const [automationMode, setAutomationMode] = useState<PostingAutomationMode>("AUTOMATIC");
+  const [automationMode, setAutomationMode] = useState<PostingAutomationMode>(initialAutomationMode ?? "AUTOMATIC");
   const selectableAccountsByPlatform = useMemo(() => platforms.reduce((accumulator, platform) => ({
     ...accumulator,
     [platform]: accountsByPlatform[platform].filter((account) => (
@@ -109,11 +133,17 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
   const [scheduledFor, setScheduledFor] = useState(() => {
     const date = new Date(Date.now() + 60 * 60_000);
     date.setMinutes(Math.ceil(date.getMinutes() / 15) * 15, 0, 0);
-    return formatDateTimeLocal(date);
+    return initialScheduledFor?.trim() || toDateTimeLocalInputValue(date);
   });
   const [customScheduleIntervalMinutes, setCustomScheduleIntervalMinutes] = useState<number | null>(null);
   const [timezone, setTimezone] = useState("Africa/Johannesburg");
-  const [postingSlot, setPostingSlot] = useState(postingSlots[0]);
+  const postingSlotOptions = useMemo(() => (
+    Array.from(new Set([
+      initialPostingSlot?.trim(),
+      ...postingSlots,
+    ].filter((slot): slot is string => Boolean(slot && slot.length > 0))))
+  ), [initialPostingSlot]);
+  const [postingSlot, setPostingSlot] = useState(postingSlotOptions[0] ?? postingSlots[0]);
   const [title, setTitle] = useState("");
   const [caption, setCaption] = useState("");
   const [note, setNote] = useState("");
@@ -158,13 +188,13 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
       return [];
     }
 
-    const interval = clipIds.length > 1 ? scheduleIntervalMinutes : 0;
-    return clipIds.slice(0, 6).map((clipId, index) => ({
+    const interval = orderedClipIds.length > 1 ? scheduleIntervalMinutes : 0;
+    return orderedClipIds.slice(0, 8).map((clipId, index) => ({
       clipId,
-      label: `Clip ${index + 1}`,
+      label: clipCopyById[clipId]?.title || clipDetailsById.get(clipId)?.title || `Clip ${index + 1}`,
       scheduledFor: new Date(start.getTime() + index * interval * 60_000),
     }));
-  }, [automationMode, clipIds, scheduleIntervalMinutes, scheduledFor]);
+  }, [automationMode, clipCopyById, clipDetailsById, orderedClipIds, scheduleIntervalMinutes, scheduledFor]);
 
   if (!open) {
     return null;
@@ -206,6 +236,40 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
     }
   }
 
+  function updateClipOrder(clipId: string, orderValue: string) {
+    const nextOrder = Math.max(1, Math.min(orderedClipIds.length, Math.round(Number(orderValue) || 1)));
+    setOrderedClipIds((current) => {
+      const withoutClip = current.filter((item) => item !== clipId);
+      withoutClip.splice(nextOrder - 1, 0, clipId);
+      return withoutClip;
+    });
+  }
+
+  function moveClip(clipId: string, direction: -1 | 1) {
+    setOrderedClipIds((current) => {
+      const index = current.indexOf(clipId);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= current.length) {
+        return current;
+      }
+
+      const next = [...current];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
+  }
+
+  function updateClipCopy(clipId: string, field: "title" | "caption", value: string) {
+    setClipCopyById((current) => ({
+      ...current,
+      [clipId]: {
+        title: current[clipId]?.title ?? clipDetailsById.get(clipId)?.title ?? "",
+        caption: current[clipId]?.caption ?? clipDetailsById.get(clipId)?.caption ?? "",
+        [field]: value,
+      },
+    }));
+  }
+
   async function createDraft() {
     setPending(true);
     setMessage("");
@@ -214,7 +278,7 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          clipIds,
+          clipIds: orderedClipIds,
           platforms: selectedPlatforms,
           socialAccountIdsByPlatform: selectedPlatforms.reduce((accumulator, platform) => {
             const accountIds = resolvedSocialAccountIdsByPlatform[platform]?.filter(Boolean) ?? [];
@@ -227,7 +291,11 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
           title,
           caption,
           note,
-          scheduleIntervalMinutes: clipIds.length > 1 ? scheduleIntervalMinutes : 0,
+          scheduleIntervalMinutes: orderedClipIds.length > 1 ? scheduleIntervalMinutes : 0,
+          clipCopyById: orderedClipIds.reduce((accumulator, clipId) => {
+            const copy = clipCopyById[clipId];
+            return copy ? { ...accumulator, [clipId]: copy } : accumulator;
+          }, {} as Record<string, { title: string; caption: string }>),
         }),
       });
       const result = await response.json();
@@ -262,9 +330,9 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
         </div>
 
         <div className="schedule-draft-summary">
-          <span className="status-pill status-exported">{clipIds.length} clip{clipIds.length === 1 ? "" : "s"}</span>
+          <span className="status-pill status-exported">{orderedClipIds.length} clip{orderedClipIds.length === 1 ? "" : "s"}</span>
           <span className="status-pill">{automationMode === "AUTOMATIC" ? "Automatic posting" : "Media team handoff"}</span>
-          {automationMode === "AUTOMATIC" && clipIds.length > 1 ? (
+          {automationMode === "AUTOMATIC" && orderedClipIds.length > 1 ? (
             <span className="status-pill">Every {formatScheduleInterval(scheduleIntervalMinutes)}</span>
           ) : null}
         </div>
@@ -339,11 +407,72 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
           </div>
         ) : null}
 
+        <div className="schedule-fieldset bulk-scheduler-sequence">
+          <div className="bulk-scheduler-heading">
+            <div>
+              <p className="small muted">{orderedClipIds.length > 1 ? "Posting sequence" : "Post copy"}</p>
+              <strong>{orderedClipIds.length > 1 ? "Arrange order and review captions" : "Review caption before scheduling"}</strong>
+            </div>
+            {orderedClipIds.length > 1 ? <span className="status-pill">Order controls scheduling</span> : null}
+          </div>
+          <div className="bulk-scheduler-list">
+            {orderedClipIds.map((clipId, index) => {
+              const clip = clipDetailsById.get(clipId);
+              const copy = clipCopyById[clipId] ?? {
+                title: clip?.title ?? `Clip ${index + 1}`,
+                caption: clip?.caption ?? "",
+              };
+              return (
+                <article key={clipId} className="bulk-scheduler-row">
+                  <div className="bulk-scheduler-order">
+                    <label htmlFor={`bulk-order-${clipId}`}>Order</label>
+                    <input
+                      id={`bulk-order-${clipId}`}
+                      type="number"
+                      min={1}
+                      max={orderedClipIds.length}
+                      value={index + 1}
+                      onChange={(event) => updateClipOrder(clipId, event.target.value)}
+                    />
+                  </div>
+                  <div className="bulk-scheduler-copy">
+                    <label htmlFor={`bulk-title-${clipId}`}>Title</label>
+                    <input
+                      id={`bulk-title-${clipId}`}
+                      value={copy.title}
+                      onChange={(event) => updateClipCopy(clipId, "title", event.target.value)}
+                      placeholder={clip?.title ?? "Clip title"}
+                    />
+                    <label htmlFor={`bulk-caption-${clipId}`}>Caption</label>
+                    <textarea
+                      id={`bulk-caption-${clipId}`}
+                      value={copy.caption}
+                      onChange={(event) => updateClipCopy(clipId, "caption", event.target.value)}
+                      rows={3}
+                      placeholder="Generated caption or post description"
+                    />
+                  </div>
+                  {orderedClipIds.length > 1 ? (
+                    <div className="bulk-scheduler-row-actions" aria-label={`Move ${copy.title || `clip ${index + 1}`}`}>
+                      <button type="button" className="button tertiary" onClick={() => moveClip(clipId, -1)} disabled={index === 0}>
+                        Up
+                      </button>
+                      <button type="button" className="button tertiary" onClick={() => moveClip(clipId, 1)} disabled={index === orderedClipIds.length - 1}>
+                        Down
+                      </button>
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="schedule-fieldset schedule-two-column">
           <label htmlFor="postingSlot">
             Posting label
             <select id="postingSlot" value={postingSlot} onChange={(event) => setPostingSlot(event.target.value)}>
-              {postingSlots.map((slot) => (
+              {postingSlotOptions.map((slot) => (
                 <option key={slot} value={slot}>{slot}</option>
               ))}
             </select>
@@ -375,7 +504,7 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
           </div>
         ) : null}
 
-        {automationMode === "AUTOMATIC" && clipIds.length > 1 ? (
+        {automationMode === "AUTOMATIC" && orderedClipIds.length > 1 ? (
           <div className="schedule-fieldset">
             <label htmlFor="scheduleIntervalMinutes">
               Clip spacing
@@ -402,8 +531,8 @@ export function ScheduleDraftModal({ clipIds, socialAccounts = [], open, onClose
                     <strong>{formatPlanTime(item.scheduledFor)}</strong>
                   </div>
                 ))}
-                {clipIds.length > schedulePreview.length ? (
-                  <p className="muted small">+ {clipIds.length - schedulePreview.length} more clip{clipIds.length - schedulePreview.length === 1 ? "" : "s"} in the same rhythm</p>
+                {orderedClipIds.length > schedulePreview.length ? (
+                  <p className="muted small">+ {orderedClipIds.length - schedulePreview.length} more clip{orderedClipIds.length - schedulePreview.length === 1 ? "" : "s"} in the same rhythm</p>
                 ) : null}
               </div>
             ) : null}

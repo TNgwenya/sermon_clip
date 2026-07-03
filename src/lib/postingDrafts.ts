@@ -10,6 +10,11 @@ export type PostingPlatform = "TikTok" | "Instagram" | "YouTube Shorts" | "Faceb
 
 export type PostingDraftStatus = "DRAFT" | "READY_FOR_MEDIA_TEAM";
 export type PostingAutomationMode = "MANUAL" | "AUTOMATIC";
+export type ClipPostCopy = {
+  title?: string;
+  caption?: string;
+  note?: string;
+};
 
 export type PostingDraft = {
   id: string;
@@ -168,6 +173,7 @@ export async function createPostingDraft(input: {
   caption?: string;
   title?: string;
   note?: string;
+  clipCopyById?: Record<string, ClipPostCopy>;
 }): Promise<PostingDraft> {
   const automationMode = input.automationMode ?? "MANUAL";
   const scheduledFor = input.scheduledFor ?? null;
@@ -178,6 +184,7 @@ export async function createPostingDraft(input: {
   const caption = input.caption?.trim() ?? "";
   const title = input.title?.trim() ?? "";
   const note = input.note?.trim() ?? "";
+  const clipCopyById = input.clipCopyById ?? {};
 
   const draft = await prisma.$transaction(async (tx) => {
     const created = await tx.postingDraft.create({
@@ -216,6 +223,10 @@ export async function createPostingDraft(input: {
         const clipScheduledFor = clipSchedule.scheduledFor;
         const clipPostingSlot = buildPostingSlot(clipScheduledFor, input.postingSlot);
         const clipIds = [clipSchedule.clipId];
+        const clipCopy = clipCopyById[clipSchedule.clipId];
+        const clipTitle = clipCopy?.title?.trim() || title;
+        const clipCaption = clipCopy?.caption?.trim() || caption;
+        const clipNote = clipCopy?.note?.trim() || note;
 
         return targetAccounts.map((account) => ({
           postingDraftId: created.id,
@@ -223,9 +234,9 @@ export async function createPostingDraft(input: {
           clipIdsJson: clipIds,
           platform: dbPlatform,
           postingSlot: clipPostingSlot,
-          title: title || null,
-          caption: caption || null,
-          note: note || null,
+          title: clipTitle || null,
+          caption: clipCaption || null,
+          note: clipNote || null,
           status,
           automationMode,
           scheduledFor: clipScheduledFor,

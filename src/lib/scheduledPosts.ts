@@ -164,7 +164,7 @@ export async function updateScheduledPostStatus(input: {
 }): Promise<ScheduledPost | null> {
   const existing = await prisma.scheduledPost.findUnique({
     where: { id: input.id },
-    select: { id: true },
+    select: { id: true, automationMode: true },
   });
 
   if (!existing) {
@@ -187,6 +187,66 @@ export async function updateScheduledPostStatus(input: {
   });
 
   return toScheduledPost(post);
+}
+
+export async function updateScheduledPostSchedule(input: {
+  id: string;
+  scheduledFor: Date;
+  timezone?: string | null;
+}): Promise<ScheduledPost | null> {
+  const existing = await prisma.scheduledPost.findUnique({
+    where: { id: input.id },
+    select: { id: true, automationMode: true },
+  });
+
+  if (!existing) {
+    return null;
+  }
+
+  const post = await prisma.scheduledPost.update({
+    where: { id: input.id },
+    data: {
+      scheduledFor: input.scheduledFor,
+      postingSlot: new Intl.DateTimeFormat("en", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(input.scheduledFor),
+      timezone: input.timezone?.trim() || undefined,
+      workerStatus: "IDLE",
+      claimedAt: null,
+      workerId: null,
+      publishError: null,
+      ...(existing.automationMode === "AUTOMATIC" && input.scheduledFor.getTime() > Date.now()
+        ? { status: "PLANNED" as const }
+        : {}),
+    },
+    include: {
+      socialAccount: {
+        select: {
+          label: true,
+          externalProvider: true,
+          externalAccountId: true,
+          externalPlatform: true,
+        },
+      },
+    },
+  });
+
+  return toScheduledPost(post);
+}
+
+export async function deleteScheduledPost(input: {
+  id: string;
+}): Promise<boolean> {
+  const deleted = await prisma.scheduledPost.delete({
+    where: { id: input.id },
+    select: { id: true },
+  }).catch(() => null);
+
+  return Boolean(deleted);
 }
 
 export async function postScheduledPostNow(input: {

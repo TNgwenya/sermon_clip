@@ -5,9 +5,11 @@ import {
   mapCleanedPreviewSecondsToSourceSeconds,
   mapSourceSecondsToCleanedPreviewSeconds,
   resolveActiveCaptionCueText,
+  resolveActiveCaptionWordIndex,
   resolveSpeechCleanupJumpTarget,
   shouldShowHookOverlay,
 } from "@/lib/clipStudioPreviewTimeline";
+import { createSpeechCleanupEditsFromPlan } from "@/lib/speechCleanupPlan";
 
 const baseHook = {
   enabled: true,
@@ -97,6 +99,50 @@ describe("resolveActiveCaptionCueText", () => {
       }),
     ).toBe("Fallback caption");
   });
+
+  it("uses the next cue at an exact caption boundary", () => {
+    expect(
+      resolveActiveCaptionCueText({
+        applyCaptionsToClip: true,
+        captionCues: [
+          { index: 1, startSeconds: 0, endSeconds: 2, text: "First caption" },
+          { index: 2, startSeconds: 2, endSeconds: 4, text: "Second caption" },
+        ],
+        fallbackText: "Fallback",
+        previewSeconds: 2,
+      }),
+    ).toBe("Second caption");
+  });
+});
+
+describe("resolveActiveCaptionWordIndex", () => {
+  it("advances the active word inside a full visible caption line", () => {
+    const cue = {
+      index: 1,
+      startSeconds: 0,
+      endSeconds: 8,
+      text: "aa bb cc dd",
+    };
+    const words = cue.text.split(" ");
+
+    expect(resolveActiveCaptionWordIndex({ activeCue: cue, words, previewSeconds: 0 })).toBe(0);
+    expect(resolveActiveCaptionWordIndex({ activeCue: cue, words, previewSeconds: 2 })).toBe(1);
+    expect(resolveActiveCaptionWordIndex({ activeCue: cue, words, previewSeconds: 4 })).toBe(2);
+    expect(resolveActiveCaptionWordIndex({ activeCue: cue, words, previewSeconds: 7.9 })).toBe(3);
+  });
+
+  it("uses word length weighting so short words do not take equal caption time", () => {
+    const cue = {
+      index: 1,
+      startSeconds: 0,
+      endSeconds: 22.5,
+      text: "Faith grows when we trust God through every season.",
+    };
+    const words = cue.text.split(" ");
+
+    expect(words[1]).toBe("grows");
+    expect(resolveActiveCaptionWordIndex({ activeCue: cue, words, previewSeconds: 5.28 })).toBe(1);
+  });
 });
 
 describe("speech cleanup preview timeline", () => {
@@ -111,6 +157,7 @@ describe("speech cleanup preview timeline", () => {
         removeDeadAir: true,
         tightenLongPauses: true,
         flagFillerWords: true,
+        intensity: "normal",
       },
     });
 
@@ -120,7 +167,195 @@ describe("speech cleanup preview timeline", () => {
     expect(plan.cuts).toEqual([
       { startSeconds: 4.18, endSeconds: 6.82, removedSeconds: 2.64 },
     ]);
+    expect(plan.removedRanges).toMatchObject([
+      { kind: "edge", source: "transcript", confidence: "candidate", startSeconds: 0, endSeconds: 1.28, removedSeconds: 1.28 },
+      { kind: "internal", source: "transcript", confidence: "candidate", startSeconds: 4.18, endSeconds: 6.82, removedSeconds: 2.64 },
+      { kind: "edge", source: "transcript", confidence: "candidate", startSeconds: 10.12, endSeconds: 12, removedSeconds: 1.88 },
+    ]);
+    expect(plan.candidateRanges).toEqual([]);
+    expect(plan.reviewItems.map((item) => item.label)).toEqual(["Review 1", "Review 2", "Review 3"]);
+    expect(plan.hasAudioAnalysis).toBe(false);
     expect(plan.cleanedDurationSeconds).toBe(6.2);
+  });
+
+  it("marks shorter caption gaps when intensity is stronger", () => {
+    const normalPlan = buildSpeechCleanupPreviewPlan({
+      captionCues: [
+        { index: 1, startSeconds: 0, endSeconds: 2, text: "Opening words" },
+        { index: 2, startSeconds: 2.7, endSeconds: 5, text: "Closing words" },
+      ],
+      durationSeconds: 5,
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "normal",
+      },
+    });
+    const strongPlan = buildSpeechCleanupPreviewPlan({
+      captionCues: [
+        { index: 1, startSeconds: 0, endSeconds: 2, text: "Opening words" },
+        { index: 2, startSeconds: 2.7, endSeconds: 5, text: "Closing words" },
+      ],
+      durationSeconds: 5,
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "strong",
+      },
+    });
+
+    expect(normalPlan.cuts).toEqual([]);
+    expect(strongPlan.cuts).toEqual([
+      { startSeconds: 2.1, endSeconds: 2.6, removedSeconds: 0.5 },
+    ]);
+  });
+
+  it("uses audio-confirmed silence for cuts and keeps transcript-only gaps as review candidates", () => {
+    const plan = buildSpeechCleanupPreviewPlan({
+      captionCues: [
+        { index: 1, startSeconds: 0, endSeconds: 1, text: "Opening words" },
+        { index: 2, startSeconds: 2, endSeconds: 3, text: "Middle words" },
+        { index: 3, startSeconds: 7, endSeconds: 8, text: "Closing words" },
+      ],
+      durationSeconds: 10,
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "maximum",
+      },
+      audioSilenceEvents: [
+        { startSeconds: 1.05, endSeconds: 1.8, durationSeconds: 0.75 },
+      ],
+      audioSilenceAnalysisAvailable: true,
+    });
+
+    expect(plan.hasAudioAnalysis).toBe(true);
+    expect(plan.cuts).toEqual([
+      { startSeconds: 1.12, endSeconds: 1.73, removedSeconds: 0.61 },
+    ]);
+    expect(plan.removedRanges).toMatchObject([
+      {
+        source: "audio",
+        confidence: "confirmed",
+        startSeconds: 1.12,
+        endSeconds: 1.73,
+        beforeText: "Opening words",
+        afterText: "Middle words",
+      },
+    ]);
+    expect(plan.candidateRanges).toMatchObject([
+      {
+        source: "transcript",
+        confidence: "candidate",
+        startSeconds: 3.07,
+        endSeconds: 6.93,
+        beforeText: "Middle words",
+        afterText: "Closing words",
+      },
+    ]);
+    expect(plan.reviewItems.map((item) => item.label)).toEqual(["Cut 1", "Review 2"]);
+    expect(plan.cleanedDurationSeconds).toBe(9.39);
+  });
+
+  it("keeps transcript gaps as candidates when audio analysis finds no silence events", () => {
+    const plan = buildSpeechCleanupPreviewPlan({
+      captionCues: [
+        { index: 1, startSeconds: 0, endSeconds: 2, text: "Opening words" },
+        { index: 2, startSeconds: 3, endSeconds: 5, text: "Closing words" },
+      ],
+      durationSeconds: 5,
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "more",
+      },
+      audioSilenceEvents: [],
+      audioSilenceAnalysisAvailable: true,
+    });
+
+    expect(plan.hasAudioAnalysis).toBe(true);
+    expect(plan.cuts).toEqual([]);
+    expect(plan.removedRanges).toEqual([]);
+    expect(plan.candidateRanges).toMatchObject([
+      { source: "transcript", confidence: "candidate", startSeconds: 2.14, endSeconds: 2.86 },
+    ]);
+    expect(plan.cleanedDurationSeconds).toBe(5);
+  });
+
+  it("applies manual cleanup edits to disable, delete, and resize cuts", () => {
+    const basePlan = buildSpeechCleanupPreviewPlan({
+      captionCues: [
+        { index: 1, startSeconds: 0, endSeconds: 2, text: "Opening words" },
+        { index: 2, startSeconds: 4, endSeconds: 5, text: "Middle words" },
+        { index: 3, startSeconds: 8, endSeconds: 10, text: "Closing words" },
+      ],
+      durationSeconds: 10,
+      speechCleanup: {
+        removeDeadAir: false,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "normal",
+      },
+    });
+    const edits = createSpeechCleanupEditsFromPlan(basePlan);
+
+    expect(basePlan.cuts).toHaveLength(2);
+
+    const disabledPlan = buildSpeechCleanupPreviewPlan({
+      captionCues: [
+        { index: 1, startSeconds: 0, endSeconds: 2, text: "Opening words" },
+        { index: 2, startSeconds: 4, endSeconds: 5, text: "Middle words" },
+        { index: 3, startSeconds: 8, endSeconds: 10, text: "Closing words" },
+      ],
+      durationSeconds: 10,
+      speechCleanup: {
+        removeDeadAir: false,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "normal",
+      },
+      speechCleanupEdits: {
+        ...edits,
+        cuts: edits.cuts.map((cut, index) => index === 0 ? { ...cut, enabled: false } : cut),
+      },
+    });
+
+    expect(disabledPlan.cuts).toHaveLength(1);
+    expect(disabledPlan.cuts[0]).toMatchObject({ startSeconds: 5.18, endSeconds: 7.82 });
+
+    const resizedPlan = buildSpeechCleanupPreviewPlan({
+      captionCues: [
+        { index: 1, startSeconds: 0, endSeconds: 2, text: "Opening words" },
+        { index: 2, startSeconds: 4, endSeconds: 5, text: "Middle words" },
+        { index: 3, startSeconds: 8, endSeconds: 10, text: "Closing words" },
+      ],
+      durationSeconds: 10,
+      speechCleanup: {
+        removeDeadAir: false,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "normal",
+      },
+      speechCleanupEdits: {
+        ...edits,
+        cuts: [
+          {
+            ...edits.cuts[0],
+            startSeconds: 2.5,
+            endSeconds: 3.5,
+            removedSeconds: 1,
+            rawGapSeconds: 1,
+          },
+        ],
+      },
+    });
+
+    expect(resizedPlan.cuts).toEqual([{ startSeconds: 2.5, endSeconds: 3.5, removedSeconds: 1 }]);
+    expect(resizedPlan.cleanedDurationSeconds).toBe(9);
   });
 
   it("maps between cleaned preview time and source video time", () => {
@@ -134,6 +369,7 @@ describe("speech cleanup preview timeline", () => {
         removeDeadAir: true,
         tightenLongPauses: true,
         flagFillerWords: true,
+        intensity: "normal",
       },
     });
 
@@ -150,6 +386,7 @@ describe("speech cleanup preview timeline", () => {
         removeDeadAir: true,
         tightenLongPauses: true,
         flagFillerWords: true,
+        intensity: "normal",
       },
     });
 
@@ -159,6 +396,10 @@ describe("speech cleanup preview timeline", () => {
       sourceEndSeconds: 12,
       cleanedDurationSeconds: 12,
       cuts: [],
+      removedRanges: [],
+      candidateRanges: [],
+      reviewItems: [],
+      hasAudioAnalysis: false,
     });
   });
 });

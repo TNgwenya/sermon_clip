@@ -31,6 +31,12 @@ export type CaptionGuidance = {
 export type HookOverlayAnimation = "none" | "fade" | "pan-in" | "pop";
 export type HookOverlayPosition = "top" | "center" | "lower";
 export type HookOverlaySize = "small" | "medium" | "large";
+export type BrollCardTone = "scripture" | "quote" | "application" | "context";
+export type BrollCardPosition = "full" | "upper" | "lower";
+export type CaptionPosition = "top" | "middle" | "lower";
+export type CaptionFontScale = "compact" | "regular" | "large";
+export type CaptionMaxLines = 2 | 3 | 4;
+export type SpeechCleanupIntensity = "normal" | "more" | "strong" | "maximum";
 
 export type HookOverlayConfig = {
   enabled: boolean;
@@ -43,16 +49,119 @@ export type HookOverlayConfig = {
   bold: boolean;
 };
 
+export type BrollCardConfig = {
+  id: string;
+  enabled: boolean;
+  text: string;
+  label: string;
+  startSeconds: number;
+  durationSeconds: number;
+  tone: BrollCardTone;
+  position: BrollCardPosition;
+};
+
+export type BrollLayerConfig = {
+  enabled: boolean;
+  cards: BrollCardConfig[];
+};
+
 export type SpeechCleanupSettings = {
   removeDeadAir: boolean;
   tightenLongPauses: boolean;
   flagFillerWords: boolean;
+  intensity: SpeechCleanupIntensity;
+};
+
+export type SpeechCleanupProfile = {
+  intensity: SpeechCleanupIntensity;
+  edgeSpeechPadSeconds: number;
+  internalSpeechPadSeconds: number;
+  minEdgeSilenceSeconds: number;
+  minInternalSilenceSeconds: number;
+  silenceDetectNoiseDb: number;
+  silenceDetectDurationSeconds: number;
+};
+
+export type CaptionAppearanceSettings = {
+  fontScale: CaptionFontScale;
+  maxLines: CaptionMaxLines;
+  uppercase: boolean;
+  verticalOffset: number;
 };
 
 export const DEFAULT_SPEECH_CLEANUP_SETTINGS: SpeechCleanupSettings = {
   removeDeadAir: false,
   tightenLongPauses: false,
   flagFillerWords: true,
+  intensity: "normal",
+};
+
+export const SPEECH_CLEANUP_INTENSITIES: SpeechCleanupIntensity[] = ["normal", "more", "strong", "maximum"];
+
+export const SPEECH_CLEANUP_INTENSITY_LABELS: Record<SpeechCleanupIntensity, string> = {
+  normal: "Normal",
+  more: "More",
+  strong: "Strong",
+  maximum: "Maximum",
+};
+
+const SPEECH_CLEANUP_PROFILES: Record<SpeechCleanupIntensity, SpeechCleanupProfile> = {
+  normal: {
+    intensity: "normal",
+    edgeSpeechPadSeconds: 0.12,
+    internalSpeechPadSeconds: 0.18,
+    minEdgeSilenceSeconds: 0.5,
+    minInternalSilenceSeconds: 1.2,
+    silenceDetectNoiseDb: -35,
+    silenceDetectDurationSeconds: 0.3,
+  },
+  more: {
+    intensity: "more",
+    edgeSpeechPadSeconds: 0.1,
+    internalSpeechPadSeconds: 0.14,
+    minEdgeSilenceSeconds: 0.35,
+    minInternalSilenceSeconds: 0.85,
+    silenceDetectNoiseDb: -33,
+    silenceDetectDurationSeconds: 0.24,
+  },
+  strong: {
+    intensity: "strong",
+    edgeSpeechPadSeconds: 0.08,
+    internalSpeechPadSeconds: 0.1,
+    minEdgeSilenceSeconds: 0.25,
+    minInternalSilenceSeconds: 0.55,
+    silenceDetectNoiseDb: -31,
+    silenceDetectDurationSeconds: 0.18,
+  },
+  maximum: {
+    intensity: "maximum",
+    edgeSpeechPadSeconds: 0.05,
+    internalSpeechPadSeconds: 0.07,
+    minEdgeSilenceSeconds: 0.18,
+    minInternalSilenceSeconds: 0.32,
+    silenceDetectNoiseDb: -28,
+    silenceDetectDurationSeconds: 0.12,
+  },
+};
+
+export function normalizeSpeechCleanupIntensity(value: unknown): SpeechCleanupIntensity {
+  return value === "more" || value === "strong" || value === "maximum" ? value : "normal";
+}
+
+export function resolveSpeechCleanupProfile(value: unknown): SpeechCleanupProfile {
+  return SPEECH_CLEANUP_PROFILES[normalizeSpeechCleanupIntensity(value)];
+}
+
+export const DEFAULT_CAPTION_APPEARANCE_SETTINGS: CaptionAppearanceSettings = {
+  fontScale: "regular",
+  maxLines: 4,
+  uppercase: false,
+  verticalOffset: 0,
+};
+
+export const DEFAULT_BROLL_LAYER_CONFIG: BrollLayerConfig = {
+  enabled: false,
+  cards: [],
 };
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -156,9 +265,49 @@ export function extractCaptionStyleOverride(captionData: unknown): CaptionStyleP
   return isCaptionStylePresetId(value) ? value : "";
 }
 
+export function extractCaptionPosition(captionData: unknown): CaptionPosition {
+  const data = asObject(captionData);
+  const value = data?.["captionPosition"];
+
+  return value === "top" || value === "middle" || value === "lower" ? value : "lower";
+}
+
 export function extractApplyCaptionsToClip(captionData: unknown): boolean {
   const data = asObject(captionData);
   return typeof data?.["applyCaptionsToClip"] === "boolean" ? data["applyCaptionsToClip"] : true;
+}
+
+export function normalizeCaptionAppearanceSettings(value: unknown): CaptionAppearanceSettings {
+  const appearance = asObject(value);
+  const rawFontScale = appearance?.["fontScale"];
+  const fontScale: CaptionFontScale =
+    rawFontScale === "compact" || rawFontScale === "regular" || rawFontScale === "large"
+      ? rawFontScale
+      : DEFAULT_CAPTION_APPEARANCE_SETTINGS.fontScale;
+  const rawMaxLines = asNumber(appearance?.["maxLines"]);
+  const maxLines: CaptionMaxLines =
+    rawMaxLines === 2 || rawMaxLines === 3 || rawMaxLines === 4
+      ? rawMaxLines
+      : DEFAULT_CAPTION_APPEARANCE_SETTINGS.maxLines;
+  const rawVerticalOffset = asNumber(appearance?.["verticalOffset"]);
+  const verticalOffset =
+    rawVerticalOffset === null
+      ? DEFAULT_CAPTION_APPEARANCE_SETTINGS.verticalOffset
+      : Math.max(-48, Math.min(48, Math.round(rawVerticalOffset)));
+
+  return {
+    fontScale,
+    maxLines,
+    uppercase: typeof appearance?.["uppercase"] === "boolean"
+      ? appearance["uppercase"]
+      : DEFAULT_CAPTION_APPEARANCE_SETTINGS.uppercase,
+    verticalOffset,
+  };
+}
+
+export function extractCaptionAppearanceSettings(captionData: unknown): CaptionAppearanceSettings {
+  const data = asObject(captionData);
+  return normalizeCaptionAppearanceSettings(data?.["captionAppearance"]);
 }
 
 export function extractSpeechCleanupSettings(captionData: unknown): SpeechCleanupSettings {
@@ -175,6 +324,7 @@ export function extractSpeechCleanupSettings(captionData: unknown): SpeechCleanu
     flagFillerWords: typeof speechCleanup?.["flagFillerWords"] === "boolean"
       ? speechCleanup["flagFillerWords"]
       : DEFAULT_SPEECH_CLEANUP_SETTINGS.flagFillerWords,
+    intensity: normalizeSpeechCleanupIntensity(speechCleanup?.["intensity"]),
   };
 }
 
@@ -199,6 +349,76 @@ export function extractHookOverlayConfig(
     size: size === "small" || size === "medium" || size === "large" ? size : "medium",
     bold: typeof hookOverlay?.["bold"] === "boolean" ? hookOverlay["bold"] : true,
   };
+}
+
+function normalizeBrollCardTone(value: unknown): BrollCardTone {
+  return value === "scripture" || value === "quote" || value === "application" || value === "context"
+    ? value
+    : "quote";
+}
+
+function normalizeBrollCardPosition(value: unknown): BrollCardPosition {
+  return value === "full" || value === "upper" || value === "lower" ? value : "full";
+}
+
+function normalizeBrollText(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, maxLength) : "";
+}
+
+export function normalizeBrollLayerConfig(
+  value: unknown,
+  durationSeconds?: number | null,
+): BrollLayerConfig {
+  const layer = asObject(value);
+  const cards = Array.isArray(layer?.["cards"]) ? layer["cards"] : [];
+  const maxDuration = typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0
+    ? durationSeconds
+    : null;
+
+  const normalizedCards = cards.flatMap((card, index): BrollCardConfig[] => {
+    const record = asObject(card);
+    if (!record) {
+      return [];
+    }
+
+    const text = normalizeBrollText(record["text"], 180);
+    if (!text) {
+      return [];
+    }
+
+    const id = normalizeBrollText(record["id"], 80) || `broll-${index + 1}`;
+    const rawStartSeconds = asNumber(record["startSeconds"]) ?? 0;
+    const startUpperBound = maxDuration !== null ? Math.max(0, maxDuration - 0.5) : Number.POSITIVE_INFINITY;
+    const startSeconds = Math.max(0, Math.min(rawStartSeconds, startUpperBound));
+    const rawDurationSeconds = asNumber(record["durationSeconds"]) ?? 5;
+    const remainingDuration = maxDuration !== null ? Math.max(0.5, maxDuration - startSeconds) : 12;
+    const durationLimit = Math.min(12, remainingDuration);
+    const durationSeconds = Math.min(durationLimit, Math.max(1, rawDurationSeconds));
+
+    return [{
+      id,
+      enabled: record["enabled"] !== false,
+      text,
+      label: normalizeBrollText(record["label"], 32) || "Key moment",
+      startSeconds: Number(startSeconds.toFixed(2)),
+      durationSeconds: Number(durationSeconds.toFixed(2)),
+      tone: normalizeBrollCardTone(record["tone"]),
+      position: normalizeBrollCardPosition(record["position"]),
+    }];
+  }).slice(0, 4);
+
+  return {
+    enabled: typeof layer?.["enabled"] === "boolean" ? layer["enabled"] : normalizedCards.length > 0,
+    cards: normalizedCards,
+  };
+}
+
+export function extractBrollLayerConfig(
+  captionData: unknown,
+  durationSeconds?: number | null,
+): BrollLayerConfig {
+  const data = asObject(captionData);
+  return normalizeBrollLayerConfig(data?.["brollLayer"], durationSeconds);
 }
 
 export function extractCaptionPackage(

@@ -8,10 +8,12 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 const sermonsActionPath = join(currentDir, "..", "sermons.ts");
 
 describe("sermon server action dynamic imports", () => {
-  it("uses a relative smart crop debug import so Turbopack server chunks can resolve it", async () => {
+  it("lets Turbopack resolve local app-code imports for server chunks", async () => {
     const source = await readFile(sermonsActionPath, "utf8");
 
-    expect(source).toContain('import(/* turbopackIgnore: true */ "../agents/smartCropDebugService")');
-    expect(source).not.toContain('import(/* turbopackIgnore: true */ "@/server/agents/smartCropDebugService")');
+    expect(source).toContain('import("@/server/agents/videoDownloadAgent")');
+    expect(source).toContain('import("@/server/agents/smartCropDebugService")');
+    expect(source).toContain('import("@/server/pipeline/processSermonPipeline")');
+    expect(source).not.toContain("import(/* turbopackIgnore: true */");
   });
 });

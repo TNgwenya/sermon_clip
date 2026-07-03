@@ -49,6 +49,44 @@ function buildTextNode(line: TextLine): string {
   return `<text x="${line.x}" y="${line.y}" font-family="Arial, Helvetica, sans-serif" font-size="${line.fontSize}" font-weight="${weight}" fill="${line.fill}" fill-opacity="${opacity}" text-anchor="${line.anchor ?? "start"}" dominant-baseline="hanging" paint-order="stroke fill" stroke="#000000" stroke-width="3" stroke-linejoin="round">${escapeSvgText(line.text)}</text>`;
 }
 
+function buildBrandBackgroundNode(config: ClipBrandingConfig, width: number, height: number, themeColor: string): string | null {
+  if (config.backgroundStyle === "NONE") {
+    return null;
+  }
+
+  const opacity =
+    config.backgroundStyle === "SOLID_BRAND"
+      ? 0.16
+      : config.backgroundStyle === "BLURRED_TINT"
+        ? 0.12
+        : 0.09;
+
+  return `<rect x="0" y="0" width="${width}" height="${height}" fill="${themeColor}" fill-opacity="${opacity}" />`;
+}
+
+function buildBrandBadge(input: {
+  label: string;
+  y: number;
+  width: number;
+  themeColor: string;
+}): string {
+  const badgeWidth = Math.min(520, Math.max(260, input.width * 0.54));
+  const badgeX = Math.round((input.width - badgeWidth) / 2);
+
+  return [
+    `<rect x="${badgeX}" y="${input.y}" width="${badgeWidth}" height="72" rx="24" fill="#020617" fill-opacity="0.72" stroke="${input.themeColor}" stroke-opacity="0.58" stroke-width="2" />`,
+    buildTextNode({
+      text: input.label,
+      x: input.width / 2,
+      y: input.y + 20,
+      fontSize: 24,
+      fill: "#FFFFFF",
+      weight: 800,
+      anchor: "middle",
+    }),
+  ].join("\n      ");
+}
+
 export function getBrandingOverlayDimensions(format: ClipExportFormat): { width: number; height: number } {
   if (format === "HORIZONTAL_16_9") {
     return { width: 1920, height: 1080 };
@@ -109,6 +147,11 @@ export function buildBrandingOverlaySvg(config: ClipBrandingConfig, context: Bra
   const layout = buildLayout(width, height);
   const themeColor = normalizeHexColor(context.themeColor, "#FFFFFF");
   const lines: string[] = [];
+  const backgroundNode = buildBrandBackgroundNode(config, width, height, themeColor);
+
+  if (backgroundNode) {
+    lines.push(backgroundNode);
+  }
 
   const hasPreacher = config.showPreacherName && context.preacherName.trim().length > 0;
   const hasTitle = config.showSermonTitle && context.sermonTitle.trim().length > 0;
@@ -148,6 +191,24 @@ export function buildBrandingOverlaySvg(config: ClipBrandingConfig, context: Bra
         }),
       );
     }
+  }
+
+  if (config.introEnabled) {
+    lines.push(buildBrandBadge({
+      label: "Intro",
+      y: height >= 1600 ? 150 : 90,
+      width,
+      themeColor,
+    }));
+  }
+
+  if (config.outroEnabled) {
+    lines.push(buildBrandBadge({
+      label: "Outro",
+      y: height >= 1600 ? height - 430 : height - 250,
+      width,
+      themeColor,
+    }));
   }
 
   return `

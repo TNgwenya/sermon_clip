@@ -134,6 +134,22 @@ describe("clip render service validation", () => {
     expect(metadata.renderedAt).toBeInstanceOf(Date);
   });
 
+  it("falls back to known source duration when transcript segments are unavailable", () => {
+    expect(__clipRenderTestUtils.resolveSermonDurationFallback({
+      sourceDurationSeconds: 70,
+      mediaDurationSeconds: null,
+      clipEndTimeSeconds: 55,
+    })).toBe(70);
+  });
+
+  it("uses the clip end as a final duration fallback for transcript-text-only fixtures", () => {
+    expect(__clipRenderTestUtils.resolveSermonDurationFallback({
+      sourceDurationSeconds: null,
+      mediaDurationSeconds: null,
+      clipEndTimeSeconds: 55,
+    })).toBe(55);
+  });
+
   it("uses Apple hardware encoder arguments when requested", () => {
     expect(__clipRenderTestUtils.buildVideoEncoderArgs("h264_videotoolbox")).toContain("h264_videotoolbox");
     expect(__clipRenderTestUtils.buildVideoEncoderArgs("h264_videotoolbox")).toContain("-allow_sw");
@@ -217,15 +233,18 @@ describe("clip render service validation", () => {
       speechCleanup: {
         removeDeadAir: true,
         tightenLongPauses: true,
+        intensity: "maximum",
       },
     })).toEqual({
       removeDeadAir: true,
       tightenLongPauses: true,
+      intensity: "maximum",
     });
 
     expect(__clipRenderTestUtils.resolveRenderSpeechCleanupSettings(null)).toEqual({
       removeDeadAir: false,
       tightenLongPauses: false,
+      intensity: "normal",
     });
   });
 
@@ -274,6 +293,37 @@ describe("clip render service validation", () => {
     expect(cleanup.renderedDurationSeconds).toBe(58.36);
   });
 
+  it("collapses shorter internal silence at stronger intensity", () => {
+    const cleanup = __clipRenderTestUtils.buildInternalSilenceCleanup({
+      startTimeSeconds: 100,
+      endTimeSeconds: 160,
+      silenceEvents: [
+        { start: 10, end: 10.7, duration: 0.7 },
+      ],
+      profile: {
+        intensity: "strong",
+        edgeSpeechPadSeconds: 0.08,
+        internalSpeechPadSeconds: 0.1,
+        minEdgeSilenceSeconds: 0.25,
+        minInternalSilenceSeconds: 0.55,
+        silenceDetectNoiseDb: -31,
+        silenceDetectDurationSeconds: 0.18,
+      },
+    });
+
+    expect(cleanup.applied).toBe(true);
+    expect(cleanup.cuts).toEqual([
+      {
+        startTimeSeconds: 110.1,
+        endTimeSeconds: 110.6,
+        trimSeconds: 0.5,
+        originalSilenceStartSeconds: 110,
+        originalSilenceEndSeconds: 110.7,
+        originalSilenceDurationSeconds: 0.7,
+      },
+    ]);
+  });
+
   it("does not collapse internal silence when it would make the clip too short", () => {
     const cleanup = __clipRenderTestUtils.buildInternalSilenceCleanup({
       startTimeSeconds: 10,
@@ -313,7 +363,7 @@ describe("clip render service validation", () => {
       },
     });
 
-    expect(filter.audioMap).toBe("[silence_a]");
+    expect(filter.audioMap).toBe("[a]");
     expect(filter.filterComplex).toContain("[0:v]select=not(between(t\\,10.17\\,11.82))");
     expect(filter.filterComplex).toContain("[0:a]aselect=not(between(t\\,10.17\\,11.82))");
     expect(filter.filterComplex).toContain("[silence_v]setpts=PTS-STARTPTS[trimmed_v]");

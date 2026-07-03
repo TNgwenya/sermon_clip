@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildEditableCaptionCuesFromTranscriptSegments,
   buildSrtFromEditableCues,
+  buildTimedCaptionCuesFromTranscriptSegments,
   hashtagsToEditorInput,
   parseHashtagEditorInput,
   validateCaptionCuesFromTranscript,
@@ -266,6 +267,54 @@ describe("buildEditableCaptionCuesFromTranscriptSegments", () => {
     expect(cues).toEqual([
       { index: 1, startSeconds: 4, endSeconds: 6, text: "Inside clip" },
     ]);
+  });
+});
+
+describe("buildTimedCaptionCuesFromTranscriptSegments", () => {
+  it("builds word-timed cues so later transcript words do not appear at the segment start", () => {
+    const cues = buildTimedCaptionCuesFromTranscriptSegments({
+      startTimeSeconds: 100,
+      endTimeSeconds: 104,
+      segments: [
+        { startTimeSeconds: 100, endTimeSeconds: 104, text: "Faith grows when we trust God" },
+      ],
+    });
+
+    expect(cues.map((cue) => cue.text)).toEqual(["Faith", "grows", "when", "we", "trust", "God"]);
+    expect(cues[0]).toMatchObject({ index: 1, startSeconds: 0, text: "Faith" });
+    expect(cues[1]?.startSeconds).toBeGreaterThan(0);
+    expect(cues[4]?.startSeconds).toBeGreaterThan(cues[1]?.startSeconds ?? 0);
+    expect(cues.at(-1)?.endSeconds).toBe(4);
+  });
+
+  it("can group transcript words into short timed phrases when requested", () => {
+    const cues = buildTimedCaptionCuesFromTranscriptSegments({
+      startTimeSeconds: 10,
+      endTimeSeconds: 16,
+      segments: [
+        { startTimeSeconds: 10, endTimeSeconds: 16, text: "God is faithful through every season" },
+      ],
+      maxWordsPerCue: 3,
+      maxCueDurationSeconds: 10,
+    });
+
+    expect(cues.map((cue) => cue.text)).toEqual(["God is faithful", "through every season"]);
+    expect(cues[1]?.startSeconds).toBeGreaterThan(cues[0]?.startSeconds ?? 0);
+    expect(cues[1]?.endSeconds).toBe(6);
+  });
+
+  it("clips estimated word cues to the selected clip range", () => {
+    const cues = buildTimedCaptionCuesFromTranscriptSegments({
+      startTimeSeconds: 102,
+      endTimeSeconds: 106,
+      segments: [
+        { startTimeSeconds: 100, endTimeSeconds: 108, text: "aa bb cc dd" },
+      ],
+    });
+
+    expect(cues.map((cue) => cue.text)).toEqual(["bb", "cc"]);
+    expect(cues[0]).toMatchObject({ index: 1, startSeconds: 0, endSeconds: 2, text: "bb" });
+    expect(cues[1]).toMatchObject({ index: 2, startSeconds: 2, endSeconds: 4, text: "cc" });
   });
 });
 

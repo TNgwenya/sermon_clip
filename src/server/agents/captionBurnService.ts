@@ -1,4 +1,4 @@
-import { access, rename, stat, unlink } from "node:fs/promises";
+import { access, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 
 import type { ClipCandidate, Prisma } from "@prisma/client";
@@ -27,8 +27,19 @@ import {
   resolveCaptionStylePreset,
   type CaptionStylePresetId,
 } from "@/lib/captionStylePresets";
+import {
+  DEFAULT_CAPTION_APPEARANCE_SETTINGS,
+  normalizeCaptionAppearanceSettings,
+  type CaptionAppearanceSettings,
+  type CaptionPosition,
+} from "@/lib/clipStudio";
 import { getBrandingSettings } from "@/server/branding/settings";
 import { getSharp } from "@/server/agents/sharpClient";
+import {
+  extractSpeechCleanupCutPlan,
+  remapTimelineRangeToCleanedTime,
+  type SpeechCleanupCutPlan,
+} from "@/lib/speechCleanupPlan";
 
 type CaptionBurnOptions = {
   ffmpegPath?: string;
@@ -79,12 +90,56 @@ type CaptionCueOverlay = {
   startSeconds: number;
   endSeconds: number;
   text: string;
+  activeWordIndex?: number;
 };
 
 type CaptionSafeArea = "STANDARD" | "RAISED" | "LOWER_MINIMAL";
 
+const FALLBACK_VIDEO_ENCODER = "libx264";
+const HARDWARE_VIDEO_ENCODER = "h264_videotoolbox";
+
 function commandFor(binaryPath?: string): string {
   return binaryPath?.trim() || "ffmpeg";
+}
+
+function resolvePreferredVideoEncoder(): string {
+  return process.env.CLIP_CAPTION_BURN_VIDEO_ENCODER?.trim()
+    || process.env.CLIP_RENDER_VIDEO_ENCODER?.trim()
+    || process.env.CLIP_EXPORT_VIDEO_ENCODER?.trim()
+    || (process.platform === "darwin" ? HARDWARE_VIDEO_ENCODER : FALLBACK_VIDEO_ENCODER);
+}
+
+function isHardwareVideoEncoder(encoder: string): boolean {
+  return encoder === HARDWARE_VIDEO_ENCODER || encoder.includes("videotoolbox");
+}
+
+function buildVideoEncoderArgs(encoder: string): string[] {
+  if (encoder === HARDWARE_VIDEO_ENCODER) {
+    return [
+      "-c:v",
+      HARDWARE_VIDEO_ENCODER,
+      "-b:v",
+      process.env.CLIP_CAPTION_BURN_VIDEO_BITRATE?.trim()
+        || process.env.CLIP_RENDER_VIDEO_BITRATE?.trim()
+        || process.env.CLIP_EXPORT_VIDEO_BITRATE?.trim()
+        || "5000k",
+      "-allow_sw",
+      "1",
+    ];
+  }
+
+  if (encoder !== FALLBACK_VIDEO_ENCODER) {
+    return ["-c:v", encoder];
+  }
+
+  return [
+    "-c:v",
+    FALLBACK_VIDEO_ENCODER,
+    "-preset",
+    "veryfast",
+    "-crf",
+    "23",
+  ];
 }
 
 function getTempBurnPath(outputPath: string): string {
@@ -116,48 +171,92 @@ function withCaptionSafeArea(style: string, safeArea: CaptionSafeArea): string {
   return style.replace(/MarginV=\d+/, `MarginV=${margin}`);
 }
 
-function buildCaptionForceStyle(presetId: string | null | undefined, safeArea: CaptionSafeArea = "STANDARD"): string {
+function withCaptionPlacement(style: string, safeArea: CaptionSafeArea, captionPosition: CaptionPosition): string {
+  if (captionPosition === "top") {
+    return style.replace(/Alignment=\d+/, "Alignment=8").replace(/MarginV=\d+/, "MarginV=82");
+  }
+
+  if (captionPosition === "middle") {
+    return style.replace(/Alignment=\d+/, "Alignment=5").replace(/MarginV=\d+/, "MarginV=0");
+  }
+
+  return withCaptionSafeArea(style, safeArea);
+}
+
+function withCaptionAppearance(style: string, appearance?: CaptionAppearanceSettings): string {
+  if (!appearance) {
+    return style;
+  }
+
+  const fontSizeMultiplier =
+    appearance.fontScale === "compact"
+      ? 0.88
+      : appearance.fontScale === "large"
+        ? 1.16
+        : 1;
+  const withFontSize = style.replace(/FontSize=(\d+)/, (_match, size: string) => {
+    const scaledSize = Math.max(14, Math.round(Number(size) * fontSizeMultiplier));
+    return `FontSize=${scaledSize}`;
+  });
+
+  if (appearance.verticalOffset === 0) {
+    return withFontSize;
+  }
+
+  return withFontSize.replace(/MarginV=(\d+)/, (_match, margin: string) => {
+    const shiftedMargin = Math.max(0, Math.round(Number(margin) + appearance.verticalOffset));
+    return `MarginV=${shiftedMargin}`;
+  });
+}
+
+function buildCaptionForceStyle(
+  presetId: string | null | undefined,
+  safeArea: CaptionSafeArea = "STANDARD",
+  captionPosition: CaptionPosition = "lower",
+  appearance?: CaptionAppearanceSettings,
+): string {
   const preset = resolveCaptionStylePreset(presetId);
   const base = "FontName=Arial,BorderStyle=1,Shadow=0";
   const boxedBase = base.replace("BorderStyle=1", "BorderStyle=3");
+  const applyAppearance = (style: string) => withCaptionAppearance(style, appearance);
 
   if (preset.id === "clean-lower") {
-    return withCaptionSafeArea(`${boxedBase},FontSize=21,PrimaryColour=&H00111111,OutlineColour=&H00FFFFFF,BackColour=&HEEFFFFFF,Outline=2,Shadow=1,Alignment=2,MarginV=58`, safeArea);
+    return applyAppearance(withCaptionPlacement(`${boxedBase},FontSize=21,PrimaryColour=&H00111111,OutlineColour=&H00FFFFFF,BackColour=&HEEFFFFFF,Outline=2,Shadow=1,Alignment=2,MarginV=58`, safeArea, captionPosition));
   }
 
   if (preset.id === "kinetic-pop") {
-    return withCaptionSafeArea(`${base},FontSize=29,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=5,Shadow=2,Alignment=2,MarginV=70`, safeArea);
+    return applyAppearance(withCaptionPlacement(`${base},FontSize=29,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=5,Shadow=2,Alignment=2,MarginV=70`, safeArea, captionPosition));
   }
 
   if (preset.id === "creator-highlight") {
-    return withCaptionSafeArea(`${base},FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00111827,BackColour=&H8822D3EE,Outline=3,Shadow=2,Alignment=2,MarginV=66`, safeArea);
+    return applyAppearance(withCaptionPlacement(`${base},FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00111827,BackColour=&H8822D3EE,Outline=3,Shadow=2,Alignment=2,MarginV=66`, safeArea, captionPosition));
   }
 
   if (preset.id === "soft-bubble") {
-    return withCaptionSafeArea(`${boxedBase},FontSize=21,PrimaryColour=&H00111827,OutlineColour=&H00FFFFFF,BackColour=&HEEFFFFFF,Outline=2,Shadow=1,Alignment=2,MarginV=58`, safeArea);
+    return applyAppearance(withCaptionPlacement(`${boxedBase},FontSize=21,PrimaryColour=&H00111827,OutlineColour=&H00FFFFFF,BackColour=&HEEFFFFFF,Outline=2,Shadow=1,Alignment=2,MarginV=58`, safeArea, captionPosition));
   }
 
   if (preset.id === "high-contrast") {
-    return withCaptionSafeArea(`${base},FontSize=22,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,Outline=4,Alignment=2,MarginV=64`, safeArea);
+    return applyAppearance(withCaptionPlacement(`${base},FontSize=22,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,Outline=4,Alignment=2,MarginV=64`, safeArea, captionPosition));
   }
 
   if (preset.id === "youth-social") {
-    return withCaptionSafeArea(`${base},FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00D84D1D,Outline=4,Shadow=2,Alignment=2,MarginV=72`, safeArea);
+    return applyAppearance(withCaptionPlacement(`${base},FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00D84D1D,Outline=4,Shadow=2,Alignment=2,MarginV=72`, safeArea, captionPosition));
   }
 
   if (preset.id === "minimal-church") {
-    return withCaptionSafeArea(`${base},FontSize=17,PrimaryColour=&H00FFFFFF,OutlineColour=&H66000000,Outline=1,Shadow=1,Alignment=2,MarginV=42`, safeArea);
+    return applyAppearance(withCaptionPlacement(`${base},FontSize=17,PrimaryColour=&H00FFFFFF,OutlineColour=&H66000000,Outline=1,Shadow=1,Alignment=2,MarginV=42`, safeArea, captionPosition));
   }
 
   if (preset.id === "scripture-focus") {
-    return withCaptionSafeArea(`${boxedBase.replace("FontName=Arial", "FontName=Georgia")},FontSize=20,PrimaryColour=&H00111111,OutlineColour=&H00FACC15,BackColour=&HEEFFFFFF,Outline=1,Shadow=1,Alignment=2,MarginV=60`, safeArea);
+    return applyAppearance(withCaptionPlacement(`${boxedBase.replace("FontName=Arial", "FontName=Georgia")},FontSize=20,PrimaryColour=&H00111111,OutlineColour=&H00FACC15,BackColour=&HEEFFFFFF,Outline=1,Shadow=1,Alignment=2,MarginV=60`, safeArea, captionPosition));
   }
 
   if (preset.id === "cinematic-testimony") {
-    return withCaptionSafeArea(`${base},FontSize=20,PrimaryColour=&H00F8FAFC,OutlineColour=&H00111827,BackColour=&HAA111827,Outline=2,Shadow=2,Alignment=2,MarginV=54`, safeArea);
+    return applyAppearance(withCaptionPlacement(`${base},FontSize=20,PrimaryColour=&H00F8FAFC,OutlineColour=&H00111827,BackColour=&HAA111827,Outline=2,Shadow=2,Alignment=2,MarginV=54`, safeArea, captionPosition));
   }
 
-  return withCaptionSafeArea(`${base},FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=3,Alignment=2,MarginV=64`, safeArea);
+  return applyAppearance(withCaptionPlacement(`${base},FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=3,Alignment=2,MarginV=64`, safeArea, captionPosition));
 }
 
 function resolveCaptionSafeArea(captionData: unknown): CaptionSafeArea {
@@ -172,6 +271,23 @@ function resolveCaptionSafeArea(captionData: unknown): CaptionSafeArea {
 
   const safeArea = (framingDecision as Record<string, unknown>)["captionSafeArea"];
   return safeArea === "RAISED" || safeArea === "LOWER_MINIMAL" ? safeArea : "STANDARD";
+}
+
+function resolveCaptionPosition(captionData: unknown): CaptionPosition {
+  if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
+    return "lower";
+  }
+
+  const value = (captionData as Record<string, unknown>)["captionPosition"];
+  return value === "top" || value === "middle" || value === "lower" ? value : "lower";
+}
+
+function resolveCaptionAppearance(captionData: unknown): CaptionAppearanceSettings {
+  if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
+    return DEFAULT_CAPTION_APPEARANCE_SETTINGS;
+  }
+
+  return normalizeCaptionAppearanceSettings((captionData as Record<string, unknown>)["captionAppearance"]);
 }
 
 function resolveClipCaptionStylePresetId(
@@ -210,6 +326,14 @@ function shouldApplyCaptionsToClip(captionData: unknown): boolean {
   return typeof value === "boolean" ? value : true;
 }
 
+function shouldUseWordHighlightOverlay(captionData: unknown): boolean {
+  if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
+    return false;
+  }
+
+  return (captionData as Record<string, unknown>)["wordHighlightEnabled"] === true;
+}
+
 function escapeSvgText(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -221,7 +345,7 @@ function escapeSvgText(value: string): string {
     .trim();
 }
 
-function wrapCaptionText(value: string, maxLineLength = 34): string[] {
+function wrapCaptionText(value: string, maxLineLength = 34, maxLines = 4): string[] {
   const words = value.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
   const lines: string[] = [];
   let current = "";
@@ -241,7 +365,53 @@ function wrapCaptionText(value: string, maxLineLength = 34): string[] {
     lines.push(current);
   }
 
-  return lines.slice(0, 3);
+  return lines.slice(0, maxLines);
+}
+
+type CaptionOverlayWord = {
+  index: number;
+  text: string;
+};
+
+function splitCaptionOverlayWords(value: string): string[] {
+  return value.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+}
+
+function getCaptionOverlayWordWeight(word: string): number {
+  const spokenCharacterCount = word.replace(/[^\p{L}\p{N}]+/gu, "").length;
+  const punctuationWeight = /[.!?]["')\]]?$/.test(word)
+    ? 0.45
+    : /[,;:]["')\]]?$/.test(word)
+      ? 0.225
+      : 0;
+
+  return Math.max(1, spokenCharacterCount) + punctuationWeight;
+}
+
+function wrapCaptionWords(value: string, maxLineLength = 34, maxLines = 4): CaptionOverlayWord[][] {
+  const words = splitCaptionOverlayWords(value).map((word, index) => ({ index, text: word }));
+  const lines: CaptionOverlayWord[][] = [];
+  let current: CaptionOverlayWord[] = [];
+  let currentLength = 0;
+
+  for (const word of words) {
+    const nextLength = currentLength + (current.length > 0 ? 1 : 0) + word.text.length;
+    if (nextLength > maxLineLength && current.length > 0) {
+      lines.push(current);
+      current = [word];
+      currentLength = word.text.length;
+      continue;
+    }
+
+    current.push(word);
+    currentLength = nextLength;
+  }
+
+  if (current.length > 0) {
+    lines.push(current);
+  }
+
+  return lines.slice(0, maxLines);
 }
 
 function extractCaptionCueOverlays(captionData: unknown): CaptionCueOverlay[] {
@@ -277,22 +447,156 @@ function extractCaptionCueOverlays(captionData: unknown): CaptionCueOverlay[] {
   });
 }
 
-function buildCaptionOverlaySvg(cue: CaptionCueOverlay): string {
+function remapCaptionCueOverlaysForSpeechCleanup(
+  cues: CaptionCueOverlay[],
+  plan: SpeechCleanupCutPlan | null,
+): CaptionCueOverlay[] {
+  if (!plan?.enabled) {
+    return cues;
+  }
+
+  return cues.flatMap((cue, index) => {
+    const remapped = remapTimelineRangeToCleanedTime({
+      startSeconds: cue.startSeconds,
+      endSeconds: cue.endSeconds,
+      plan,
+    });
+    if (!remapped) {
+      return [];
+    }
+
+    return [{
+      ...cue,
+      index: index + 1,
+      startSeconds: remapped.startSeconds,
+      endSeconds: remapped.endSeconds,
+    }];
+  });
+}
+
+function formatSrtTimestamp(seconds: number): string {
+  const clamped = Math.max(0, seconds);
+  const hours = Math.floor(clamped / 3600);
+  const minutes = Math.floor((clamped % 3600) / 60);
+  const wholeSeconds = Math.floor(clamped % 60);
+  const milliseconds = Math.round((clamped - Math.floor(clamped)) * 1000);
+
+  return [
+    String(hours).padStart(2, "0"),
+    String(minutes).padStart(2, "0"),
+    String(wholeSeconds).padStart(2, "0"),
+  ].join(":") + `,${String(milliseconds).padStart(3, "0")}`;
+}
+
+function buildSrtFromCaptionCueOverlays(cues: CaptionCueOverlay[]): string {
+  return cues
+    .map((cue, index) => [
+      String(index + 1),
+      `${formatSrtTimestamp(cue.startSeconds)} --> ${formatSrtTimestamp(cue.endSeconds)}`,
+      cue.text,
+    ].join("\n"))
+    .join("\n\n");
+}
+
+function captionOverlayFontSize(appearance: CaptionAppearanceSettings): number {
+  if (appearance.fontScale === "compact") {
+    return 32;
+  }
+
+  if (appearance.fontScale === "large") {
+    return 42;
+  }
+
+  return 36;
+}
+
+function captionOverlayLineLength(appearance: CaptionAppearanceSettings): number {
+  if (appearance.fontScale === "compact") {
+    return 40;
+  }
+
+  if (appearance.fontScale === "large") {
+    return 29;
+  }
+
+  return 34;
+}
+
+function formatCaptionOverlayText(value: string, appearance: CaptionAppearanceSettings): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return appearance.uppercase ? normalized.toUpperCase() : normalized;
+}
+
+function buildCaptionOverlaySvg(
+  cue: CaptionCueOverlay,
+  appearance: CaptionAppearanceSettings = DEFAULT_CAPTION_APPEARANCE_SETTINGS,
+): string {
   const width = 960;
-  const height = 220;
-  const lines = wrapCaptionText(cue.text);
-  const lineHeight = 44;
-  const totalTextHeight = Math.max(lineHeight, lines.length * lineHeight);
+  const fontSize = captionOverlayFontSize(appearance);
+  const maxLineLength = captionOverlayLineLength(appearance);
+  const displayText = formatCaptionOverlayText(cue.text, appearance);
+  const wordLines = cue.activeWordIndex === undefined ? [] : wrapCaptionWords(displayText, maxLineLength, appearance.maxLines);
+  const lines = wordLines.length > 0 ? [] : wrapCaptionText(displayText, maxLineLength, appearance.maxLines);
+  const lineHeight = Math.round(fontSize * 1.22);
+  const lineCount = Math.max(1, wordLines.length || lines.length);
+  const totalTextHeight = Math.max(lineHeight, lineCount * lineHeight);
+  const height = Math.max(190, totalTextHeight + 62);
   const firstY = Math.round((height - totalTextHeight) / 2) + 8;
+  const activeFontSize = Math.round(fontSize * 1.08);
 
   return `
     <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
       <rect x="0" y="0" width="${width}" height="${height}" rx="28" fill="#000000" fill-opacity="0.68" />
-      ${lines.map((line, index) => (
-        `<text x="${width / 2}" y="${firstY + index * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="800" fill="#FFFFFF" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="#000000" stroke-width="5" stroke-linejoin="round">${escapeSvgText(line)}</text>`
-      )).join("\n      ")}
+      ${wordLines.length > 0
+        ? wordLines.map((line, lineIndex) => (
+            `<text x="${width / 2}" y="${firstY + lineIndex * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="900" fill="#FFFFFF" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="#000000" stroke-width="5" stroke-linejoin="round">${line.map((word, wordIndex) => {
+              const isActive = word.index === cue.activeWordIndex;
+              const prefix = wordIndex === 0 ? "" : " ";
+              return `<tspan fill="${isActive ? "#22C55E" : "#FFFFFF"}" font-size="${isActive ? activeFontSize : fontSize}">${escapeSvgText(`${prefix}${word.text}`)}</tspan>`;
+            }).join("")}</text>`
+          )).join("\n      ")
+        : lines.map((line, index) => (
+            `<text x="${width / 2}" y="${firstY + index * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="800" fill="#FFFFFF" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="#000000" stroke-width="5" stroke-linejoin="round">${escapeSvgText(line)}</text>`
+          )).join("\n      ")}
     </svg>
   `;
+}
+
+function expandCaptionCueWordHighlightOverlays(cues: CaptionCueOverlay[]): CaptionCueOverlay[] {
+  return cues.flatMap((cue) => {
+    const words = splitCaptionOverlayWords(cue.text);
+    const durationSeconds = cue.endSeconds - cue.startSeconds;
+
+    if (words.length === 0 || durationSeconds <= 0) {
+      return [];
+    }
+
+    const weights = words.map(getCaptionOverlayWordWeight);
+    const totalWeight = weights.reduce((total, weight) => total + weight, 0);
+    if (totalWeight <= 0) {
+      return [];
+    }
+
+    let cursorSeconds = cue.startSeconds;
+    let cumulativeWeight = 0;
+
+    return words.map((_, wordIndex) => {
+      const wordStartSeconds = cursorSeconds;
+      cumulativeWeight += weights[wordIndex];
+      const wordEndSeconds = wordIndex === words.length - 1
+        ? cue.endSeconds
+        : cue.startSeconds + durationSeconds * (cumulativeWeight / totalWeight);
+      cursorSeconds = wordEndSeconds;
+
+      return {
+        ...cue,
+        index: cue.index * 1000 + wordIndex + 1,
+        startSeconds: Number(wordStartSeconds.toFixed(3)),
+        endSeconds: Number(wordEndSeconds.toFixed(3)),
+        activeWordIndex: wordIndex,
+      };
+    });
+  });
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -341,6 +645,8 @@ function buildCaptionBurnMetadata(input: {
   burnedAt: Date;
   captionStylePresetId?: CaptionStylePresetId;
   captionSafeArea?: CaptionSafeArea;
+  captionPosition?: CaptionPosition;
+  captionAppearance?: CaptionAppearanceSettings;
   captionData?: unknown;
 }): Pick<Prisma.ClipCandidateUpdateInput, "captionBurnStatus" | "captionedVideoPath" | "captionBurnedAt" | "captionBurnError" | "subtitlesBurned" | "captionData"> {
   const currentCaptionData =
@@ -358,6 +664,8 @@ function buildCaptionBurnMetadata(input: {
       ...currentCaptionData,
       captionStylePresetId: resolveCaptionStylePreset(input.captionStylePresetId).id,
       captionSafeArea: input.captionSafeArea ?? resolveCaptionSafeArea(input.captionData),
+      captionPosition: input.captionPosition ?? resolveCaptionPosition(input.captionData),
+      captionAppearance: input.captionAppearance ?? resolveCaptionAppearance(input.captionData),
       captionBurnedAt: input.burnedAt.toISOString(),
     },
   };
@@ -416,85 +724,122 @@ async function runFfmpegCaptionBurn(input: {
   jobId: string;
   captionStylePresetId?: CaptionStylePresetId;
   captionSafeArea?: CaptionSafeArea;
+  captionPosition?: CaptionPosition;
+  appearance?: CaptionAppearanceSettings;
 }): Promise<void> {
   const escapedSubtitlePath = escapeForFfmpegSubtitlesPath(input.subtitlePath);
-  const forceStyle = buildCaptionForceStyle(input.captionStylePresetId, input.captionSafeArea);
+  const forceStyle = buildCaptionForceStyle(input.captionStylePresetId, input.captionSafeArea, input.captionPosition, input.appearance);
   const command = commandFor(input.ffmpegPath);
-
-  const args = [
-    "-y",
-    "-i",
-    input.renderedPath,
-    "-vf",
-    `subtitles=filename='${escapedSubtitlePath}':force_style='${forceStyle}'`,
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-crf",
-    "23",
-    "-c:a",
-    "copy",
-    "-movflags",
-    "+faststart",
-    input.outputPath,
-  ];
 
   await appendPipelineLog(input.sermonId, "Caption burn started.");
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
+  const runWithEncoder = async (videoEncoder: string): Promise<void> => {
+    const args = [
+      "-y",
+      "-i",
+      input.renderedPath,
+      "-vf",
+      `subtitles=filename='${escapedSubtitlePath}':force_style='${forceStyle}'`,
+      ...buildVideoEncoderArgs(videoEncoder),
+      "-c:a",
+      "copy",
+      "-movflags",
+      "+faststart",
+      input.outputPath,
+    ];
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(command, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+      });
+
+      let stderr = "";
+
+      child.stdout.on("data", (chunk) => {
+        const text = String(chunk).trim();
+        if (text.length > 0) {
+          void appendJobLog(input.jobId, `[ffmpeg stdout] ${text}`).catch(() => undefined);
+        }
+      });
+
+      child.stderr.on("data", (chunk) => {
+        const text = String(chunk);
+        stderr += text;
+        const trimmed = text.trim();
+        if (trimmed.length > 0) {
+          void appendJobLog(input.jobId, `[ffmpeg stderr] ${trimmed}`).catch(() => undefined);
+        }
+      });
+
+      child.on("error", (error) => {
+        reject(new Error(`Failed to start FFmpeg: ${error.message}`));
+      });
+
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+
+        reject(new Error(`FFmpeg caption burn failed with code ${code ?? "unknown"}. ${stderr.trim().slice(-1400)}`.trim()));
+      });
     });
+  };
 
-    let stderr = "";
+  const preferredVideoEncoder = resolvePreferredVideoEncoder();
+  try {
+    await runWithEncoder(preferredVideoEncoder);
+  } catch (error) {
+    if (!isHardwareVideoEncoder(preferredVideoEncoder)) {
+      throw error;
+    }
 
-    child.stdout.on("data", (chunk) => {
-      const text = String(chunk).trim();
-      if (text.length > 0) {
-        void appendJobLog(input.jobId, `[ffmpeg stdout] ${text}`).catch(() => undefined);
-      }
-    });
-
-    child.stderr.on("data", (chunk) => {
-      const text = String(chunk);
-      stderr += text;
-      const trimmed = text.trim();
-      if (trimmed.length > 0) {
-        void appendJobLog(input.jobId, `[ffmpeg stderr] ${trimmed}`).catch(() => undefined);
-      }
-    });
-
-    child.on("error", (error) => {
-      reject(new Error(`Failed to start FFmpeg: ${error.message}`));
-    });
-
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-
-      reject(new Error(`FFmpeg caption burn failed with code ${code ?? "unknown"}. ${stderr.trim().slice(-1400)}`.trim()));
-    });
-  });
+    const message = error instanceof Error ? error.message : "Unknown caption burn error.";
+    await unlink(input.outputPath).catch(() => undefined);
+    await appendJobLog(input.jobId, `Hardware caption burn failed with ${preferredVideoEncoder}; retrying with ${FALLBACK_VIDEO_ENCODER}. Original error: ${message}`);
+    await appendPipelineLog(input.sermonId, `Hardware caption burn fallback used: ${preferredVideoEncoder} failed.`);
+    await runWithEncoder(FALLBACK_VIDEO_ENCODER);
+  }
 }
 
 async function createCaptionOverlayImages(input: {
   cues: CaptionCueOverlay[];
   outputPath: string;
+  appearance?: CaptionAppearanceSettings;
 }): Promise<string[]> {
   const imagePaths: string[] = [];
   const sharp = await getSharp();
 
   for (const cue of input.cues) {
     const imagePath = input.outputPath.replace(/\.mp4$/i, `.cue-${String(cue.index).padStart(2, "0")}.png`);
-    await sharp(Buffer.from(buildCaptionOverlaySvg(cue))).png().toFile(imagePath);
+    await sharp(Buffer.from(buildCaptionOverlaySvg(cue, input.appearance))).png().toFile(imagePath);
     imagePaths.push(imagePath);
   }
 
   return imagePaths;
+}
+
+function captionOverlayYExpression(captionPosition: CaptionPosition | undefined, appearance?: CaptionAppearanceSettings): string {
+  const offset = appearance?.verticalOffset ?? 0;
+  if (captionPosition === "top") {
+    return String(Math.max(24, 132 - offset));
+  }
+
+  if (captionPosition === "middle") {
+    if (offset === 0) {
+      return "(H-h)/2";
+    }
+
+    return offset > 0 ? `(H-h)/2-${offset}` : `(H-h)/2+${Math.abs(offset)}`;
+  }
+
+  const lowerMargin = Math.max(24, 132 + offset);
+  if (lowerMargin === 132) {
+    return "H-h-132";
+  }
+
+  return `H-h-${lowerMargin}`;
 }
 
 async function runFfmpegCaptionOverlayFallback(input: {
@@ -504,6 +849,8 @@ async function runFfmpegCaptionOverlayFallback(input: {
   ffmpegPath?: string;
   jobId: string;
   cues: CaptionCueOverlay[];
+  captionPosition?: CaptionPosition;
+  appearance?: CaptionAppearanceSettings;
 }): Promise<void> {
   if (input.cues.length === 0) {
     throw new Error("Caption overlay fallback could not find any caption cues.");
@@ -512,47 +859,48 @@ async function runFfmpegCaptionOverlayFallback(input: {
   const imagePaths = await createCaptionOverlayImages({
     cues: input.cues,
     outputPath: input.outputPath,
+    appearance: input.appearance,
   });
 
   const command = commandFor(input.ffmpegPath);
-  const args = ["-y", "-i", input.renderedPath];
-  for (const imagePath of imagePaths) {
-    args.push("-loop", "1", "-i", imagePath);
-  }
-
   let previous = "[0:v]";
   const filterParts: string[] = [];
+  const overlayY = captionOverlayYExpression(input.captionPosition, input.appearance);
   input.cues.forEach((cue, index) => {
     const output = index === input.cues.length - 1 ? "[v]" : `[captioned${index}]`;
     filterParts.push(
-      `${previous}[${index + 1}:v]overlay=(W-w)/2:H-h-132:enable='between(t,${cue.startSeconds.toFixed(3)},${cue.endSeconds.toFixed(3)})':eof_action=pass${output}`,
+      `${previous}[${index + 1}:v]overlay=(W-w)/2:${overlayY}:enable='between(t,${cue.startSeconds.toFixed(3)},${cue.endSeconds.toFixed(3)})':eof_action=pass${output}`,
     );
     previous = output;
   });
 
-  args.push(
-    "-filter_complex",
-    filterParts.join(";"),
-    "-map",
-    "[v]",
-    "-map",
-    "0:a?",
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-crf",
-    "23",
-    "-c:a",
-    "copy",
-    "-movflags",
-    "+faststart",
-    input.outputPath,
-  );
+  const buildArgs = (videoEncoder: string): string[] => {
+    const args = ["-y", "-i", input.renderedPath];
+    for (const imagePath of imagePaths) {
+      args.push("-loop", "1", "-i", imagePath);
+    }
+
+    args.push(
+      "-filter_complex",
+      filterParts.join(";"),
+      "-map",
+      "[v]",
+      "-map",
+      "0:a?",
+      ...buildVideoEncoderArgs(videoEncoder),
+      "-c:a",
+      "copy",
+      "-movflags",
+      "+faststart",
+      input.outputPath,
+    );
+    return args;
+  };
 
   await appendPipelineLog(input.sermonId, "Caption overlay fallback started.");
 
-  try {
+  const runWithEncoder = async (videoEncoder: string): Promise<void> => {
+    const args = buildArgs(videoEncoder);
     await new Promise<void>((resolve, reject) => {
       const child = spawn(command, args, {
         stdio: ["ignore", "pipe", "pipe"],
@@ -590,6 +938,23 @@ async function runFfmpegCaptionOverlayFallback(input: {
         reject(new Error(`FFmpeg caption overlay fallback failed with code ${code ?? "unknown"}. ${stderr.trim().slice(-1400)}`.trim()));
       });
     });
+  };
+
+  try {
+    const preferredVideoEncoder = resolvePreferredVideoEncoder();
+    try {
+      await runWithEncoder(preferredVideoEncoder);
+    } catch (error) {
+      if (!isHardwareVideoEncoder(preferredVideoEncoder)) {
+        throw error;
+      }
+
+      const message = error instanceof Error ? error.message : "Unknown caption overlay error.";
+      await unlink(input.outputPath).catch(() => undefined);
+      await appendJobLog(input.jobId, `Hardware caption overlay failed with ${preferredVideoEncoder}; retrying with ${FALLBACK_VIDEO_ENCODER}. Original error: ${message}`);
+      await appendPipelineLog(input.sermonId, `Hardware caption overlay fallback used: ${preferredVideoEncoder} failed.`);
+      await runWithEncoder(FALLBACK_VIDEO_ENCODER);
+    }
   } finally {
     await Promise.all(imagePaths.map((imagePath) => unlink(imagePath).catch(() => undefined)));
   }
@@ -611,9 +976,15 @@ async function burnCaptionsForClipCore(
   const subtitlePath = clip.subtitleFilePath?.trim() || clip.srtPath?.trim() || getClipSrtPath(clip.sermonId, clip.id);
   const captionedVideoPath = getCaptionedClipPath(clip.sermonId, clip.id);
   const tempCaptionedVideoPath = getTempBurnPath(captionedVideoPath);
+  const speechCleanupPlan = extractSpeechCleanupCutPlan(clip.captionData);
+  const sourceCaptionCues = extractCaptionCueOverlays(clip.captionData);
+  const renderCaptionCues = remapCaptionCueOverlaysForSpeechCleanup(sourceCaptionCues, speechCleanupPlan);
+  const renderCaptionData = clip.captionData && typeof clip.captionData === "object" && !Array.isArray(clip.captionData)
+    ? { ...(clip.captionData as Record<string, unknown>), cues: renderCaptionCues }
+    : clip.captionData;
 
   const renderedClipExists = await fileExists(renderedPath);
-  const subtitleExists = await fileExists(subtitlePath);
+  const subtitleExists = await fileExists(subtitlePath) || renderCaptionCues.length > 0;
 
   const eligibility = validateCaptionBurnEligibility({
     status: clip.status,
@@ -641,6 +1012,8 @@ async function burnCaptionsForClipCore(
       clip.captionData,
       options?.captionStylePresetId ?? (brandingSettings.defaultCaptionStyleName as CaptionStylePresetId),
     );
+    const captionPosition = resolveCaptionPosition(renderCaptionData);
+    const captionAppearance = resolveCaptionAppearance(renderCaptionData);
     await prisma.clipCandidate.update({
       where: { id: clip.id },
       data: buildCaptionBurnMetadata({
@@ -648,6 +1021,8 @@ async function burnCaptionsForClipCore(
         burnedAt,
         captionStylePresetId,
         captionSafeArea: resolveCaptionSafeArea(clip.captionData),
+        captionPosition,
+        captionAppearance,
         captionData: clip.captionData,
       }),
     });
@@ -675,34 +1050,67 @@ async function burnCaptionsForClipCore(
     options?.captionStylePresetId ?? (brandingSettings.defaultCaptionStyleName as CaptionStylePresetId),
   );
   const captionSafeArea = resolveCaptionSafeArea(clip.captionData);
+  const captionPosition = resolveCaptionPosition(renderCaptionData);
+  const captionAppearance = resolveCaptionAppearance(renderCaptionData);
+  const remappedSubtitlePath = speechCleanupPlan?.enabled && renderCaptionCues.length > 0
+    ? tempCaptionedVideoPath.replace(/\.mp4$/i, ".speech-cleanup.srt")
+    : null;
 
-  try {
-    await runFfmpegCaptionBurn({
-      sermonId: clip.sermonId,
-      renderedPath,
-      subtitlePath,
-      outputPath: tempCaptionedVideoPath,
-      ffmpegPath: options?.ffmpegPath,
-      jobId,
-      captionStylePresetId,
-      captionSafeArea,
-    });
-  } catch (error) {
-    if (!shouldUseCaptionOverlayFallback(error)) {
-      throw error;
-    }
+  if (remappedSubtitlePath) {
+    await writeFile(/* turbopackIgnore: true */ remappedSubtitlePath, buildSrtFromCaptionCueOverlays(renderCaptionCues), "utf8");
+    await appendJobLog(jobId, "Caption timing remapped to the speech-cleaned render timeline.");
+  }
 
-    await unlink(tempCaptionedVideoPath).catch(() => undefined);
-    await appendJobLog(jobId, "FFmpeg subtitles filter is unavailable. Retrying captions with image overlays.");
-    await appendPipelineLog(clip.sermonId, "Caption burn retrying with image overlay fallback.");
+  if (shouldUseWordHighlightOverlay(clip.captionData)) {
+    const wordHighlightCues = expandCaptionCueWordHighlightOverlays(renderCaptionCues);
+    await appendJobLog(jobId, "Caption burn using active-word image overlays.");
+    await appendPipelineLog(clip.sermonId, "Caption burn using active-word image overlays.");
     await runFfmpegCaptionOverlayFallback({
       sermonId: clip.sermonId,
       renderedPath,
       outputPath: tempCaptionedVideoPath,
       ffmpegPath: options?.ffmpegPath,
       jobId,
-      cues: extractCaptionCueOverlays(clip.captionData),
+      cues: wordHighlightCues,
+      captionPosition,
+      appearance: captionAppearance,
     });
+  } else {
+    try {
+      await runFfmpegCaptionBurn({
+        sermonId: clip.sermonId,
+        renderedPath,
+        subtitlePath: remappedSubtitlePath ?? subtitlePath,
+        outputPath: tempCaptionedVideoPath,
+        ffmpegPath: options?.ffmpegPath,
+        jobId,
+        captionStylePresetId,
+        captionSafeArea,
+        captionPosition,
+        appearance: captionAppearance,
+      });
+    } catch (error) {
+      if (!shouldUseCaptionOverlayFallback(error)) {
+        throw error;
+      }
+
+      await unlink(tempCaptionedVideoPath).catch(() => undefined);
+      await appendJobLog(jobId, "FFmpeg subtitles filter is unavailable. Retrying captions with image overlays.");
+      await appendPipelineLog(clip.sermonId, "Caption burn retrying with image overlay fallback.");
+      await runFfmpegCaptionOverlayFallback({
+        sermonId: clip.sermonId,
+        renderedPath,
+        outputPath: tempCaptionedVideoPath,
+        ffmpegPath: options?.ffmpegPath,
+        jobId,
+        cues: renderCaptionCues,
+        captionPosition,
+        appearance: captionAppearance,
+      });
+    }
+  }
+  if (remappedSubtitlePath) {
+    await unlink(/* turbopackIgnore: true */ remappedSubtitlePath).catch(() => undefined);
   }
 
   try {
@@ -725,6 +1133,8 @@ async function burnCaptionsForClipCore(
       burnedAt,
       captionStylePresetId,
       captionSafeArea,
+      captionPosition,
+      captionAppearance,
       captionData: clip.captionData,
     }),
   });
@@ -814,8 +1224,16 @@ export const __captionBurnTestUtils = {
   validateCaptionBurnEligibility,
   buildCaptionBurnMetadata,
   buildCaptionForceStyle,
+  buildVideoEncoderArgs,
+  resolveCaptionPosition,
   resolveClipCaptionStylePresetId,
   shouldApplyCaptionsToClip,
+  shouldUseWordHighlightOverlay,
   extractCaptionCueOverlays,
+  remapCaptionCueOverlaysForSpeechCleanup,
+  expandCaptionCueWordHighlightOverlays,
+  buildSrtFromCaptionCueOverlays,
+  buildCaptionOverlaySvg,
+  captionOverlayYExpression,
   shouldUseCaptionOverlayFallback,
 };

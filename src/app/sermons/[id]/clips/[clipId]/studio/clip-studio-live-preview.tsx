@@ -1,20 +1,31 @@
 "use client";
 
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmptyState, StatusBadge } from "@/components/ui";
 import { BRANDING_PRESET_LABELS } from "@/lib/clipBranding";
 import { resolveCaptionStylePreset } from "@/lib/captionStylePresets";
-import { FRAMING_LABELS } from "@/lib/clipExportSettings";
+import { resolveFramingDisplayLabel } from "@/lib/clipExportSettings";
 import {
   buildSpeechCleanupPreviewPlan,
   mapCleanedPreviewSecondsToSourceSeconds,
   mapSourceSecondsToCleanedPreviewSeconds,
   resolveActiveCaptionCueText,
+  resolveActiveCaptionWordIndex,
   resolveSpeechCleanupJumpTarget,
   shouldShowHookOverlay,
 } from "@/lib/clipStudioPreviewTimeline";
+import { remapTimelineRangeToCleanedTime } from "@/lib/speechCleanupPlan";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
+import {
+  CLIP_STUDIO_OVERLAY_POSITION_EVENT,
+  clampCaptionOverlayOffset,
+  clampOverlayRatio,
+  resolveBrollPositionFromOverlayRatio,
+  resolveCaptionPositionFromOverlayRatio,
+  resolveHookPositionFromOverlayRatio,
+  type ClipStudioOverlayPositionDetail,
+} from "@/lib/clipStudioOverlayEvents";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
 
 type ClipStudioLivePreviewProps = {
@@ -44,6 +55,20 @@ const frameClassName = {
   SMART_CROP: "frame-smart",
 };
 
+type OverlayDragState = {
+  overlay: "caption" | "hook" | "broll";
+  cardId?: string;
+  pointerId: number;
+  originClientY: number;
+  originCaptionOffset: number;
+  frameTop: number;
+  frameHeight: number;
+};
+
+function dispatchOverlayPosition(detail: ClipStudioOverlayPositionDetail) {
+  window.dispatchEvent(new CustomEvent(CLIP_STUDIO_OVERLAY_POSITION_EVENT, { detail }));
+}
+
 export function ClipStudioLivePreview({
   hasPreview,
   previewSrc,
@@ -61,13 +86,16 @@ export function ClipStudioLivePreview({
     brandingConfig,
     editPreview,
     seekRequest,
+    playbackRequest,
     seekPreviewTo,
     churchName,
     sermonTitle,
     preacherName,
     updatePreviewClock,
   } = useClipStudioPreview();
+  const frameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [overlayDragState, setOverlayDragState] = useState<OverlayDragState | null>(null);
   const [previewSeconds, setPreviewSeconds] = useState(0);
   const [sourcePreviewSeconds, setSourcePreviewSeconds] = useState(0);
   const [previewDurationSeconds, setPreviewDurationSeconds] = useState<number | null>(null);
@@ -75,6 +103,7 @@ export function ClipStudioLivePreview({
   const [previewErrorState, setPreviewErrorState] = useState<{ src: string; message: string } | null>(null);
   const [previewReadySrc, setPreviewReadySrc] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
+  const [playbackNotice, setPlaybackNotice] = useState<string | null>(null);
   const brandingEnabled = brandingConfig.enabled && brandingConfig.preset !== "NO_BRANDING";
   const captionsOverrideBranding = editPreview.applyCaptionsToClip && editPreview.captionCues.length > 0;
   const showWatermark = brandingEnabled && (brandingConfig.watermarkEnabled || brandingConfig.preset === "MINIMAL_WATERMARK");
@@ -104,26 +133,88 @@ export function ClipStudioLivePreview({
         captionCues: editPreview.captionCues,
         durationSeconds: draftDurationSeconds,
         speechCleanup: editPreview.speechCleanup,
+        audioSilenceEvents: editPreview.audioSilenceEvents,
+        audioSilenceAnalysisAvailable: editPreview.audioSilenceAnalyzed,
+        speechCleanupEdits: editPreview.speechCleanupEdits,
       }),
-    [draftDurationSeconds, editPreview.captionCues, editPreview.speechCleanup],
+    [
+      draftDurationSeconds,
+      editPreview.audioSilenceAnalyzed,
+      editPreview.audioSilenceEvents,
+      editPreview.captionCues,
+      editPreview.speechCleanup,
+      editPreview.speechCleanupEdits,
+    ],
   );
   const cleanupWindowKey = `${speechCleanupPreviewPlan.sourceStartSeconds}:${speechCleanupPreviewPlan.sourceEndSeconds}:${speechCleanupPreviewPlan.cuts
     .map((cut) => `${cut.startSeconds}-${cut.endSeconds}`)
     .join(",")}`;
   const windowKey = `${hasSourcePreview ? "source" : "rendered"}:${draftStartSeconds ?? "x"}:${draftEndSeconds ?? "x"}:${cleanupWindowKey}`;
-  const hookOverlay = editPreview.hookOverlay;
+  const hookOverlay = useMemo(() => {
+    if (!speechCleanupPreviewPlan.enabled) {
+      return editPreview.hookOverlay;
+    }
+
+    const startSeconds = Number.isFinite(editPreview.hookOverlay.startSeconds)
+      ? Math.max(0, editPreview.hookOverlay.startSeconds)
+      : 0;
+    const durationSeconds = Number.isFinite(editPreview.hookOverlay.durationSeconds)
+      ? Math.max(1, editPreview.hookOverlay.durationSeconds)
+      : 6;
+    const remapped = remapTimelineRangeToCleanedTime({
+      startSeconds,
+      endSeconds: startSeconds + durationSeconds,
+      plan: speechCleanupPreviewPlan,
+    });
+
+    return remapped
+      ? {
+          ...editPreview.hookOverlay,
+          startSeconds: remapped.startSeconds,
+          durationSeconds: remapped.endSeconds - remapped.startSeconds,
+        }
+      : {
+          ...editPreview.hookOverlay,
+          enabled: false,
+        };
+  }, [editPreview.hookOverlay, speechCleanupPreviewPlan]);
   const showTimedHook = shouldShowHookOverlay(hookOverlay, previewSeconds);
+  const activeBrollCard = useMemo(() => {
+    if (!editPreview.brollLayer.enabled) {
+      return null;
+    }
+
+    return editPreview.brollLayer.cards.find((card) => {
+      if (!card.enabled || !card.text.trim()) {
+        return false;
+      }
+
+      const startSeconds = Number.isFinite(card.startSeconds) ? Math.max(0, card.startSeconds) : 0;
+      const endSeconds = startSeconds + (Number.isFinite(card.durationSeconds) ? Math.max(1, card.durationSeconds) : 5);
+      if (speechCleanupPreviewPlan.enabled) {
+        const remapped = remapTimelineRangeToCleanedTime({
+          startSeconds,
+          endSeconds,
+          plan: speechCleanupPreviewPlan,
+        });
+        return Boolean(remapped && previewSeconds >= remapped.startSeconds && previewSeconds <= remapped.endSeconds);
+      }
+
+      return sourcePreviewSeconds >= startSeconds && sourcePreviewSeconds <= endSeconds;
+    }) ?? null;
+  }, [editPreview.brollLayer, previewSeconds, sourcePreviewSeconds, speechCleanupPreviewPlan]);
   const activeCaptionCue = useMemo(() => {
     if (!editPreview.applyCaptionsToClip) {
       return null;
     }
 
-    return editPreview.captionCues.find(
-      (cue) =>
-        cue.text.trim().length > 0 &&
-        sourcePreviewSeconds >= cue.startSeconds &&
-        sourcePreviewSeconds <= cue.endSeconds,
-    ) ?? null;
+    const sortedCues = editPreview.captionCues
+      .filter((cue) => cue.text.trim().length > 0)
+      .sort((left, right) => left.startSeconds - right.startSeconds);
+    return sortedCues.find((cue, index) => {
+      const isLastCue = index === sortedCues.length - 1;
+      return sourcePreviewSeconds >= cue.startSeconds && (sourcePreviewSeconds < cue.endSeconds || (isLastCue && sourcePreviewSeconds <= cue.endSeconds));
+    }) ?? null;
   }, [editPreview.applyCaptionsToClip, editPreview.captionCues, sourcePreviewSeconds]);
   const captionPreviewText = useMemo(() => {
     return resolveActiveCaptionCueText({
@@ -133,26 +224,124 @@ export function ClipStudioLivePreview({
       previewSeconds: sourcePreviewSeconds,
     });
   }, [editPreview.applyCaptionsToClip, editPreview.captionCues, editPreview.onVideoCaptionText, sourcePreviewSeconds]);
-  const captionWords = useMemo(() => captionPreviewText.split(/\s+/).filter(Boolean).slice(0, 18), [captionPreviewText]);
+  const captionDisplayText = editPreview.captionAppearance.uppercase ? captionPreviewText.toUpperCase() : captionPreviewText;
+  const captionWords = useMemo(() => captionDisplayText.split(/\s+/).filter(Boolean), [captionDisplayText]);
+  const captionAppearanceStyle = {
+    "--caption-offset-y": `${editPreview.captionAppearance.verticalOffset}px`,
+  } as CSSProperties;
+  const manualCropPreview = exportSettings.manualCropKeyframes[0] ?? null;
+  const hasManualCropPreview = Boolean(manualCropPreview);
   const activeCaptionWordIndex = useMemo(() => {
-    if (!activeCaptionCue || captionWords.length === 0) {
-      return captionWords.length > 0 ? 0 : -1;
-    }
-
-    const cueDurationSeconds = Math.max(0.1, activeCaptionCue.endSeconds - activeCaptionCue.startSeconds);
-    const cueProgress = Math.max(0, Math.min(0.999, (sourcePreviewSeconds - activeCaptionCue.startSeconds) / cueDurationSeconds));
-    return Math.min(captionWords.length - 1, Math.floor(cueProgress * captionWords.length));
-  }, [activeCaptionCue, captionWords.length, sourcePreviewSeconds]);
+    return resolveActiveCaptionWordIndex({
+      activeCue: activeCaptionCue,
+      words: captionWords,
+      previewSeconds: sourcePreviewSeconds,
+    });
+  }, [activeCaptionCue, captionWords, sourcePreviewSeconds]);
   const previewStyle = {
     "--clip-brand-color": brandingConfig.themeColor ?? "#75d9b8",
+    ...(manualCropPreview
+      ? {
+          "--clip-manual-x": `${Math.round(manualCropPreview.centerX * 100)}%`,
+          "--clip-manual-y": `${Math.round((manualCropPreview.centerY ?? 0.5) * 100)}%`,
+          "--clip-manual-zoom": String(manualCropPreview.zoom ?? 1),
+        }
+      : {}),
   } as CSSProperties;
   const backgroundStyleClass = `background-${brandingConfig.backgroundStyle.toLowerCase().replace(/_/g, "-")}`;
+  const framingDisplayLabel = resolveFramingDisplayLabel(exportSettings);
+  function updateOverlayPositionFromPointer(state: OverlayDragState, clientY: number) {
+    const ratio = clampOverlayRatio((clientY - state.frameTop) / Math.max(1, state.frameHeight));
+
+    if (state.overlay === "caption") {
+      dispatchOverlayPosition({
+        overlay: "caption",
+        position: resolveCaptionPositionFromOverlayRatio(ratio),
+        verticalOffset: clampCaptionOverlayOffset(state.originCaptionOffset - (clientY - state.originClientY)),
+      });
+      return;
+    }
+
+    if (state.overlay === "broll" && state.cardId) {
+      dispatchOverlayPosition({
+        overlay: "broll",
+        cardId: state.cardId,
+        position: resolveBrollPositionFromOverlayRatio(ratio),
+      });
+      return;
+    }
+
+    dispatchOverlayPosition({
+      overlay: "hook",
+      position: resolveHookPositionFromOverlayRatio(ratio),
+    });
+  }
+
+  function startOverlayDrag(event: PointerEvent<HTMLElement>, overlay: OverlayDragState["overlay"], cardId?: string) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const frame = frameRef.current;
+    if (!frame) {
+      return;
+    }
+
+    const rect = frame.getBoundingClientRect();
+    if (rect.height <= 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+
+    const nextDragState: OverlayDragState = {
+      overlay,
+      cardId,
+      pointerId: event.pointerId,
+      originClientY: event.clientY,
+      originCaptionOffset: editPreview.captionAppearance.verticalOffset,
+      frameTop: rect.top,
+      frameHeight: rect.height,
+    };
+
+    setOverlayDragState(nextDragState);
+    updateOverlayPositionFromPointer(nextDragState, event.clientY);
+  }
+
+  function moveOverlayDrag(event: PointerEvent<HTMLElement>) {
+    if (!overlayDragState || overlayDragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    updateOverlayPositionFromPointer(overlayDragState, event.clientY);
+  }
+
+  function endOverlayDrag(event: PointerEvent<HTMLElement>) {
+    if (!overlayDragState || overlayDragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    updateOverlayPositionFromPointer(overlayDragState, event.clientY);
+
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+
+    setOverlayDragState(null);
+  }
   const updatePreviewSeconds = useCallback(() => {
     const video = videoRef.current;
     const videoSeconds = video?.currentTime ?? 0;
-    const startSeconds = hasSourcePreview ? draftStartSeconds ?? 0 : 0;
     const sourceSeconds = isDraftTrimPreview
-      ? Math.max(0, Math.min(draftDurationSeconds ?? Number.POSITIVE_INFINITY, videoSeconds - startSeconds))
+      ? Math.max(0, Math.min(draftDurationSeconds ?? Number.POSITIVE_INFINITY, hasSourcePreview ? videoSeconds - (draftStartSeconds ?? 0) : videoSeconds))
       : videoSeconds;
     const currentSeconds = speechCleanupPreviewPlan.enabled
       ? mapSourceSecondsToCleanedPreviewSeconds(sourceSeconds, speechCleanupPreviewPlan)
@@ -265,6 +454,30 @@ export function ClipStudioLivePreview({
     return () => video.removeEventListener("loadedmetadata", seekToDraftStart);
   }, [draftStartSeconds, isDraftTrimPreview, speechCleanupPreviewPlan, updatePreviewSeconds, windowKey]);
 
+  const startPreviewPlayback = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+
+    clampVideoToDraftWindow({ restartAtEnd: true });
+
+    try {
+      await video.play();
+      setPlaybackNotice(null);
+    } catch {
+      try {
+        video.muted = true;
+        await video.play();
+        setPlaybackNotice("Preview started muted because the browser blocked audio playback.");
+      } catch {
+        setPlaybackNotice("Preview playback is blocked by the browser. Try again or reload the Studio.");
+      }
+    } finally {
+      updatePreviewSeconds();
+    }
+  }, [clampVideoToDraftWindow, updatePreviewSeconds]);
+
   const togglePreviewPlayback = useCallback(() => {
     const video = videoRef.current;
     if (!video) {
@@ -273,14 +486,25 @@ export function ClipStudioLivePreview({
 
     if (!video.paused && !video.ended) {
       video.pause();
+      setPlaybackNotice(null);
       updatePreviewSeconds();
       return;
     }
 
-    clampVideoToDraftWindow({ restartAtEnd: true });
-    void video.play().catch(() => undefined);
-    updatePreviewSeconds();
-  }, [clampVideoToDraftWindow, updatePreviewSeconds]);
+    void startPreviewPlayback();
+  }, [startPreviewPlayback, updatePreviewSeconds]);
+
+  useEffect(() => {
+    if (!playbackRequest) {
+      return;
+    }
+
+    const playbackTimer = window.setTimeout(() => {
+      void startPreviewPlayback();
+    }, 0);
+
+    return () => window.clearTimeout(playbackTimer);
+  }, [playbackRequest, startPreviewPlayback]);
 
   const scrubPreview = useCallback((seconds: number) => {
     const durationSeconds = previewDurationSeconds ?? 0;
@@ -300,9 +524,10 @@ export function ClipStudioLivePreview({
       <div className="clip-studio-preview-body">
         <div className="clip-studio-video-shell">
           <div
+            ref={frameRef}
             className={`clip-studio-live-frame ${formatClassName[exportSettings.primaryFormat]} ${frameClassName[exportSettings.framingMode]} ${
               brandingEnabled ? "branding-on" : "branding-off"
-            } ${backgroundStyleClass}`}
+            } ${hasManualCropPreview ? "has-manual-crop" : ""} ${overlayDragState ? "is-dragging-overlay" : ""} ${backgroundStyleClass}`}
             style={previewStyle}
           >
             {canPreview && playbackSrc ? (
@@ -413,19 +638,49 @@ export function ClipStudioLivePreview({
               </div>
             ) : null}
 
+            {previewMediaReady && activeBrollCard ? (
+              <div
+                className={`clip-studio-live-broll broll-${activeBrollCard.tone} broll-position-${activeBrollCard.position}`}
+                onPointerDown={(event) => startOverlayDrag(event, "broll", activeBrollCard.id)}
+                onPointerMove={moveOverlayDrag}
+                onPointerUp={endOverlayDrag}
+                onPointerCancel={endOverlayDrag}
+                title="Drag visual card"
+              >
+                <span>{activeBrollCard.label}</span>
+                <strong>{activeBrollCard.text}</strong>
+              </div>
+            ) : null}
+
             {previewMediaReady && showTimedHook ? (
               <div
                 className={`clip-studio-live-hook hook-${hookOverlay.position} hook-${hookOverlay.animation} hook-${hookOverlay.size} ${
                   hookOverlay.bold ? "is-bold" : ""
                 }`}
+                onPointerDown={(event) => startOverlayDrag(event, "hook")}
+                onPointerMove={moveOverlayDrag}
+                onPointerUp={endOverlayDrag}
+                onPointerCancel={endOverlayDrag}
+                title="Drag hook overlay"
               >
                 {hookOverlay.text}
               </div>
             ) : null}
 
             {previewMediaReady && captionPreviewText ? (
-              <div className={`clip-studio-live-caption ${captionStyle.className}`}>
-                <span aria-label={captionPreviewText}>
+              <div
+                className={`clip-studio-live-caption ${captionStyle.className} caption-position-${editPreview.captionPosition} caption-size-${editPreview.captionAppearance.fontScale} ${
+                  editPreview.captionAppearance.uppercase ? "caption-uppercase" : ""
+                }`}
+                style={captionAppearanceStyle}
+                data-max-lines={editPreview.captionAppearance.maxLines}
+                onPointerDown={(event) => startOverlayDrag(event, "caption")}
+                onPointerMove={moveOverlayDrag}
+                onPointerUp={endOverlayDrag}
+                onPointerCancel={endOverlayDrag}
+                title="Drag captions"
+              >
+                <span aria-label={captionDisplayText}>
                   {captionWords.map((word, index) => (
                     <span
                       key={`${word}-${index}`}
@@ -445,23 +700,26 @@ export function ClipStudioLivePreview({
           </div>
 
           {canPreview && playbackSrc ? (
-            <div className="clip-studio-player-controls" aria-label="Live preview playback controls">
-              <button type="button" className="button secondary" onClick={togglePreviewPlayback}>
-                {isPreviewPlaying ? "Pause" : "Play"}
-              </button>
-              <input
-                aria-label="Preview position"
-                type="range"
-                min="0"
-                max={Math.max(0, previewDurationSeconds ?? 0)}
-                step="0.1"
-                value={Math.min(previewSeconds, previewDurationSeconds ?? previewSeconds)}
-                onChange={(event) => scrubPreview(Number(event.target.value))}
-                disabled={!previewDurationSeconds || previewDurationSeconds <= 0}
-              />
-              <span>
-                {formatSecondsForPastorView(previewSeconds)} / {previewDurationSeconds !== null ? formatSecondsForPastorView(previewDurationSeconds) : "--:--"}
-              </span>
+            <div className="stack-sm">
+              <div className="clip-studio-player-controls" aria-label="Live preview playback controls">
+                <button type="button" className="button secondary" onClick={togglePreviewPlayback}>
+                  {isPreviewPlaying ? "Pause" : "Play"}
+                </button>
+                <input
+                  aria-label="Preview position"
+                  type="range"
+                  min="0"
+                  max={Math.max(0, previewDurationSeconds ?? 0)}
+                  step="0.1"
+                  value={Math.min(previewSeconds, previewDurationSeconds ?? previewSeconds)}
+                  onChange={(event) => scrubPreview(Number(event.target.value))}
+                  disabled={!previewDurationSeconds || previewDurationSeconds <= 0}
+                />
+                <span>
+                  {formatSecondsForPastorView(previewSeconds)} / {previewDurationSeconds !== null ? formatSecondsForPastorView(previewDurationSeconds) : "--:--"}
+                </span>
+              </div>
+              {playbackNotice ? <p className="muted small">{playbackNotice}</p> : null}
             </div>
           ) : null}
         </div>
@@ -470,7 +728,7 @@ export function ClipStudioLivePreview({
           <div className="clip-studio-preview-spec">
             <div className="clip-studio-preview-state-line">
               <strong>{editPreview.isTimingValid ? "Preview updated" : "Preview needs timing"}</strong>
-              <span>{FRAMING_LABELS[exportSettings.framingMode]}</span>
+              <span>{framingDisplayLabel}</span>
             </div>
             <div className="clip-studio-layer-chips" aria-label="Active preview layers">
               {editPreview.applyCaptionsToClip ? <span>Captions On</span> : null}
@@ -482,7 +740,8 @@ export function ClipStudioLivePreview({
                 </span>
               ) : null}
               {speechCleanupPreviewPlan.enabled ? <span>Dead Air Removed</span> : null}
-              <span>{FRAMING_LABELS[exportSettings.framingMode]}</span>
+              {editPreview.brollLayer.enabled && editPreview.brollLayer.cards.length > 0 ? <span>B-roll On</span> : null}
+              <span>{framingDisplayLabel}</span>
             </div>
           </div>
         </div>

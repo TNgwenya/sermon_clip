@@ -9,7 +9,6 @@ import { SectionCard, StatusBadge } from "@/components/ui";
 import {
   FORMAT_LABELS,
   FRAMING_DESCRIPTIONS,
-  FRAMING_LABELS,
   FRAMING_PERSONALITY_DESCRIPTIONS,
   FRAMING_PERSONALITY_LABELS,
   PLATFORM_PRESET_LABELS,
@@ -17,6 +16,7 @@ import {
   buildFramingWarnings,
   isValidExportFormat,
   mapPlatformPresetToFormat,
+  resolveFramingDisplayLabel,
   summarizeExportSettings,
   type ExportSettings,
   type FramingPersonality,
@@ -25,13 +25,15 @@ import {
 import {
   generateSmartCropDebugSnapshotAction,
   refreshClipVideoTrackingAction,
-  resetManualCropCorrectionAction,
-  saveManualCropCorrectionAction,
   type ClipVideoTrackingActionState,
-  type ManualCropActionState,
   type SmartCropDebugActionState,
 } from "@/server/actions/sermons";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
+import {
+  buildPresetManualCropKeyframes,
+  normalizeManualCropKeyframes,
+  nudgeManualCropKeyframes,
+} from "@/lib/manualCrop";
 
 type ClipStudioFormatFramingProps = {
   clipId: string;
@@ -47,7 +49,6 @@ type ClipStudioFormatFramingProps = {
     centerX: number;
     centerY: number;
   }>;
-  manualCropKeyframes: unknown;
   manualCropUpdatedAt: string | null;
   smartCropDebugGeneratedAt: string | null;
   smartCropDebugError: string | null;
@@ -101,7 +102,7 @@ const FRAMING_MODE_CARDS: Array<{
   {
     label: "Blurred Background",
     description: "Fits the full frame into the output.",
-    personality: "SAFE_FULL_STAGE",
+    personality: "AUTO_INTELLIGENT",
     mode: "FIT_BLURRED_BACKGROUND",
   },
 ];
@@ -111,7 +112,6 @@ export function ClipStudioFormatFraming({
   clipDurationSeconds,
   initialSettings,
   videoSubjectTracks,
-  manualCropKeyframes,
   manualCropUpdatedAt,
   smartCropDebugGeneratedAt,
   smartCropDebugError,
@@ -132,6 +132,7 @@ export function ClipStudioFormatFraming({
   const [framingMode, setFramingMode] = useState(initialSettings.framingMode);
   const [framingPersonality, setFramingPersonality] = useState<FramingPersonality>(initialSettings.framingPersonality);
   const [selectedFormats, setSelectedFormats] = useState<ClipExportFormat[]>(initialSettings.selectedFormats);
+  const [manualCropPreviewKeyframes, setManualCropPreviewKeyframes] = useState(initialSettings.manualCropKeyframes);
 
   const [trackingMessage, setTrackingMessage] = useState("");
   const [trackingSuccess, setTrackingSuccess] = useState(true);
@@ -148,16 +149,15 @@ export function ClipStudioFormatFraming({
       framingMode,
       framingPersonality,
       backgroundMode: framingMode === "FIT_BLURRED_BACKGROUND" ? "BLURRED" : "CROP",
+      manualCropKeyframes: manualCropPreviewKeyframes,
     } as ExportSettings),
-    [platformPreset, primaryFormat, selectedFormats, framingMode, framingPersonality],
+    [platformPreset, primaryFormat, selectedFormats, framingMode, framingPersonality, manualCropPreviewKeyframes],
   );
 
   const previewSummary = summarizeExportSettings(previewSettings);
   const warnings = buildFramingWarnings(previewSettings);
-  const manualCropCount = Array.isArray(manualCropKeyframes) ? manualCropKeyframes.length : 0;
-  const activeModeLabel =
-    FRAMING_MODE_CARDS.find((card) => card.mode === framingMode && card.personality === framingPersonality)?.label ??
-    FRAMING_LABELS[framingMode];
+  const manualCropCount = manualCropPreviewKeyframes.length;
+  const activeModeLabel = resolveFramingDisplayLabel(previewSettings);
   const frameQualitySummary = useMemo(() => {
     if (framingDecisionSummary) {
       return framingDecisionSummary;
@@ -210,6 +210,9 @@ export function ClipStudioFormatFraming({
   function applyFraming(personality: FramingPersonality, mode: ExportSettings["framingMode"]) {
     setFramingPersonality(personality);
     setFramingMode(mode);
+    if (mode !== "SMART_CROP") {
+      setManualCropPreviewKeyframes([]);
+    }
   }
 
   function refreshTracking() {
@@ -222,26 +225,28 @@ export function ClipStudioFormatFraming({
     });
   }
 
-  function saveManualCrop(input: {
+  function previewManualCrop(input: {
     direction?: "left" | "center" | "right";
     nudge?: "left" | "right";
     keyframes?: Array<{ timeSeconds: number; centerX: number; centerY?: number; zoom?: number }>;
   }) {
     setCropMessage("");
-    startTransition(async () => {
-      const result: ManualCropActionState = await saveManualCropCorrectionAction({
-        clipId,
-        ...input,
-      });
+    const keyframes = input.keyframes
+      ? normalizeManualCropKeyframes(input.keyframes)
+      : input.nudge
+        ? nudgeManualCropKeyframes({ keyframes: manualCropPreviewKeyframes, direction: input.nudge, durationSeconds: clipDurationSeconds ?? 0 })
+        : buildPresetManualCropKeyframes({ direction: input.direction ?? "center", durationSeconds: clipDurationSeconds ?? 0 });
 
-      setCropSuccess(result.success);
-      setCropMessage(result.message);
+    if (keyframes.length === 0) {
+      setCropSuccess(false);
+      setCropMessage("Manual crop correction did not include any usable keyframes.");
+      return;
+    }
 
-      if (result.success) {
-        setFramingMode("SMART_CROP");
-        router.refresh();
-      }
-    });
+    setManualCropPreviewKeyframes(keyframes);
+    setFramingMode("SMART_CROP");
+    setCropSuccess(true);
+    setCropMessage("Framing adjusted in preview. Prepare for Posting saves it.");
   }
 
   function saveManualKeyframes(input: { centerX?: number; centerY?: number; zoom?: number }) {
@@ -253,7 +258,7 @@ export function ClipStudioFormatFraming({
       zoom: input.zoom ?? 1,
     };
 
-    saveManualCrop({
+    previewManualCrop({
       keyframes: durationSeconds > 0
         ? [keyframe, { ...keyframe, timeSeconds: durationSeconds }]
         : [keyframe],
@@ -262,15 +267,13 @@ export function ClipStudioFormatFraming({
 
   function resetManualCrop() {
     setCropMessage("");
-    startTransition(async () => {
-      const result: ManualCropActionState = await resetManualCropCorrectionAction(clipId);
-      setCropSuccess(result.success);
-      setCropMessage(result.message);
-
-      if (result.success) {
-        router.refresh();
-      }
-    });
+    setManualCropPreviewKeyframes([]);
+    if (initialSettings.manualCropKeyframes.length === 0) {
+      setFramingMode(initialSettings.framingMode);
+      setFramingPersonality(initialSettings.framingPersonality);
+    }
+    setCropSuccess(true);
+    setCropMessage("Manual crop reset in preview. Prepare for Posting saves it.");
   }
 
   function generateDebugSnapshot() {
@@ -383,21 +386,21 @@ export function ClipStudioFormatFraming({
             </StatusBadge>
           </div>
           <div className="framing-control-grid compact">
-            <button type="button" className="button secondary" onClick={() => saveManualCrop({ direction: "left" })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => previewManualCrop({ direction: "left" })} disabled={isPending}>
               Left
             </button>
-            <button type="button" className="button secondary" onClick={() => saveManualCrop({ direction: "center" })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => previewManualCrop({ direction: "center" })} disabled={isPending}>
               Center
             </button>
-            <button type="button" className="button secondary" onClick={() => saveManualCrop({ direction: "right" })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => previewManualCrop({ direction: "right" })} disabled={isPending}>
               Right
             </button>
           </div>
           <div className="framing-nudge-row">
-            <button type="button" className="button secondary" onClick={() => saveManualCrop({ nudge: "left" })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => previewManualCrop({ nudge: "left" })} disabled={isPending}>
               Nudge left
             </button>
-            <button type="button" className="button secondary" onClick={() => saveManualCrop({ nudge: "right" })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => previewManualCrop({ nudge: "right" })} disabled={isPending}>
               Nudge right
             </button>
             <button type="button" className="button secondary" onClick={resetManualCrop} disabled={isPending || manualCropCount === 0}>
@@ -422,8 +425,8 @@ export function ClipStudioFormatFraming({
           </div>
           <p className="muted small">
             {manualCropCount > 0
-              ? `Framing updated${manualCropUpdatedAt ? ` ${new Date(manualCropUpdatedAt).toLocaleString()}` : ""}. Prepare again when ready.`
-              : "Manual adjust saves a crop correction for the final render."}
+              ? `Framing adjusted${manualCropUpdatedAt ? ` ${new Date(manualCropUpdatedAt).toLocaleString()}` : ""}. Prepare for Posting saves it.`
+              : "Manual adjust previews a crop correction for the final render."}
           </p>
           {cropMessage ? (
             <p className={cropSuccess ? "success-banner" : "error-banner"} role="status" aria-live="polite">

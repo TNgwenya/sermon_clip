@@ -117,6 +117,34 @@ describe("preset summaries", () => {
 
     expect(summary).toContain("Brand layers are off");
   });
+
+  it("includes intro, outro, and background style layers in summaries", () => {
+    const summary = __clipBrandingTestUtils.buildBrandingSummary(
+      {
+        enabled: true,
+        preset: "SERMON_IDENTITY",
+        showChurchName: true,
+        showSermonTitle: false,
+        showPreacherName: false,
+        watermarkEnabled: false,
+        lowerThirdEnabled: false,
+        introEnabled: true,
+        outroEnabled: true,
+        backgroundStyle: "SOLID_BRAND",
+        themeColor: "#0F766E",
+      },
+      {
+        churchName: "Grace Church",
+        sermonTitle: "Faith Through Trials",
+        preacherName: "Pastor James",
+        logoPath: null,
+      },
+    );
+
+    expect(summary).toContain("intro brand badge");
+    expect(summary).toContain("outro brand badge");
+    expect(summary).toContain("background style");
+  });
 });
 
 describe("render filter generation", () => {

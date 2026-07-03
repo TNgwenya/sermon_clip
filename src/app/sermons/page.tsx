@@ -6,6 +6,7 @@ import {
   StatCard,
 } from "@/components/ui";
 import { prisma } from "@/lib/prisma";
+import { DeleteSermonProjectButton } from "@/app/sermons/delete-sermon-project-button";
 
 export const dynamic = "force-dynamic";
 
@@ -409,7 +410,10 @@ export default async function SermonsPage({ searchParams }: { searchParams: Prom
                   <span><strong>{featured.stats.readyClipCount}</strong> ready</span>
                   <span><strong>{featured.stats.failedClipCount + featured.stats.failedJobCount}</strong> issues</span>
                 </div>
-                <Link href={`/sermons/${featured.sermon.id}`} className="button primary">{getNextAction(featured.sermon, featured.stats)}</Link>
+                <div className="library-project-actions">
+                  <Link href={`/sermons/${featured.sermon.id}`} className="button primary">{getNextAction(featured.sermon, featured.stats)}</Link>
+                  <DeleteSermonProjectButton sermonId={featured.sermon.id} sermonTitle={featured.sermon.title} />
+                </div>
               </div>
             </>
           ) : (
@@ -453,7 +457,7 @@ export default async function SermonsPage({ searchParams }: { searchParams: Prom
 
                     return (
                       <li key={sermon.id}>
-                        <Link href={`/sermons/${sermon.id}`} className={`library-sermon-card${stats.needsAttention ? " needs-attention" : ""}`}>
+                        <article className={`library-sermon-card${stats.needsAttention ? " needs-attention" : ""}`}>
                           <span className={`library-status-rail ${getPrimaryStatusTone(sermon, stats)}`} />
                           <div className="library-sermon-main stack-sm">
                             <div className="clip-badge-row">
@@ -477,9 +481,10 @@ export default async function SermonsPage({ searchParams }: { searchParams: Prom
                           </div>
 
                           <div className="library-sermon-meta">
-                            <span className="button secondary">{nextAction}</span>
+                            <Link href={`/sermons/${sermon.id}`} className="button secondary">{nextAction}</Link>
+                            <DeleteSermonProjectButton sermonId={sermon.id} sermonTitle={sermon.title} />
                           </div>
-                        </Link>
+                        </article>
                       </li>
                     );
                   })}

@@ -15,9 +15,7 @@
 .clip-studio-layout {
   display: grid;
   grid-template-columns: minmax(280px, 0.82fr) minmax(420px, 1.18fr) minmax(340px, 0.96fr);
-  grid-template-areas:
-    "transcript preview tools"
-    "timeline timeline timeline";
+  grid-template-areas: "transcript preview tools";
   gap: 0.9rem;
   align-items: start;
 }
@@ -45,10 +43,17 @@
 
 .clip-studio-main-column {
   grid-area: tools;
+  position: sticky;
+  top: 0.85rem;
+  max-height: calc(100vh - 14rem);
+  min-height: 0;
+  overflow: auto;
+  padding-right: 0.2rem;
 }
 
 .clip-studio-bottom-timeline {
-  grid-area: timeline;
+  grid-area: auto;
+  width: 100%;
   padding: 0.85rem;
   background:
     linear-gradient(180deg, rgba(117, 217, 184, 0.08), transparent 42%),
@@ -197,7 +202,8 @@
   width: 100%;
   min-height: 2.35rem;
   padding: 0.48rem 0.55rem;
-  text-align: left;
+  overflow-wrap: anywhere;
+  text-align: center;
   white-space: normal;
 }
 
@@ -237,19 +243,32 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.clip-studio-diagnostics-disclosure {
+  grid-column: 2;
+  opacity: 0.82;
+}
+
+.clip-studio-diagnostics-disclosure .clip-studio-details {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
 @media (max-width: 1180px) {
   .clip-studio-layout {
     grid-template-columns: minmax(280px, 0.88fr) minmax(360px, 1.12fr);
     grid-template-areas:
       "preview preview"
-      "transcript tools"
-      "timeline timeline";
+      "transcript tools";
   }
 
   .clip-studio-preview-column,
   .clip-studio-transcript-rail,
-  .clip-studio-workbench-head {
+  .clip-studio-workbench-head,
+  .clip-studio-main-column {
     position: static;
+    max-height: none;
+    overflow: visible;
   }
 
   .clip-studio-transcript-rail {
@@ -263,8 +282,7 @@
     grid-template-areas:
       "preview"
       "transcript"
-      "tools"
-      "timeline";
+      "tools";
   }
 
   .clip-studio-transcript-rail {
@@ -280,19 +298,149 @@
     grid-column: 1;
   }
 
+  .clip-studio-diagnostics-disclosure {
+    grid-column: 1;
+  }
+
   .clip-studio-tabs {
-    display: flex;
-    overflow-x: auto;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.25rem;
+    overflow: visible;
   }
 
   .clip-studio-tab {
-    flex: 0 0 auto;
-    width: auto;
-    min-width: 7rem;
+    width: 100%;
+    min-width: 0;
+    padding-inline: 0.32rem;
+    text-align: center;
   }
 
   .clip-studio-transcript-line {
     grid-template-columns: 3.4rem minmax(0, 1fr);
+  }
+}
+
+.clip-studio-transcript-line.is-focused {
+  border-color: rgba(248, 250, 252, 0.72);
+  box-shadow:
+    0 0 0 1px rgba(117, 217, 184, 0.38),
+    0 12px 24px rgba(0, 0, 0, 0.16);
+}
+
+.clip-studio-transcript-active {
+  display: grid;
+  gap: 0.62rem;
+  border: 1px solid rgba(117, 217, 184, 0.24);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(117, 217, 184, 0.08), rgba(255, 255, 255, 0.035)),
+    rgba(255, 255, 255, 0.025);
+  padding: 0.68rem;
+}
+
+.clip-studio-transcript-active strong {
+  display: block;
+  margin-top: 0.16rem;
+  font-size: 0.92rem;
+}
+
+.clip-studio-transcript-active p {
+  margin-top: 0.25rem;
+  line-height: 1.38;
+}
+
+.clip-studio-transcript-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.38rem;
+}
+
+.clip-studio-transcript-actions.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.clip-studio-transcript-actions .button {
+  width: 100%;
+  min-height: 2.2rem;
+  padding-inline: 0.48rem;
+  white-space: normal;
+}
+
+@media (max-width: 760px) {
+  .clip-studio-transcript-actions,
+  .clip-studio-transcript-actions.compact {
+    grid-template-columns: 1fr;
+  }
+}
+
+.clip-studio-transcript-rail {
+  grid-template-rows: auto auto auto auto minmax(8rem, 1fr);
+  min-height: 0;
+}
+
+.clip-studio-transcript-list {
+  align-content: start;
+  max-height: none;
+  overscroll-behavior: contain;
+}
+
+.clip-studio-transcript-active {
+  align-self: start;
+}
+
+.clip-studio-transcript-word-editor {
+  margin-top: 0.45rem;
+}
+
+.clip-studio-transcript-word-editor textarea {
+  min-height: 5.6rem;
+  max-height: 11rem;
+  resize: vertical;
+}
+
+.clip-studio-timeline-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.clip-studio-timeline-boundary-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(4.2rem, 1fr));
+  gap: 0.35rem;
+}
+
+.clip-studio-timeline-boundary-actions .button {
+  min-height: 2.2rem;
+  padding-inline: 0.45rem;
+  white-space: normal;
+}
+
+.clip-studio-bottom-timeline .clip-studio-timeline-handle {
+  z-index: 7;
+  width: 0.44rem;
+  height: 2rem;
+  border: 1px solid rgba(2, 6, 23, 0.72);
+  border-radius: 999px;
+  background: #f8fafc;
+  box-shadow:
+    0 0 0 2px rgba(117, 217, 184, 0.34),
+    0 12px 26px rgba(0, 0, 0, 0.28);
+}
+
+@media (max-width: 1180px) {
+  .clip-studio-transcript-rail {
+    grid-template-rows: auto auto auto auto minmax(12rem, 1fr);
+  }
+
+  .clip-studio-timeline-action-row {
+    grid-template-columns: 1fr;
+  }
+
+  .clip-studio-timeline-boundary-actions {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
@@ -2497,6 +2645,20 @@ textarea::placeholder {
   gap: 1rem;
 }
 
+.library-project-actions {
+  display: grid;
+  gap: 0.45rem;
+  justify-items: stretch;
+  width: min(100%, 13rem);
+}
+
+.library-project-actions .button,
+.library-project-actions .library-delete-control,
+.library-sermon-meta .button,
+.library-sermon-meta .library-delete-control {
+  width: 100%;
+}
+
 .library-inline-metrics,
 .library-sermon-facts,
 .library-view-tabs {
@@ -2692,7 +2854,48 @@ textarea::placeholder {
 
 .library-sermon-meta {
   display: grid;
+  gap: 0.45rem;
   justify-items: end;
+}
+
+.library-delete-control {
+  position: relative;
+}
+
+.library-delete-trigger {
+  width: 100%;
+}
+
+.library-delete-confirm {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  z-index: 20;
+  display: grid;
+  gap: 0.65rem;
+  width: min(22rem, calc(100vw - 2rem));
+  border: 1px solid rgba(248, 113, 113, 0.34);
+  border-radius: 8px;
+  background: #17171c;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
+  padding: 0.85rem;
+}
+
+.library-delete-confirm-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.library-delete-confirm-field span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 850;
+}
+
+.library-delete-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem;
 }
 
 .status-pill.tone-neutral {
@@ -4941,6 +5144,268 @@ textarea::placeholder {
   line-height: 1.25;
 }
 
+.social-calendar-panel {
+  display: grid;
+  gap: 0.9rem;
+  margin: 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(110, 231, 216, 0.045), transparent 18rem),
+    #111115;
+  padding: 1rem;
+}
+
+.social-calendar-header,
+.social-calendar-toolbar,
+.social-calendar-day-head,
+.social-calendar-window-controls,
+.social-calendar-summary {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.social-calendar-header {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.social-calendar-window-controls {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.social-calendar-toolbar {
+  align-items: end;
+  justify-content: space-between;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #101014;
+  padding: 0.65rem;
+}
+
+.social-calendar-toolbar .ready-select-field {
+  min-width: 12rem;
+}
+
+.social-calendar-summary {
+  flex: 1;
+  min-width: 16rem;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.social-calendar-summary strong {
+  color: #f8fafc;
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.social-calendar-summary span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.social-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.social-calendar-day {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 0.65rem;
+  min-height: 20rem;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #151519;
+  padding: 0.72rem;
+}
+
+.social-calendar-day.is-today {
+  border-color: rgba(110, 231, 216, 0.48);
+  box-shadow: 0 0 0 1px rgba(110, 231, 216, 0.14);
+}
+
+.social-calendar-day.is-past {
+  opacity: 0.72;
+}
+
+.social-calendar-day-head {
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.social-calendar-day-head h3 {
+  font-size: 0.96rem;
+  line-height: 1.18;
+}
+
+.social-calendar-date {
+  display: grid;
+  place-items: center;
+  flex: 0 0 2.8rem;
+  min-height: 3.2rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #101014;
+}
+
+.social-calendar-date span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.social-calendar-date strong {
+  color: #f8fafc;
+  font-size: 1.28rem;
+  line-height: 1;
+}
+
+.social-calendar-schedule-button {
+  width: 100%;
+  min-height: 2.15rem;
+}
+
+.social-calendar-post-list {
+  display: grid;
+  align-content: start;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.social-calendar-post {
+  display: grid;
+  grid-template-columns: 2.25rem minmax(0, 1fr);
+  gap: 0.48rem;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #101014;
+  padding: 0.55rem;
+}
+
+.social-calendar-post.is-planned {
+  border-color: rgba(110, 231, 216, 0.18);
+}
+
+.social-calendar-post.is-posting {
+  border-color: rgba(59, 130, 246, 0.34);
+}
+
+.social-calendar-post.is-posted {
+  border-color: rgba(74, 222, 128, 0.34);
+}
+
+.social-calendar-post.needs-attention {
+  border-color: rgba(248, 113, 113, 0.34);
+}
+
+.social-calendar-post .platform-mark {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 8px;
+}
+
+.social-calendar-post .social-platform-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.social-calendar-post-copy {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+}
+
+.social-calendar-post-copy strong,
+.social-calendar-post-copy span,
+.social-calendar-post-copy small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.social-calendar-post-copy strong {
+  color: #f8fafc;
+  font-size: 0.82rem;
+  line-height: 1.2;
+}
+
+.social-calendar-post-copy span,
+.social-calendar-post-copy small {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.social-calendar-post-actions {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
+  gap: 0.35rem;
+}
+
+.social-calendar-reschedule-field {
+  display: grid;
+  gap: 0.18rem;
+  grid-column: 1 / -1;
+}
+
+.social-calendar-reschedule-field span {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.social-calendar-reschedule-field input {
+  width: 100%;
+  min-height: 2rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #151519;
+  color: var(--text);
+  padding: 0 0.45rem;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.social-calendar-post-actions .button {
+  width: 100%;
+  min-height: 2rem;
+  padding-inline: 0.4rem;
+  font-size: 0.76rem;
+}
+
+.social-calendar-unscheduled {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #101014;
+  padding: 0.75rem;
+}
+
+.social-calendar-unscheduled summary {
+  color: #f8fafc;
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.social-calendar-unscheduled[open] {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.compact-calendar-card {
+  grid-template-columns: 3rem minmax(0, 1fr) minmax(10rem, 0.45fr);
+}
+
 .asset-select-check input {
   width: 1.6rem;
   height: 1.6rem;
@@ -6321,7 +6786,7 @@ textarea::placeholder {
 }
 
 .schedule-draft-modal {
-  max-width: 720px;
+  max-width: 880px;
   gap: 0.85rem;
 }
 
@@ -6368,6 +6833,75 @@ textarea::placeholder {
 .schedule-two-column {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: end;
+}
+
+.bulk-scheduler-sequence {
+  border: 1px solid rgba(110, 231, 216, 0.18);
+  border-radius: 8px;
+  background: rgba(110, 231, 216, 0.045);
+  padding: 0.72rem;
+}
+
+.bulk-scheduler-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.bulk-scheduler-heading strong {
+  color: #f8fafc;
+  font-size: 0.98rem;
+}
+
+.bulk-scheduler-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.bulk-scheduler-row {
+  display: grid;
+  grid-template-columns: 4.4rem minmax(0, 1fr) minmax(5.2rem, auto);
+  gap: 0.65rem;
+  align-items: start;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #111115;
+  padding: 0.65rem;
+}
+
+.bulk-scheduler-order,
+.bulk-scheduler-copy {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.bulk-scheduler-order label,
+.bulk-scheduler-copy label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.bulk-scheduler-order input {
+  min-height: 2.45rem;
+  text-align: center;
+}
+
+.bulk-scheduler-copy textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+
+.bulk-scheduler-row-actions {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.bulk-scheduler-row-actions .button {
+  min-height: 2.25rem;
+  width: 100%;
 }
 
 .platform-toggle-grid {
@@ -6617,6 +7151,28 @@ textarea::placeholder {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .social-calendar-header,
+  .social-calendar-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .social-calendar-window-controls {
+    justify-content: stretch;
+  }
+
+  .social-calendar-window-controls .button {
+    flex: 1 1 8rem;
+  }
+
+  .social-calendar-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .compact-calendar-card {
+    grid-template-columns: 3rem minmax(0, 1fr);
+  }
+
   .caption-copy-grid {
     grid-template-columns: 1fr;
   }
@@ -6836,6 +7392,10 @@ textarea::placeholder {
     justify-items: stretch;
   }
 
+  .library-project-actions {
+    width: 100%;
+  }
+
   .library-inline-metrics {
     justify-content: flex-start;
     max-width: none;
@@ -6881,6 +7441,16 @@ textarea::placeholder {
 
   .library-sermon-meta {
     justify-items: stretch;
+  }
+
+  .library-delete-confirm {
+    position: static;
+    width: 100%;
+    margin-top: 0.5rem;
+  }
+
+  .library-delete-actions {
+    grid-template-columns: 1fr;
   }
 
   .processing-step-grid {
@@ -7312,6 +7882,40 @@ textarea::placeholder {
 
   .manual-publishing-actions {
     grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .social-calendar-panel {
+    padding: 0.72rem;
+  }
+
+  .social-calendar-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .social-calendar-day {
+    min-height: 0;
+  }
+
+  .social-calendar-toolbar .ready-select-field,
+  .social-calendar-summary {
+    min-width: 0;
+  }
+
+  .social-calendar-post-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .bulk-scheduler-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .bulk-scheduler-row {
+    grid-template-columns: 1fr;
+  }
+
+  .bulk-scheduler-row-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -8275,6 +8879,13 @@ textarea::placeholder {
     object-position: 72% center;
   }
 
+  .clip-studio-live-frame.has-manual-crop .clip-studio-video {
+    object-fit: cover;
+    object-position: var(--clip-manual-x, 50%) var(--clip-manual-y, 50%);
+    transform: scale(var(--clip-manual-zoom, 1));
+    transform-origin: var(--clip-manual-x, 50%) var(--clip-manual-y, 50%);
+  }
+
   .clip-studio-live-frame.frame-fit .clip-studio-video {
     width: 86%;
     height: 86%;
@@ -8412,16 +9023,45 @@ textarea::placeholder {
     z-index: 6;
     left: 0.78rem;
     right: 0.78rem;
-    bottom: 4.65rem;
+    bottom: calc(4.65rem + var(--caption-offset-y, 0px));
     display: grid;
     gap: 0.22rem;
     justify-items: center;
-    pointer-events: none;
+    cursor: grab;
+    pointer-events: auto;
     text-align: center;
+    touch-action: none;
   }
 
   .clip-studio-live-frame:not(.branding-on) .clip-studio-live-caption {
-    bottom: 1.05rem;
+    bottom: calc(1.05rem + var(--caption-offset-y, 0px));
+  }
+
+  .clip-studio-live-caption.caption-position-lower {
+    top: auto;
+    bottom: calc(4.65rem + var(--caption-offset-y, 0px));
+    transform: none;
+  }
+
+  .clip-studio-live-frame:not(.branding-on) .clip-studio-live-caption.caption-position-lower {
+    bottom: calc(1.05rem + var(--caption-offset-y, 0px));
+  }
+
+  .clip-studio-live-caption.caption-position-middle {
+    top: 50%;
+    bottom: auto;
+    transform: translateY(calc(-50% - var(--caption-offset-y, 0px)));
+  }
+
+  .clip-studio-live-caption.caption-position-top {
+    top: calc(4.35rem - var(--caption-offset-y, 0px));
+    bottom: auto;
+    transform: none;
+  }
+
+  .clip-studio-live-frame:not(.branding-on) .clip-studio-live-caption.caption-position-middle,
+  .clip-studio-live-frame:not(.branding-on) .clip-studio-live-caption.caption-position-top {
+    bottom: auto;
   }
 
   .clip-studio-live-hook {
@@ -8439,6 +9079,14 @@ textarea::placeholder {
     text-align: center;
     text-wrap: balance;
     text-shadow: 0 1px 10px rgba(0, 0, 0, 0.55);
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .clip-studio-live-frame.is-dragging-overlay .clip-studio-live-caption,
+  .clip-studio-live-frame.is-dragging-overlay .clip-studio-live-hook,
+  .clip-studio-live-frame.is-dragging-overlay .clip-studio-live-broll {
+    cursor: grabbing;
   }
 
   .clip-studio-live-hook.is-bold {
@@ -8482,6 +9130,94 @@ textarea::placeholder {
 
   .clip-studio-live-hook.hook-pop {
     border: 2px solid color-mix(in srgb, var(--clip-brand-color), white 28%);
+  }
+
+  .clip-studio-live-broll {
+    position: absolute;
+    z-index: 6;
+    left: 0.86rem;
+    right: 0.86rem;
+    display: grid;
+    gap: 0.42rem;
+    place-items: center;
+    border: 2px solid rgba(255, 255, 255, 0.18);
+    border-radius: 14px;
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.16), transparent 42%),
+      rgba(13, 17, 25, 0.84);
+    box-shadow: 0 24px 54px rgba(0, 0, 0, 0.34);
+    color: #f8fafc;
+    padding: 1rem 0.82rem;
+    text-align: center;
+    text-wrap: balance;
+    cursor: grab;
+    pointer-events: auto;
+    touch-action: none;
+  }
+
+  .clip-studio-live-broll span {
+    color: #75d9b8;
+    font-size: 0.7rem;
+    font-weight: 900;
+    letter-spacing: 0;
+    text-transform: uppercase;
+  }
+
+  .clip-studio-live-broll strong {
+    max-width: 100%;
+    font-size: 1.26rem;
+    font-weight: 950;
+    line-height: 1.08;
+    overflow-wrap: anywhere;
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.58);
+  }
+
+  .clip-studio-live-broll.broll-position-full {
+    top: 50%;
+    min-height: 38%;
+    transform: translateY(-50%);
+  }
+
+  .clip-studio-live-broll.broll-position-upper {
+    top: 5.1rem;
+    min-height: 8.8rem;
+  }
+
+  .clip-studio-live-broll.broll-position-lower {
+    bottom: 8.8rem;
+    min-height: 8.8rem;
+  }
+
+  .clip-studio-live-broll.broll-scripture {
+    border-color: rgba(117, 217, 184, 0.46);
+  }
+
+  .clip-studio-live-broll.broll-scripture span {
+    color: #75d9b8;
+  }
+
+  .clip-studio-live-broll.broll-application {
+    border-color: rgba(250, 204, 21, 0.48);
+  }
+
+  .clip-studio-live-broll.broll-application span {
+    color: #facc15;
+  }
+
+  .clip-studio-live-broll.broll-context {
+    border-color: rgba(147, 197, 253, 0.48);
+  }
+
+  .clip-studio-live-broll.broll-context span {
+    color: #93c5fd;
+  }
+
+  .clip-studio-live-broll.broll-quote {
+    border-color: rgba(240, 171, 252, 0.46);
+  }
+
+  .clip-studio-live-broll.broll-quote span {
+    color: #f0abfc;
   }
 
   .clip-studio-live-caption > span {
@@ -8635,6 +9371,18 @@ textarea::placeholder {
   .clip-studio-live-caption.caption-style-cinematic-testimony > span {
     background: rgba(3, 7, 18, 0.88);
     outline: 1px solid rgba(226, 232, 240, 0.22);
+  }
+
+  .clip-studio-live-caption.caption-size-compact > span {
+    font-size: 0.88rem;
+  }
+
+  .clip-studio-live-caption.caption-size-large > span {
+    font-size: 1.12rem;
+  }
+
+  .clip-studio-live-caption.caption-uppercase > span {
+    text-transform: uppercase;
   }
 
   .clip-studio-live-caption small {
@@ -8885,6 +9633,17 @@ textarea::placeholder {
     padding: 0.34rem 0.62rem;
   }
 
+  .clip-studio-intensity-control {
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .clip-studio-intensity-row .button[aria-pressed="true"] {
+    border-color: rgba(117, 217, 184, 0.72);
+    background: rgba(117, 217, 184, 0.16);
+    color: #f8fafc;
+  }
+
   .clip-studio-simple-timing {
     display: grid;
     gap: 0.75rem;
@@ -8957,11 +9716,8 @@ textarea::placeholder {
   }
 
   .clip-studio-timeline-track-interactive {
-    min-height: 1rem;
-  }
-
-  .clip-studio-edit-deck .clip-studio-timeline-track-interactive {
-    height: 2.2rem;
+    min-height: 2.25rem;
+    height: 2.25rem;
     border: 1px solid rgba(148, 163, 184, 0.16);
     background:
       repeating-linear-gradient(
@@ -8972,6 +9728,11 @@ textarea::placeholder {
         transparent 8%
       ),
       #151823;
+    overflow: visible;
+  }
+
+  .clip-studio-edit-deck .clip-studio-timeline-track-interactive {
+    height: 2.2rem;
     overflow: hidden;
   }
 
@@ -8992,22 +9753,380 @@ textarea::placeholder {
       0 10px 24px rgba(117, 217, 184, 0.14);
   }
 
+  .clip-studio-timeline-track-interactive .clip-studio-timeline-selection {
+    top: 0.34rem;
+    bottom: 0.34rem;
+    border-radius: 8px;
+  }
+
   .clip-studio-timeline-dead-air {
     position: absolute;
-    z-index: 4;
-    top: 0.42rem;
-    bottom: 0.42rem;
-    border-radius: 999px;
+    z-index: 5;
+    top: 0.26rem;
+    bottom: 0.26rem;
+    min-width: 0.68rem;
+    border: 0;
+    border-radius: 8px;
+    cursor: grab;
+    padding: 0;
+    pointer-events: auto;
+    touch-action: none;
+  }
+
+  .clip-studio-timeline-dead-air:active {
+    cursor: grabbing;
+  }
+
+  .clip-studio-timeline-dead-air.is-audio {
     background:
       repeating-linear-gradient(
         45deg,
-        rgba(248, 113, 113, 0.82) 0,
-        rgba(248, 113, 113, 0.82) 4px,
-        rgba(127, 29, 29, 0.88) 4px,
-        rgba(127, 29, 29, 0.88) 8px
+        rgba(248, 113, 113, 0.98) 0,
+        rgba(248, 113, 113, 0.98) 5px,
+        rgba(127, 29, 29, 0.96) 5px,
+        rgba(127, 29, 29, 0.96) 10px
       );
-    box-shadow: 0 0 0 1px rgba(254, 202, 202, 0.38);
+    box-shadow:
+      0 0 0 2px rgba(254, 202, 202, 0.58),
+      0 0 18px rgba(248, 113, 113, 0.34);
+  }
+
+  .clip-studio-timeline-dead-air.is-transcript {
+    border: 2px dashed rgba(251, 191, 36, 0.9);
+    background:
+      repeating-linear-gradient(
+        45deg,
+        rgba(251, 191, 36, 0.24) 0,
+        rgba(251, 191, 36, 0.24) 5px,
+        rgba(146, 64, 14, 0.34) 5px,
+        rgba(146, 64, 14, 0.34) 10px
+      );
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.75);
+  }
+
+  .clip-studio-timeline-dead-air.is-disabled {
+    border: 1px solid rgba(148, 163, 184, 0.62);
+    background: rgba(71, 85, 105, 0.72);
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.85);
+  }
+
+  .clip-studio-timeline-dead-air.is-selected {
+    outline: 2px solid rgba(117, 217, 184, 0.95);
+    outline-offset: 3px;
+    z-index: 7;
+  }
+
+  .clip-studio-timeline-cut-label {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    max-width: 7.4rem;
+    overflow: hidden;
+    border: 1px solid rgba(15, 23, 42, 0.75);
+    border-radius: 999px;
+    transform: translate(-50%, -50%);
+    background: rgba(248, 250, 252, 0.96);
+    color: #111827;
+    font-size: 0.62rem;
+    font-weight: 950;
+    line-height: 1;
+    padding: 0.22rem 0.38rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     pointer-events: none;
+  }
+
+  .clip-studio-timeline-dead-air.is-transcript .clip-studio-timeline-cut-label {
+    background: #fef3c7;
+    color: #78350f;
+  }
+
+  .clip-studio-timeline-dead-air.is-active .clip-studio-timeline-cut-label {
+    display: none;
+  }
+
+  .clip-studio-timeline-cut-resize {
+    position: absolute;
+    top: 0.08rem;
+    bottom: 0.08rem;
+    z-index: 2;
+    width: 0.46rem;
+    border-radius: 999px;
+    background: rgba(248, 250, 252, 0.84);
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.5);
+    cursor: ew-resize;
+  }
+
+  .clip-studio-timeline-cut-resize.is-start {
+    left: -0.16rem;
+  }
+
+  .clip-studio-timeline-cut-resize.is-end {
+    right: -0.16rem;
+  }
+
+  .clip-studio-pacing-panel {
+    display: grid;
+    gap: 0.72rem;
+    border-block: 1px solid rgba(148, 163, 184, 0.18);
+    background:
+      linear-gradient(90deg, rgba(117, 217, 184, 0.08), rgba(126, 141, 255, 0.05)),
+      rgba(15, 23, 42, 0.2);
+    padding: 0.78rem 0;
+  }
+
+  .clip-studio-pacing-summary {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .clip-studio-pacing-summary strong {
+    display: block;
+    margin-top: 0.12rem;
+    color: #f8fafc;
+    font-size: 0.98rem;
+  }
+
+  .clip-studio-pacing-summary > div > span {
+    display: block;
+    margin-top: 0.2rem;
+    color: #a8b3c4;
+    font-size: 0.82rem;
+  }
+
+  .clip-studio-pacing-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .clip-studio-pacing-actions .button {
+    min-height: 2.08rem;
+    padding-inline: 0.65rem;
+  }
+
+  .clip-studio-layer-stack {
+    display: grid;
+    gap: 0.42rem;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.03);
+    padding: 0.58rem;
+  }
+
+  .clip-studio-layer-row {
+    display: grid;
+    grid-template-columns: 6.4rem minmax(0, 1fr) auto;
+    gap: 0.55rem;
+    align-items: center;
+    min-height: 2.45rem;
+  }
+
+  .clip-studio-layer-label {
+    display: grid;
+    gap: 0.12rem;
+    min-width: 0;
+  }
+
+  .clip-studio-layer-label strong {
+    color: #f8fafc;
+    font-size: 0.82rem;
+    line-height: 1.1;
+  }
+
+  .clip-studio-layer-label span {
+    overflow: hidden;
+    color: #94a3b8;
+    font-size: 0.72rem;
+    font-weight: 750;
+    line-height: 1.1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .clip-studio-layer-track {
+    position: relative;
+    height: 1.42rem;
+    overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 7px;
+    background:
+      repeating-linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.045) 0,
+        rgba(255, 255, 255, 0.045) 1px,
+        transparent 1px,
+        transparent 10%
+      ),
+      rgba(15, 23, 42, 0.54);
+  }
+
+  .clip-studio-layer-segment {
+    position: absolute;
+    top: 0.22rem;
+    bottom: 0.22rem;
+    min-width: 0.72rem;
+    overflow: hidden;
+    border: 0;
+    border-radius: 5px;
+    color: #0f172a;
+    cursor: pointer;
+    padding: 0;
+    text-align: center;
+  }
+
+  .clip-studio-layer-segment span {
+    display: block;
+    overflow: hidden;
+    font-size: 0.62rem;
+    font-weight: 950;
+    line-height: 1.1;
+    padding-inline: 0.2rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .clip-studio-layer-segment:hover,
+  .clip-studio-layer-segment:focus-visible {
+    outline: 2px solid rgba(248, 250, 252, 0.78);
+    outline-offset: 2px;
+  }
+
+  .clip-studio-layer-segment.is-caption {
+    background: linear-gradient(90deg, #7dd3fc, #75d9b8);
+  }
+
+  .clip-studio-layer-segment.is-hook {
+    background: linear-gradient(90deg, #f0abfc, #c084fc);
+  }
+
+  .clip-studio-layer-segment.is-broll {
+    background: linear-gradient(90deg, #facc15, #fb7185);
+  }
+
+  .clip-studio-layer-segment.is-audio {
+    background: repeating-linear-gradient(
+      45deg,
+      #f87171 0,
+      #f87171 5px,
+      #991b1b 5px,
+      #991b1b 10px
+    );
+  }
+
+  .clip-studio-layer-segment.is-kept {
+    background: rgba(148, 163, 184, 0.62);
+    color: #f8fafc;
+  }
+
+  .clip-studio-layer-empty {
+    position: absolute;
+    inset: 0.38rem 0.48rem;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.12);
+  }
+
+  .clip-studio-layer-row.is-disabled .clip-studio-layer-track {
+    opacity: 0.7;
+  }
+
+  .clip-studio-layer-row .button {
+    min-height: 1.9rem;
+    min-width: 3.8rem;
+    padding: 0.26rem 0.48rem;
+  }
+
+  .clip-studio-cleanup-review {
+    display: grid;
+    gap: 0.62rem;
+    border-block: 1px solid rgba(148, 163, 184, 0.16);
+    padding: 0.72rem 0;
+  }
+
+  .clip-studio-cleanup-review-list {
+    display: grid;
+    gap: 0.48rem;
+  }
+
+  .clip-studio-cleanup-review-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.7rem;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-left: 3px solid rgba(248, 113, 113, 0.9);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.035);
+    padding: 0.62rem;
+  }
+
+  .clip-studio-cleanup-review-item.is-kept {
+    border-left-color: rgba(148, 163, 184, 0.9);
+    background: rgba(71, 85, 105, 0.18);
+  }
+
+  .clip-studio-cleanup-review-item.is-selected {
+    border-color: rgba(117, 217, 184, 0.62);
+    box-shadow: 0 0 0 1px rgba(117, 217, 184, 0.16);
+  }
+
+  .clip-studio-cleanup-review-item strong {
+    display: block;
+    margin-top: 0.12rem;
+    color: #f8fafc;
+  }
+
+  .clip-studio-cleanup-review-actions,
+  .clip-studio-cleanup-review-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.4rem;
+  }
+
+  .clip-studio-cleanup-review-actions .button,
+  .clip-studio-cleanup-review-footer .button {
+    min-height: 2rem;
+    padding-inline: 0.58rem;
+  }
+
+  .clip-studio-cleanup-review-empty {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    color: #f8fafc;
+  }
+
+  .clip-studio-cleanup-editor {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.035);
+    padding: 0.72rem;
+  }
+
+  .clip-studio-cleanup-editor strong {
+    display: block;
+    margin-top: 0.12rem;
+  }
+
+  .clip-studio-cleanup-editor-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.4rem;
+  }
+
+  .clip-studio-cleanup-editor-actions .button {
+    min-height: 2rem;
+    padding-inline: 0.58rem;
   }
 
   .clip-studio-timeline-ai-marker {
@@ -9255,6 +10374,38 @@ textarea::placeholder {
   }
 
   @media (max-width: 760px) {
+    .clip-studio-pacing-summary,
+    .clip-studio-cleanup-review-item,
+    .clip-studio-cleanup-review-empty {
+      align-items: stretch;
+      grid-template-columns: 1fr;
+      flex-direction: column;
+    }
+
+    .clip-studio-pacing-actions .button,
+    .clip-studio-cleanup-review-actions .button,
+    .clip-studio-cleanup-review-footer .button {
+      flex: 1 1 8rem;
+    }
+
+    .clip-studio-cleanup-review-actions,
+    .clip-studio-cleanup-review-footer {
+      justify-content: stretch;
+    }
+
+    .clip-studio-cleanup-editor {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .clip-studio-cleanup-editor-actions {
+      justify-content: stretch;
+    }
+
+    .clip-studio-cleanup-editor-actions .button {
+      flex: 1 1 8rem;
+    }
+
     .clip-studio-nudge-grid {
       grid-template-columns: 1fr;
       max-width: 100%;
@@ -9427,6 +10578,19 @@ textarea::placeholder {
     gap: 0.7rem;
   }
 
+  .clip-studio-caption-appearance-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.65rem;
+    align-items: end;
+  }
+
+  .clip-studio-caption-appearance-grid .clip-studio-toggle-row.compact {
+    min-height: 0;
+    align-self: stretch;
+    align-items: center;
+  }
+
   .clip-studio-caption-textarea {
     min-height: 5.6rem;
   }
@@ -9436,7 +10600,8 @@ textarea::placeholder {
   }
 
   .clip-studio-caption-style-panel,
-  .clip-studio-hook-panel {
+  .clip-studio-hook-panel,
+  .clip-studio-broll-panel {
     display: grid;
     gap: 0.75rem;
     border: 1px solid var(--border);
@@ -9528,6 +10693,51 @@ textarea::placeholder {
     gap: 0.65rem;
   }
 
+  .clip-studio-broll-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .clip-studio-broll-list {
+    display: grid;
+    gap: 0.72rem;
+  }
+
+  .clip-studio-broll-card {
+    display: grid;
+    gap: 0.68rem;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.035);
+    padding: 0.72rem;
+  }
+
+  .clip-studio-broll-card-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .clip-studio-broll-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.58rem;
+  }
+
+  .clip-studio-broll-empty {
+    display: grid;
+    min-height: 5.4rem;
+    place-items: center;
+    border: 1px dashed rgba(148, 163, 184, 0.32);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.026);
+  }
+
   .clip-studio-save-strip {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -9543,6 +10753,19 @@ textarea::placeholder {
 
   .clip-studio-save-title {
     font-weight: 800;
+  }
+
+  .clip-studio-history-actions {
+    display: flex;
+    gap: 0.42rem;
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  .clip-studio-history-actions .button {
+    min-height: 2rem;
+    min-width: 4.35rem;
+    padding: 0.3rem 0.58rem;
   }
 
   .clip-studio-save-strip .success-banner,
@@ -9589,6 +10812,111 @@ textarea::placeholder {
   .clip-studio-effect-note.is-render-only {
     border-color: rgba(251, 191, 36, 0.28);
     background: rgba(251, 191, 36, 0.08);
+  }
+
+  .clip-studio-creator-review {
+    overflow: hidden;
+  }
+
+  .clip-studio-creator-review-hero {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.85rem;
+    align-items: center;
+    border: 1px solid rgba(117, 217, 184, 0.24);
+    border-radius: 12px;
+    background:
+      linear-gradient(135deg, rgba(117, 217, 184, 0.1), transparent 44%),
+      rgba(16, 17, 22, 0.96);
+    padding: 0.78rem;
+  }
+
+  .clip-studio-creator-review-meter {
+    --creator-review-score: 0%;
+    position: relative;
+    display: grid;
+    width: 4.45rem;
+    aspect-ratio: 1;
+    place-items: center;
+    border-radius: 999px;
+    background:
+      radial-gradient(circle at center, #101116 0 56%, transparent 57%),
+      conic-gradient(#75d9b8 var(--creator-review-score), rgba(148, 163, 184, 0.2) 0);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  }
+
+  .clip-studio-creator-review-meter span {
+    color: #f8fafc;
+    font-size: 1.15rem;
+    font-weight: 950;
+    line-height: 1;
+  }
+
+  .clip-studio-creator-review-summary {
+    display: grid;
+    min-width: 0;
+    gap: 0.35rem;
+  }
+
+  .clip-studio-creator-review-summary .actions-row {
+    justify-content: space-between;
+  }
+
+  .clip-studio-creator-review-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+  }
+
+  .clip-studio-creator-review-item {
+    display: grid;
+    gap: 0.55rem;
+    align-content: space-between;
+    min-height: 8rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #101116;
+    padding: 0.72rem;
+  }
+
+  .clip-studio-creator-review-item.is-ready {
+    border-color: rgba(74, 222, 128, 0.22);
+    background:
+      linear-gradient(135deg, rgba(74, 222, 128, 0.08), transparent 46%),
+      #101116;
+  }
+
+  .clip-studio-creator-review-item.is-warning {
+    border-color: rgba(251, 191, 36, 0.3);
+    background:
+      linear-gradient(135deg, rgba(251, 191, 36, 0.08), transparent 46%),
+      #101116;
+  }
+
+  .clip-studio-creator-review-item.is-needs-work {
+    border-color: rgba(248, 113, 113, 0.32);
+    background:
+      linear-gradient(135deg, rgba(248, 113, 113, 0.08), transparent 46%),
+      #101116;
+  }
+
+  .clip-studio-creator-review-item-head {
+    display: flex;
+    gap: 0.55rem;
+    align-items: center;
+    justify-content: space-between;
+    min-width: 0;
+  }
+
+  .clip-studio-creator-review-item-head strong {
+    min-width: 0;
+    line-height: 1.16;
+  }
+
+  .clip-studio-creator-review-item .button {
+    width: fit-content;
+    min-height: 2.1rem;
+    padding-block: 0.3rem;
   }
 
   .clip-studio-effect-note.is-transcript-source {
@@ -9816,6 +11144,54 @@ textarea::placeholder {
 
 .clip-studio-prepare-button {
   min-width: 13.5rem;
+  overflow: hidden;
+  position: relative;
+}
+
+.clip-studio-prepare-button.is-preparing {
+  box-shadow: 0 0 0 1px rgba(117, 217, 184, 0.18), 0 16px 36px rgba(45, 212, 191, 0.18);
+}
+
+.clip-studio-prepare-button.is-preparing::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(110deg, transparent 0%, rgba(255, 255, 255, 0.18) 45%, transparent 70%);
+  transform: translateX(-120%);
+  animation: clip-studio-prepare-button-sheen 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.clip-studio-prepare-button-content {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.52rem;
+  justify-content: center;
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.clip-studio-prepare-idle-mark,
+.clip-studio-prepare-spinner {
+  aspect-ratio: 1;
+  border-radius: 999px;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 1rem;
+}
+
+.clip-studio-prepare-idle-mark {
+  background:
+    radial-gradient(circle at 50% 50%, #ffffff 0 0.16rem, transparent 0.18rem),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.32), rgba(117, 217, 184, 0.92));
+  box-shadow: 0 0 0 0.2rem rgba(255, 255, 255, 0.08);
+}
+
+.clip-studio-prepare-spinner {
+  border: 2px solid rgba(255, 255, 255, 0.42);
+  border-top-color: #ffffff;
+  animation: clip-studio-prepare-spin 0.8s linear infinite;
 }
 
 .clip-studio-prepare-state {
@@ -9823,28 +11199,177 @@ textarea::placeholder {
   justify-content: flex-end;
 }
 
+.clip-studio-prepare-loader {
+  background:
+    linear-gradient(135deg, rgba(10, 18, 28, 0.94), rgba(20, 36, 42, 0.9)),
+    radial-gradient(circle at top left, rgba(117, 217, 184, 0.24), transparent 48%);
+  border: 1px solid rgba(117, 217, 184, 0.22);
+  border-radius: 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+  color: #ecfeff;
+  display: grid;
+  gap: 0.66rem;
+  max-width: min(100%, 25rem);
+  overflow: hidden;
+  padding: 0.82rem;
+  position: relative;
+}
+
+.clip-studio-prepare-loader::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  transform: translateX(-110%);
+  animation: clip-studio-prepare-panel-sheen 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.clip-studio-prepare-loader-head {
+  align-items: center;
+  display: grid;
+  gap: 0.66rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  position: relative;
+  z-index: 1;
+}
+
+.clip-studio-prepare-loader-head strong {
+  display: block;
+  font-size: 0.86rem;
+  line-height: 1.2;
+}
+
+.clip-studio-prepare-loader-head p {
+  color: rgba(236, 254, 255, 0.72);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  margin: 0.12rem 0 0;
+}
+
+.clip-studio-prepare-loader-head time {
+  color: rgba(236, 254, 255, 0.72);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+.clip-studio-prepare-loader-orbit {
+  aspect-ratio: 1;
+  border: 1px solid rgba(117, 217, 184, 0.32);
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  position: relative;
+  width: 2.15rem;
+}
+
+.clip-studio-prepare-loader-orbit::before {
+  position: absolute;
+  inset: 0.2rem;
+  border: 2px solid rgba(117, 217, 184, 0.2);
+  border-top-color: #75d9b8;
+  border-radius: inherit;
+  content: "";
+  animation: clip-studio-prepare-spin 1.1s linear infinite;
+}
+
+.clip-studio-prepare-loader-orbit span {
+  aspect-ratio: 1;
+  background: #75d9b8;
+  border-radius: inherit;
+  box-shadow: 0 0 18px rgba(117, 217, 184, 0.74);
+  width: 0.48rem;
+}
+
+.clip-studio-prepare-track {
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  height: 0.36rem;
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+
+.clip-studio-prepare-track span {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(117, 217, 184, 0.94), transparent);
+  border-radius: inherit;
+  transform: translateX(-70%);
+  width: 56%;
+  animation: clip-studio-prepare-track 1.35s ease-in-out infinite;
+}
+
 .clip-studio-prepare-progress {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
   justify-content: flex-end;
+  position: relative;
+  z-index: 1;
 }
 
 .clip-studio-prepare-progress span {
-  border: 1px solid rgba(117, 217, 184, 0.24);
+  border: 1px solid rgba(236, 254, 255, 0.14);
   border-radius: 999px;
-  background: rgba(117, 217, 184, 0.08);
-  color: #d9fff2;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(236, 254, 255, 0.58);
   font-size: 0.7rem;
   font-weight: 800;
   line-height: 1;
   padding: 0.28rem 0.46rem;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.clip-studio-prepare-progress span.is-active {
+  background: rgba(117, 217, 184, 0.15);
+  border-color: rgba(117, 217, 184, 0.36);
+  color: #d9fff2;
 }
 
 .clip-studio-prepare-control .success-banner,
 .clip-studio-prepare-control .error-banner {
   max-width: 18rem;
   text-align: right;
+}
+
+@keyframes clip-studio-prepare-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes clip-studio-prepare-track {
+  0% {
+    transform: translateX(-85%);
+  }
+
+  100% {
+    transform: translateX(185%);
+  }
+}
+
+@keyframes clip-studio-prepare-button-sheen {
+  0%,
+  36% {
+    transform: translateX(-120%);
+  }
+
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+@keyframes clip-studio-prepare-panel-sheen {
+  0%,
+  45% {
+    transform: translateX(-110%);
+  }
+
+  100% {
+    transform: translateX(110%);
+  }
 }
 .clip-studio-score-card .muted {
   font-size: 0.88rem;
@@ -9919,8 +11444,10 @@ textarea::placeholder {
     .clip-studio-workbench .section-card,
     .clip-studio-editor-disclosure,
     .clip-studio-caption-form,
+    .clip-studio-creator-review,
     .clip-studio-caption-style-panel,
     .clip-studio-hook-panel,
+    .clip-studio-broll-panel,
     .clip-studio-save-strip {
       min-width: 0;
       max-width: 100%;
@@ -9975,6 +11502,15 @@ textarea::placeholder {
     .clip-studio-save-strip,
     .clip-studio-workbench-head {
       grid-template-columns: 1fr;
+    }
+
+    .clip-studio-history-actions {
+      justify-content: stretch;
+    }
+
+    .clip-studio-history-actions .button {
+      flex: 1 1 0;
+      min-width: 0;
     }
 
     .clip-studio-workbench-head {
@@ -10054,9 +11590,37 @@ textarea::placeholder {
     }
 
     .clip-studio-caption-cue,
+    .clip-studio-creator-review-grid,
     .clip-studio-caption-style-grid,
-    .clip-studio-hook-grid {
+    .clip-studio-caption-appearance-grid,
+    .clip-studio-hook-grid,
+    .clip-studio-broll-grid {
       grid-template-columns: 1fr;
+    }
+
+    .clip-studio-broll-actions,
+    .clip-studio-broll-card-head {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .clip-studio-broll-actions .button,
+    .clip-studio-broll-card-head .button {
+      width: 100%;
+    }
+
+    .clip-studio-layer-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .clip-studio-layer-track {
+      grid-column: 1 / -1;
+      order: 3;
+    }
+
+    .clip-studio-creator-review-hero {
+      grid-template-columns: 1fr;
+      justify-items: start;
     }
 
     .clip-studio-edit-deck-head,
@@ -10162,6 +11726,29 @@ textarea::placeholder {
 
     .clip-studio-live-frame:not(.branding-on) .clip-studio-live-caption {
       bottom: 0.72rem;
+    }
+
+    .clip-studio-live-caption.caption-position-lower {
+      bottom: 4.85rem;
+    }
+
+    .clip-studio-live-frame:not(.branding-on) .clip-studio-live-caption.caption-position-lower {
+      bottom: 0.72rem;
+    }
+
+    .clip-studio-live-caption.caption-position-middle {
+      top: 50%;
+      bottom: auto;
+    }
+
+    .clip-studio-live-caption.caption-position-top {
+      top: 3.35rem;
+      bottom: auto;
+    }
+
+    .clip-studio-live-frame:not(.branding-on) .clip-studio-live-caption.caption-position-middle,
+    .clip-studio-live-frame:not(.branding-on) .clip-studio-live-caption.caption-position-top {
+      bottom: auto;
     }
 
     .clip-studio-live-caption span {
@@ -10879,9 +12466,7 @@ textarea::placeholder {
 .clip-studio-layout {
   display: grid;
   grid-template-columns: minmax(280px, 0.82fr) minmax(420px, 1.18fr) minmax(340px, 0.96fr);
-  grid-template-areas:
-    "transcript preview tools"
-    "timeline timeline timeline";
+  grid-template-areas: "transcript preview tools";
   gap: 0.9rem;
   align-items: start;
 }
@@ -10909,10 +12494,17 @@ textarea::placeholder {
 
 .clip-studio-main-column {
   grid-area: tools;
+  position: sticky;
+  top: 0.85rem;
+  max-height: calc(100vh - 14rem);
+  min-height: 0;
+  overflow: auto;
+  padding-right: 0.2rem;
 }
 
 .clip-studio-bottom-timeline {
-  grid-area: timeline;
+  grid-area: auto;
+  width: 100%;
   padding: 0.85rem;
   background:
     linear-gradient(180deg, rgba(117, 217, 184, 0.08), transparent 42%),
@@ -11032,7 +12624,7 @@ textarea::placeholder {
 
 .clip-studio-workbench {
   display: grid;
-  grid-template-columns: minmax(5.4rem, 0.25fr) minmax(0, 1fr);
+  grid-template-columns: minmax(7.2rem, 0.34fr) minmax(0, 1fr);
   gap: 0.75rem;
   align-items: start;
 }
@@ -11061,7 +12653,8 @@ textarea::placeholder {
   width: 100%;
   min-height: 2.35rem;
   padding: 0.46rem 0.5rem;
-  text-align: left;
+  overflow-wrap: anywhere;
+  text-align: center;
   white-space: normal;
 }
 
@@ -11097,19 +12690,32 @@ textarea::placeholder {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.clip-studio-diagnostics-disclosure {
+  grid-column: 2;
+  opacity: 0.82;
+}
+
+.clip-studio-diagnostics-disclosure .clip-studio-details {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
 @media (max-width: 1180px) {
   .clip-studio-layout {
     grid-template-columns: minmax(280px, 0.88fr) minmax(360px, 1.12fr);
     grid-template-areas:
       "preview preview"
-      "transcript tools"
-      "timeline timeline";
+      "transcript tools";
   }
 
   .clip-studio-preview-column,
   .clip-studio-transcript-rail,
-  .clip-studio-workbench-head {
+  .clip-studio-workbench-head,
+  .clip-studio-main-column {
     position: static;
+    max-height: none;
+    overflow: visible;
   }
 
   .clip-studio-transcript-rail {
@@ -11123,8 +12729,7 @@ textarea::placeholder {
     grid-template-areas:
       "preview"
       "transcript"
-      "tools"
-      "timeline";
+      "tools";
   }
 
   .clip-studio-transcript-rail {
@@ -11140,15 +12745,22 @@ textarea::placeholder {
     grid-column: 1;
   }
 
+  .clip-studio-diagnostics-disclosure {
+    grid-column: 1;
+  }
+
   .clip-studio-tabs {
-    display: flex;
-    overflow-x: auto;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.25rem;
+    overflow: visible;
   }
 
   .clip-studio-tab {
-    flex: 0 0 auto;
-    width: auto;
-    min-width: 7rem;
+    width: 100%;
+    min-width: 0;
+    padding-inline: 0.32rem;
+    text-align: center;
   }
 
   .clip-studio-transcript-line {

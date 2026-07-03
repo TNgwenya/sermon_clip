@@ -125,6 +125,21 @@ describe("resolveExportSettings", () => {
     expect(settings.backgroundMode).toBe("BLURRED");
   });
 
+  it("loads manual crop keyframes into export settings", () => {
+    const settings = resolveExportSettings({
+      exportFormat: "VERTICAL_9_16",
+      exportLayoutStrategy: "SMART_CROP",
+      captionData: null,
+      manualCropKeyframes: [
+        { timeSeconds: 0, centerX: 0.62, centerY: 0.42, zoom: 1.08 },
+      ],
+    });
+
+    expect(settings.manualCropKeyframes).toEqual([
+      { timeSeconds: 0, centerX: 0.62, centerY: 0.42, zoom: 1.08 },
+    ]);
+  });
+
   it("falls back safely when stored values are unsupported", () => {
     const settings = resolveExportSettings({
       exportFormat: null,
@@ -265,6 +280,7 @@ describe("preview helpers", () => {
       framingMode: "CENTER_CROP",
       framingPersonality: "AUTO_INTELLIGENT",
       backgroundMode: "CROP",
+      manualCropKeyframes: [],
     });
 
     expect(summary).toContain("Ready-to-post style:");
@@ -279,6 +295,7 @@ describe("preview helpers", () => {
       framingMode: "CENTER_CROP",
       framingPersonality: "AUTO_INTELLIGENT",
       backgroundMode: "CROP",
+      manualCropKeyframes: [],
     });
 
     expect(summary).toContain("Download style:");
@@ -293,6 +310,7 @@ describe("preview helpers", () => {
       framingMode: "CENTER_CROP",
       framingPersonality: "AUTO_INTELLIGENT",
       backgroundMode: "CROP",
+      manualCropKeyframes: [],
     });
 
     expect(warnings).toContain("Vertical crop may cut out the pastor if he moves away from the center.");
@@ -307,6 +325,7 @@ describe("preview helpers", () => {
       framingMode: "CENTER_CROP",
       framingPersonality: "AUTO_INTELLIGENT",
       backgroundMode: "CROP",
+      manualCropKeyframes: [],
     });
 
     expect(warnings).toEqual([]);

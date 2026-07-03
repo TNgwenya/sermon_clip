@@ -1,14 +1,36 @@
 import { describe, expect, it } from "vitest";
 
-import { __clipIntelligenceTestUtils } from "@/server/agents/clipIntelligenceAgent";
+import { __clipIntelligenceTestUtils, type ClipWindow } from "@/server/agents/clipIntelligenceAgent";
 
 describe("clip intelligence generation summary", () => {
+  type ClipWindowFixtureInput = Omit<ClipWindow, "segments"> & {
+    segments?: ClipWindow["segments"];
+  };
+
   function reusableGroundingSnapshot(score = 0.92, orderedFlowRatio = 0.95) {
     return {
       transcriptGrounding: {
         score,
         orderedFlowRatio,
       },
+    };
+  }
+
+  function makeClipWindowFixture(input: ClipWindowFixtureInput): ClipWindow {
+    const segmentLines = input.segmentLines.length > 0 ? input.segmentLines : [input.transcriptText];
+    const segmentDurationSeconds = Math.max(0.1, input.durationSeconds / segmentLines.length);
+    const segments = input.segments ?? segmentLines.map((line, index) => ({
+      segmentIndex: index,
+      startTimeSeconds: Number((input.startTimeSeconds + index * segmentDurationSeconds).toFixed(2)),
+      endTimeSeconds: index === segmentLines.length - 1
+        ? input.endTimeSeconds
+        : Number((input.startTimeSeconds + (index + 1) * segmentDurationSeconds).toFixed(2)),
+      text: line.replace(/^(?:\d+:\s*)?\[[^\]]+\]\s*/, "").trim() || input.transcriptText,
+    }));
+
+    return {
+      ...input,
+      segments,
     };
   }
 
@@ -101,7 +123,7 @@ describe("clip intelligence generation summary", () => {
 
   it("builds deterministic fallback candidates when AI clip selection quota is unavailable", () => {
     const candidates = __clipIntelligenceTestUtils.buildHeuristicClipCandidatesFromWindows([
-      {
+      makeClipWindowFixture({
         windowId: "window-fixture",
         startTimeSeconds: 9000,
         endTimeSeconds: 9090,
@@ -114,7 +136,7 @@ describe("clip intelligence generation summary", () => {
         ministryPayoffScore: 8,
         windowQualityScore: 8.7,
         windowQualityWarnings: [],
-      },
+      }),
     ]);
 
     expect(__clipIntelligenceTestUtils.isAiQuotaError(new Error("429 quota exceeded"))).toBe(true);
@@ -325,7 +347,7 @@ describe("clip intelligence generation summary", () => {
         durationSeconds: 65,
         transcriptText: "Forgiveness is not pretending the wound did not happen. It is choosing obedience before the feeling arrives, because grace has already met you and mercy keeps the heart free enough to love again. That freedom lets families heal and neighbors see Christ clearly.",
         qualityDebugSnapshot: reusableGroundingSnapshot(),
-        smartClipCategory: "Best Healing Clip",
+        smartClipCategory: "Best Encouragement Clip",
         clipType: "pastoral",
         hookScore: 7.2,
         standaloneClarityScore: 7.2,
@@ -1035,16 +1057,16 @@ describe("clip intelligence generation summary", () => {
       finalQualityScore: 9 - index * 0.1,
       score: 9 - index * 0.1,
       startTimeSeconds: index * 60,
-      smartClipCategory: "Best Teaching Clip",
-      clipType: "teaching",
+      smartClipCategory: "Best Scripture Explanation Clip" as const,
+      clipType: "teaching" as const,
     }));
     const selected = __clipIntelligenceTestUtils.selectBestClipCandidates([
       ...repeatedTeaching,
-      { id: "prayer", qualityLabel: "POST_READY" as const, finalQualityScore: 8.1, score: 8.1, startTimeSeconds: 600, smartClipCategory: "Best Prayer Clip", clipType: "pastoral" },
-      { id: "testimony", qualityLabel: "GOOD_NEEDS_REVIEW" as const, finalQualityScore: 7.7, score: 7.7, startTimeSeconds: 700, smartClipCategory: "Best Testimony Clip", clipType: "testimony" },
+      { id: "prayer", qualityLabel: "POST_READY" as const, finalQualityScore: 8.1, score: 8.1, startTimeSeconds: 600, smartClipCategory: "Best Prayer Clip" as const, clipType: "pastoral" as const },
+      { id: "testimony", qualityLabel: "GOOD_NEEDS_REVIEW" as const, finalQualityScore: 7.7, score: 7.7, startTimeSeconds: 700, smartClipCategory: "Best Testimony Clip" as const, clipType: "testimony" as const },
     ]);
 
-    expect(selected.filter((clip) => clip.smartClipCategory === "Best Teaching Clip")).toHaveLength(4);
+    expect(selected.filter((clip) => clip.smartClipCategory === "Best Scripture Explanation Clip")).toHaveLength(4);
     expect(selected.map((clip) => clip.id)).toContain("prayer");
     expect(selected.map((clip) => clip.id)).toContain("testimony");
   });
@@ -1099,7 +1121,7 @@ describe("clip intelligence generation summary", () => {
         endTimeSeconds: 1045,
         durationSeconds: 65,
         transcriptText: "Do not bury the gift God gave you just because fear has been loud. The body of Christ needs what is in your hand, and the faithful response this week is to stir up the gift and serve with courage.",
-        smartClipCategory: "Best Application Clip",
+        smartClipCategory: "Best Call To Action Clip",
         clipType: "teaching",
         hookScore: 7.8,
         standaloneClarityScore: 7.8,
@@ -1118,7 +1140,7 @@ describe("clip intelligence generation summary", () => {
         endTimeSeconds: 1385,
         durationSeconds: 65,
         transcriptText: "Forgiveness is not pretending the wound did not happen. It is choosing obedience before the feeling arrives, because grace has already met you and mercy keeps the heart free enough to love again. That freedom lets families heal and neighbors see Christ clearly.",
-        smartClipCategory: "Best Healing Clip",
+        smartClipCategory: "Best Encouragement Clip",
         clipType: "pastoral",
         hookScore: 7.6,
         standaloneClarityScore: 7.6,
@@ -1188,7 +1210,7 @@ describe("clip intelligence generation summary", () => {
         endTimeSeconds: 6660,
         durationSeconds: 89,
         transcriptText: "Leadership is being a shepherd knowing your flock and taking care of those who are following you. A faithful leader does not only give instructions from far away, but walks with the people, sees their needs, protects their hearts, and serves with integrity. Let us lead with integrity and serve others faithfully this week.",
-        smartClipCategory: "Best Leadership Integrity Clip",
+        smartClipCategory: "Best Leadership Clip",
         clipType: "teaching",
         hookScore: 7.4,
         standaloneClarityScore: 7,
@@ -1295,7 +1317,7 @@ describe("clip intelligence generation summary", () => {
         finalQualityScore: 7.85,
         score: 7.85,
         startTimeSeconds: 900,
-        smartClipCategory: "Best Application Clip",
+        smartClipCategory: "Best Call To Action Clip",
         transcriptText: "The response this week is not to wait until everything feels easy. The response is to stir up the gift God placed in your hand and serve one person with courage, because obedience grows as it is practiced.",
         hookScore: 7.7,
         standaloneClarityScore: 7.6,
@@ -1323,8 +1345,8 @@ describe("clip intelligence generation summary", () => {
       durationSeconds: 115,
       transcriptText: "God has placed a gift in you, and the church still needs what is in your hand. Do not bury what God gave you because fear became loud; take one faithful step and serve with courage this week.",
       qualityDebugSnapshot: reusableGroundingSnapshot(),
-      smartClipCategory: "Best Discipleship Clip",
-      clipType: "teaching",
+      smartClipCategory: "Best Discipleship Clip" as const,
+      clipType: "teaching" as const,
       boundaryQuality: "NEEDS_REVIEW" as const,
       riskLevel: "LOW" as const,
       qualityWarnings: ["NEEDS_CONTEXT_EXTENSION", "MISSING_CAPTION_SEGMENTS"],
@@ -1573,8 +1595,7 @@ describe("clip intelligence generation summary", () => {
       windowQualityScore: number,
       wordCount = 80,
       meaningfulSegmentCount = 6,
-    ) => ({
-      id,
+    ) => makeClipWindowFixture({
       windowId: id,
       startTimeSeconds,
       endTimeSeconds: startTimeSeconds + 80,
@@ -1606,7 +1627,7 @@ describe("clip intelligence generation summary", () => {
 
   it("rejects AI clip candidates that fall outside the prompt batch windows", () => {
     const windows = [
-      {
+      makeClipWindowFixture({
         windowId: "window-1",
         startTimeSeconds: 100,
         endTimeSeconds: 190,
@@ -1617,8 +1638,8 @@ describe("clip intelligence generation summary", () => {
         meaningfulSegmentCount: 5,
         windowQualityScore: 8.6,
         windowQualityWarnings: [],
-      },
-      {
+      }),
+      makeClipWindowFixture({
         windowId: "window-2",
         startTimeSeconds: 420,
         endTimeSeconds: 510,
@@ -1629,7 +1650,7 @@ describe("clip intelligence generation summary", () => {
         meaningfulSegmentCount: 5,
         windowQualityScore: 8.1,
         windowQualityWarnings: [],
-      },
+      }),
     ];
     const makeCandidate = (id: string, startTimeSeconds: number, endTimeSeconds: number) => ({
       startTimeSeconds,
@@ -2282,7 +2303,7 @@ describe("clip intelligence generation summary", () => {
   });
 
   it("scopes ministry moment prompt context to the current transcript window batch", () => {
-    const windows = [{
+    const windows = [makeClipWindowFixture({
       windowId: "weary-window",
       startTimeSeconds: 880,
       endTimeSeconds: 1010,
@@ -2293,7 +2314,7 @@ describe("clip intelligence generation summary", () => {
       meaningfulSegmentCount: 5,
       windowQualityScore: 8.4,
       windowQualityWarnings: [],
-    }];
+    })];
     const selected = __clipIntelligenceTestUtils.selectPromptMinistryMomentsForWindows(windows, [
       {
         id: "opening",
@@ -3166,6 +3187,14 @@ describe("clip intelligence generation summary", () => {
       riskLevel: "LOW" as const,
       riskReasons: [],
       contextWarning: false,
+      arcType: "PROBLEM_TRUTH_APPLICATION" as const,
+      arcSummary: "Truth and application.",
+      setupStartTime: 10120,
+      mainPointTime: 10140,
+      payoffTime: 10210,
+      applicationTime: 10210,
+      whyThisClipFeelsComplete: "The indexed segment range contains the full application.",
+      whatContextMightBeMissing: null,
     };
 
     const result = __clipIntelligenceTestUtils.filterCandidatesToPromptWindows([candidate] as never, windows);
@@ -3222,6 +3251,14 @@ describe("clip intelligence generation summary", () => {
       riskLevel: "LOW" as const,
       riskReasons: [],
       contextWarning: false,
+      arcType: "PROBLEM_TRUTH_APPLICATION" as const,
+      arcSummary: "Truth and application.",
+      setupStartTime: windows[0].startTimeSeconds,
+      mainPointTime: windows[0].startTimeSeconds,
+      payoffTime: windows[0].endTimeSeconds,
+      applicationTime: windows[0].endTimeSeconds,
+      whyThisClipFeelsComplete: "The legacy timestamp range is inside the prompt window.",
+      whatContextMightBeMissing: null,
     };
 
     const result = __clipIntelligenceTestUtils.filterCandidatesToPromptWindows([candidate], windows);
@@ -3275,6 +3312,14 @@ describe("clip intelligence generation summary", () => {
       riskLevel: "LOW" as const,
       riskReasons: [],
       contextWarning: false,
+      arcType: "PROBLEM_TRUTH_APPLICATION" as const,
+      arcSummary: "Truth and application.",
+      setupStartTime: windows[0].startTimeSeconds,
+      mainPointTime: windows[0].startTimeSeconds,
+      payoffTime: windows[0].endTimeSeconds,
+      applicationTime: windows[0].endTimeSeconds,
+      whyThisClipFeelsComplete: "The legacy timestamp range is inside the prompt window.",
+      whatContextMightBeMissing: null,
     };
 
     const result = __clipIntelligenceTestUtils.filterCandidatesToPromptWindows([candidate] as never, windows);
@@ -3325,6 +3370,14 @@ describe("clip intelligence generation summary", () => {
       riskLevel: "LOW" as const,
       riskReasons: [],
       contextWarning: false,
+      arcType: "PROBLEM_TRUTH_APPLICATION" as const,
+      arcSummary: "Truth and application.",
+      setupStartTime: windows[0].startTimeSeconds,
+      mainPointTime: windows[0].startTimeSeconds,
+      payoffTime: windows[0].endTimeSeconds,
+      applicationTime: windows[0].endTimeSeconds,
+      whyThisClipFeelsComplete: "The legacy timestamp range is inside the prompt window.",
+      whatContextMightBeMissing: null,
     };
 
     const result = __clipIntelligenceTestUtils.filterCandidatesToPromptWindows([candidate] as never, windows);
@@ -3375,6 +3428,14 @@ describe("clip intelligence generation summary", () => {
       riskLevel: "LOW" as const,
       riskReasons: [],
       contextWarning: false,
+      arcType: "PROBLEM_TRUTH_APPLICATION" as const,
+      arcSummary: "Truth and application.",
+      setupStartTime: windows[0].startTimeSeconds,
+      mainPointTime: windows[0].startTimeSeconds,
+      payoffTime: windows[0].endTimeSeconds,
+      applicationTime: windows[0].endTimeSeconds,
+      whyThisClipFeelsComplete: "The legacy timestamp range is inside the prompt window.",
+      whatContextMightBeMissing: null,
     };
 
     const result = __clipIntelligenceTestUtils.filterCandidatesToPromptWindows([candidate], windows);

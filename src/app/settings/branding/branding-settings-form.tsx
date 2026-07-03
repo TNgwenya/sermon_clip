@@ -223,7 +223,7 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
   }
 
   return (
-    <form action={action} className="brand-kit-workspace" encType="multipart/form-data">
+    <form action={action} className="brand-kit-workspace">
       <section className="card brand-kit-controls stack-md">
         <div className="section-heading-row brand-controls-heading">
           <div>

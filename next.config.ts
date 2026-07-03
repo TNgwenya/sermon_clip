@@ -8,6 +8,22 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: projectRoot,
   },
+  outputFileTracingExcludes: {
+    "/*": [
+      "storage/**/*",
+      "artifacts/**/*",
+      "docs/**/*",
+      "scripts/**/*",
+      "src/**/*.test.*",
+      "next.config.*",
+      "vitest.config.*",
+      "eslint.config.*",
+      "prisma.config.*",
+      "tsconfig.tsbuildinfo",
+      "dev.db",
+      "ready-to-post-implemented-desktop.png",
+    ],
+  },
   experimental: {
     serverActions: {
       bodySizeLimit: "2gb",

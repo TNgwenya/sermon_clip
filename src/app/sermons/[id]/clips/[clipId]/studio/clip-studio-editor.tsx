@@ -1,17 +1,55 @@
 "use client";
 
-import { type MouseEvent, useEffect, useMemo, useState } from "react";
+import { type CSSProperties, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { SectionCard, StatusBadge } from "@/components/ui";
 import { formatSecondsForPastorView, formatSecondsForTimestampInput } from "@/lib/sermonSegment";
 import {
+  buildEditableCaptionCuesFromTranscriptSegments,
   type EditableCaptionCue,
   hashtagsToEditorInput,
   validateClipStudioTiming,
 } from "@/lib/clipStudioEditing";
+import {
+  CLIP_STUDIO_TRANSCRIPT_COMMAND_EVENT,
+  type ClipStudioTranscriptCommandDetail,
+} from "@/lib/clipStudioTranscriptEvents";
+import {
+  CLIP_STUDIO_SPEECH_CLEANUP_EDIT_EVENT,
+  type ClipStudioSpeechCleanupEditDetail,
+} from "@/lib/clipStudioSpeechCleanupEvents";
+import {
+  CLIP_STUDIO_OVERLAY_POSITION_EVENT,
+  type ClipStudioOverlayPositionDetail,
+} from "@/lib/clipStudioOverlayEvents";
+import {
+  CLIP_STUDIO_LAYER_COMMAND_EVENT,
+  type ClipStudioLayerCommandDetail,
+} from "@/lib/clipStudioLayerEvents";
 import { CAPTION_STYLE_PRESETS, resolveCaptionStylePreset } from "@/lib/captionStylePresets";
-import type { HookOverlayConfig, SpeechCleanupSettings } from "@/lib/clipStudio";
-import { buildSpeechCleanupPreviewPlan } from "@/lib/clipStudioPreviewTimeline";
+import {
+  SPEECH_CLEANUP_INTENSITIES,
+  SPEECH_CLEANUP_INTENSITY_LABELS,
+  type BrollCardConfig,
+  type BrollCardPosition,
+  type BrollCardTone,
+  type BrollLayerConfig,
+  type CaptionAppearanceSettings,
+  type CaptionFontScale,
+  type CaptionMaxLines,
+  type CaptionPosition,
+  type HookOverlayConfig,
+  type SpeechCleanupIntensity,
+  type SpeechCleanupSettings,
+} from "@/lib/clipStudio";
+import {
+  buildSpeechCleanupPreviewPlan,
+  type SpeechCleanupAudioSilenceEvent,
+} from "@/lib/clipStudioPreviewTimeline";
+import {
+  createSpeechCleanupEditsFromPlan,
+  type SpeechCleanupEdits,
+} from "@/lib/speechCleanupPlan";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
 
 type ClipStudioEditorProps = {
@@ -23,10 +61,16 @@ type ClipStudioEditorProps = {
   initialCaptionCues: EditableCaptionCue[];
   initialApplyCaptionsToClip: boolean;
   initialCaptionStylePresetId: string;
+  initialCaptionPosition: CaptionPosition;
+  initialCaptionAppearance: CaptionAppearanceSettings;
   brandCaptionStylePresetId: string;
   suggestedHook: string;
   initialHookOverlay: HookOverlayConfig;
+  initialBrollLayer: BrollLayerConfig;
   initialSpeechCleanup: SpeechCleanupSettings;
+  initialSpeechCleanupEdits: SpeechCleanupEdits | null;
+  initialAudioSilenceEvents: SpeechCleanupAudioSilenceEvent[];
+  initialAudioSilenceAnalyzed: boolean;
   transcriptSegments: Array<{
     id: string;
     startTimeSeconds: number;
@@ -44,6 +88,61 @@ type ClipStudioEditorProps = {
 type TranscriptSegmentOption = ClipStudioEditorProps["transcriptSegments"][number];
 
 const QUICK_CLIP_LENGTH_SECONDS = [30, 45, 60, 90];
+const EMPTY_AUDIO_SILENCE_EVENTS: SpeechCleanupAudioSilenceEvent[] = [];
+const BROLL_TONE_OPTIONS: Array<{ value: BrollCardTone; label: string }> = [
+  { value: "quote", label: "Quote" },
+  { value: "scripture", label: "Scripture" },
+  { value: "application", label: "Application" },
+  { value: "context", label: "Context" },
+];
+const BROLL_POSITION_OPTIONS: Array<{ value: BrollCardPosition; label: string }> = [
+  { value: "full", label: "Full" },
+  { value: "upper", label: "Upper" },
+  { value: "lower", label: "Lower" },
+];
+
+type CreatorReviewStatus = "ready" | "warning" | "needs-work";
+
+type CreatorReviewAction =
+  | "fix-timing"
+  | "enable-captions"
+  | "tighten-captions"
+  | "add-hook"
+  | "move-hook"
+  | "add-broll"
+  | "enable-audio"
+  | "preview";
+
+type CreatorReviewItem = {
+  id: string;
+  label: string;
+  status: CreatorReviewStatus;
+  detail: string;
+  action?: CreatorReviewAction;
+  actionLabel?: string;
+};
+
+type StudioDraftSnapshot = {
+  startTimestamp: string;
+  endTimestamp: string;
+  applyCaptionsToClip: boolean;
+  captionStylePresetId: string;
+  captionPosition: CaptionPosition;
+  captionAppearance: CaptionAppearanceSettings;
+  captionCueTextEdits: Record<string, string>;
+  hookOverlay: HookOverlayConfig;
+  brollLayer: BrollLayerConfig;
+  speechCleanup: SpeechCleanupSettings;
+  speechCleanupEdits: SpeechCleanupEdits | null;
+  firstSegmentId: string;
+  lastSegmentId: string;
+  focusedSegmentId: string;
+};
+
+type StudioDraftHistory = {
+  past: StudioDraftSnapshot[];
+  future: StudioDraftSnapshot[];
+};
 
 function findClosestTranscriptSegment(
   segments: TranscriptSegmentOption[],
@@ -115,6 +214,115 @@ function clampSeconds(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function formatCleanupDuration(seconds: number): string {
+  const safeSeconds = Math.max(0, seconds);
+  if (safeSeconds === 0) {
+    return "0s";
+  }
+
+  if (safeSeconds < 1) {
+    return `${Math.max(0.1, safeSeconds).toFixed(1)}s`;
+  }
+
+  if (safeSeconds < 10 && !Number.isInteger(safeSeconds)) {
+    return `${safeSeconds.toFixed(1)}s`;
+  }
+
+  return formatSecondsForPastorView(safeSeconds);
+}
+
+function getCaptionCueKey(cue: Pick<EditableCaptionCue, "startSeconds" | "endSeconds">): string {
+  return `${Number(cue.startSeconds).toFixed(3)}-${Number(cue.endSeconds).toFixed(3)}`;
+}
+
+function buildCaptionCueTextEditSeed(cues: EditableCaptionCue[]): Record<string, string> {
+  return cues.reduce<Record<string, string>>((edits, cue) => {
+    edits[getCaptionCueKey(cue)] = cue.text;
+    return edits;
+  }, {});
+}
+
+function countWords(value: string): number {
+  return value.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function trimBrollText(value: string, maxLength = 180): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function cloneStudioDraftSnapshot(snapshot: StudioDraftSnapshot): StudioDraftSnapshot {
+  return JSON.parse(JSON.stringify(snapshot)) as StudioDraftSnapshot;
+}
+
+function getStudioDraftSnapshotKey(snapshot: StudioDraftSnapshot): string {
+  return JSON.stringify(snapshot);
+}
+
+function getCreatorReviewTone(score: number, hasBlockingIssue: boolean): "success" | "accent" | "warning" | "danger" {
+  if (hasBlockingIssue || score < 55) {
+    return "danger";
+  }
+
+  if (score < 74) {
+    return "warning";
+  }
+
+  if (score < 88) {
+    return "accent";
+  }
+
+  return "success";
+}
+
+function getCreatorReviewLabel(score: number, hasBlockingIssue: boolean): string {
+  if (hasBlockingIssue || score < 55) {
+    return "Needs review";
+  }
+
+  if (score < 74) {
+    return "Close";
+  }
+
+  if (score < 88) {
+    return "Strong draft";
+  }
+
+  return "Post-ready";
+}
+
+function getCreatorReviewStatusLabel(status: CreatorReviewStatus): string {
+  if (status === "needs-work") {
+    return "Needs work";
+  }
+
+  if (status === "warning") {
+    return "Review";
+  }
+
+  return "Ready";
+}
+
+function getCreatorReviewStatusTone(status: CreatorReviewStatus): "success" | "warning" | "danger" {
+  if (status === "needs-work") {
+    return "danger";
+  }
+
+  if (status === "warning") {
+    return "warning";
+  }
+
+  return "success";
+}
+
+function isKeyboardEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const tagName = target.tagName.toLowerCase();
+  return target.isContentEditable || tagName === "input" || tagName === "textarea" || tagName === "select";
+}
+
 export function ClipStudioEditor({
   initialStartTimeSeconds,
   initialEndTimeSeconds,
@@ -124,10 +332,16 @@ export function ClipStudioEditor({
   initialCaptionCues,
   initialApplyCaptionsToClip,
   initialCaptionStylePresetId,
+  initialCaptionPosition,
+  initialCaptionAppearance,
   brandCaptionStylePresetId,
   suggestedHook,
   initialHookOverlay,
+  initialBrollLayer,
   initialSpeechCleanup,
+  initialSpeechCleanupEdits,
+  initialAudioSilenceEvents,
+  initialAudioSilenceAnalyzed,
   transcriptSegments,
   knownDurationSeconds,
   captionQualityScore,
@@ -136,10 +350,13 @@ export function ClipStudioEditor({
   translationUncertainty,
   captionImprovementSuggestions,
 }: ClipStudioEditorProps) {
-  const { previewClock, seekPreviewTo, updateEditPreview } = useClipStudioPreview();
+  const { previewClock, requestPreviewPlayback, seekPreviewTo, updateEditPreview } = useClipStudioPreview();
   const isPending = false;
+  const historyRestorePendingRef = useRef(false);
+  const lastHistorySnapshotRef = useRef<StudioDraftSnapshot | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusSuccess, setStatusSuccess] = useState(true);
+  const [draftHistory, setDraftHistory] = useState<StudioDraftHistory>({ past: [], future: [] });
 
   const [startTimestamp, setStartTimestamp] = useState(
     formatSecondsForTimestampInput(initialStartTimeSeconds),
@@ -150,11 +367,17 @@ export function ClipStudioEditor({
   const shortCaption = initialShortCaption;
   const platformCaption = initialPlatformCaption;
   const hashtags = hashtagsToEditorInput(initialHashtags);
-  const [captionCues, setCaptionCues] = useState<EditableCaptionCue[]>(initialCaptionCues);
   const [applyCaptionsToClip, setApplyCaptionsToClip] = useState(initialApplyCaptionsToClip);
   const [captionStylePresetId, setCaptionStylePresetId] = useState(initialCaptionStylePresetId);
+  const [captionPosition, setCaptionPosition] = useState<CaptionPosition>(initialCaptionPosition);
+  const [captionAppearance, setCaptionAppearance] = useState<CaptionAppearanceSettings>(initialCaptionAppearance);
+  const [captionCueTextEdits, setCaptionCueTextEdits] = useState<Record<string, string>>(
+    () => buildCaptionCueTextEditSeed(initialCaptionCues),
+  );
   const [hookOverlay, setHookOverlay] = useState<HookOverlayConfig>(initialHookOverlay);
+  const [brollLayer, setBrollLayer] = useState<BrollLayerConfig>(initialBrollLayer);
   const [speechCleanup, setSpeechCleanup] = useState<SpeechCleanupSettings>(initialSpeechCleanup);
+  const [speechCleanupEdits, setSpeechCleanupEdits] = useState<SpeechCleanupEdits | null>(initialSpeechCleanupEdits);
   const initialFirstSegmentId = useMemo(
     () => findClosestTranscriptSegment(transcriptSegments, initialStartTimeSeconds, "start")?.id ?? transcriptSegments[0]?.id ?? "",
     [initialStartTimeSeconds, transcriptSegments],
@@ -168,9 +391,6 @@ export function ClipStudioEditor({
   const [focusedSegmentId, setFocusedSegmentId] = useState(initialFirstSegmentId);
   const resolvedCaptionStyleId = captionStylePresetId || brandCaptionStylePresetId;
   const resolvedCaptionStyle = useMemo(() => resolveCaptionStylePreset(resolvedCaptionStyleId), [resolvedCaptionStyleId]);
-  const onVideoCaptionText = captionCues.map((cue) => cue.text.trim()).filter(Boolean).join(" ");
-  const captionLineLabel = `${captionCues.length} ${captionCues.length === 1 ? "line" : "lines"}`;
-  const captionDropdownPreview = onVideoCaptionText || "No on-video caption text yet.";
 
   const timingPreview = useMemo(
     () =>
@@ -185,6 +405,33 @@ export function ClipStudioEditor({
     captionCues?: string;
     hook?: string;
   } = timingPreview.fieldErrors;
+  const generatedCaptionCues = useMemo(() => {
+    if (timingPreview.startSeconds !== null && timingPreview.endSeconds !== null) {
+      const transcriptCues = buildEditableCaptionCuesFromTranscriptSegments({
+        startTimeSeconds: timingPreview.startSeconds,
+        endTimeSeconds: timingPreview.endSeconds,
+        segments: transcriptSegments,
+      });
+
+      if (transcriptCues.length > 0) {
+        return transcriptCues;
+      }
+    }
+
+    return initialCaptionCues;
+  }, [initialCaptionCues, timingPreview.endSeconds, timingPreview.startSeconds, transcriptSegments]);
+  const captionCues = useMemo(
+    () =>
+      generatedCaptionCues.map((cue, index) => ({
+        ...cue,
+        index: index + 1,
+        text: captionCueTextEdits[getCaptionCueKey(cue)] ?? cue.text,
+      })),
+    [captionCueTextEdits, generatedCaptionCues],
+  );
+  const onVideoCaptionText = captionCues.map((cue) => cue.text.trim()).filter(Boolean).join(" ");
+  const captionLineLabel = `${captionCues.length} ${captionCues.length === 1 ? "line" : "lines"}`;
+  const captionDropdownPreview = onVideoCaptionText || "No on-video caption text yet.";
 
   const durationLabel =
     timingPreview.durationSeconds !== null
@@ -260,14 +507,31 @@ export function ClipStudioEditor({
       label: formatSecondsForPastorView(absoluteSeconds),
     };
   }, [localTimeline.duration, localTimeline.end, localTimeline.start, previewClock.currentSeconds, timingPreview.startSeconds]);
+  const audioSilenceMatchesCurrentTiming =
+    timingPreview.startSeconds !== null &&
+    timingPreview.endSeconds !== null &&
+    Math.abs(timingPreview.startSeconds - initialStartTimeSeconds) < 0.05 &&
+    Math.abs(timingPreview.endSeconds - initialEndTimeSeconds) < 0.05;
+  const activeAudioSilenceEvents = audioSilenceMatchesCurrentTiming ? initialAudioSilenceEvents : EMPTY_AUDIO_SILENCE_EVENTS;
+  const activeAudioSilenceAnalyzed = audioSilenceMatchesCurrentTiming ? initialAudioSilenceAnalyzed : false;
   const speechCleanupPreviewPlan = useMemo(
     () =>
       buildSpeechCleanupPreviewPlan({
         captionCues,
         durationSeconds: timingPreview.durationSeconds,
         speechCleanup,
+        audioSilenceEvents: activeAudioSilenceEvents,
+        audioSilenceAnalysisAvailable: activeAudioSilenceAnalyzed,
+        speechCleanupEdits,
       }),
-    [captionCues, speechCleanup, timingPreview.durationSeconds],
+    [
+      activeAudioSilenceAnalyzed,
+      activeAudioSilenceEvents,
+      captionCues,
+      speechCleanup,
+      speechCleanupEdits,
+      timingPreview.durationSeconds,
+    ],
   );
   const deadAirCutMarkers = useMemo(() => {
     if (!speechCleanupPreviewPlan.enabled || timingPreview.startSeconds === null) {
@@ -275,9 +539,9 @@ export function ClipStudioEditor({
     }
 
     const selectedStartSeconds = timingPreview.startSeconds;
-    return speechCleanupPreviewPlan.cuts.flatMap((cut, index) => {
-      const absoluteStart = selectedStartSeconds + cut.startSeconds;
-      const absoluteEnd = selectedStartSeconds + cut.endSeconds;
+    return speechCleanupPreviewPlan.reviewItems.flatMap((range) => {
+      const absoluteStart = selectedStartSeconds + range.startSeconds;
+      const absoluteEnd = selectedStartSeconds + range.endSeconds;
       if (absoluteEnd < localTimeline.start || absoluteStart > localTimeline.end) {
         return [];
       }
@@ -285,10 +549,14 @@ export function ClipStudioEditor({
       const leftPercent = clampSeconds(((absoluteStart - localTimeline.start) / localTimeline.duration) * 100, 0, 100);
       const rightPercent = clampSeconds(((absoluteEnd - localTimeline.start) / localTimeline.duration) * 100, 0, 100);
       return [{
-        id: `${index}-${cut.startSeconds}-${cut.endSeconds}`,
+        id: range.id,
         leftPercent,
         widthPercent: Math.max(0.6, rightPercent - leftPercent),
-        label: `${formatSecondsForPastorView(cut.removedSeconds)} removed`,
+        label: range.label,
+        title: range.source === "audio"
+          ? `${range.label}: ${formatCleanupDuration(range.removedSeconds)} audio silence`
+          : `${range.label}: ${formatCleanupDuration(range.removedSeconds)} estimated pause`,
+        source: range.source,
       }];
     });
   }, [localTimeline.duration, localTimeline.end, localTimeline.start, speechCleanupPreviewPlan, timingPreview.startSeconds]);
@@ -363,6 +631,40 @@ export function ClipStudioEditor({
       count: overlappingSegments.length,
     };
   }, [timingPreview.endSeconds, timingPreview.startSeconds, transcriptSegments]);
+  const currentDraftSnapshot = useMemo<StudioDraftSnapshot>(
+    () => ({
+      startTimestamp,
+      endTimestamp,
+      applyCaptionsToClip,
+      captionStylePresetId,
+      captionPosition,
+      captionAppearance,
+      captionCueTextEdits,
+      hookOverlay,
+      brollLayer,
+      speechCleanup,
+      speechCleanupEdits,
+      firstSegmentId,
+      lastSegmentId,
+      focusedSegmentId,
+    }),
+    [
+      applyCaptionsToClip,
+      brollLayer,
+      captionAppearance,
+      captionCueTextEdits,
+      captionPosition,
+      captionStylePresetId,
+      endTimestamp,
+      firstSegmentId,
+      focusedSegmentId,
+      hookOverlay,
+      lastSegmentId,
+      speechCleanup,
+      speechCleanupEdits,
+      startTimestamp,
+    ],
+  );
 
   const editPreview = useMemo(
     () => ({
@@ -385,24 +687,36 @@ export function ClipStudioEditor({
       captionCues,
       applyCaptionsToClip,
       captionStylePresetId: resolvedCaptionStyle.id,
+      captionPosition,
+      captionAppearance,
       hookOverlay,
+      brollLayer,
       speechCleanup,
+      speechCleanupEdits,
+      audioSilenceEvents: activeAudioSilenceEvents,
+      audioSilenceAnalyzed: activeAudioSilenceAnalyzed,
       hashtags,
       isTimingValid: timingPreview.isValid,
     }),
     [
+      activeAudioSilenceAnalyzed,
+      activeAudioSilenceEvents,
       durationLabel,
       endTimestamp,
       captionCues,
       hashtags,
       onVideoCaptionText,
       applyCaptionsToClip,
+      captionAppearance,
+      captionPosition,
       platformCaption,
       resolvedCaptionStyle.id,
       shortCaption,
       startTimestamp,
       hookOverlay,
+      brollLayer,
       speechCleanup,
+      speechCleanupEdits,
       timingPreview.durationSeconds,
       timingPreview.endSeconds,
       timingPreview.isValid,
@@ -414,8 +728,122 @@ export function ClipStudioEditor({
     updateEditPreview(editPreview);
   }, [editPreview, updateEditPreview]);
 
+  useEffect(() => {
+    const nextSnapshot = cloneStudioDraftSnapshot(currentDraftSnapshot);
+    const nextSnapshotKey = getStudioDraftSnapshotKey(nextSnapshot);
+    const previousSnapshot = lastHistorySnapshotRef.current;
+
+    if (!previousSnapshot) {
+      lastHistorySnapshotRef.current = nextSnapshot;
+      return;
+    }
+
+    if (historyRestorePendingRef.current) {
+      historyRestorePendingRef.current = false;
+      lastHistorySnapshotRef.current = nextSnapshot;
+      return;
+    }
+
+    if (getStudioDraftSnapshotKey(previousSnapshot) === nextSnapshotKey) {
+      return;
+    }
+
+    setDraftHistory((current) => ({
+      past: [...current.past, cloneStudioDraftSnapshot(previousSnapshot)].slice(-60),
+      future: [],
+    }));
+    lastHistorySnapshotRef.current = nextSnapshot;
+  }, [currentDraftSnapshot]);
+
+  useEffect(() => {
+    function handleTimelineDurationRequest(event: Event) {
+      const detail = (event as CustomEvent<{ lengthSeconds?: unknown }>).detail;
+      const targetDurationSeconds = Number(detail?.lengthSeconds);
+
+      if (!Number.isFinite(targetDurationSeconds) || targetDurationSeconds <= 0) {
+        return;
+      }
+
+      clearFeedback();
+
+      const currentStart = timingPreview.startSeconds ?? initialStartTimeSeconds;
+      const hardEnd = knownDurationSeconds && knownDurationSeconds > 0
+        ? knownDurationSeconds
+        : Math.max(localTimeline.end, currentStart + targetDurationSeconds);
+      const nextEnd = clampSeconds(currentStart + targetDurationSeconds, currentStart + 0.1, hardEnd);
+      const lastSegment = findClosestTranscriptSegment(transcriptSegments, nextEnd, "end");
+
+      setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
+      if (lastSegment) {
+        setLastSegmentId(lastSegment.id);
+      }
+      seekPreviewTo(0);
+      setStatusSuccess(true);
+      setStatusMessage(`${targetDurationSeconds}s clip length drafted from the timeline.`);
+    }
+
+    window.addEventListener("clip-studio-set-duration", handleTimelineDurationRequest);
+    return () => window.removeEventListener("clip-studio-set-duration", handleTimelineDurationRequest);
+  }, [
+    initialStartTimeSeconds,
+    knownDurationSeconds,
+    localTimeline.end,
+    seekPreviewTo,
+    timingPreview.startSeconds,
+    transcriptSegments,
+  ]);
+
   function clearFeedback() {
     setStatusMessage("");
+  }
+
+  function restoreDraftSnapshot(snapshot: StudioDraftSnapshot, message: string) {
+    const nextSnapshot = cloneStudioDraftSnapshot(snapshot);
+    historyRestorePendingRef.current = true;
+    setStartTimestamp(nextSnapshot.startTimestamp);
+    setEndTimestamp(nextSnapshot.endTimestamp);
+    setApplyCaptionsToClip(nextSnapshot.applyCaptionsToClip);
+    setCaptionStylePresetId(nextSnapshot.captionStylePresetId);
+    setCaptionPosition(nextSnapshot.captionPosition);
+    setCaptionAppearance(nextSnapshot.captionAppearance);
+    setCaptionCueTextEdits(nextSnapshot.captionCueTextEdits);
+    setHookOverlay(nextSnapshot.hookOverlay);
+    setBrollLayer(nextSnapshot.brollLayer);
+    setSpeechCleanup(nextSnapshot.speechCleanup);
+    setSpeechCleanupEdits(nextSnapshot.speechCleanupEdits);
+    setFirstSegmentId(nextSnapshot.firstSegmentId);
+    setLastSegmentId(nextSnapshot.lastSegmentId);
+    setFocusedSegmentId(nextSnapshot.focusedSegmentId);
+    setStatusSuccess(true);
+    setStatusMessage(message);
+  }
+
+  function undoDraftChange() {
+    const previousSnapshot = draftHistory.past.at(-1);
+    if (!previousSnapshot) {
+      return;
+    }
+
+    const currentSnapshot = cloneStudioDraftSnapshot(currentDraftSnapshot);
+    setDraftHistory((current) => ({
+      past: current.past.slice(0, -1),
+      future: [currentSnapshot, ...current.future].slice(0, 60),
+    }));
+    restoreDraftSnapshot(previousSnapshot, "Draft change undone.");
+  }
+
+  function redoDraftChange() {
+    const nextSnapshot = draftHistory.future[0];
+    if (!nextSnapshot) {
+      return;
+    }
+
+    const currentSnapshot = cloneStudioDraftSnapshot(currentDraftSnapshot);
+    setDraftHistory((current) => ({
+      past: [...current.past, currentSnapshot].slice(-60),
+      future: current.future.slice(1),
+    }));
+    restoreDraftSnapshot(nextSnapshot, "Draft change restored.");
   }
 
   function applyTranscriptTrim() {
@@ -511,7 +939,7 @@ export function ClipStudioEditor({
     const lastSegment = findClosestTranscriptSegment(transcriptSegments, nextEnd, "end");
 
     setStartTimestamp(formatSecondsForTimestampInput(firstSegment?.startTimeSeconds ?? nextStart));
-    setEndTimestamp(formatSecondsForTimestampInput(lastSegment?.endTimeSeconds ?? nextEnd));
+    setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
     setFirstSegmentId(firstSegment?.id ?? segment.id);
     setLastSegmentId(lastSegment?.id ?? segment.id);
     setStatusSuccess(true);
@@ -600,34 +1028,276 @@ export function ClipStudioEditor({
     setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
   }
 
-  function updateCaptionCue(index: number, patch: Partial<EditableCaptionCue>) {
-    setCaptionCues((current) =>
-      current.map((cue, cueIndex) => cueIndex === index ? { ...cue, ...patch } : cue),
-    );
+  function applyBoundaryFromAbsoluteSeconds(rawSeconds: number, boundary: "start" | "end") {
+    if (!Number.isFinite(rawSeconds)) {
+      return;
+    }
+
+    clearFeedback();
+
+    if (boundary === "start") {
+      const currentEnd = timingPreview.endSeconds ?? initialEndTimeSeconds;
+      const nextStart = clampSeconds(rawSeconds, 0, Math.max(0, currentEnd - 0.1));
+      const firstSegment = findClosestTranscriptSegment(transcriptSegments, nextStart, "start");
+      setStartTimestamp(formatSecondsForTimestampInput(nextStart));
+      if (firstSegment) {
+        setFirstSegmentId(firstSegment.id);
+        setFocusedSegmentId(firstSegment.id);
+      }
+      seekPreviewTo(0);
+      setStatusSuccess(true);
+      setStatusMessage("Start point set from the timeline.");
+      return;
+    }
+
+    const currentStart = timingPreview.startSeconds ?? initialStartTimeSeconds;
+    const hardEnd = knownDurationSeconds && knownDurationSeconds > 0
+      ? knownDurationSeconds
+      : Math.max(localTimeline.end, rawSeconds);
+    const nextEnd = clampSeconds(rawSeconds, currentStart + 0.1, hardEnd);
+    const lastSegment = findClosestTranscriptSegment(transcriptSegments, nextEnd, "end");
+    setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
+    if (lastSegment) {
+      setLastSegmentId(lastSegment.id);
+      setFocusedSegmentId(lastSegment.id);
+    }
+    seekPreviewTo(Math.max(0, nextEnd - currentStart));
+    setStatusSuccess(true);
+    setStatusMessage("End point set from the timeline.");
   }
 
-  function addCaptionCue() {
-    const lastCue = captionCues.at(-1);
-    const startSeconds = lastCue ? lastCue.endSeconds : 0;
-    const endSeconds = startSeconds + 3;
-    setCaptionCues((current) => [
+  function updateCaptionCueText(cue: EditableCaptionCue, text: string) {
+    const cueKey = getCaptionCueKey(cue);
+    setCaptionCueTextEdits((current) => ({
       ...current,
-      {
-        index: current.length + 1,
-        startSeconds,
-        endSeconds,
-        text: "",
-      },
-    ]);
+      [cueKey]: text,
+    }));
   }
 
-  function removeCaptionCue(index: number) {
-    setCaptionCues((current) =>
-      current
-        .filter((_, cueIndex) => cueIndex !== index)
-        .map((cue, cueIndex) => ({ ...cue, index: cueIndex + 1 })),
+  function resetCaptionCueText(cue: EditableCaptionCue) {
+    const cueKey = getCaptionCueKey(cue);
+    setCaptionCueTextEdits((current) => {
+      const next = { ...current };
+      delete next[cueKey];
+      return next;
+    });
+  }
+
+  function isCaptionCueTextEdited(cue: EditableCaptionCue): boolean {
+    const editedText = captionCueTextEdits[getCaptionCueKey(cue)];
+    const sourceCue = generatedCaptionCues.find((item) => getCaptionCueKey(item) === getCaptionCueKey(cue));
+    return editedText !== undefined && editedText !== sourceCue?.text;
+  }
+
+  function findCaptionCueForTranscriptSegment(segment: TranscriptSegmentOption): EditableCaptionCue | null {
+    if (timingPreview.startSeconds === null || timingPreview.endSeconds === null) {
+      return null;
+    }
+
+    const overlapStart = Math.max(timingPreview.startSeconds, segment.startTimeSeconds);
+    const overlapEnd = Math.min(timingPreview.endSeconds, segment.endTimeSeconds);
+    if (overlapEnd <= overlapStart) {
+      return null;
+    }
+
+    const relativeStart = Number((overlapStart - timingPreview.startSeconds).toFixed(3));
+    const relativeEnd = Number((overlapEnd - timingPreview.startSeconds).toFixed(3));
+
+    return (
+      generatedCaptionCues.find(
+        (cue) =>
+          Math.abs(cue.startSeconds - relativeStart) < 0.08 &&
+          Math.abs(cue.endSeconds - relativeEnd) < 0.08,
+      ) ?? null
     );
   }
+
+  useEffect(() => {
+    function handleTranscriptCommand(event: Event) {
+      const detail = (event as CustomEvent<ClipStudioTranscriptCommandDetail>).detail;
+      if (!detail || typeof detail.command !== "string") {
+        return;
+      }
+
+      if (detail.command === "snap-to-sentence") {
+        snapToNearestSpokenLines();
+        return;
+      }
+
+      if (detail.command === "reset-ai") {
+        resetTiming();
+        return;
+      }
+
+      if (detail.command === "set-start-seconds") {
+        applyBoundaryFromAbsoluteSeconds(Number(detail.seconds), "start");
+        return;
+      }
+
+      if (detail.command === "set-end-seconds") {
+        applyBoundaryFromAbsoluteSeconds(Number(detail.seconds), "end");
+        return;
+      }
+
+      if (!detail.segmentId) {
+        return;
+      }
+
+      const segment = transcriptSegments.find((item) => item.id === detail.segmentId);
+      if (!segment) {
+        return;
+      }
+
+      setFocusedSegmentId(segment.id);
+
+      if (detail.command === "update-text") {
+        const cue = findCaptionCueForTranscriptSegment(segment);
+        if (cue) {
+          updateCaptionCueText(cue, typeof detail.text === "string" ? detail.text : segment.text);
+        }
+        return;
+      }
+
+      if (detail.command === "reset-text") {
+        const cue = findCaptionCueForTranscriptSegment(segment);
+        if (cue) {
+          resetCaptionCueText(cue);
+        }
+        return;
+      }
+
+      if (detail.command === "set-start") {
+        applyBoundaryFromSegment(segment, "start");
+        seekPreviewTo(0);
+        return;
+      }
+
+      if (detail.command === "set-end") {
+        applyBoundaryFromSegment(segment, "end");
+        seekPreviewToAbsolute(segment.startTimeSeconds);
+      }
+    }
+
+    window.addEventListener(CLIP_STUDIO_TRANSCRIPT_COMMAND_EVENT, handleTranscriptCommand);
+    return () => window.removeEventListener(CLIP_STUDIO_TRANSCRIPT_COMMAND_EVENT, handleTranscriptCommand);
+  });
+
+  useEffect(() => {
+    function handleSpeechCleanupEdit(event: Event) {
+      const detail = (event as CustomEvent<ClipStudioSpeechCleanupEditDetail>).detail;
+      if (!detail || typeof detail.command !== "string") {
+        return;
+      }
+
+      if (detail.command === "reset-cuts") {
+        setSpeechCleanupEdits(null);
+        return;
+      }
+
+      if (detail.command === "add-cut") {
+        const startSeconds = Number(detail.startSeconds);
+        const endSeconds = Number(detail.endSeconds);
+        if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || endSeconds - startSeconds < 0.2) {
+          return;
+        }
+
+        setSpeechCleanupEdits((current) => {
+          const seed = current ?? createSpeechCleanupEditsFromPlan(speechCleanupPreviewPlan);
+          const roundedStart = Number(startSeconds.toFixed(3));
+          const roundedEnd = Number(endSeconds.toFixed(3));
+          const removedSeconds = Number((roundedEnd - roundedStart).toFixed(3));
+          const cut = {
+            id: `manual-internal-${roundedStart}-${roundedEnd}-${Date.now()}`,
+            kind: "internal" as const,
+            source: "audio" as const,
+            confidence: "confirmed" as const,
+            startSeconds: roundedStart,
+            endSeconds: roundedEnd,
+            removedSeconds,
+            rawGapSeconds: removedSeconds,
+            beforeText: null,
+            afterText: null,
+            enabled: true,
+          };
+
+          return {
+            version: 1,
+            cuts: [...seed.cuts, cut].sort((left, right) => left.startSeconds - right.startSeconds),
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        return;
+      }
+
+      if (detail.command === "set-all-cuts") {
+        setSpeechCleanupEdits((current) => {
+          const seed = current ?? createSpeechCleanupEditsFromPlan(speechCleanupPreviewPlan);
+          return {
+            version: 1,
+            cuts: seed.cuts.map((cut) => ({ ...cut, enabled: detail.enabled !== false })),
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        return;
+      }
+
+      if (!detail.cutId) {
+        return;
+      }
+
+      setSpeechCleanupEdits((current) => {
+        const seed = current ?? createSpeechCleanupEditsFromPlan(speechCleanupPreviewPlan);
+        const updatedAt = new Date().toISOString();
+
+        if (detail.command === "toggle-cut") {
+          return {
+            version: 1,
+            cuts: seed.cuts.map((cut) => cut.id === detail.cutId ? { ...cut, enabled: !cut.enabled } : cut),
+            updatedAt,
+          };
+        }
+
+        if (detail.command === "delete-cut") {
+          return {
+            version: 1,
+            cuts: seed.cuts.filter((cut) => cut.id !== detail.cutId),
+            updatedAt,
+          };
+        }
+
+        if (detail.command === "update-cut") {
+          const startSeconds = Number(detail.startSeconds);
+          const endSeconds = Number(detail.endSeconds);
+          if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || endSeconds - startSeconds < 0.2) {
+            return seed;
+          }
+
+          return {
+            version: 1,
+            cuts: seed.cuts
+              .map((cut) =>
+                cut.id === detail.cutId
+                  ? {
+                      ...cut,
+                      startSeconds: Number(startSeconds.toFixed(3)),
+                      endSeconds: Number(endSeconds.toFixed(3)),
+                      removedSeconds: Number((endSeconds - startSeconds).toFixed(3)),
+                      rawGapSeconds: Number((endSeconds - startSeconds).toFixed(3)),
+                    }
+                  : cut,
+              )
+              .sort((left, right) => left.startSeconds - right.startSeconds),
+            updatedAt,
+          };
+        }
+
+        return seed;
+      });
+    }
+
+    window.addEventListener(CLIP_STUDIO_SPEECH_CLEANUP_EDIT_EVENT, handleSpeechCleanupEdit);
+    return () => window.removeEventListener(CLIP_STUDIO_SPEECH_CLEANUP_EDIT_EVENT, handleSpeechCleanupEdit);
+  }, [speechCleanupPreviewPlan]);
 
   function useSuggestedHook() {
     if (!suggestedHook.trim()) {
@@ -642,19 +1312,600 @@ export function ClipStudioEditor({
     }));
   }
 
-  const speechCleanupRemovedSeconds = speechCleanupPreviewPlan.cuts.reduce((total, cut) => total + cut.removedSeconds, 0);
+  function getBrollSeedText(): string {
+    return trimBrollText(
+      focusedSegment?.text ||
+      onVideoCaptionText ||
+      hookOverlay.text ||
+      suggestedHook ||
+      "Key sermon moment",
+      140,
+    );
+  }
+
+  function addBrollCard() {
+    const clipDurationSeconds = timingPreview.durationSeconds ?? 60;
+    const currentPreviewSecond = Math.max(0, Math.min(previewClock.currentSeconds || 0, Math.max(0, clipDurationSeconds - 1)));
+    const startSeconds = Math.min(Math.max(0, currentPreviewSecond), Math.max(0, clipDurationSeconds - 1));
+    const durationSeconds = Math.min(5, Math.max(1, clipDurationSeconds - startSeconds));
+    const seedText = getBrollSeedText();
+    const nextCard: BrollCardConfig = {
+      id: `broll-${Date.now().toString(36)}`,
+      enabled: true,
+      text: seedText,
+      label: focusedSegment ? "Selected line" : "Key moment",
+      startSeconds: Number(startSeconds.toFixed(1)),
+      durationSeconds: Number(durationSeconds.toFixed(1)),
+      tone: "quote",
+      position: "full",
+    };
+
+    setBrollLayer((current) => ({
+      enabled: true,
+      cards: [nextCard, ...current.cards].slice(0, 4),
+    }));
+    setStatusSuccess(true);
+    setStatusMessage("B-roll card added to the preview.");
+  }
+
+  function updateBrollCard(cardId: string, updates: Partial<BrollCardConfig>) {
+    setBrollLayer((current) => ({
+      ...current,
+      cards: current.cards.map((card) => {
+        if (card.id !== cardId) {
+          return card;
+        }
+
+        const clipDurationSeconds = timingPreview.durationSeconds ?? Number.POSITIVE_INFINITY;
+        const startSeconds =
+          typeof updates.startSeconds === "number" && Number.isFinite(updates.startSeconds)
+            ? Math.max(0, Math.min(updates.startSeconds, Math.max(0, clipDurationSeconds - 0.5)))
+            : card.startSeconds;
+        const durationSeconds =
+          typeof updates.durationSeconds === "number" && Number.isFinite(updates.durationSeconds)
+            ? Math.max(1, Math.min(updates.durationSeconds, Math.max(1, clipDurationSeconds - startSeconds)))
+            : card.durationSeconds;
+
+        return {
+          ...card,
+          ...updates,
+          text: typeof updates.text === "string" ? updates.text.slice(0, 180) : card.text,
+          label: typeof updates.label === "string" ? updates.label.slice(0, 32) : card.label,
+          startSeconds: Number(startSeconds.toFixed(2)),
+          durationSeconds: Number(durationSeconds.toFixed(2)),
+        };
+      }),
+    }));
+  }
+
+  function removeBrollCard(cardId: string) {
+    setBrollLayer((current) => {
+      const cards = current.cards.filter((card) => card.id !== cardId);
+      return {
+        enabled: cards.length > 0 && current.enabled,
+        cards,
+      };
+    });
+    setStatusSuccess(true);
+    setStatusMessage("B-roll card removed from the preview.");
+  }
+
+  function setSpeechCleanupIntensity(intensity: SpeechCleanupIntensity) {
+    setSpeechCleanup((current) => ({
+      ...current,
+      removeDeadAir: true,
+      tightenLongPauses: true,
+      intensity,
+    }));
+  }
+
+  function applyCreatorReviewAction(action: CreatorReviewAction) {
+    clearFeedback();
+
+    if (action === "fix-timing") {
+      if (timingPreview.durationSeconds === null || timingPreview.durationSeconds < 30 || timingPreview.durationSeconds > 120) {
+        setDurationFromCurrentStart(60);
+        return;
+      }
+
+      snapToNearestSpokenLines();
+      return;
+    }
+
+    if (action === "enable-captions") {
+      setApplyCaptionsToClip(true);
+      setStatusSuccess(true);
+      setStatusMessage("Captions turned on for the current draft.");
+      return;
+    }
+
+    if (action === "tighten-captions") {
+      setApplyCaptionsToClip(true);
+      setCaptionAppearance((current) => ({
+        ...current,
+        fontScale: current.fontScale === "large" ? "regular" : current.fontScale,
+        maxLines: Math.min(current.maxLines, 3) as CaptionMaxLines,
+      }));
+      setStatusSuccess(true);
+      setStatusMessage("Caption layout tightened for the preview.");
+      return;
+    }
+
+    if (action === "add-hook") {
+      const fallbackHook = onVideoCaptionText.split(/\s+/).filter(Boolean).slice(0, 9).join(" ");
+      setHookOverlay((current) => ({
+        ...current,
+        enabled: true,
+        text: current.text.trim() || suggestedHook.trim() || fallbackHook,
+        durationSeconds: current.durationSeconds || 6,
+      }));
+      setStatusSuccess(true);
+      setStatusMessage("Hook overlay added to the opening seconds.");
+      return;
+    }
+
+    if (action === "move-hook") {
+      setHookOverlay((current) => ({
+        ...current,
+        position: "top",
+      }));
+      setStatusSuccess(true);
+      setStatusMessage("Hook moved away from the caption safe area.");
+      return;
+    }
+
+    if (action === "add-broll") {
+      addBrollCard();
+      return;
+    }
+
+    if (action === "enable-audio") {
+      setSpeechCleanupIntensity(speechCleanup.intensity === "normal" ? "more" : speechCleanup.intensity);
+      setStatusSuccess(true);
+      setStatusMessage("Dead air and long-pause cleanup enabled for the draft.");
+      return;
+    }
+
+    requestPreviewPlayback();
+  }
+
+  useEffect(() => {
+    function handleLayerCommand(event: Event) {
+      const detail = (event as CustomEvent<ClipStudioLayerCommandDetail>).detail;
+      if (!detail?.command) {
+        return;
+      }
+
+      if (detail.command === "toggle-captions") {
+        setApplyCaptionsToClip((current) => !current);
+        return;
+      }
+
+      if (detail.command === "toggle-hook") {
+        const fallbackHook = onVideoCaptionText.split(/\s+/).filter(Boolean).slice(0, 9).join(" ");
+        setHookOverlay((current) => ({
+          ...current,
+          enabled: !current.enabled,
+          text: current.text.trim() || suggestedHook.trim() || fallbackHook,
+        }));
+        return;
+      }
+
+      if (detail.command === "toggle-broll-layer") {
+        if (brollLayer.cards.length === 0) {
+          addBrollCard();
+          return;
+        }
+
+        setBrollLayer((current) => ({
+          ...current,
+          enabled: !current.enabled,
+        }));
+        return;
+      }
+
+      if (detail.command === "toggle-broll-card" && detail.cardId) {
+        setBrollLayer((current) => ({
+          ...current,
+          cards: current.cards.map((card) =>
+            card.id === detail.cardId ? { ...card, enabled: !card.enabled } : card,
+          ),
+        }));
+      }
+    }
+
+    window.addEventListener(CLIP_STUDIO_LAYER_COMMAND_EVENT, handleLayerCommand);
+    return () => window.removeEventListener(CLIP_STUDIO_LAYER_COMMAND_EVENT, handleLayerCommand);
+  });
+
+  useEffect(() => {
+    function handleStudioKeyboard(event: KeyboardEvent) {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      const isEditingTarget = isKeyboardEditingTarget(event.target);
+
+      if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+        if (isEditingTarget) {
+          return;
+        }
+
+        if (key === "z") {
+          event.preventDefault();
+          if (event.shiftKey) {
+            redoDraftChange();
+          } else {
+            undoDraftChange();
+          }
+          return;
+        }
+
+        if (key === "y") {
+          event.preventDefault();
+          redoDraftChange();
+          return;
+        }
+      }
+
+      if (event.metaKey || event.ctrlKey || event.altKey || isEditingTarget) {
+        return;
+      }
+
+      if (key === "k") {
+        event.preventDefault();
+        requestPreviewPlayback();
+        return;
+      }
+
+      if (key === "arrowleft" || key === "arrowright") {
+        event.preventDefault();
+        const direction = key === "arrowleft" ? -1 : 1;
+        const stepSeconds = event.shiftKey ? 5 : 1;
+        seekPreviewTo(Math.max(0, previewClock.currentSeconds + direction * stepSeconds));
+        return;
+      }
+
+      if (event.key === "[") {
+        event.preventDefault();
+        applyBoundaryFromAbsoluteSeconds((timingPreview.startSeconds ?? initialStartTimeSeconds) + previewClock.currentSeconds, "start");
+        return;
+      }
+
+      if (event.key === "]") {
+        event.preventDefault();
+        applyBoundaryFromAbsoluteSeconds((timingPreview.startSeconds ?? initialStartTimeSeconds) + previewClock.currentSeconds, "end");
+        return;
+      }
+
+      if (key === "s") {
+        event.preventDefault();
+        snapToNearestSpokenLines();
+        return;
+      }
+
+      if (key === "r") {
+        event.preventDefault();
+        resetTiming();
+        return;
+      }
+
+      if (key === "c") {
+        event.preventDefault();
+        setApplyCaptionsToClip((current) => !current);
+        return;
+      }
+
+      if (key === "h") {
+        event.preventDefault();
+        setHookOverlay((current) => ({
+          ...current,
+          enabled: !current.enabled,
+          text: current.text.trim() || suggestedHook.trim() || current.text,
+        }));
+        return;
+      }
+
+      if (key === "b") {
+        event.preventDefault();
+        addBrollCard();
+        return;
+      }
+
+      if (key === "a") {
+        event.preventDefault();
+        setSpeechCleanup((current) => {
+          const nextEnabled = !(current.removeDeadAir && current.tightenLongPauses);
+          return {
+            ...current,
+            removeDeadAir: nextEnabled,
+            tightenLongPauses: nextEnabled,
+          };
+        });
+      }
+    }
+
+    window.addEventListener("keydown", handleStudioKeyboard);
+    return () => window.removeEventListener("keydown", handleStudioKeyboard);
+  });
+
+  useEffect(() => {
+    function handleOverlayPosition(event: Event) {
+      const detail = (event as CustomEvent<ClipStudioOverlayPositionDetail>).detail;
+      if (!detail?.overlay) {
+        return;
+      }
+
+      if (detail.overlay === "caption") {
+        setCaptionPosition(detail.position);
+        setCaptionAppearance((current) => ({
+          ...current,
+          verticalOffset: Math.max(-48, Math.min(48, Math.round(detail.verticalOffset))),
+        }));
+        return;
+      }
+
+      if (detail.overlay === "broll") {
+        setBrollLayer((current) => ({
+          ...current,
+          cards: current.cards.map((card) =>
+            card.id === detail.cardId ? { ...card, position: detail.position } : card,
+          ),
+        }));
+        return;
+      }
+
+      setHookOverlay((current) => ({
+        ...current,
+        position: detail.position,
+      }));
+    }
+
+    window.addEventListener(CLIP_STUDIO_OVERLAY_POSITION_EVENT, handleOverlayPosition);
+    return () => window.removeEventListener(CLIP_STUDIO_OVERLAY_POSITION_EVENT, handleOverlayPosition);
+  }, []);
+
+  const speechCleanupRemovedSeconds = speechCleanupPreviewPlan.removedRanges.reduce((total, range) => total + range.removedSeconds, 0);
+  const speechCleanupMarkedCount = speechCleanupPreviewPlan.removedRanges.length;
   const speechCleanupSummary = speechCleanupPreviewPlan.enabled
-    ? `${speechCleanupPreviewPlan.cuts.length} pause${speechCleanupPreviewPlan.cuts.length === 1 ? "" : "s"} marked · ${formatSecondsForPastorView(
-        speechCleanupRemovedSeconds,
-      )} saved`
+    ? speechCleanupMarkedCount > 0
+      ? `${speechCleanupMarkedCount} pause${speechCleanupMarkedCount === 1 ? "" : "s"} tightened · ${formatCleanupDuration(
+          speechCleanupRemovedSeconds,
+        )} saved`
+      : "No long pauses found at this intensity"
     : "Natural pacing kept";
   const hookCaptionWarning =
     hookOverlay.enabled && applyCaptionsToClip && hookOverlay.position === "lower"
       ? "Hook and captions can compete in the lower safe area. Move the hook higher before preparing."
       : null;
+  const canUndoDraft = draftHistory.past.length > 0;
+  const canRedoDraft = draftHistory.future.length > 0;
+  const creatorReview = useMemo(() => {
+    const items: CreatorReviewItem[] = [];
+    let score = 100;
+    const durationSeconds = timingPreview.durationSeconds;
+    const captionTextWordCount = countWords(onVideoCaptionText);
+    const longCaptionCueCount = captionCues.filter((cue) => countWords(cue.text) > 16).length;
+    const averageCueWords = captionCues.length > 0 ? captionTextWordCount / captionCues.length : 0;
+    const hasCaptionText = captionTextWordCount > 0 && captionCues.length > 0;
+    const hasHookText = hookOverlay.enabled && hookOverlay.text.trim().length > 0;
+    const activeBrollCards = brollLayer.enabled
+      ? brollLayer.cards.filter((card) => card.enabled && card.text.trim().length > 0)
+      : [];
+    const audioCleanupEnabled = speechCleanup.removeDeadAir && speechCleanup.tightenLongPauses;
+    const socialCopyReady = Boolean(shortCaption.trim() || platformCaption.trim() || hashtags.trim());
+
+    if (!timingPreview.isValid || durationSeconds === null) {
+      score -= 26;
+      items.push({
+        id: "timing",
+        label: "Timing",
+        status: "needs-work",
+        detail: "The clip cannot be prepared until the start and end are valid.",
+        action: "fix-timing",
+        actionLabel: "Draft 60s",
+      });
+    } else if (durationSeconds < 30 || durationSeconds > 120) {
+      score -= 9;
+      items.push({
+        id: "timing",
+        label: "Timing",
+        status: "warning",
+        detail: `${durationLabel} works only if the hook and landing are unusually clear.`,
+        action: "fix-timing",
+        actionLabel: "Make 60s",
+      });
+    } else {
+      items.push({
+        id: "timing",
+        label: "Timing",
+        status: "ready",
+        detail: `${durationLabel} sits in a strong short-form range.`,
+      });
+    }
+
+    if (!applyCaptionsToClip || !hasCaptionText) {
+      score -= 18;
+      items.push({
+        id: "captions",
+        label: "Captions",
+        status: "needs-work",
+        detail: "On-video captions are missing from the current composition.",
+        action: "enable-captions",
+        actionLabel: "Turn on",
+      });
+    } else if ((captionQualityScore !== null && captionQualityScore < 0.58) || captionWarnings.length >= 2) {
+      score -= 14;
+      items.push({
+        id: "captions",
+        label: "Captions",
+        status: "needs-work",
+        detail: "Caption quality needs review before this should be prepared.",
+      });
+    } else if (
+      (captionQualityScore !== null && captionQualityScore < 0.8) ||
+      captionWarnings.length > 0 ||
+      captionImprovementSuggestions.length > 0 ||
+      Boolean(translationUncertainty)
+    ) {
+      score -= 7;
+      items.push({
+        id: "captions",
+        label: "Captions",
+        status: "warning",
+        detail: "Captions are present, but the AI feedback still has review notes.",
+      });
+    } else if (averageCueWords > 14 || longCaptionCueCount > 0 || captionAppearance.maxLines > 3) {
+      score -= 5;
+      items.push({
+        id: "captions",
+        label: "Captions",
+        status: "warning",
+        detail: "Caption blocks are a little dense for fast mobile viewing.",
+        action: "tighten-captions",
+        actionLabel: "Tighten",
+      });
+    } else {
+      items.push({
+        id: "captions",
+        label: "Captions",
+        status: "ready",
+        detail: `${captionCues.length} timed caption line${captionCues.length === 1 ? "" : "s"} are active.`,
+      });
+    }
+
+    if (!hasHookText) {
+      score -= 8;
+      items.push({
+        id: "hook",
+        label: "Hook",
+        status: "warning",
+        detail: "The opening has no hook overlay.",
+        action: "add-hook",
+        actionLabel: "Add hook",
+      });
+    } else if (hookCaptionWarning) {
+      score -= 8;
+      items.push({
+        id: "hook",
+        label: "Hook",
+        status: "needs-work",
+        detail: "The hook is competing with captions in the lower safe area.",
+        action: "move-hook",
+        actionLabel: "Move up",
+      });
+    } else {
+      items.push({
+        id: "hook",
+        label: "Hook",
+        status: "ready",
+        detail: `${hookOverlay.durationSeconds}s hook overlay is active.`,
+      });
+    }
+
+    if (activeBrollCards.length === 0) {
+      score -= durationSeconds !== null && durationSeconds >= 45 ? 7 : 4;
+      items.push({
+        id: "broll",
+        label: "Visual layer",
+        status: "warning",
+        detail: "The clip has no visual emphasis card yet.",
+        action: "add-broll",
+        actionLabel: "Add card",
+      });
+    } else {
+      items.push({
+        id: "broll",
+        label: "Visual layer",
+        status: "ready",
+        detail: `${activeBrollCards.length} visual card${activeBrollCards.length === 1 ? "" : "s"} timed for the edit.`,
+      });
+    }
+
+    if (!audioCleanupEnabled) {
+      score -= 6;
+      items.push({
+        id: "audio",
+        label: "Pacing",
+        status: "warning",
+        detail: "Dead air and long pauses are still kept in the draft.",
+        action: "enable-audio",
+        actionLabel: "Polish audio",
+      });
+    } else if (speechCleanupPreviewPlan.enabled && speechCleanupMarkedCount > 0) {
+      items.push({
+        id: "audio",
+        label: "Pacing",
+        status: "ready",
+        detail: `${speechCleanupMarkedCount} pause${speechCleanupMarkedCount === 1 ? "" : "s"} tightened, ${formatCleanupDuration(speechCleanupRemovedSeconds)} saved.`,
+      });
+    } else {
+      items.push({
+        id: "audio",
+        label: "Pacing",
+        status: "ready",
+        detail: "Audio cleanup is enabled for this draft.",
+      });
+    }
+
+    if (!socialCopyReady) {
+      score -= 5;
+      items.push({
+        id: "copy",
+        label: "Post copy",
+        status: "warning",
+        detail: "Caption copy and hashtags are thin for posting.",
+      });
+    } else {
+      items.push({
+        id: "copy",
+        label: "Post copy",
+        status: "ready",
+        detail: "Posting caption copy is available.",
+      });
+    }
+
+    const hasBlockingIssue = items.some((item) => item.status === "needs-work");
+    const normalizedScore = Math.max(0, Math.min(hasBlockingIssue ? 82 : 100, Math.round(score)));
+
+    return {
+      items,
+      score: normalizedScore,
+      label: getCreatorReviewLabel(normalizedScore, hasBlockingIssue),
+      tone: getCreatorReviewTone(normalizedScore, hasBlockingIssue),
+      scoreStyle: { "--creator-review-score": `${normalizedScore}%` } as CSSProperties,
+    };
+  }, [
+    applyCaptionsToClip,
+    brollLayer,
+    captionAppearance.maxLines,
+    captionCues,
+    captionImprovementSuggestions.length,
+    captionQualityScore,
+    captionWarnings.length,
+    durationLabel,
+    hashtags,
+    hookCaptionWarning,
+    hookOverlay.durationSeconds,
+    hookOverlay.enabled,
+    hookOverlay.text,
+    onVideoCaptionText,
+    platformCaption,
+    shortCaption,
+    speechCleanup.removeDeadAir,
+    speechCleanup.tightenLongPauses,
+    speechCleanupMarkedCount,
+    speechCleanupPreviewPlan.enabled,
+    speechCleanupRemovedSeconds,
+    timingPreview.durationSeconds,
+    timingPreview.isValid,
+    translationUncertainty,
+  ]);
 
   return (
     <section className="stack-lg">
+      <div hidden>
       <SectionCard title="Timing" description="Adjust the clip boundaries before rendering.">
         <div className="actions-row">
           <p className="muted small">Times are based on the original sermon video.</p>
@@ -716,10 +1967,10 @@ export function ClipStudioEditor({
           </div>
         </div>
 
-        <details className="clip-studio-editor-disclosure">
+        <details hidden className="clip-studio-editor-disclosure">
           <summary>
-            <span>Advanced timing</span>
-            <span className="muted small">Timeline, transcript trim, nudges</span>
+            <span>Trim controls</span>
+            <span className="muted small">Nudge starts, ends, and spoken lines</span>
           </summary>
           <div className="stack-md">
         {trimTrack ? (
@@ -763,10 +2014,15 @@ export function ClipStudioEditor({
               {deadAirCutMarkers.map((cut) => (
                 <span
                   key={cut.id}
-                  className="clip-studio-timeline-dead-air"
+                  className={[
+                    "clip-studio-timeline-dead-air",
+                    cut.source === "audio" ? "is-audio" : "is-transcript",
+                  ].join(" ")}
                   style={{ left: `${cut.leftPercent}%`, width: `${cut.widthPercent}%` }}
-                  title={cut.label}
-                />
+                  title={cut.title}
+                >
+                  <span className="clip-studio-timeline-cut-label">{cut.label}</span>
+                </span>
               ))}
               {aiBoundaryMarkers.map((marker) => (
                 <span
@@ -955,18 +2211,62 @@ export function ClipStudioEditor({
           </ul>
         ) : null}
       </SectionCard>
+      </div>
+
+      <SectionCard title="Creator Review" className="clip-studio-creator-review">
+        <div className="clip-studio-creator-review-hero">
+          <div className="clip-studio-creator-review-meter" style={creatorReview.scoreStyle} aria-label={`Creator readiness ${creatorReview.score}%`}>
+            <span>{creatorReview.score}</span>
+          </div>
+          <div className="clip-studio-creator-review-summary">
+            <div className="actions-row">
+              <StatusBadge tone={creatorReview.tone}>{creatorReview.label}</StatusBadge>
+              <button type="button" className="button secondary" onClick={() => applyCreatorReviewAction("preview")}>
+                Preview
+              </button>
+            </div>
+            <p className="muted small">
+              {creatorReview.items.filter((item) => item.status === "ready").length} of {creatorReview.items.length} checks are ready for posting.
+            </p>
+          </div>
+        </div>
+
+        <div className="clip-studio-creator-review-grid">
+          {creatorReview.items.map((item) => (
+            <article
+              key={item.id}
+              className={`clip-studio-creator-review-item is-${item.status}`}
+            >
+              <div>
+                <div className="clip-studio-creator-review-item-head">
+                  <strong>{item.label}</strong>
+                  <StatusBadge tone={getCreatorReviewStatusTone(item.status)}>
+                    {getCreatorReviewStatusLabel(item.status)}
+                  </StatusBadge>
+                </div>
+                <p className="muted small">{item.detail}</p>
+              </div>
+              {item.action && item.actionLabel ? (
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() => applyCreatorReviewAction(item.action as CreatorReviewAction)}
+                  disabled={isPending}
+                >
+                  {item.actionLabel}
+                </button>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      </SectionCard>
 
       <details className="clip-studio-editor-disclosure" open>
         <summary>
           <span>Audio</span>
-          <span className="muted small">Polish</span>
         </summary>
-      <SectionCard title="Audio" description="Polish speech pacing without changing the original sermon clip.">
+      <SectionCard title="Audio">
         <div className="stack-md">
-          <div className="clip-studio-effect-note">
-            <StatusBadge tone="success">Live preview</StatusBadge>
-            <p>The preview skips dead air and long transcript gaps immediately. Prepare when the pacing feels right.</p>
-          </div>
           <p className="status-help">{speechCleanupSummary}</p>
           <label className="clip-studio-toggle-row">
             <input
@@ -984,28 +2284,27 @@ export function ClipStudioEditor({
             />
             <span>
               <strong>Remove dead air and long pauses</strong>
-              <small>Preview playback skips quiet transcript gaps now; render uses audio silence detection for the prepared video.</small>
             </span>
           </label>
 
-          <label className="clip-studio-toggle-row">
-            <input
-              type="checkbox"
-              aria-label="Flag filler words"
-              checked={speechCleanup.flagFillerWords}
-              onChange={(event) =>
-                setSpeechCleanup((current) => ({
-                  ...current,
-                  flagFillerWords: event.target.checked,
-                }))
-              }
-              disabled={isPending}
-            />
-            <span>
-              <strong>Flag filler words</strong>
-              <small>Detects repeated filler words for review. Automatic word removal needs word-level timestamps.</small>
-            </span>
-          </label>
+          <div className="clip-studio-intensity-control">
+            <p className="kicker">Intensity</p>
+            <div className="clip-studio-quick-lengths clip-studio-intensity-row" aria-label="Dead air removal intensity">
+              {SPEECH_CLEANUP_INTENSITIES.map((intensity) => (
+                <button
+                  key={intensity}
+                  type="button"
+                  className="button secondary"
+                  aria-pressed={speechCleanup.intensity === intensity}
+                  onClick={() => setSpeechCleanupIntensity(intensity)}
+                  disabled={isPending}
+                  title={`Use ${SPEECH_CLEANUP_INTENSITY_LABELS[intensity].toLowerCase()} dead air removal`}
+                >
+                  {SPEECH_CLEANUP_INTENSITY_LABELS[intensity]}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div className="clip-studio-boundary-readout">
             <article>
@@ -1015,35 +2314,22 @@ export function ClipStudioEditor({
                   ? formatSecondsForPastorView(speechCleanupPreviewPlan.cleanedDurationSeconds)
                   : durationLabel}
               </strong>
-              <p className="muted small">
-                The final video uses this same audio setting.
-              </p>
             </article>
             <article>
               <span className="kicker">Dead air</span>
               <strong>{speechCleanup.removeDeadAir ? "Will remove" : "Kept"}</strong>
-              <p className="muted small">Start/end silence is only trimmed when this is enabled.</p>
             </article>
             <article>
               <span className="kicker">Long pauses</span>
-              <strong>{speechCleanup.tightenLongPauses ? `${speechCleanupPreviewPlan.cuts.length} marked` : "Kept"}</strong>
-              <p className="muted small">Clear internal silent gaps collapse while leaving a natural breath.</p>
+              <strong>{speechCleanup.tightenLongPauses ? `${speechCleanupMarkedCount} tightened` : "Kept"}</strong>
             </article>
           </div>
         </div>
       </SectionCard>
       </details>
 
-      <SectionCard title="On-video captions & hook" description="Edit what appears on the prepared clip.">
+      <SectionCard title="On-video captions & hook">
         <div className="stack-md clip-studio-caption-form">
-          <div className="clip-studio-effect-note">
-            <StatusBadge tone="success">Live preview</StatusBadge>
-            <p>Caption visibility, text, style, and hook changes update the preview immediately.</p>
-          </div>
-          <div className="clip-studio-effect-note is-transcript-source">
-            <StatusBadge tone="accent">Transcript</StatusBadge>
-            <p>On-video captions are built from the sermon transcription. When captions are on, they override the branding lower-third so the words stay readable.</p>
-          </div>
           <label className="clip-studio-toggle-row">
             <input
               type="checkbox"
@@ -1054,7 +2340,6 @@ export function ClipStudioEditor({
             />
             <span>
               <strong>Captions</strong>
-              <small>Uses the sermon transcript and timing.</small>
             </span>
           </label>
 
@@ -1075,59 +2360,62 @@ export function ClipStudioEditor({
 
             <div className="clip-studio-caption-dropdown-body">
               <div className="clip-studio-caption-cue-list">
-                {captionCues.map((cue, index) => (
-                  <div className="clip-studio-caption-cue" key={`${cue.index}-${index}`}>
-                    <div className="clip-studio-caption-cue-times">
-                      <label className="stack-sm">
-                        Start
-                        <input
-                          type="number"
-                          min={0}
-                          step={0.1}
-                          value={cue.startSeconds}
-                          onChange={(event) => updateCaptionCue(index, { startSeconds: Number(event.target.value) })}
+                {captionCues.map((cue, index) => {
+                  const cueTextEdited = isCaptionCueTextEdited(cue);
+
+                  return (
+                    <div className="clip-studio-caption-cue" key={`${cue.index}-${index}`}>
+                      <div className="clip-studio-caption-cue-times">
+                        <label className="stack-sm">
+                          Start
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.1}
+                            value={cue.startSeconds}
+                            readOnly
+                            disabled={isPending || !applyCaptionsToClip}
+                          />
+                        </label>
+                        <label className="stack-sm">
+                          End
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.1}
+                            value={cue.endSeconds}
+                            readOnly
+                            disabled={isPending || !applyCaptionsToClip}
+                          />
+                        </label>
+                      </div>
+                      <label className="stack-sm clip-studio-caption-cue-text">
+                        Transcript line {index + 1}
+                        <textarea
+                          aria-label={`Edit caption words for transcript line ${index + 1}`}
+                          className="clip-studio-caption-textarea"
+                          value={cue.text}
+                          onChange={(event) => updateCaptionCueText(cue, event.target.value)}
                           disabled={isPending || !applyCaptionsToClip}
                         />
                       </label>
-                      <label className="stack-sm">
-                        End
-                        <input
-                          type="number"
-                          min={0}
-                          step={0.1}
-                          value={cue.endSeconds}
-                          onChange={(event) => updateCaptionCue(index, { endSeconds: Number(event.target.value) })}
+                      {cueTextEdited ? (
+                        <button
+                          type="button"
+                          className="button secondary"
+                          onClick={() => resetCaptionCueText(cue)}
                           disabled={isPending || !applyCaptionsToClip}
-                        />
-                      </label>
+                        >
+                          Reset line
+                        </button>
+                      ) : null}
                     </div>
-                    <label className="stack-sm clip-studio-caption-cue-text">
-                      Caption {index + 1}
-                      <textarea
-                        className="clip-studio-caption-textarea"
-                        value={cue.text}
-                        onChange={(event) => updateCaptionCue(index, { text: event.target.value })}
-                        disabled={isPending || !applyCaptionsToClip}
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="button secondary"
-                      onClick={() => removeCaptionCue(index)}
-                      disabled={isPending || captionCues.length <= 1}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
               {fieldErrors?.captionCues ? (
                 <span className="error-text small">{fieldErrors.captionCues}</span>
               ) : null}
-
-              <button type="button" className="button secondary" onClick={addCaptionCue} disabled={isPending || !applyCaptionsToClip}>
-                Add caption line
-              </button>
             </div>
           </details>
 
@@ -1153,6 +2441,98 @@ export function ClipStudioEditor({
                   <span>{resolvedCaptionStyle.bestFor}</span>
                 </div>
               </div>
+            </div>
+
+            <label className="stack-sm">
+              Caption position
+              <select
+                aria-label="Caption position"
+                value={captionPosition}
+                onChange={(event) => setCaptionPosition(event.target.value as CaptionPosition)}
+                disabled={isPending || !applyCaptionsToClip}
+              >
+                <option value="lower">Lower</option>
+                <option value="middle">Middle</option>
+                <option value="top">Top</option>
+              </select>
+            </label>
+
+            <div className="clip-studio-caption-appearance-grid" aria-label="Caption appearance controls">
+              <label className="stack-sm">
+                Text size
+                <select
+                  aria-label="Caption text size"
+                  value={captionAppearance.fontScale}
+                  onChange={(event) =>
+                    setCaptionAppearance((current) => ({
+                      ...current,
+                      fontScale: event.target.value as CaptionFontScale,
+                    }))
+                  }
+                  disabled={isPending || !applyCaptionsToClip}
+                >
+                  <option value="compact">Compact</option>
+                  <option value="regular">Regular</option>
+                  <option value="large">Large</option>
+                </select>
+              </label>
+
+              <label className="stack-sm">
+                Max lines
+                <select
+                  aria-label="Caption max lines"
+                  value={captionAppearance.maxLines}
+                  onChange={(event) =>
+                    setCaptionAppearance((current) => ({
+                      ...current,
+                      maxLines: Number(event.target.value) as CaptionMaxLines,
+                    }))
+                  }
+                  disabled={isPending || !applyCaptionsToClip}
+                >
+                  <option value={2}>2</option>
+                  <option value={3}>3</option>
+                  <option value={4}>4</option>
+                </select>
+              </label>
+
+              <label className="stack-sm">
+                Safe offset
+                <input
+                  aria-label="Caption vertical offset"
+                  type="range"
+                  min={-48}
+                  max={48}
+                  step={4}
+                  value={captionAppearance.verticalOffset}
+                  onChange={(event) =>
+                    setCaptionAppearance((current) => ({
+                      ...current,
+                      verticalOffset: Number(event.target.value),
+                    }))
+                  }
+                  disabled={isPending || !applyCaptionsToClip}
+                />
+                <span className="muted small">{captionAppearance.verticalOffset}px</span>
+              </label>
+
+              <label className="clip-studio-toggle-row compact">
+                <input
+                  type="checkbox"
+                  aria-label="Uppercase caption text"
+                  checked={captionAppearance.uppercase}
+                  onChange={(event) =>
+                    setCaptionAppearance((current) => ({
+                      ...current,
+                      uppercase: event.target.checked,
+                    }))
+                  }
+                  disabled={isPending || !applyCaptionsToClip}
+                />
+                <span>
+                  <strong>Uppercase</strong>
+                </span>
+              </label>
             </div>
 
             <details className="clip-studio-editor-disclosure compact">
@@ -1332,6 +2712,146 @@ export function ClipStudioEditor({
             </div>
             </details>
           </section>
+
+          <section className="clip-studio-broll-panel" aria-labelledby="clip-broll-heading">
+            <div className="section-heading-row compact">
+              <div>
+                <p className="kicker">B-roll cards</p>
+                <h3 id="clip-broll-heading">Visual emphasis</h3>
+              </div>
+              <StatusBadge tone={brollLayer.enabled && brollLayer.cards.length > 0 ? "success" : "neutral"}>
+                {brollLayer.enabled && brollLayer.cards.length > 0 ? `${brollLayer.cards.length} card${brollLayer.cards.length === 1 ? "" : "s"}` : "Off"}
+              </StatusBadge>
+            </div>
+
+            <div className="clip-studio-broll-actions">
+              <label className="clip-studio-toggle-row">
+                <input
+                  type="checkbox"
+                  aria-label="Show B-roll cards"
+                  checked={brollLayer.enabled}
+                  onChange={(event) => setBrollLayer((current) => ({ ...current, enabled: event.target.checked }))}
+                  disabled={isPending || brollLayer.cards.length === 0}
+                />
+                <span>
+                  <strong>Show visual cards</strong>
+                </span>
+              </label>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={addBrollCard}
+                disabled={isPending || brollLayer.cards.length >= 4}
+              >
+                Add card
+              </button>
+            </div>
+
+            {brollLayer.cards.length > 0 ? (
+              <div className="clip-studio-broll-list">
+                {brollLayer.cards.map((card, index) => (
+                  <article className="clip-studio-broll-card" key={card.id}>
+                    <div className="clip-studio-broll-card-head">
+                      <label className="clip-studio-toggle-row compact">
+                        <input
+                          type="checkbox"
+                          aria-label={`Enable visual card ${index + 1}`}
+                          checked={card.enabled}
+                          onChange={(event) => updateBrollCard(card.id, { enabled: event.target.checked })}
+                          disabled={isPending || !brollLayer.enabled}
+                        />
+                        <span>
+                          <strong>Card {index + 1}</strong>
+                        </span>
+                      </label>
+                      <button
+                        type="button"
+                        className="button secondary"
+                        onClick={() => removeBrollCard(card.id)}
+                        disabled={isPending}
+                      >
+                        Delete
+                      </button>
+                    </div>
+
+                    <label className="stack-sm">
+                      Text
+                      <textarea
+                        className="clip-studio-caption-textarea"
+                        value={card.text}
+                        onChange={(event) => updateBrollCard(card.id, { text: event.target.value })}
+                        disabled={isPending || !brollLayer.enabled || !card.enabled}
+                      />
+                    </label>
+
+                    <div className="clip-studio-broll-grid">
+                      <label className="stack-sm">
+                        Label
+                        <input
+                          value={card.label}
+                          onChange={(event) => updateBrollCard(card.id, { label: event.target.value })}
+                          disabled={isPending || !brollLayer.enabled || !card.enabled}
+                        />
+                      </label>
+                      <label className="stack-sm">
+                        Starts
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.1}
+                          value={card.startSeconds}
+                          onChange={(event) => updateBrollCard(card.id, { startSeconds: Number(event.target.value) })}
+                          disabled={isPending || !brollLayer.enabled || !card.enabled}
+                        />
+                      </label>
+                      <label className="stack-sm">
+                        Duration
+                        <input
+                          type="number"
+                          min={1}
+                          max={12}
+                          step={0.5}
+                          value={card.durationSeconds}
+                          onChange={(event) => updateBrollCard(card.id, { durationSeconds: Number(event.target.value) })}
+                          disabled={isPending || !brollLayer.enabled || !card.enabled}
+                        />
+                      </label>
+                      <label className="stack-sm">
+                        Tone
+                        <select
+                          value={card.tone}
+                          onChange={(event) => updateBrollCard(card.id, { tone: event.target.value as BrollCardTone })}
+                          disabled={isPending || !brollLayer.enabled || !card.enabled}
+                        >
+                          {BROLL_TONE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="stack-sm">
+                        Placement
+                        <select
+                          value={card.position}
+                          onChange={(event) => updateBrollCard(card.id, { position: event.target.value as BrollCardPosition })}
+                          disabled={isPending || !brollLayer.enabled || !card.enabled}
+                        >
+                          {BROLL_POSITION_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="clip-studio-broll-empty">
+                <button type="button" className="button secondary" onClick={addBrollCard} disabled={isPending}>
+                  Add first card
+                </button>
+              </div>
+            )}
+          </section>
         </div>
       </SectionCard>
 
@@ -1377,7 +2897,29 @@ export function ClipStudioEditor({
         <div>
           <p className="muted small">Studio draft</p>
           <p className="clip-studio-save-title">Preview updated</p>
-          <p className="muted small">Prepare for Posting saves this composition and renders the final video.</p>
+        </div>
+
+        <div className="clip-studio-history-actions" aria-label="Draft history controls">
+          <button
+            type="button"
+            className="button secondary"
+            onClick={undoDraftChange}
+            disabled={!canUndoDraft}
+            title="Undo draft change"
+            aria-label="Undo draft change"
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            className="button secondary"
+            onClick={redoDraftChange}
+            disabled={!canRedoDraft}
+            title="Redo draft change"
+            aria-label="Redo draft change"
+          >
+            Redo
+          </button>
         </div>
 
         {statusMessage ? (

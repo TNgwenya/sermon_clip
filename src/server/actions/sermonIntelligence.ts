@@ -31,35 +31,35 @@ function generateSermonIntelligence(
   ...args: Parameters<typeof import("@/server/agents/sermonIntelligenceService").generateSermonIntelligence>
 ): ReturnType<typeof import("@/server/agents/sermonIntelligenceService").generateSermonIntelligence> {
   assertLocalMediaProcessing("Sermon intelligence generation");
-  return import(/* turbopackIgnore: true */ "@/server/agents/sermonIntelligenceService").then((module) => module.generateSermonIntelligence(...args));
+  return import("@/server/agents/sermonIntelligenceService").then((module) => module.generateSermonIntelligence(...args));
 }
 
 function regenerateSermonIntelligence(
   ...args: Parameters<typeof import("@/server/agents/sermonIntelligenceService").regenerateSermonIntelligence>
 ): ReturnType<typeof import("@/server/agents/sermonIntelligenceService").regenerateSermonIntelligence> {
   assertLocalMediaProcessing("Sermon intelligence regeneration");
-  return import(/* turbopackIgnore: true */ "@/server/agents/sermonIntelligenceService").then((module) => module.regenerateSermonIntelligence(...args));
+  return import("@/server/agents/sermonIntelligenceService").then((module) => module.regenerateSermonIntelligence(...args));
 }
 
 function regenerateMinistryMoments(
   ...args: Parameters<typeof import("@/server/agents/ministryMomentService").regenerateMinistryMoments>
 ): ReturnType<typeof import("@/server/agents/ministryMomentService").regenerateMinistryMoments> {
   assertLocalMediaProcessing("Ministry moment regeneration");
-  return import(/* turbopackIgnore: true */ "@/server/agents/ministryMomentService").then((module) => module.regenerateMinistryMoments(...args));
+  return import("@/server/agents/ministryMomentService").then((module) => module.regenerateMinistryMoments(...args));
 }
 
 function refreshSubjectSpeakerTracking(
   ...args: Parameters<typeof import("@/server/agents/subjectSpeakerTrackingService").refreshSubjectSpeakerTracking>
 ): ReturnType<typeof import("@/server/agents/subjectSpeakerTrackingService").refreshSubjectSpeakerTracking> {
   assertLocalMediaProcessing("Subject and speaker tracking");
-  return import(/* turbopackIgnore: true */ "@/server/agents/subjectSpeakerTrackingService").then((module) => module.refreshSubjectSpeakerTracking(...args));
+  return import("@/server/agents/subjectSpeakerTrackingService").then((module) => module.refreshSubjectSpeakerTracking(...args));
 }
 
 function generateClipSuggestions(
   ...args: Parameters<typeof import("@/server/agents/clipIntelligenceAgent").generateClipSuggestions>
 ): ReturnType<typeof import("@/server/agents/clipIntelligenceAgent").generateClipSuggestions> {
   assertLocalMediaProcessing("Smart clip generation");
-  return import(/* turbopackIgnore: true */ "@/server/agents/clipIntelligenceAgent").then((module) => module.generateClipSuggestions(...args));
+  return import("@/server/agents/clipIntelligenceAgent").then((module) => module.generateClipSuggestions(...args));
 }
 
 async function queueSmartClipGeneration(sermonId: string): Promise<void> {

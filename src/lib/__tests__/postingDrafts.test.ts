@@ -93,6 +93,44 @@ describe("posting drafts", () => {
     ]);
   });
 
+  it("uses per-clip bulk copy and selected order for scheduled posts", async () => {
+    setupTransaction();
+    txMock.postingDraft.create.mockResolvedValue({
+      id: "draft-1",
+      clipIdsJson: ["clip-2", "clip-1"],
+      platformsJson: ["YouTube Shorts"],
+      postingSlot: "Wed, Jul 1, 10:00 AM",
+      note: null,
+      status: "READY_FOR_MEDIA_TEAM",
+      createdAt,
+    });
+    txMock.socialAccount.findMany.mockResolvedValue([]);
+
+    await createPostingDraft({
+      clipIds: ["clip-2", "clip-1"],
+      platforms: ["YouTube Shorts"],
+      postingSlot: "Bulk plan",
+      automationMode: "AUTOMATIC",
+      scheduledFor: new Date("2026-07-01T10:00:00.000Z"),
+      scheduleIntervalMinutes: 120,
+      timezone: "Africa/Johannesburg",
+      clipCopyById: {
+        "clip-1": { title: "First clip title", caption: "First clip caption" },
+        "clip-2": { title: "Second clip title", caption: "Second clip caption" },
+      },
+    });
+
+    const data = txMock.scheduledPost.createMany.mock.calls[0]?.[0]?.data;
+    expect(data).toHaveLength(2);
+    expect(data.map((post: { clipIdsJson: string[] }) => post.clipIdsJson[0])).toEqual(["clip-2", "clip-1"]);
+    expect(data.map((post: { title: string | null }) => post.title)).toEqual(["Second clip title", "First clip title"]);
+    expect(data.map((post: { caption: string | null }) => post.caption)).toEqual(["Second clip caption", "First clip caption"]);
+    expect(data.map((post: { scheduledFor: Date | null }) => post.scheduledFor?.toISOString())).toEqual([
+      "2026-07-01T10:00:00.000Z",
+      "2026-07-01T12:00:00.000Z",
+    ]);
+  });
+
   it("rejects selected accounts that are unavailable for the platform", async () => {
     setupTransaction();
 

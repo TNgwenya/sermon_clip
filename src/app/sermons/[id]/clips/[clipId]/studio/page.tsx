@@ -9,8 +9,11 @@ import { DEFAULT_CAPTION_STYLE_PRESET_ID } from "@/lib/captionStylePresets";
 import {
   extractCaptionPackage,
   extractCaptionGuidance,
+  extractCaptionAppearanceSettings,
   extractApplyCaptionsToClip,
+  extractCaptionPosition,
   extractCaptionStyleOverride,
+  extractBrollLayerConfig,
   extractHookOverlayConfig,
   extractOnVideoCaptionCues,
   extractLanguageHints,
@@ -25,6 +28,7 @@ import {
   hasCaptionPackage,
 } from "@/lib/clipStudio";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
+import { buildEditableCaptionCuesFromTranscriptSegments } from "@/lib/clipStudioEditing";
 import { ClipStudioEditor } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-editor";
 import { ClipStudioFormatFraming } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-format-framing";
 import { ClipStudioBranding } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-branding";
@@ -32,17 +36,100 @@ import { ClipStudioLivePreview } from "@/app/sermons/[id]/clips/[clipId]/studio/
 import { ClipStudioPreviewProvider } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
 import { ClipStudioWorkbenchTabs } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-workbench-tabs";
 import { ClipStudioPrepareButton } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-prepare-button";
-import { ClipStudioTranscriptPanel } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-transcript-panel";
-import { resolveExportHistory, resolveExportSettings } from "@/lib/clipExportSettings";
+import {
+  ClipStudioTimeline,
+  ClipStudioTranscriptPanel,
+} from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-transcript-panel";
+import {
+  FORMAT_LABELS,
+  exportStatusTone,
+  resolveExportHistory,
+  resolveExportSettings,
+  toPastorFriendlyExportStatus,
+} from "@/lib/clipExportSettings";
 import { resolveBrandingConfig } from "@/lib/clipBranding";
 import { buildClipAssetRecoveryPlan } from "@/lib/clipAssetRecovery";
 import { getBrandingSettings } from "@/server/branding/settings";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import { resolveBestPreviewCandidate } from "@/lib/clipPreview";
+import { detectClipStudioAudioSilenceEvents } from "@/server/agents/clipStudioAudioReviewService";
+import { extractSpeechCleanupEdits } from "@/lib/speechCleanupPlan";
 
 type ClipStudioPageParams = {
   params: Promise<{ id: string; clipId: string }>;
 };
+
+type StudioTranscriptSegment = {
+  id: string;
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+  text: string;
+};
+
+const FALLBACK_TRANSCRIPT_SEGMENT_TARGET_WORDS = 24;
+
+function splitTranscriptTextForStudio(transcriptText: string | null): string[] {
+  const normalizedText = transcriptText?.replace(/\s+/g, " ").trim();
+
+  if (!normalizedText) {
+    return [];
+  }
+
+  const sentencePieces = normalizedText
+    .match(/[^.!?]+[.!?]+|[^.!?]+$/g)
+    ?.map((piece) => piece.trim())
+    .filter(Boolean) ?? [];
+
+  if (sentencePieces.length > 1) {
+    return sentencePieces;
+  }
+
+  const words = normalizedText.split(" ").filter(Boolean);
+  const chunks: string[] = [];
+
+  for (let index = 0; index < words.length; index += FALLBACK_TRANSCRIPT_SEGMENT_TARGET_WORDS) {
+    chunks.push(words.slice(index, index + FALLBACK_TRANSCRIPT_SEGMENT_TARGET_WORDS).join(" "));
+  }
+
+  return chunks;
+}
+
+function buildFallbackTranscriptSegments({
+  clipStartSeconds,
+  clipEndSeconds,
+  transcriptText,
+}: {
+  clipStartSeconds: number;
+  clipEndSeconds: number;
+  transcriptText: string | null;
+}): StudioTranscriptSegment[] {
+  const transcriptPieces = splitTranscriptTextForStudio(transcriptText);
+
+  if (transcriptPieces.length === 0) {
+    return [];
+  }
+
+  const durationSeconds = Math.max(1, clipEndSeconds - clipStartSeconds);
+  const segmentDurationSeconds = durationSeconds / transcriptPieces.length;
+
+  return transcriptPieces.map((text, index) => {
+    const startTimeSeconds = clipStartSeconds + segmentDurationSeconds * index;
+    const endTimeSeconds = index === transcriptPieces.length - 1
+      ? clipEndSeconds
+      : clipStartSeconds + segmentDurationSeconds * (index + 1);
+
+    return {
+      id: `clip-transcript-${index + 1}`,
+      startTimeSeconds,
+      endTimeSeconds,
+      text,
+    };
+  });
+}
+
+function isStaleFinalExportFreshness(value: string | null | undefined): boolean {
+  return value === "OUTDATED" || value === "NEEDS_REGENERATION" || value === "FAILED";
+}
 
 function extractFramingDecisionSummary(captionData: unknown): string | null {
   if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
@@ -212,17 +299,25 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
 
   const captionPackage = extractCaptionPackage(clip.captionData, clip.caption, hashtags);
   const captionGuidance = extractCaptionGuidance(clip.captionData);
-  const onVideoCaptionCues = extractOnVideoCaptionCues(clip.captionData, clip.caption, clip.durationSeconds);
+  const fallbackOnVideoCaptionCues = extractOnVideoCaptionCues(clip.captionData, clip.caption, clip.durationSeconds);
   const captionStyleOverride = extractCaptionStyleOverride(clip.captionData);
+  const captionPosition = extractCaptionPosition(clip.captionData);
+  const captionAppearance = extractCaptionAppearanceSettings(clip.captionData);
   const applyCaptionsToClip = extractApplyCaptionsToClip(clip.captionData);
   const hookOverlay = extractHookOverlayConfig(clip.captionData, clip.hook || clip.suggestedHook);
+  const brollLayer = extractBrollLayerConfig(
+    clip.captionData,
+    clip.durationSeconds ?? Math.max(0, clip.endTimeSeconds - clip.startTimeSeconds),
+  );
   const languageHints = extractLanguageHints(clip.captionData);
   const speechCleanupSettings = extractSpeechCleanupSettings(clip.captionData);
+  const speechCleanupEdits = extractSpeechCleanupEdits(clip.captionData, clip.durationSeconds ?? Math.max(0, clip.endTimeSeconds - clip.startTimeSeconds));
   const framingDecisionSummary = extractFramingDecisionSummary(clip.captionData);
   const exportSettings = resolveExportSettings({
     exportFormat: clip.exportFormat,
     exportLayoutStrategy: clip.exportLayoutStrategy,
     captionData: clip.captionData,
+    manualCropKeyframes: clip.manualCropKeyframes,
   });
   const brandingConfig = resolveBrandingConfig(clip.captionData);
   const appBranding = await getBrandingSettings().catch(() => null);
@@ -253,7 +348,30 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
         .then((fileStat) => fileStat.isFile() && fileStat.size > 0)
         .catch(() => false)
     : false;
+  const audioSilenceReview = sourceVideoExists && sermon.sourceVideoPath
+    ? await detectClipStudioAudioSilenceEvents({
+        sourceVideoPath: sermon.sourceVideoPath,
+        startTimeSeconds: clip.startTimeSeconds,
+        endTimeSeconds: clip.endTimeSeconds,
+        ffmpegPath: process.env.FFMPEG_PATH,
+      })
+        .then((events) => ({ events, analyzed: true }))
+        .catch(() => ({ events: [], analyzed: false }))
+    : { events: [], analyzed: false };
   const transcriptExcerpt = formatTranscriptExcerpt(clip.transcriptText);
+  const studioTranscriptSegments = transcriptSegments.length > 0
+    ? transcriptSegments
+    : buildFallbackTranscriptSegments({
+        clipStartSeconds: clip.startTimeSeconds,
+        clipEndSeconds: clip.endTimeSeconds,
+        transcriptText: clip.transcriptText,
+      });
+  const transcriptCaptionCues = buildEditableCaptionCuesFromTranscriptSegments({
+    startTimeSeconds: clip.startTimeSeconds,
+    endTimeSeconds: clip.endTimeSeconds,
+    segments: studioTranscriptSegments,
+  });
+  const onVideoCaptionCues = transcriptCaptionCues.length > 0 ? transcriptCaptionCues : fallbackOnVideoCaptionCues;
   const timing = buildClipTimingDisplay(clip.startTimeSeconds, clip.endTimeSeconds, clip.durationSeconds);
   const initialEditPreview = {
     startLabel: timing.startLabel,
@@ -269,8 +387,14 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     captionCues: onVideoCaptionCues,
     applyCaptionsToClip,
     captionStylePresetId: captionStyleOverride || appBranding?.defaultCaptionStyleName || DEFAULT_CAPTION_STYLE_PRESET_ID,
+    captionPosition,
+    captionAppearance,
     hookOverlay,
+    brollLayer,
     speechCleanup: speechCleanupSettings,
+    speechCleanupEdits,
+    audioSilenceEvents: audioSilenceReview.events,
+    audioSilenceAnalyzed: audioSilenceReview.analyzed,
     hashtags: captionPackage.hashtags.join(" "),
     isTimingValid: true,
   };
@@ -332,6 +456,14 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     (record) => record.status === "COMPLETED" && record.fileExists && record.isLatest,
   );
   const hasPreparedMedia = currentExportFileExists || latestPreparedMediaExists;
+  const preparedFinalNeedsUpdate = hasPreparedMedia && (
+    renderStatus !== "COMPLETED"
+    || clip.exportStatus !== "COMPLETED"
+    || isStaleFinalExportFreshness(clip.renderFreshness)
+    || isStaleFinalExportFreshness(clip.exportFreshness)
+  );
+  const preparedFinalReady = hasPreparedMedia && !preparedFinalNeedsUpdate;
+  const latestExportRecords = exportHistoryWithFileState.filter((record) => record.isLatest).slice(0, 4);
 
   return (
     <ClipStudioPreviewProvider
@@ -384,7 +516,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             <ClipStudioPrepareButton
               clipId={clip.id}
               hasPreparedMedia={hasPreparedMedia}
-              serverNeedsUpdate={recoveryPlan.hasRecoverableIssue}
+              serverNeedsUpdate={preparedFinalNeedsUpdate}
             />
           </div>
         </div>
@@ -392,7 +524,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
 
       <div className="clip-studio-layout">
         <ClipStudioTranscriptPanel
-          transcriptSegments={transcriptSegments}
+          transcriptSegments={studioTranscriptSegments}
           clipStartSeconds={clip.startTimeSeconds}
           clipEndSeconds={clip.endTimeSeconds}
           clipDurationSeconds={clip.durationSeconds}
@@ -426,6 +558,18 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
           {clip.captionBurnError ? <p className="status-help">Caption burn issue: {clip.captionBurnError}</p> : null}
           {clip.overlayRenderError ? <p className="status-help">Branding issue: {clip.overlayRenderError}</p> : null}
           {clip.exportError ? <p className="status-help">Export issue: {clip.exportError}</p> : null}
+
+          <ClipStudioTimeline
+            transcriptSegments={studioTranscriptSegments}
+            clipStartSeconds={clip.startTimeSeconds}
+            clipEndSeconds={clip.endTimeSeconds}
+            clipDurationSeconds={clip.durationSeconds}
+            captionCues={onVideoCaptionCues}
+            speechCleanup={speechCleanupSettings}
+            momentType={clip.ministryMoment?.momentType ?? clip.clipType ?? null}
+            momentTitle={clip.ministryMoment?.title ?? null}
+            smartClipCategory={clip.smartClipCategory}
+          />
         </aside>
 
         <div className="clip-studio-main-column stack-md">
@@ -440,11 +584,17 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 initialCaptionCues={onVideoCaptionCues}
                 initialApplyCaptionsToClip={applyCaptionsToClip}
                 initialCaptionStylePresetId={captionStyleOverride}
+                initialCaptionPosition={captionPosition}
+                initialCaptionAppearance={captionAppearance}
                 brandCaptionStylePresetId={appBranding?.defaultCaptionStyleName ?? DEFAULT_CAPTION_STYLE_PRESET_ID}
                 suggestedHook={clip.suggestedHook ?? ""}
                 initialHookOverlay={hookOverlay}
+                initialBrollLayer={brollLayer}
                 initialSpeechCleanup={speechCleanupSettings}
-                transcriptSegments={transcriptSegments}
+                initialSpeechCleanupEdits={speechCleanupEdits}
+                initialAudioSilenceEvents={audioSilenceReview.events}
+                initialAudioSilenceAnalyzed={audioSilenceReview.analyzed}
+                transcriptSegments={studioTranscriptSegments}
                 knownDurationSeconds={sermonDurationSegment?.endTimeSeconds ?? null}
                 captionQualityScore={captionGuidance.qualityScore}
                 captionQualityReason={captionGuidance.qualityReason}
@@ -459,7 +609,6 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 clipDurationSeconds={clip.durationSeconds}
                 initialSettings={exportSettings}
                 videoSubjectTracks={videoSubjectTracks}
-                manualCropKeyframes={clip.manualCropKeyframes}
                 manualCropUpdatedAt={clip.manualCropUpdatedAt?.toISOString() ?? null}
                 smartCropDebugGeneratedAt={clip.smartCropDebugGeneratedAt?.toISOString() ?? null}
                 smartCropDebugError={clip.smartCropDebugError}
@@ -486,18 +635,52 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 <div className="section-heading-row">
                   <div>
                     <p className="kicker">Post</p>
-                    <h3>{hasPreparedMedia && !recoveryPlan.hasRecoverableIssue ? "Prepared video ready" : "Final video needs updating"}</h3>
+                    <h3>{preparedFinalReady ? "Prepared video ready" : "Final video needs updating"}</h3>
                   </div>
-                  <StatusBadge tone={hasPreparedMedia && !recoveryPlan.hasRecoverableIssue ? "success" : "warning"}>
+                  <StatusBadge tone={preparedFinalReady ? "success" : "warning"}>
                     {hasPreparedMedia ? "Prepared" : "Not prepared"}
                   </StatusBadge>
                 </div>
                 <p className="muted small">
-                  {hasPreparedMedia && !recoveryPlan.hasRecoverableIssue
+                  {preparedFinalReady
                     ? "Prepared media is ready for the ready-to-post package."
                     : "Use Prepare for Posting to save this composition, approve the clip, and update the final video."}
                 </p>
-                {recoveryPlan.hasRecoverableIssue ? <p className="muted small">{recoveryPlan.summary}</p> : null}
+                {preparedFinalNeedsUpdate && recoveryPlan.hasRecoverableIssue ? (
+                  <p className="muted small">{recoveryPlan.summary}</p>
+                ) : null}
+                {latestExportRecords.length > 0 ? (
+                  <div className="posting-draft-list">
+                    {latestExportRecords.map((record) => (
+                      <article className="posting-draft-card" key={record.id}>
+                        <div className="actions-row">
+                          <strong>{FORMAT_LABELS[record.format]}</strong>
+                          <StatusBadge tone={exportStatusTone(record.status)}>
+                            {toPastorFriendlyExportStatus(record.status)}
+                          </StatusBadge>
+                        </div>
+                        <p className="muted small">
+                          {record.outputFilename ?? "No file yet"}
+                          {record.fileSizeBytes ? ` · ${(record.fileSizeBytes / 1_000_000).toFixed(1)} MB` : ""}
+                        </p>
+                        <p className="muted small">
+                          {record.status === "COMPLETED" && record.fileExists
+                            ? "File verified locally"
+                            : record.status === "FAILED"
+                              ? record.errorMessage ?? "Export failed"
+                              : "Preparing or waiting for a fresh export"}
+                        </p>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted small">Prepared output records will appear here after the first prepare run.</p>
+                )}
+                {preparedFinalReady ? (
+                  <Link href={`/ready-to-post?clipId=${clip.id}`} className="button secondary">
+                    Open ready queue
+                  </Link>
+                ) : null}
               </section>
             }
             evidence={

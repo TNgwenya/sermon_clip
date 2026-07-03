@@ -186,6 +186,14 @@ export function buildBrandingSummary(config: ClipBrandingConfig, context: Brandi
     elements.push(context.logoPath ? "logo watermark" : "church name watermark");
   }
 
+  if (config.introEnabled) {
+    elements.push("intro brand badge");
+  }
+
+  if (config.outroEnabled) {
+    elements.push("outro brand badge");
+  }
+
   if (config.backgroundStyle !== "NONE") {
     elements.push("background style");
   }

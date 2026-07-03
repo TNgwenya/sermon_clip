@@ -301,6 +301,32 @@ describe("buildHookOverlayFilter", () => {
     expect(filter).toContain("(6.00-t)");
   });
 
+  it("remaps hook overlay timing onto the speech-cleaned render timeline", () => {
+    const filter = buildHookOverlayFilter({
+      speechCleanupPlan: {
+        version: 1,
+        enabled: true,
+        sourceStartSeconds: 1,
+        sourceEndSeconds: 10,
+        cleanedDurationSeconds: 6,
+        cuts: [{ startSeconds: 4, endSeconds: 7, removedSeconds: 3 }],
+        hasAudioAnalysis: true,
+      },
+      hookOverlay: {
+        enabled: true,
+        text: "Stay with the promise",
+        position: "center",
+        startSeconds: 7,
+        durationSeconds: 2,
+        animation: "none",
+        size: "medium",
+        bold: true,
+      },
+    });
+
+    expect(filter).toContain("between(t,3.00,5.00)");
+  });
+
   it("animates pan-in hooks with a moving x expression", () => {
     const filter = buildHookOverlayFilter({
       hookOverlay: {
@@ -341,6 +367,117 @@ describe("buildHookOverlayFilter", () => {
 
   it("returns null when hook overlay is disabled", () => {
     expect(buildHookOverlayFilter({ hookOverlay: { enabled: false, text: "Hidden" } })).toBeNull();
+  });
+});
+
+describe("B-roll overlay cards", () => {
+  const { buildBrollCardSvg, buildOverlayFilterComplex, extractBrollOverlaySpecs } = __clipOverlayTestUtils;
+
+  it("extracts enabled B-roll cards for timed overlay rendering", () => {
+    const specs = extractBrollOverlaySpecs({
+      brollLayer: {
+        enabled: true,
+        cards: [
+          {
+            id: "card-1",
+            enabled: true,
+            text: "God is still faithful",
+            label: "Key quote",
+            startSeconds: 4,
+            durationSeconds: 5,
+            tone: "quote",
+            position: "full",
+          },
+        ],
+      },
+    });
+
+    expect(specs).toHaveLength(1);
+    expect(specs[0]).toMatchObject({
+      id: "card-1",
+      text: "God is still faithful",
+      label: "Key quote",
+      startSeconds: 4,
+      endSeconds: 9,
+      position: "full",
+    });
+  });
+
+  it("remaps B-roll cards onto the speech-cleaned render timeline", () => {
+    const specs = extractBrollOverlaySpecs({
+      speechCleanupPlan: {
+        version: 1,
+        enabled: true,
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 20,
+        cleanedDurationSeconds: 17,
+        cuts: [{ startSeconds: 3, endSeconds: 6, removedSeconds: 3 }],
+        hasAudioAnalysis: true,
+      },
+      brollLayer: {
+        enabled: true,
+        cards: [
+          {
+            id: "card-1",
+            enabled: true,
+            text: "After the pause",
+            label: "Application",
+            startSeconds: 8,
+            durationSeconds: 4,
+            tone: "application",
+            position: "lower",
+          },
+        ],
+      },
+    });
+
+    expect(specs[0]?.startSeconds).toBe(5);
+    expect(specs[0]?.endSeconds).toBe(9);
+  });
+
+  it("adds B-roll PNG inputs before the hook overlay in the complex filter", () => {
+    const [brollSpec] = extractBrollOverlaySpecs({
+      brollLayer: {
+        enabled: true,
+        cards: [{ id: "card-1", enabled: true, text: "Remember mercy", label: "Quote", startSeconds: 1, durationSeconds: 3 }],
+      },
+    });
+    const filter = buildOverlayFilterComplex({
+      hasBrandingOverlay: true,
+      brollOverlaySpecs: brollSpec ? [brollSpec] : [],
+      brollOverlayInputStartIndex: 2,
+      hookOverlaySpec: {
+        text: "Do not quit now",
+        position: "top",
+        startSeconds: 0,
+        durationSeconds: 6,
+        endSeconds: 6,
+        animation: "fade",
+        size: "medium",
+        bold: true,
+        width: 960,
+        height: 220,
+      },
+      hookOverlayInputIndex: 3,
+    });
+
+    expect(filter).toContain("[2:v]format=rgba");
+    expect(filter).toContain("between(t,1.000,4.000)");
+    expect(filter).toContain("[3:v]format=rgba");
+  });
+
+  it("renders an SVG card with escaped text", () => {
+    const [spec] = extractBrollOverlaySpecs({
+      brollLayer: {
+        enabled: true,
+        cards: [{ id: "card-1", enabled: true, text: "God's promise <stands>", label: "John 3:16", startSeconds: 0, durationSeconds: 4 }],
+      },
+    });
+
+    expect(spec).toBeDefined();
+    const svg = buildBrollCardSvg(spec!);
+    expect(svg).toContain("God&apos;s promise &lt;stands&gt;");
+    expect(svg).toContain("JOHN 3:16");
   });
 });
 

@@ -222,7 +222,7 @@ describe("clip suggestion curation service", () => {
       startTimeSeconds: 10,
       endTimeSeconds: 70,
       durationSeconds: 60,
-      transcriptText: candidate.transcriptText,
+      transcriptText: candidate.transcriptText ?? "",
       qualityDebugSnapshot: candidate.qualityDebugSnapshot,
       smartClipCategory: "Best Faith Clip",
       clipType: "teaching",

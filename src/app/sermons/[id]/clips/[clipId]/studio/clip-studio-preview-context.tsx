@@ -3,8 +3,16 @@
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
 
 import type { ClipBrandingConfig } from "@/lib/clipBranding";
-import type { HookOverlayConfig, SpeechCleanupSettings } from "@/lib/clipStudio";
+import type {
+  BrollLayerConfig,
+  CaptionAppearanceSettings,
+  CaptionPosition,
+  HookOverlayConfig,
+  SpeechCleanupSettings,
+} from "@/lib/clipStudio";
 import type { ExportSettings } from "@/lib/clipExportSettings";
+import type { SpeechCleanupAudioSilenceEvent } from "@/lib/clipStudioPreviewTimeline";
+import type { SpeechCleanupEdits } from "@/lib/speechCleanupPlan";
 
 export type ClipStudioEditPreview = {
   startLabel: string;
@@ -25,8 +33,14 @@ export type ClipStudioEditPreview = {
   }>;
   applyCaptionsToClip: boolean;
   captionStylePresetId: string;
+  captionPosition: CaptionPosition;
+  captionAppearance: CaptionAppearanceSettings;
   hookOverlay: HookOverlayConfig;
+  brollLayer: BrollLayerConfig;
   speechCleanup: SpeechCleanupSettings;
+  speechCleanupEdits: SpeechCleanupEdits | null;
+  audioSilenceEvents: SpeechCleanupAudioSilenceEvent[];
+  audioSilenceAnalyzed: boolean;
   hashtags: string;
   isTimingValid: boolean;
 };
@@ -43,6 +57,7 @@ type ClipStudioPreviewContextValue = {
   editPreview: ClipStudioEditPreview;
   previewClock: ClipStudioPreviewClock;
   seekRequest: { seconds: number; requestId: number } | null;
+  playbackRequest: { requestId: number } | null;
   churchName: string;
   sermonTitle: string;
   preacherName: string;
@@ -51,6 +66,7 @@ type ClipStudioPreviewContextValue = {
   updateEditPreview: (preview: ClipStudioEditPreview) => void;
   updatePreviewClock: (clock: ClipStudioPreviewClock) => void;
   seekPreviewTo: (seconds: number) => void;
+  requestPreviewPlayback: () => void;
 };
 
 const ClipStudioPreviewContext = createContext<ClipStudioPreviewContextValue | null>(null);
@@ -73,7 +89,18 @@ function sameExportSettings(a: ExportSettings, b: ExportSettings): boolean {
     a.framingPersonality === b.framingPersonality &&
     a.backgroundMode === b.backgroundMode &&
     a.selectedFormats.length === b.selectedFormats.length &&
-    a.selectedFormats.every((format, index) => format === b.selectedFormats[index])
+    a.selectedFormats.every((format, index) => format === b.selectedFormats[index]) &&
+    a.manualCropKeyframes.length === b.manualCropKeyframes.length &&
+    a.manualCropKeyframes.every((keyframe, index) => {
+      const otherKeyframe = b.manualCropKeyframes[index];
+      return (
+        otherKeyframe !== undefined &&
+        keyframe.timeSeconds === otherKeyframe.timeSeconds &&
+        keyframe.centerX === otherKeyframe.centerX &&
+        keyframe.centerY === otherKeyframe.centerY &&
+        keyframe.zoom === otherKeyframe.zoom
+      );
+    })
   );
 }
 
@@ -118,6 +145,11 @@ function sameEditPreview(a: ClipStudioEditPreview, b: ClipStudioEditPreview): bo
     }) &&
     a.applyCaptionsToClip === b.applyCaptionsToClip &&
     a.captionStylePresetId === b.captionStylePresetId &&
+    a.captionPosition === b.captionPosition &&
+    a.captionAppearance.fontScale === b.captionAppearance.fontScale &&
+    a.captionAppearance.maxLines === b.captionAppearance.maxLines &&
+    a.captionAppearance.uppercase === b.captionAppearance.uppercase &&
+    a.captionAppearance.verticalOffset === b.captionAppearance.verticalOffset &&
     a.hookOverlay.enabled === b.hookOverlay.enabled &&
     a.hookOverlay.text === b.hookOverlay.text &&
     a.hookOverlay.position === b.hookOverlay.position &&
@@ -126,9 +158,38 @@ function sameEditPreview(a: ClipStudioEditPreview, b: ClipStudioEditPreview): bo
     a.hookOverlay.animation === b.hookOverlay.animation &&
     a.hookOverlay.size === b.hookOverlay.size &&
     a.hookOverlay.bold === b.hookOverlay.bold &&
+    a.brollLayer.enabled === b.brollLayer.enabled &&
+    a.brollLayer.cards.length === b.brollLayer.cards.length &&
+    a.brollLayer.cards.every((card, index) => {
+      const otherCard = b.brollLayer.cards[index];
+      return (
+        otherCard !== undefined &&
+        card.id === otherCard.id &&
+        card.enabled === otherCard.enabled &&
+        card.text === otherCard.text &&
+        card.label === otherCard.label &&
+        card.startSeconds === otherCard.startSeconds &&
+        card.durationSeconds === otherCard.durationSeconds &&
+        card.tone === otherCard.tone &&
+        card.position === otherCard.position
+      );
+    }) &&
     a.speechCleanup.removeDeadAir === b.speechCleanup.removeDeadAir &&
     a.speechCleanup.tightenLongPauses === b.speechCleanup.tightenLongPauses &&
     a.speechCleanup.flagFillerWords === b.speechCleanup.flagFillerWords &&
+    a.speechCleanup.intensity === b.speechCleanup.intensity &&
+    JSON.stringify(a.speechCleanupEdits) === JSON.stringify(b.speechCleanupEdits) &&
+    a.audioSilenceEvents.length === b.audioSilenceEvents.length &&
+    a.audioSilenceEvents.every((event, index) => {
+      const otherEvent = b.audioSilenceEvents[index];
+      return (
+        otherEvent !== undefined &&
+        event.startSeconds === otherEvent.startSeconds &&
+        event.endSeconds === otherEvent.endSeconds &&
+        event.durationSeconds === otherEvent.durationSeconds
+      );
+    }) &&
+    a.audioSilenceAnalyzed === b.audioSilenceAnalyzed &&
     a.hashtags === b.hashtags &&
     a.isTimingValid === b.isTimingValid
   );
@@ -160,6 +221,7 @@ export function ClipStudioPreviewProvider({
     isPlaying: false,
   });
   const [seekRequest, setSeekRequest] = useState<{ seconds: number; requestId: number } | null>(null);
+  const [playbackRequest, setPlaybackRequest] = useState<{ requestId: number } | null>(null);
 
   const updateExportSettings = useCallback((settings: ExportSettings) => {
     setExportSettings((current) => (sameExportSettings(current, settings) ? current : settings));
@@ -188,6 +250,12 @@ export function ClipStudioPreviewProvider({
     }));
   }, []);
 
+  const requestPreviewPlayback = useCallback(() => {
+    setPlaybackRequest((current) => ({
+      requestId: (current?.requestId ?? 0) + 1,
+    }));
+  }, []);
+
   const value = useMemo(
     () => ({
       exportSettings,
@@ -195,6 +263,7 @@ export function ClipStudioPreviewProvider({
       editPreview,
       previewClock,
       seekRequest,
+      playbackRequest,
       churchName,
       sermonTitle,
       preacherName,
@@ -203,14 +272,17 @@ export function ClipStudioPreviewProvider({
       updateEditPreview,
       updatePreviewClock,
       seekPreviewTo,
+      requestPreviewPlayback,
     }),
     [
       brandingConfig,
       churchName,
       editPreview,
       exportSettings,
+      playbackRequest,
       preacherName,
       previewClock,
+      requestPreviewPlayback,
       seekPreviewTo,
       seekRequest,
       sermonTitle,

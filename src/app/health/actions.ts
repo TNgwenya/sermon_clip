@@ -21,21 +21,21 @@ const LOCAL_WORKER_ONLY_MESSAGE = "This recovery action must run from the local 
 async function backfillClipThumbnails(
   ...args: Parameters<typeof import("@/server/agents/clipThumbnailService").backfillClipThumbnails>
 ): ReturnType<typeof import("@/server/agents/clipThumbnailService").backfillClipThumbnails> {
-  const { backfillClipThumbnails: run } = await import(/* turbopackIgnore: true */ "@/server/agents/clipThumbnailService");
+  const { backfillClipThumbnails: run } = await import("@/server/agents/clipThumbnailService");
   return run(...args);
 }
 
 async function regenerateClipOutdatedAssetsAction(
   ...args: Parameters<typeof import("@/server/actions/sermons").regenerateClipOutdatedAssetsAction>
 ): ReturnType<typeof import("@/server/actions/sermons").regenerateClipOutdatedAssetsAction> {
-  const { regenerateClipOutdatedAssetsAction: run } = await import(/* turbopackIgnore: true */ "@/server/actions/sermons");
+  const { regenerateClipOutdatedAssetsAction: run } = await import("@/server/actions/sermons");
   return run(...args);
 }
 
 async function retryFailedProcessingJobById(
   ...args: Parameters<typeof import("@/server/actions/sermons").retryFailedProcessingJobById>
 ): ReturnType<typeof import("@/server/actions/sermons").retryFailedProcessingJobById> {
-  const { retryFailedProcessingJobById: run } = await import(/* turbopackIgnore: true */ "@/server/actions/sermons");
+  const { retryFailedProcessingJobById: run } = await import("@/server/actions/sermons");
   return run(...args);
 }
 
