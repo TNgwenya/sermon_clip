@@ -5463,6 +5463,7 @@ export async function retryClipStudioExportAction(input: {
     where: { id: clipId },
     select: {
       id: true,
+      sermonId: true,
       captionData: true,
     },
   });
@@ -5482,6 +5483,38 @@ export async function retryClipStudioExportAction(input: {
     return {
       success: false,
       message: "Render retry is not available for this record.",
+      results: [],
+    };
+  }
+
+  if (!canRunLocalMediaProcessing()) {
+    const queued = await queueSermonMediaAssetJobs(clip.sermonId);
+    const retriedAt = new Date().toISOString();
+    await updateClipStudioExportHistory(
+      clip.id,
+      markLatestExports(history.map((item) => item.id === record.id
+        ? {
+            ...item,
+            status: "WAITING",
+            errorMessage: null,
+            startedAt: null,
+            completedAt: null,
+            createdAt: retriedAt,
+          }
+        : item)),
+    );
+
+    revalidatePath(`/sermons/${clip.sermonId}`);
+    revalidatePath(`/sermons/${clip.sermonId}/review`);
+    revalidatePath(`/sermons/${clip.sermonId}/clips/${clip.id}/studio`);
+    revalidatePath("/ready-to-post");
+    revalidatePath("/");
+
+    return {
+      success: true,
+      message: queued.queued > 0
+        ? "Render retry was queued for your local worker."
+        : "Render retry is already queued for your local worker.",
       results: [],
     };
   }
