@@ -33,6 +33,15 @@ function log(message: string, data?: unknown): void {
   console.log(`[media-worker] ${new Date().toISOString()} ${message}${suffix}`);
 }
 
+function errorSummary(error: unknown): { message: string; code?: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code ?? "") || undefined
+    : undefined;
+
+  return { message, code };
+}
+
 async function runCaptionBurnJob(sermonId: string): Promise<string> {
   const clips = await prisma.clipCandidate.findMany({
     where: {
@@ -295,6 +304,8 @@ async function processNextJob(): Promise<void> {
       await markJobFailed(job.id, message);
       log("job failed", { id: job.id, type: job.type, error: message });
     }
+  } catch (error) {
+    log("poll failed; will retry", errorSummary(error));
   } finally {
     processing = false;
   }
