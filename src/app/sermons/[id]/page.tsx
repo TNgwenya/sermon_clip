@@ -1229,6 +1229,11 @@ export default async function SermonDetailPage({
     )).filter((clipId): clipId is string => Boolean(clipId)),
   );
   const refreshItemCount = operationSummary.failed + operationSummary.outdated;
+  const hasPastorReviewFeed = clipCounts.total > 0;
+  const pastorReviewFeedIsPrimaryAction =
+    failedRecoveryCount === 0 &&
+    !hasLiveProcessingWork &&
+    (pastorWorkflow.primaryAction === "review" || pastorWorkflow.primaryAction === "prepare");
 
   const publishingChecklist = [
     {
@@ -1338,12 +1343,12 @@ export default async function SermonDetailPage({
             ) : null}
             {failedRecoveryCount === 0 && !hasLiveProcessingWork && pastorWorkflow.primaryAction === "review" ? (
               <Link href={`/sermons/${sermon.id}/review`} className="button primary">
-                Review suggested clips
+                Pastor Review Feed
               </Link>
             ) : null}
             {failedRecoveryCount === 0 && !hasLiveProcessingWork && pastorWorkflow.primaryAction === "prepare" ? (
               <Link href={`/sermons/${sermon.id}/review`} className="button primary">
-                Prepare approved clips
+                Pastor Review Feed
               </Link>
             ) : null}
             {failedRecoveryCount === 0 && !hasLiveProcessingWork && pastorWorkflow.primaryAction === "post" ? (
@@ -1351,7 +1356,7 @@ export default async function SermonDetailPage({
                 Open ready-to-post queue
               </Link>
             ) : null}
-            {pastorWorkflow.primaryAction !== "review" && pastorWorkflow.primaryAction !== "prepare" ? (
+            {hasPastorReviewFeed && !pastorReviewFeedIsPrimaryAction ? (
               <Link href={`/sermons/${sermon.id}/review`} className="button secondary">
                 Pastor Review Feed
               </Link>
