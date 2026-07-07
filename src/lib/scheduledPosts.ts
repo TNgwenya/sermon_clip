@@ -3,6 +3,7 @@ import type {
   PostingPlatform as PrismaPostingPlatform,
   ScheduledPostStatus as PrismaScheduledPostStatus,
   ScheduledPostWorkerStatus as PrismaScheduledPostWorkerStatus,
+  SocialConnectorProvider,
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
@@ -50,6 +51,61 @@ export type ScheduledPostAction = "POST_NOW";
 
 const MANUAL_PUBLISHING_STATUSES: ManualPublishingStatus[] = ["READY_FOR_MEDIA_TEAM", "POSTED", "FAILED", "SKIPPED"];
 const SCHEDULED_POST_ACTIONS: ScheduledPostAction[] = ["POST_NOW"];
+const POSTING_PLATFORM_CREDENTIAL_PROVIDER: Partial<Record<PrismaPostingPlatform, SocialConnectorProvider>> = {
+  FACEBOOK: "META_FACEBOOK",
+  INSTAGRAM: "META_INSTAGRAM",
+  TIKTOK: "TIKTOK",
+  YOUTUBE_SHORTS: "YOUTUBE",
+};
+
+function isSocialAuthFailure(message: string | null | undefined): boolean {
+  const normalized = message?.toLowerCase() ?? "";
+  return [
+    "access token",
+    "expired or revoked",
+    "session has expired",
+    "token has been expired",
+    "invalid_grant",
+    "invalid token",
+    "needs reauth",
+    "reauthorize",
+    "reauthorise",
+    "oauth",
+  ].some((pattern) => normalized.includes(pattern));
+}
+
+async function markScheduledPostSocialAccountNeedsReview(input: {
+  socialAccountId: string | null;
+  platform: PrismaPostingPlatform;
+  publishError: string | null | undefined;
+}): Promise<void> {
+  if (!input.socialAccountId || !isSocialAuthFailure(input.publishError)) {
+    return;
+  }
+
+  const provider = POSTING_PLATFORM_CREDENTIAL_PROVIDER[input.platform];
+
+  await prisma.$transaction([
+    prisma.socialAccount.update({
+      where: { id: input.socialAccountId },
+      data: { status: "NEEDS_REVIEW" },
+    }),
+    ...(provider
+      ? [
+          prisma.socialCredential.updateMany({
+            where: {
+              socialAccountId: input.socialAccountId,
+              provider,
+            },
+            data: {
+              status: "NEEDS_REAUTH",
+              lastError: input.publishError,
+            },
+          }),
+        ]
+      : []),
+  ]).catch(() => undefined);
+}
 
 function normalizeClipIds(value: unknown): string[] {
   return Array.isArray(value)
@@ -309,7 +365,7 @@ export type AutomationUpcomingPost = ScheduledPost & {
   }>;
 };
 
-const ACTIVE_AUTOMATION_STATUSES: PrismaScheduledPostStatus[] = ["PLANNED", "FAILED"];
+const ACTIVE_AUTOMATION_STATUSES: PrismaScheduledPostStatus[] = ["PLANNED"];
 
 export async function listUpcomingAutomationPosts(input: {
   now?: Date;
@@ -489,5 +545,18 @@ export async function completeScheduledPost(input: {
     },
   }).catch(() => null);
 
+  if (post && input.status === "FAILED") {
+    await markScheduledPostSocialAccountNeedsReview({
+      socialAccountId: post.socialAccountId,
+      platform: post.platform,
+      publishError: input.publishError,
+    });
+  }
+
   return post ? toScheduledPost(post) : null;
 }
+
+export const __scheduledPostsTestUtils = {
+  isSocialAuthFailure,
+  ACTIVE_AUTOMATION_STATUSES,
+};
