@@ -3,6 +3,8 @@ import os from "node:os";
 import type { ProcessingJob } from "@prisma/client";
 import nextEnv from "@next/env";
 
+import { createWorkerLogger, errorFields, formatDuration } from "./worker-log.ts";
+
 process.env.WORKER_ENABLED ||= "true";
 const { loadEnvConfig } = nextEnv;
 loadEnvConfig(process.cwd());
@@ -26,21 +28,8 @@ const {
 
 const workerId = process.env.MEDIA_WORKER_ID?.trim() || `${os.hostname()}-media-worker`;
 const pollIntervalMs = Number(process.env.MEDIA_WORKER_POLL_SECONDS ?? 15) * 1000;
+const logger = createWorkerLogger("media");
 let processing = false;
-
-function log(message: string, data?: unknown): void {
-  const suffix = data ? ` ${JSON.stringify(data)}` : "";
-  console.log(`[media-worker] ${new Date().toISOString()} ${message}${suffix}`);
-}
-
-function errorSummary(error: unknown): { message: string; code?: string } {
-  const message = error instanceof Error ? error.message : String(error);
-  const code = typeof error === "object" && error !== null && "code" in error
-    ? String((error as { code?: unknown }).code ?? "") || undefined
-    : undefined;
-
-  return { message, code };
-}
 
 async function runCaptionBurnJob(sermonId: string): Promise<string> {
   const clips = await prisma.clipCandidate.findMany({
@@ -306,29 +295,40 @@ async function processNextJob(): Promise<void> {
       return;
     }
 
-    log("claimed job", { id: job.id, sermonId: job.sermonId, type: job.type });
+    const startedAt = Date.now();
+    logger.info("claimed job", { job: job.id, sermon: job.sermonId, type: job.type });
     await appendJobLog(job.id, `Started ${job.type} on ${workerId}.`);
 
     try {
       const summary = await runJob(job);
       await markJobSucceeded(job.id, summary);
-      log("job succeeded", { id: job.id, type: job.type, summary });
+      logger.success("job succeeded", {
+        job: job.id,
+        type: job.type,
+        duration: formatDuration(Date.now() - startedAt),
+        summary,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await markJobFailed(job.id, message);
-      log("job failed", { id: job.id, type: job.type, error: message });
+      logger.error("job failed", {
+        job: job.id,
+        type: job.type,
+        duration: formatDuration(Date.now() - startedAt),
+        error: message,
+      });
     }
   } catch (error) {
-    log("poll failed; will retry", errorSummary(error));
+    logger.error("poll failed; will retry", errorFields(error));
   } finally {
     processing = false;
   }
 }
 
 async function main(): Promise<void> {
-  log("starting", {
+  logger.banner("media worker started", {
     workerId,
-    pollIntervalSeconds: pollIntervalMs / 1000,
+    pollEvery: `${pollIntervalMs / 1000}s`,
   });
 
   await processNextJob();
@@ -338,16 +338,16 @@ async function main(): Promise<void> {
 }
 
 process.on("SIGINT", () => {
-  log("stopping");
+  logger.warn("stopping");
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
-  log("stopping");
+  logger.warn("stopping");
   process.exit(0);
 });
 
 void main().catch((error) => {
-  console.error(error);
+  logger.error("fatal startup failure", errorFields(error));
   process.exit(1);
 });

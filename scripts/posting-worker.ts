@@ -4,15 +4,17 @@ import os from "node:os";
 import type { AutomationPost, UploadResult } from "./posting-platforms.ts";
 import { uploadPlatformPost } from "./posting-platforms.ts";
 import { uploadPostingMediaToR2, type StagedMedia } from "./posting-media-staging.ts";
+import { createWorkerLogger, errorFields, formatBytes, formatDuration } from "./worker-log.ts";
 
 const workerId = process.env.POSTING_WORKER_ID?.trim() || `${os.hostname()}-posting-worker`;
 const apiBaseUrl = (process.env.WORKER_API_BASE_URL?.trim() || "http://localhost:3000").replace(/\/$/, "");
 const apiToken = process.env.WORKER_API_TOKEN?.trim() || "";
-const syncIntervalMs = Number(process.env.POSTING_WORKER_SYNC_SECONDS ?? 300) * 1000;
+const syncIntervalMs = Number(process.env.POSTING_WORKER_SYNC_SECONDS ?? 60) * 1000;
 const dueCheckIntervalMs = Number(process.env.POSTING_WORKER_DUE_CHECK_SECONDS ?? 30) * 1000;
 const dryRun = process.env.POSTING_WORKER_DRY_RUN !== "false";
 const upcomingWindowMinutes = Number(process.env.POSTING_WORKER_UPCOMING_WINDOW_MINUTES ?? 10080);
 const seenCompletions = new Set<string>();
+const logger = createWorkerLogger("posting");
 let cachedPosts: AutomationPost[] = [];
 let syncing = false;
 let posting = false;
@@ -20,11 +22,6 @@ let posting = false;
 type PublishErrorWithStagedMedia = Error & {
   stagedMedia?: StagedMedia;
 };
-
-function log(message: string, data?: unknown): void {
-  const suffix = data ? ` ${JSON.stringify(data)}` : "";
-  console.log(`[posting-worker] ${new Date().toISOString()} ${message}${suffix}`);
-}
 
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
@@ -53,9 +50,12 @@ async function syncUpcomingPosts(): Promise<void> {
     }
 
     cachedPosts = data.scheduledPosts;
-    log(`synced ${cachedPosts.length} upcoming post(s)`);
+    logger.info("synced upcoming posts", {
+      count: cachedPosts.length,
+      window: `${upcomingWindowMinutes}m`,
+    });
   } catch (error) {
-    log("sync failed", { error: error instanceof Error ? error.message : String(error) });
+    logger.error("sync failed", errorFields(error));
   } finally {
     syncing = false;
   }
@@ -72,7 +72,11 @@ async function claimPost(post: AutomationPost): Promise<boolean> {
   }
 
   const data = await response.json().catch(() => null);
-  log("claim skipped", { id: post.id, error: data?.error ?? response.statusText });
+  logger.warn("claim skipped", {
+    post: post.id,
+    platform: post.platform,
+    error: data?.error ?? response.statusText,
+  });
   return false;
 }
 
@@ -132,7 +136,12 @@ async function publishPost(post: AutomationPost): Promise<UploadResult> {
     : undefined;
 
   if (dryRun) {
-    log("dry run publish", { id: post.id, platform: post.platform, videoPath: video.path });
+    logger.warn("dry-run publish skipped", {
+      post: post.id,
+      platform: post.platform,
+      video: video.path,
+      size: formatBytes(video.size),
+    });
     return {
       status: "SKIPPED",
       externalPostId: `dry-run-${post.id}`,
@@ -151,7 +160,11 @@ async function publishPost(post: AutomationPost): Promise<UploadResult> {
         videoPath: video.path,
         videoSize: video.size,
       });
-      log("staged media", { id: post.id, platform: post.platform, publicUrl: stagedMedia.publicUrl });
+      logger.success("media staged for publisher", {
+        post: post.id,
+        platform: post.platform,
+        size: formatBytes(video.size),
+      });
     }
 
     const result = await uploadPlatformPost({
@@ -192,15 +205,29 @@ async function processDuePosts(): Promise<void> {
     });
 
     for (const post of duePosts) {
+      const startedAt = Date.now();
       const claimed = await claimPost(post);
       if (!claimed) {
         continue;
       }
 
+      logger.info("publishing post", {
+        post: post.id,
+        platform: post.platform,
+        account: post.socialAccountExternalAccountId ?? post.socialAccountId ?? "default",
+      });
+
       try {
         const result = await publishPost(post);
         await completePost(post, result);
-        log("post completed", { id: post.id, status: result.status });
+        logger.success("post completed", {
+          post: post.id,
+          platform: post.platform,
+          status: result.status,
+          duration: formatDuration(Date.now() - startedAt),
+          privacy: result.finalPrivacyStatus,
+          externalPost: result.externalPostId,
+        });
       } catch (error) {
         const publishError = error instanceof Error ? error.message : String(error);
         const stagedMedia = error instanceof Error ? (error as PublishErrorWithStagedMedia).stagedMedia : undefined;
@@ -211,7 +238,12 @@ async function processDuePosts(): Promise<void> {
           mediaPublicUrl: stagedMedia?.publicUrl,
           mediaUploadedAt: stagedMedia?.uploadedAt,
         });
-        log("post failed", { id: post.id, error: publishError });
+        logger.error("post failed", {
+          post: post.id,
+          platform: post.platform,
+          duration: formatDuration(Date.now() - startedAt),
+          error: publishError,
+        });
       }
     }
   } finally {
@@ -220,12 +252,12 @@ async function processDuePosts(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  log("starting", {
+  logger.banner("posting worker started", {
     apiBaseUrl,
     workerId,
     dryRun,
-    syncIntervalSeconds: syncIntervalMs / 1000,
-    dueCheckIntervalSeconds: dueCheckIntervalMs / 1000,
+    syncEvery: `${syncIntervalMs / 1000}s`,
+    dueEvery: `${dueCheckIntervalMs / 1000}s`,
   });
 
   await syncUpcomingPosts();
@@ -241,16 +273,16 @@ async function main(): Promise<void> {
 }
 
 process.on("SIGINT", () => {
-  log("stopping");
+  logger.warn("stopping");
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
-  log("stopping");
+  logger.warn("stopping");
   process.exit(0);
 });
 
 void main().catch((error) => {
-  console.error(error);
+  logger.error("fatal startup failure", errorFields(error));
   process.exit(1);
 });

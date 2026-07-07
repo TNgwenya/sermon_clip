@@ -117,8 +117,9 @@ npm run worker:posting
 Useful worker settings:
 - `WORKER_API_BASE_URL`: Vercel or local app URL.
 - `WORKER_API_TOKEN`: bearer token shared with the app.
-- `POSTING_WORKER_SYNC_SECONDS`: defaults to `300`.
+- `POSTING_WORKER_SYNC_SECONDS`: defaults to `60`.
 - `POSTING_WORKER_DUE_CHECK_SECONDS`: defaults to `30`.
+- `POSTING_WORKER_UPCOMING_WINDOW_MINUTES`: defaults to `10080` (7 days).
 - `POSTING_WORKER_DRY_RUN`: defaults to dry-run unless set to `false`.
 - `TIKTOK_ACCESS_TOKEN`: enables automatic TikTok Direct Post uploads from the Mac worker. The token must include TikTok's `video.publish` permission.
 - `TIKTOK_DEFAULT_PRIVACY_LEVEL`: defaults to `SELF_ONLY` so early tests do not publish publicly.
