@@ -15,6 +15,75 @@ describe("openai transcription provider", () => {
     expect(() => assertTimestampedTranscriptionModel("gpt-4o-transcribe")).toThrow(/segment timestamps/);
   });
 
+  it("treats transient transcription API failures as retryable", () => {
+    expect(
+      __openAITranscriptionProviderTestUtils.isRetryableOpenAITranscriptionError(
+        Object.assign(new Error("500 status code (no body)"), { status: 500 }),
+      ),
+    ).toBe(true);
+    expect(
+      __openAITranscriptionProviderTestUtils.isRetryableOpenAITranscriptionError(
+        Object.assign(new Error("socket closed"), { code: "ECONNRESET" }),
+      ),
+    ).toBe(true);
+    expect(
+      __openAITranscriptionProviderTestUtils.isRetryableOpenAITranscriptionError(
+        Object.assign(new Error("invalid file"), { status: 400 }),
+      ),
+    ).toBe(false);
+  });
+
+  it("retries transient transcription failures before succeeding", async () => {
+    let attempts = 0;
+    const retryMessages: string[] = [];
+
+    const result = await __openAITranscriptionProviderTestUtils.runTranscriptionRequestWithRetry(
+      async () => {
+        attempts += 1;
+        if (attempts < 3) {
+          throw Object.assign(new Error("500 status code (no body)"), { status: 500 });
+        }
+
+        return "transcribed";
+      },
+      {
+        maxAttempts: 4,
+        baseDelayMs: 0,
+        sleepFn: async () => undefined,
+        onRetry: (info) => {
+          retryMessages.push(`${info.attempt}->${info.nextAttempt}:${info.message}`);
+        },
+      },
+    );
+
+    expect(result).toBe("transcribed");
+    expect(attempts).toBe(3);
+    expect(retryMessages).toEqual([
+      "1->2:500 status code (no body)",
+      "2->3:500 status code (no body)",
+    ]);
+  });
+
+  it("does not retry non-transient transcription failures", async () => {
+    let attempts = 0;
+
+    await expect(
+      __openAITranscriptionProviderTestUtils.runTranscriptionRequestWithRetry(
+        async () => {
+          attempts += 1;
+          throw Object.assign(new Error("invalid file"), { status: 400 });
+        },
+        {
+          maxAttempts: 4,
+          baseDelayMs: 0,
+          sleepFn: async () => undefined,
+        },
+      ),
+    ).rejects.toThrow("invalid file");
+
+    expect(attempts).toBe(1);
+  });
+
   it("converts word timestamps into short phrase-timed transcript segments", () => {
     const words = [
       "Faith",

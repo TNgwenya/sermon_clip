@@ -21,6 +21,16 @@ export type OpenAITranscriptionOptions = {
   language?: string;
   prompt?: string;
   model?: string;
+  onRetry?: (info: OpenAITranscriptionRetryInfo) => void | Promise<void>;
+};
+
+export type OpenAITranscriptionRetryInfo = {
+  attempt: number;
+  nextAttempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  message: string;
+  status?: number;
 };
 
 type OpenAISegmentLike = {
@@ -48,6 +58,145 @@ const WORD_GAP_SPLIT_SECONDS = 1.2;
 const MIN_WORDS_FOR_WORD_TIMED_SEGMENTS = 20;
 const MIN_WORD_TIMED_SEGMENT_RETENTION_RATIO = 0.72;
 const MAX_WORD_TIMED_RETENTION_LOSS_VS_SEGMENTS = 0.08;
+const DEFAULT_TRANSCRIPTION_MAX_ATTEMPTS = 4;
+const MAX_TRANSCRIPTION_MAX_ATTEMPTS = 8;
+const DEFAULT_TRANSCRIPTION_RETRY_BASE_DELAY_MS = 2_000;
+const RETRYABLE_STATUS_CODES = new Set([408, 409, 429, 500, 502, 503, 504]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function resolvePositiveIntegerEnv(name: string, fallback: number): number {
+  const configured = process.env[name]?.trim();
+  if (!configured) {
+    return fallback;
+  }
+
+  const value = Number(configured);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+export function resolveOpenAITranscriptionMaxAttempts(): number {
+  return Math.min(
+    resolvePositiveIntegerEnv("OPENAI_TRANSCRIPTION_MAX_ATTEMPTS", DEFAULT_TRANSCRIPTION_MAX_ATTEMPTS),
+    MAX_TRANSCRIPTION_MAX_ATTEMPTS,
+  );
+}
+
+function resolveOpenAITranscriptionRetryBaseDelayMs(): number {
+  return resolvePositiveIntegerEnv("OPENAI_TRANSCRIPTION_RETRY_BASE_DELAY_MS", DEFAULT_TRANSCRIPTION_RETRY_BASE_DELAY_MS);
+}
+
+function getErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+
+  const status = "status" in error ? (error as { status?: unknown }).status : undefined;
+  if (typeof status === "number" && Number.isFinite(status)) {
+    return status;
+  }
+
+  const response = "response" in error ? (error as { response?: { status?: unknown } }).response : undefined;
+  if (response && typeof response.status === "number" && Number.isFinite(response.status)) {
+    return response.status;
+  }
+
+  return undefined;
+}
+
+function getErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return undefined;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code.trim() ? code.trim() : undefined;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function isRetryableOpenAITranscriptionError(error: unknown): boolean {
+  const status = getErrorStatus(error);
+  if (status && RETRYABLE_STATUS_CODES.has(status)) {
+    return true;
+  }
+
+  const code = getErrorCode(error)?.toLowerCase() ?? "";
+  if (
+    [
+      "econnreset",
+      "econnrefused",
+      "etimedout",
+      "eai_again",
+      "enetunreach",
+      "und_err_socket",
+      "und_err_headers_timeout",
+      "und_err_body_timeout",
+    ].includes(code)
+  ) {
+    return true;
+  }
+
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    message.includes("500 status code") ||
+    message.includes("502 status code") ||
+    message.includes("503 status code") ||
+    message.includes("504 status code") ||
+    message.includes("no body") ||
+    message.includes("rate limit") ||
+    message.includes("timeout") ||
+    message.includes("temporarily unavailable") ||
+    message.includes("socket") ||
+    message.includes("network")
+  );
+}
+
+async function runTranscriptionRequestWithRetry<T>(
+  operation: () => Promise<T>,
+  options?: {
+    maxAttempts?: number;
+    baseDelayMs?: number;
+    onRetry?: OpenAITranscriptionOptions["onRetry"];
+    sleepFn?: (delayMs: number) => Promise<void>;
+  },
+): Promise<T> {
+  const maxAttempts = Math.max(1, Math.floor(options?.maxAttempts ?? resolveOpenAITranscriptionMaxAttempts()));
+  const baseDelayMs = Math.max(0, Math.floor(options?.baseDelayMs ?? resolveOpenAITranscriptionRetryBaseDelayMs()));
+  const wait = options?.sleepFn ?? sleep;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (attempt >= maxAttempts || !isRetryableOpenAITranscriptionError(error)) {
+        throw error;
+      }
+
+      const delayMs = baseDelayMs * (2 ** (attempt - 1));
+      await options?.onRetry?.({
+        attempt,
+        nextAttempt: attempt + 1,
+        maxAttempts,
+        delayMs,
+        message: getErrorMessage(error),
+        status: getErrorStatus(error),
+      });
+
+      if (delayMs > 0) {
+        await wait(delayMs);
+      }
+    }
+  }
+
+  throw new Error("Transcription retry loop exited unexpectedly.");
+}
 
 function normalizeNumber(value: number | string | undefined): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -229,14 +378,17 @@ export async function transcribeAudioWithOpenAI(
   const model = resolveOpenAITranscriptionModel(options?.model);
   assertTimestampedTranscriptionModel(model);
 
-  const response = await client.audio.transcriptions.create({
-    model,
-    file: createReadStream(audioPath),
-    response_format: "verbose_json",
-    timestamp_granularities: ["segment", "word"],
-    ...(options?.language ? { language: options.language } : {}),
-    ...(options?.prompt ? { prompt: options.prompt } : {}),
-  });
+  const response = await runTranscriptionRequestWithRetry(
+    () => client.audio.transcriptions.create({
+      model,
+      file: createReadStream(audioPath),
+      response_format: "verbose_json",
+      timestamp_granularities: ["segment", "word"],
+      ...(options?.language ? { language: options.language } : {}),
+      ...(options?.prompt ? { prompt: options.prompt } : {}),
+    }),
+    { onRetry: options?.onRetry },
+  );
 
   const fullText = typeof response.text === "string" ? response.text.trim() : "";
   const segmentTimestamps = normalizeSegments((response as { segments?: unknown }).segments);
@@ -259,7 +411,9 @@ export async function transcribeAudioWithOpenAI(
 }
 
 export const __openAITranscriptionProviderTestUtils = {
+  isRetryableOpenAITranscriptionError,
   normalizeWords,
+  runTranscriptionRequestWithRetry,
   wordsToTranscriptSegments,
   selectBestTimestampedSegments,
 };

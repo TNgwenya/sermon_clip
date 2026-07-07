@@ -11,7 +11,11 @@ import {
   markJobSucceeded,
 } from "@/server/agents/processing";
 import { assessTranscriptQualityForClipping, type TranscriptQualityAssessment } from "@/server/agents/transcriptQuality";
-import { transcribeAudioWithOpenAI, type NormalizedTranscript } from "@/server/ai/openaiTranscriptionProvider";
+import {
+  transcribeAudioWithOpenAI,
+  type NormalizedTranscript,
+  type OpenAITranscriptionRetryInfo,
+} from "@/server/ai/openaiTranscriptionProvider";
 import {
   appendPipelineLog,
   ensureSermonFolders,
@@ -32,6 +36,20 @@ import {
 type TranscribeOptions = {
   force?: boolean;
 };
+
+function buildOpenAITranscriptionRetryLogger(
+  sermonId: string,
+  label: string,
+): (info: OpenAITranscriptionRetryInfo) => Promise<void> {
+  return async (info) => {
+    const status = info.status ? ` status ${info.status}` : "";
+    const retryInSeconds = Math.round(info.delayMs / 1000);
+    await appendPipelineLog(
+      sermonId,
+      `OpenAI transcription retry for ${label}: attempt ${info.attempt}/${info.maxAttempts} failed${status} (${info.message}). Retrying attempt ${info.nextAttempt} in ${retryInSeconds}s.`,
+    );
+  };
+}
 
 type SermonSegmentWindowInput = {
   sermonStartSeconds: number | null;
@@ -1554,6 +1572,10 @@ async function transcribeAudioWithChunking(
         await transcribeAudioWithOpenAI(chunkPath, {
           language: languageHint?.openAiLanguage,
           prompt: buildChunkTranscriptionPrompt(languageHint, previousTranscriptTail),
+          onRetry: buildOpenAITranscriptionRetryLogger(
+            sermonId,
+            `chunk ${index + 1}/${existingChunkFiles.length}`,
+          ),
         }),
       );
 
@@ -1759,6 +1781,7 @@ export async function transcribeSermonAudio(
 	            await transcribeAudioWithOpenAI(transcriptionInput.audioPath, {
 	              language: languageHint?.openAiLanguage,
 	              prompt: languageHint?.prompt,
+	              onRetry: buildOpenAITranscriptionRetryLogger(sermon.id, transcriptionInput.description),
 	            }),
 	            transcriptionInput.timelineOffsetSeconds,
 	          ),
@@ -1813,6 +1836,10 @@ export async function transcribeSermonAudio(
 	                await transcribeAudioWithOpenAI(enhancedAudioPath, {
 	                  language: languageHint?.openAiLanguage,
 	                  prompt: buildChunkTranscriptionPrompt(languageHint, getTranscriptTail(originalWindowed.transcript.fullText)),
+	                  onRetry: buildOpenAITranscriptionRetryLogger(
+	                    sermon.id,
+	                    `speech-enhanced ${transcriptionInput.description}`,
+	                  ),
 	                }),
 	                transcriptionInput.timelineOffsetSeconds,
 	              ),

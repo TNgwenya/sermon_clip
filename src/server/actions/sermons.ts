@@ -335,6 +335,33 @@ async function queueSermonMediaAssetJobs(
   return { queued, reused, jobTypes: Array.from(new Set(jobTypes)) };
 }
 
+function processingJobTypeLabel(type: ProcessingJobType): string {
+  switch (type) {
+    case "DOWNLOAD_VIDEO":
+      return "Video download";
+    case "EXTRACT_AUDIO":
+      return "Audio extraction";
+    case "TRANSCRIBE_AUDIO":
+      return "Transcription";
+    case "GENERATE_CLIPS":
+      return "Clip generation";
+    case "EXPORT_CLIPS":
+      return "Clip export";
+    case "GENERATE_SUBTITLES":
+      return "Caption generation";
+    case "BURN_SUBTITLES":
+      return "Caption burn";
+    case "PROCESS_SERMON":
+      return "Sermon processing";
+    case "RENDER_OVERLAY":
+      return "Overlay render";
+    case "QUALITY_REFRESH":
+      return "Quality refresh";
+  }
+
+  return String(type).replaceAll("_", " ").toLowerCase();
+}
+
 function startOneClickSermonPipeline(sermonId: string): void {
   if (!canRunLocalMediaProcessing()) {
     void queueSermonProcessingJob(sermonId, "PROCESS_SERMON").catch(() => undefined);
@@ -2240,6 +2267,26 @@ export async function retryFailedProcessingJobById(input: {
         "Recovered stale running or pending job before manual retry.",
       );
       await appendPipelineLog(sermonId, `Marked stale ${job.status.toLowerCase()} job ${job.id} (${job.type}) as failed before retry.`);
+    }
+
+    if (!canRunLocalMediaProcessing()) {
+      const queuedJob = await queueSermonProcessingJob(sermonId, job.type);
+      const label = processingJobTypeLabel(job.type);
+      await appendPipelineLog(
+        sermonId,
+        `Manual retry for failed job ${job.id} (${job.type}) ${queuedJob.reusedExisting ? "reused an existing local-worker queue item" : "queued a new local-worker job"}.`,
+      );
+
+      revalidatePath(`/sermons/${sermonId}`);
+      revalidatePath(`/sermons/${sermonId}/review`);
+      revalidatePath("/");
+
+      return {
+        success: true,
+        message: queuedJob.reusedExisting
+          ? `${label} retry is already queued for your local worker.`
+          : `${label} retry queued for your local worker.`,
+      };
     }
 
     await retryFailedProcessingJobTarget(sermonId, job);
