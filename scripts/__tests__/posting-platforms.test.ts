@@ -12,6 +12,7 @@ import {
   buildZernioPostRequest,
   buildYouTubeText,
   extractHashtags,
+  selectYouTubeRefreshTokenSources,
   uploadPlatformPost,
   type AutomationPost,
 } from "../posting-platforms";
@@ -57,6 +58,27 @@ describe("posting platform helpers", () => {
     expect(text.description).toContain("#Faith #Church");
     expect(text.description).toContain("From Grace Church");
     expect(text.tags).toEqual(["Shorts", "Faith", "Church"]);
+  });
+
+  it("prefers stored YouTube OAuth tokens before stale env fallback tokens", () => {
+    expect(selectYouTubeRefreshTokenSources({
+      hasSocialAccount: false,
+      storedRefreshToken: "stored-refresh",
+      envRefreshToken: "env-refresh",
+    })).toEqual([
+      { source: "stored", refreshToken: "stored-refresh" },
+      { source: "env", refreshToken: "env-refresh" },
+    ]);
+  });
+
+  it("does not fall back to env YouTube tokens for account-specific posts", () => {
+    expect(selectYouTubeRefreshTokenSources({
+      hasSocialAccount: true,
+      storedRefreshToken: "stored-refresh",
+      envRefreshToken: "env-refresh",
+    })).toEqual([
+      { source: "stored", refreshToken: "stored-refresh" },
+    ]);
   });
 
   it("builds TikTok captions with hashtags inside the platform limit", () => {

@@ -128,6 +128,7 @@ Useful worker settings:
 - `FACEBOOK_DEFAULT_PUBLISHED`: defaults to `false`, so early tests upload videos as unpublished. Set to `true` only when you are ready for automatic public Page posts.
 
 Automatic YouTube Shorts, TikTok, and Facebook posts can upload directly from Mac-local files. Instagram automatic posting still needs a public video URL or temporary media hosting.
+After connecting YouTube in Social Settings, stored OAuth credentials are preferred. `YOUTUBE_REFRESH_TOKEN` is only a legacy fallback; remove or replace it if Google reports that the token was expired or revoked.
 
 For Neon/Vercel setup, create the Neon database, set `DATABASE_URL` in Vercel and locally, then run `npx prisma db push` once against Neon. To copy existing local SQLite rows into Neon, run:
 

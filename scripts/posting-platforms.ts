@@ -59,6 +59,10 @@ export type UploadResult = {
 };
 
 type FetchLike = typeof fetch;
+type YouTubeTokenSource = {
+  source: "stored" | "env";
+  refreshToken: string;
+};
 
 const TIKTOK_MAX_TITLE_LENGTH = 2200;
 const INSTAGRAM_MAX_REEL_SECONDS = 60;
@@ -395,36 +399,79 @@ export function buildFacebookText(post: AutomationPost): { title: string; descri
   };
 }
 
+export function selectYouTubeRefreshTokenSources(input: {
+  hasSocialAccount: boolean;
+  storedRefreshToken?: string | null;
+  envRefreshToken?: string | null;
+}): YouTubeTokenSource[] {
+  const storedRefreshToken = input.storedRefreshToken?.trim();
+  const envRefreshToken = input.envRefreshToken?.trim();
+  const sources: YouTubeTokenSource[] = [];
+
+  if (storedRefreshToken) {
+    sources.push({ source: "stored", refreshToken: storedRefreshToken });
+  }
+
+  if (!input.hasSocialAccount && envRefreshToken && envRefreshToken !== storedRefreshToken) {
+    sources.push({ source: "env", refreshToken: envRefreshToken });
+  }
+
+  return sources;
+}
+
+function youtubeTokenErrorMessage(data: unknown): string {
+  const payload = data && typeof data === "object" ? data as { error_description?: unknown; error?: unknown } : {};
+  const message = typeof payload.error_description === "string"
+    ? payload.error_description
+    : typeof payload.error === "string"
+      ? payload.error
+      : "Could not refresh YouTube access token.";
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes("expired") || normalized.includes("revoked")) {
+    return `${message} Reconnect YouTube in Social settings. If this worker still has YOUTUBE_REFRESH_TOKEN in local .env, replace it or remove it so the stored OAuth token can be used.`;
+  }
+
+  return message;
+}
+
 async function getYouTubeAccessToken(post: AutomationPost, fetchImpl: FetchLike = fetch): Promise<string> {
   const clientId = process.env.YOUTUBE_CLIENT_ID?.trim();
   const clientSecret = process.env.YOUTUBE_CLIENT_SECRET?.trim();
   const envRefreshToken = process.env.YOUTUBE_REFRESH_TOKEN?.trim();
-  const storedCredential = post.socialAccountId || !envRefreshToken
-    ? await getStoredPostingCredential(STORED_CREDENTIAL_PROVIDERS["YouTube Shorts"], post.socialAccountId)
-    : null;
-  const refreshToken = storedCredential?.refreshToken || envRefreshToken;
+  const storedCredential = await getStoredPostingCredential(STORED_CREDENTIAL_PROVIDERS["YouTube Shorts"], post.socialAccountId);
+  const tokenSources = selectYouTubeRefreshTokenSources({
+    hasSocialAccount: Boolean(post.socialAccountId),
+    storedRefreshToken: storedCredential?.refreshToken,
+    envRefreshToken,
+  });
 
-  if (!clientId || !clientSecret || !refreshToken) {
+  if (!clientId || !clientSecret || tokenSources.length === 0) {
     throw new Error("YouTube credentials are incomplete. Connect YouTube in Social settings or set YOUTUBE_REFRESH_TOKEN, plus YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET.");
   }
 
-  const response = await fetchImpl("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-    }),
-  });
-  const data = await response.json().catch(() => null);
+  let lastError = "Could not refresh YouTube access token.";
+  for (const tokenSource of tokenSources) {
+    const response = await fetchImpl("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: tokenSource.refreshToken,
+        grant_type: "refresh_token",
+      }),
+    });
+    const data = await response.json().catch(() => null);
 
-  if (!response.ok || typeof data?.access_token !== "string") {
-    throw new Error(data?.error_description ?? "Could not refresh YouTube access token.");
+    if (response.ok && typeof data?.access_token === "string") {
+      return data.access_token;
+    }
+
+    lastError = youtubeTokenErrorMessage(data);
   }
 
-  return data.access_token;
+  throw new Error(lastError);
 }
 
 export async function uploadYouTubeShort(
