@@ -54,6 +54,7 @@ export function GenerateClipsButton({
   return (
     <form action={action} className="stack-sm">
       <input type="hidden" name="sermonId" value={sermonId} />
+      <input type="hidden" name="append" value="true" />
       <SubmitButton status={status} hasTranscriptSegments={hasTranscriptSegments} />
       {!hasTranscriptSegments ? (
         <p className="muted">A sermon transcript is needed before finding clip moments.</p>

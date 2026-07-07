@@ -154,6 +154,84 @@ describe("clip intelligence generation summary", () => {
     expect(candidates[0]?.reasonSelected).toContain("spoken transcript lands with");
   });
 
+  it("builds deterministic top-up candidates beyond one AI batch while skipping existing ranges", () => {
+    const windows = Array.from({ length: 7 }, (_, index) => {
+      const startTimeSeconds = index * 100;
+      return makeClipWindowFixture({
+        windowId: `window-${index + 1}`,
+        startTimeSeconds,
+        endTimeSeconds: startTimeSeconds + 60,
+        durationSeconds: 60,
+        transcriptText: `God placed a gift in you at moment ${index + 1}. Stir it up and use what is already in your hand.`,
+        segmentLines: [`[${startTimeSeconds}.0 - ${startTimeSeconds + 60}.0] God placed a gift in you.`],
+        wordCount: 18,
+        meaningfulSegmentCount: 2,
+        openingHookScore: 8,
+        ministryPayoffScore: 8,
+        windowQualityScore: 7.2,
+        windowQualityWarnings: [],
+      });
+    });
+
+    const candidates = __clipIntelligenceTestUtils.buildHeuristicClipCandidatesFromWindows(windows, {
+      limit: 6,
+      excludeRanges: [
+        {
+          startTimeSeconds: 0,
+          endTimeSeconds: 60,
+          durationSeconds: 60,
+        },
+      ],
+      scoreCap: 7,
+    });
+
+    expect(candidates).toHaveLength(6);
+    expect(candidates[0]?.startTimeSeconds).toBe(100);
+    expect(candidates.map((candidate) => candidate.startTimeSeconds)).not.toContain(0);
+    expect(candidates.every((candidate) => candidate.score <= 7)).toBe(true);
+  });
+
+  it("builds coverage top-up candidates across a long transcript", () => {
+    const segments = Array.from({ length: 90 }, (_, index) => ({
+      startTimeSeconds: index * 10,
+      endTimeSeconds: index * 10 + 10,
+      text: `Moment ${index} teaches faith obedience prayer grace purpose calling service family hope and courage for today.`,
+    }));
+
+    const candidates = __clipIntelligenceTestUtils.buildCoverageTopUpClipCandidates(segments, {
+      limit: 8,
+      desiredReviewSuggestions: 10,
+      excludeRanges: [
+        {
+          startTimeSeconds: 0,
+          endTimeSeconds: 60,
+          durationSeconds: 60,
+        },
+      ],
+    });
+
+    expect(candidates).toHaveLength(8);
+    expect(candidates[0]?.startTimeSeconds).toBeGreaterThanOrEqual(80);
+    expect(candidates.every((candidate) => candidate.contextWarning)).toBe(true);
+    expect(candidates.every((candidate) => candidate.durationSeconds >= 45 && candidate.durationSeconds <= 90)).toBe(true);
+  });
+
+  it("treats non-overlapping top-up ranges as distinct even when the sermon theme repeats", () => {
+    const left = {
+      startTimeSeconds: 100,
+      endTimeSeconds: 160,
+      durationSeconds: 60,
+    };
+    const right = {
+      startTimeSeconds: 260,
+      endTimeSeconds: 320,
+      durationSeconds: 60,
+    };
+
+    expect(__clipIntelligenceTestUtils.hasSignificantClipOverlap(left, right)).toBe(false);
+    expect(__clipIntelligenceTestUtils.excludeCandidatesOverlappingExisting([left, right], [])).toHaveLength(2);
+  });
+
   it("rejects fragment-style pastor titles", () => {
     const validation = __clipIntelligenceTestUtils.validatePastorTitle(
       "And the Gift of",

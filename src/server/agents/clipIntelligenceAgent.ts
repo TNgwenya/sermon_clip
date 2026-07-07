@@ -48,6 +48,7 @@ import {
 import { type MinistryMomentRecord as PromptMinistryMomentRecord } from "@/server/ai/ministryMomentSchema";
 import { appendPipelineLog } from "@/server/agents/storage";
 import { updateSermonStatus } from "@/server/status/sermonStatus";
+import { refreshVideoSubjectTracking } from "@/server/agents/videoSubjectTrackingService";
 
 export type ClipWindow = {
   windowId: string;
@@ -71,6 +72,7 @@ export type ClipWindow = {
 
 type GenerateClipOptions = {
   force?: boolean;
+  append?: boolean;
   targetCategory?: string;
   responseOverride?: string;
   repairResponseOverride?: string;
@@ -1031,13 +1033,29 @@ function normalizePastorTitle(input: {
   return deterministicPastorTitle(input);
 }
 
-function buildHeuristicClipCandidatesFromWindows(windows: ClipWindow[]): ClipJsonCandidate[] {
+function buildHeuristicClipCandidatesFromWindows(
+  windows: ClipWindow[],
+  options: {
+    limit?: number;
+    excludeRanges?: ExistingClipRange[];
+    minWindowQualityScore?: number;
+    scoreCap?: number;
+    reasonSelected?: string;
+    contextWarning?: boolean;
+  } = {},
+): ClipJsonCandidate[] {
+  const limit = Math.max(0, options.limit ?? MAX_BATCH_CLIPS);
+  const minWindowQualityScore = options.minWindowQualityScore ?? 6.8;
   return windows
-    .filter((window) => window.windowQualityScore >= 6.8)
-    .slice(0, MAX_BATCH_CLIPS)
+    .filter((window) => window.windowQualityScore >= minWindowQualityScore)
+    .filter((window) => !options.excludeRanges?.some((range) => hasSignificantClipOverlap(range, window)))
+    .slice(0, limit)
     .map((window) => {
       const landingSentence = analyzeClipCoherence(window.transcriptText).evidence.landingText ?? firstCoherenceSentence(window.transcriptText);
       const title = deterministicPastorTitle({ transcriptText: window.transcriptText, landingSentence });
+      const score = options.scoreCap === undefined
+        ? window.windowQualityScore
+        : Math.min(options.scoreCap, window.windowQualityScore);
       return {
         startTimeSeconds: window.startTimeSeconds,
         endTimeSeconds: window.endTimeSeconds,
@@ -1047,8 +1065,8 @@ function buildHeuristicClipCandidatesFromWindows(windows: ClipWindow[]): ClipJso
         hook: firstCoherenceSentence(window.transcriptText) || title,
         caption: landingSentence || title,
         hashtags: ["#Faith", "#Church"],
-        score: window.windowQualityScore,
-        reasonSelected: "Deterministic fallback selected this clip because the spoken transcript lands with a clear ministry payoff.",
+        score,
+        reasonSelected: options.reasonSelected ?? "Deterministic fallback selected this clip because the spoken transcript lands with a clear ministry payoff.",
         landingSentence: landingSentence || window.transcriptText,
         clipType: "teaching",
         smartClipCategory: hasCallingGiftStewardshipPayoff(window.transcriptText) ? "Best Discipleship Clip" : "Best Faith Clip",
@@ -1057,7 +1075,7 @@ function buildHeuristicClipCandidatesFromWindows(windows: ClipWindow[]): ClipJso
         socialValue: "Short, clear spoken moment with a usable takeaway.",
         riskLevel: "LOW",
         riskReasons: [],
-        contextWarning: false,
+        contextWarning: options.contextWarning ?? false,
         arcType: "PROBLEM_TRUTH_APPLICATION",
         arcSummary: "Deterministic fallback arc from spoken transcript.",
         setupStartTime: window.startTimeSeconds,
@@ -1068,6 +1086,116 @@ function buildHeuristicClipCandidatesFromWindows(windows: ClipWindow[]): ClipJso
         whatContextMightBeMissing: null,
       };
     });
+}
+
+function findCoverageWindowEndIndex(
+  segments: TranscriptSegmentRecord[],
+  startIndex: number,
+  targetDurationSeconds = 60,
+): number | null {
+  const startSegment = segments[startIndex];
+  if (!startSegment) return null;
+
+  let bestIndex: number | null = null;
+  for (let index = startIndex; index < segments.length; index += 1) {
+    const gapSeconds = index > startIndex ? segments[index].startTimeSeconds - segments[index - 1].endTimeSeconds : 0;
+    if (gapSeconds > MAX_TRANSCRIPT_ISLAND_GAP_SECONDS) break;
+
+    const durationSeconds = segments[index].endTimeSeconds - startSegment.startTimeSeconds;
+    if (durationSeconds > MAX_WINDOW_SECONDS) break;
+    if (durationSeconds >= 45) {
+      bestIndex = index;
+    }
+    if (durationSeconds >= targetDurationSeconds) {
+      return index;
+    }
+  }
+
+  return bestIndex;
+}
+
+function buildCoverageTopUpClipCandidates(
+  segments: TranscriptSegmentRecord[],
+  options: {
+    limit: number;
+    desiredReviewSuggestions: number;
+    excludeRanges?: ExistingClipRange[];
+  },
+): ClipJsonCandidate[] {
+  if (segments.length === 0 || options.limit <= 0) {
+    return [];
+  }
+
+  const candidates: ClipJsonCandidate[] = [];
+  const transcriptDurationSeconds = segmentDuration(segments);
+  const coverageStepSeconds = Math.max(75, Math.floor(transcriptDurationSeconds / Math.max(1, options.desiredReviewSuggestions)));
+  const firstStartTime = segments[0].startTimeSeconds;
+  const lastEndTime = segments[segments.length - 1].endTimeSeconds;
+
+  for (let anchorTime = firstStartTime; anchorTime <= lastEndTime && candidates.length < options.limit; anchorTime += coverageStepSeconds) {
+    const startIndex = segments.findIndex((segment) => segment.startTimeSeconds >= anchorTime);
+    if (startIndex === -1) break;
+
+    const endIndex = findCoverageWindowEndIndex(segments, startIndex);
+    if (endIndex === null || endIndex <= startIndex) continue;
+
+    const selectedSegments = segments.slice(startIndex, endIndex + 1);
+    const transcriptText = segmentTranscriptText(selectedSegments);
+    if (countTranscriptWords(transcriptText) < MIN_WINDOW_WORDS || uniqueSubstanceTokenCount(transcriptText) < MIN_WINDOW_SERMON_TOKENS) {
+      continue;
+    }
+
+    const startTimeSeconds = selectedSegments[0].startTimeSeconds;
+    const endTimeSeconds = selectedSegments[selectedSegments.length - 1].endTimeSeconds;
+    const durationSeconds = Number((endTimeSeconds - startTimeSeconds).toFixed(2));
+    const range = { startTimeSeconds, endTimeSeconds, durationSeconds };
+    if (options.excludeRanges?.some((existing) => hasSignificantClipOverlap(existing, range))) {
+      continue;
+    }
+    if (candidates.some((existing) => hasSignificantClipOverlap(existing, range))) {
+      continue;
+    }
+
+    const quality = assessClipWindowQuality(selectedSegments, durationSeconds);
+    const landingSentence = analyzeClipCoherence(transcriptText).evidence.landingText ?? firstCoherenceSentence(transcriptText);
+    const title = deterministicPastorTitle({ transcriptText, landingSentence });
+
+    candidates.push({
+      startTimeSeconds,
+      endTimeSeconds,
+      durationSeconds,
+      transcriptText,
+      title,
+      hook: firstCoherenceSentence(transcriptText) || title,
+      caption: landingSentence || title,
+      hashtags: ["#Faith", "#Church"],
+      score: Number(Math.min(6.9, Math.max(6.1, quality.windowQualityScore)).toFixed(2)),
+      reasonSelected: "Coverage top-up selected this distinct sermon section so the pastor has enough review options across the full message.",
+      landingSentence: landingSentence || transcriptText,
+      clipType: "teaching",
+      smartClipCategory: hasCallingGiftStewardshipPayoff(transcriptText) ? "Best Discipleship Clip" : "Best Faith Clip",
+      intendedAudience: "Pastor review queue",
+      ministryValue: "Additional grounded sermon section for review coverage.",
+      socialValue: "Potential short-form teaching moment; review before posting.",
+      riskLevel: "LOW",
+      riskReasons: quality.windowQualityWarnings,
+      contextWarning: true,
+      arcType: "PROBLEM_TRUTH_APPLICATION",
+      arcSummary: "Coverage top-up arc from the spoken transcript.",
+      setupStartTime: startTimeSeconds,
+      mainPointTime: startTimeSeconds,
+      payoffTime: endTimeSeconds,
+      applicationTime: endTimeSeconds,
+      whyThisClipFeelsComplete: landingSentence
+        ? "The selected transcript includes a spoken landing."
+        : "The selected transcript is a distinct sermon section for pastor review.",
+      whatContextMightBeMissing: quality.windowQualityWarnings.length > 0
+        ? `Needs pastor review: ${quality.windowQualityWarnings.join(", ")}.`
+        : null,
+    });
+  }
+
+  return candidates;
 }
 
 function assessTranscriptReadinessForClipping(segments: TranscriptSegmentRecord[]): TranscriptReadinessResult {
@@ -1713,6 +1841,12 @@ type EnrichedClipCandidate = BoundaryAdjustedCandidate & {
   recommendationConfidence?: number;
 };
 
+type ExistingClipRange = {
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+  durationSeconds: number;
+};
+
 function getOpenAiClient(): OpenAI {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
@@ -2049,13 +2183,7 @@ function dedupeCandidates<T extends ClipJsonCandidate>(candidates: T[]): T[] {
   const deduped: T[] = [];
 
   for (const candidate of sorted) {
-    const overlapsExisting = deduped.some((existing) => {
-      const overlapStart = Math.max(existing.startTimeSeconds, candidate.startTimeSeconds);
-      const overlapEnd = Math.min(existing.endTimeSeconds, candidate.endTimeSeconds);
-      const overlap = Math.max(0, overlapEnd - overlapStart);
-      const shorter = Math.min(existing.durationSeconds, candidate.durationSeconds);
-      return shorter > 0 && overlap / shorter >= 0.5;
-    });
+    const overlapsExisting = deduped.some((existing) => hasSignificantClipOverlap(existing, candidate));
 
     if (!overlapsExisting) {
       deduped.push(candidate);
@@ -2063,6 +2191,30 @@ function dedupeCandidates<T extends ClipJsonCandidate>(candidates: T[]): T[] {
   }
 
   return deduped;
+}
+
+function hasSignificantClipOverlap(
+  existing: ExistingClipRange,
+  candidate: ExistingClipRange,
+): boolean {
+  const overlapStart = Math.max(existing.startTimeSeconds, candidate.startTimeSeconds);
+  const overlapEnd = Math.min(existing.endTimeSeconds, candidate.endTimeSeconds);
+  const overlap = Math.max(0, overlapEnd - overlapStart);
+  const shorter = Math.min(existing.durationSeconds, candidate.durationSeconds);
+  return shorter > 0 && overlap / shorter >= 0.5;
+}
+
+function excludeCandidatesOverlappingExisting<T extends ExistingClipRange>(
+  candidates: T[],
+  existingRanges: ExistingClipRange[],
+): T[] {
+  if (existingRanges.length === 0) {
+    return candidates;
+  }
+
+  return candidates.filter((candidate) => (
+    !existingRanges.some((existing) => hasSignificantClipOverlap(existing, candidate))
+  ));
 }
 
 function candidateHasIndexedBoundary(candidate: ClipJsonCandidate): candidate is ClipJsonCandidate & {
@@ -2095,6 +2247,17 @@ function isCandidateInsideBatch(candidate: ClipJsonCandidate, windows: ClipWindo
   ));
 }
 
+function findCandidateWindow(windowId: string, windows: ClipWindow[]): ClipWindow | undefined {
+  const exact = windows.find((item) => item.windowId === windowId);
+  if (exact) {
+    return exact;
+  }
+
+  const localWindowMatch = windowId.trim().match(/^window\s*-?\s*(\d+)$/i);
+  const localWindowIndex = localWindowMatch ? Number(localWindowMatch[1]) - 1 : -1;
+  return localWindowIndex >= 0 ? windows[localWindowIndex] : undefined;
+}
+
 function filterCandidatesToPromptWindows(
   candidates: ClipJsonCandidate[],
   windows: ClipWindow[],
@@ -2105,7 +2268,7 @@ function filterCandidatesToPromptWindows(
 
   for (const [index, candidate] of candidates.entries()) {
     if (candidateHasIndexedBoundary(candidate)) {
-      const window = windows.find((item) => item.windowId === candidate.windowId);
+      const window = findCandidateWindow(candidate.windowId, windows);
       if (!window) {
         rejectedReasons.push(`OUTSIDE_BATCH clips.${index}: unknown or cross-batch windowId ${candidate.windowId}.`);
         continue;
@@ -2336,7 +2499,9 @@ export async function generateClipSuggestions(
       },
     });
 
-    if (shouldReuseExistingSuggestions(
+    const appendMode = options?.append === true;
+
+    if (!appendMode && shouldReuseExistingSuggestions(
       existingSuggestionCount,
       options?.force,
       options?.targetCategory ? null : clipVolumeTarget,
@@ -2352,6 +2517,17 @@ export async function generateClipSuggestions(
       );
       return { clipCount: existingSuggestionCount, reusedExistingSuggestions: true };
     }
+
+    const existingClipRanges = appendMode
+      ? await prisma.clipCandidate.findMany({
+          where: { sermonId: sermon.id },
+          select: {
+            startTimeSeconds: true,
+            endTimeSeconds: true,
+            durationSeconds: true,
+          },
+        })
+      : [];
 
     const windows = buildRollingWindows(segments, ministryMoments);
     if (windows.length === 0) {
@@ -2464,11 +2640,145 @@ export async function generateClipSuggestions(
     const semanticDedupeResult = semanticDedupeCandidates(overlapDeduped);
     const overlapDuplicateCount = Math.max(0, boundaryAdjusted.length - overlapDeduped.length);
     const semanticDuplicateCount = semanticDedupeResult.duplicates.length;
-    const dedupedWithBoundaryFields = semanticDedupeResult.kept
+    const dedupedNewCandidates = semanticDedupeResult.kept
       .sort((left, right) => right.score - left.score);
+    const existingOverlapDuplicateCount = appendMode
+      ? dedupedNewCandidates.length - excludeCandidatesOverlappingExisting(dedupedNewCandidates, existingClipRanges).length
+      : 0;
+    let dedupedWithBoundaryFields = excludeCandidatesOverlappingExisting(
+      dedupedNewCandidates,
+      existingClipRanges,
+    );
 
     if (dedupedWithBoundaryFields.length === 0) {
-      throw new Error("Clip generation produced no valid candidates after boundary alignment and deduplication.");
+      throw new Error(appendMode
+        ? "Clip generation did not find any new non-overlapping candidates. Try redoing clips from transcript if you want to replace the current set."
+        : "Clip generation produced no valid candidates after boundary alignment and deduplication.");
+    }
+
+    let totalReviewableSuggestions = appendMode
+      ? existingSuggestionCount + dedupedWithBoundaryFields.length
+      : dedupedWithBoundaryFields.length;
+    let topUpCandidateCount = 0;
+    let topUpSavedCount = 0;
+    let topUpBoundaryRejectedCount = 0;
+    let topUpDuplicateCount = 0;
+
+    if (!options?.targetCategory && totalReviewableSuggestions < clipVolumeTarget.targetReviewSuggestions) {
+      const desiredNewClipCount = appendMode
+        ? Math.max(0, clipVolumeTarget.targetReviewSuggestions - existingSuggestionCount)
+        : clipVolumeTarget.targetReviewSuggestions;
+      const topUpNeeded = Math.max(0, desiredNewClipCount - dedupedWithBoundaryFields.length);
+      const topUpExcludeRanges = [...existingClipRanges, ...dedupedWithBoundaryFields];
+      const topUpSourceCandidates = buildHeuristicClipCandidatesFromWindows(windows, {
+        limit: Math.max(topUpNeeded * 3, topUpNeeded + 8),
+        excludeRanges: topUpExcludeRanges,
+        minWindowQualityScore: 5.8,
+        scoreCap: 7.4,
+        contextWarning: true,
+        reasonSelected: "Deterministic top-up selected this pastor-review option because the first AI pass came in below the sermon volume target and this transcript window has a clear ministry payoff.",
+      });
+      topUpCandidateCount = topUpSourceCandidates.length;
+
+      const topUpBoundaryAdjusted: EnrichedClipCandidate[] = [];
+      for (const [index, candidate] of topUpSourceCandidates.entries()) {
+        const adjustedResult = refineClipBoundaries(candidate, segments);
+        if (!adjustedResult.accepted) {
+          topUpBoundaryRejectedCount += 1;
+          boundaryRejected.push(`top-up candidate ${index + 1}: ${adjustedResult.reason}`);
+          continue;
+        }
+
+        if (adjustedResult.adjusted) {
+          boundaryAdjustedCount += 1;
+        }
+
+        topUpBoundaryAdjusted.push(enrichCandidate(adjustedResult.candidate, ministryMoments));
+      }
+
+      const topUpTimingDeduped = excludeCandidatesOverlappingExisting(
+        dedupeCandidates(topUpBoundaryAdjusted),
+        topUpExcludeRanges,
+      );
+      const combinedTimingDedupe = excludeCandidatesOverlappingExisting(
+        dedupeCandidates([...dedupedWithBoundaryFields, ...topUpTimingDeduped]),
+        existingClipRanges,
+      );
+      topUpDuplicateCount = Math.max(
+        0,
+        topUpBoundaryAdjusted.length - Math.max(0, combinedTimingDedupe.length - dedupedWithBoundaryFields.length),
+      );
+
+      const beforeTopUpCount = dedupedWithBoundaryFields.length;
+      dedupedWithBoundaryFields = combinedTimingDedupe;
+      topUpSavedCount = Math.max(0, dedupedWithBoundaryFields.length - beforeTopUpCount);
+      totalReviewableSuggestions = appendMode
+        ? existingSuggestionCount + dedupedWithBoundaryFields.length
+        : dedupedWithBoundaryFields.length;
+
+      if (totalReviewableSuggestions < clipVolumeTarget.targetReviewSuggestions) {
+        const coverageNeeded = Math.max(
+          0,
+          (appendMode ? clipVolumeTarget.targetReviewSuggestions - existingSuggestionCount : clipVolumeTarget.targetReviewSuggestions)
+            - dedupedWithBoundaryFields.length,
+        );
+        const coverageCandidates = buildCoverageTopUpClipCandidates(segments, {
+          limit: Math.max(coverageNeeded * 2, coverageNeeded + 8),
+          desiredReviewSuggestions: clipVolumeTarget.targetReviewSuggestions,
+          excludeRanges: [...existingClipRanges, ...dedupedWithBoundaryFields],
+        });
+        topUpCandidateCount += coverageCandidates.length;
+
+        const coverageBoundaryAdjusted: EnrichedClipCandidate[] = [];
+        for (const [index, candidate] of coverageCandidates.entries()) {
+          const adjustedResult = refineClipBoundaries(candidate, segments);
+          if (!adjustedResult.accepted) {
+            topUpBoundaryRejectedCount += 1;
+            boundaryRejected.push(`coverage top-up candidate ${index + 1}: ${adjustedResult.reason}`);
+            continue;
+          }
+
+          if (adjustedResult.adjusted) {
+            boundaryAdjustedCount += 1;
+          }
+
+          coverageBoundaryAdjusted.push(enrichCandidate(adjustedResult.candidate, ministryMoments));
+        }
+
+        const coverageTimingDeduped = excludeCandidatesOverlappingExisting(
+          dedupeCandidates(coverageBoundaryAdjusted),
+          [...existingClipRanges, ...dedupedWithBoundaryFields],
+        );
+        const combinedCoverageTimingDedupe = excludeCandidatesOverlappingExisting(
+          dedupeCandidates([...dedupedWithBoundaryFields, ...coverageTimingDeduped]),
+          existingClipRanges,
+        );
+        const beforeCoverageTopUpCount = dedupedWithBoundaryFields.length;
+        dedupedWithBoundaryFields = combinedCoverageTimingDedupe;
+        const coverageSavedCount = Math.max(0, dedupedWithBoundaryFields.length - beforeCoverageTopUpCount);
+        topUpSavedCount += coverageSavedCount;
+        topUpDuplicateCount += Math.max(0, coverageBoundaryAdjusted.length - coverageSavedCount);
+        totalReviewableSuggestions = appendMode
+          ? existingSuggestionCount + dedupedWithBoundaryFields.length
+          : dedupedWithBoundaryFields.length;
+      }
+
+      await appendJobLog(
+        job.id,
+        `Deterministic clip top-up considered ${topUpCandidateCount} window candidate(s), added ${topUpSavedCount}, rejected ${topUpBoundaryRejectedCount} by boundary checks, and removed ${topUpDuplicateCount} duplicate/overlapping option(s).`,
+      );
+    }
+
+    if (!options?.targetCategory && totalReviewableSuggestions < clipVolumeTarget.minReviewSuggestions) {
+      throw new Error([
+        `Clip generation produced ${totalReviewableSuggestions} pastor-review option(s), below the ${clipVolumeTarget.rangeLabel} target minimum of ${clipVolumeTarget.minReviewSuggestions} for this transcript.`,
+        appendMode
+          ? `${existingSuggestionCount} existing option(s) plus ${dedupedWithBoundaryFields.length} new non-overlapping option(s) were found.`
+          : `${dedupedWithBoundaryFields.length} distinct option(s) were found.`,
+        `Top-up considered ${topUpCandidateCount} window candidate(s) and added ${topUpSavedCount}.`,
+        `Rejected ${rejectedReasons.length} validation/scope candidate(s), ${boundaryRejected.length} boundary candidate(s), and removed ${overlapDuplicateCount + semanticDuplicateCount + existingOverlapDuplicateCount + topUpDuplicateCount} duplicate/overlapping candidate(s).`,
+        "The job was stopped before replacing/saving the low-count result so the review board does not quietly regress.",
+      ].join(" "));
     }
 
     await prisma.$transaction(async (tx) => {
@@ -2518,16 +2828,43 @@ export async function generateClipSuggestions(
       });
     });
 
+    const savedClips = await prisma.clipCandidate.findMany({
+      where: {
+        sermonId: sermon.id,
+        status: "SUGGESTED",
+        isAiGenerated: true,
+        isManuallyEdited: false,
+        createdAt: { gte: job.createdAt },
+        ...(options?.targetCategory ? { smartClipCategory: options.targetCategory } : {}),
+      },
+      select: { id: true },
+    });
+
+    let trackedClipCount = 0;
+    for (const clip of savedClips) {
+      try {
+        const trackingResult = await refreshVideoSubjectTracking(clip.id);
+        trackedClipCount += 1;
+        await appendJobLog(job.id, `Video subject tracking prepared for clip ${clip.id} using ${trackingResult.source}.`);
+      } catch (trackingError) {
+        const trackingMessage = trackingError instanceof Error ? trackingError.message : "Unknown video subject tracking error.";
+        await appendJobLog(job.id, `Video subject tracking skipped for clip ${clip.id}: ${trackingMessage}`);
+      }
+    }
+
     await updateSermonStatus(sermon.id, "CLIPS_GENERATED");
     const successMessage = [
       `Saved ${dedupedWithBoundaryFields.length} clip suggestions.`,
-      "Preview rendering is handled by the review asset preparation step.",
+      `Video subject tracking prepared for ${trackedClipCount} clip(s).`,
       `Repair used in ${repairUsedCount} batch(es).`,
       `Target duration guidance ${TARGET_MIN_DURATION_SECONDS}-${TARGET_MAX_DURATION_SECONDS}s applied.`,
-      `Clip volume target was ${clipVolumeTarget.rangeLabel}; saved ${dedupedWithBoundaryFields.length} distinct option(s).`,
+      `Clip volume target was ${clipVolumeTarget.rangeLabel}; review board has ${totalReviewableSuggestions} option(s).`,
+      topUpCandidateCount > 0
+        ? `Deterministic top-up considered ${topUpCandidateCount} candidate(s) and added ${topUpSavedCount}.`
+        : "Deterministic top-up was not needed.",
       `Boundary adjustments applied to ${boundaryAdjustedCount} candidate(s).`,
-      overlapDuplicateCount + semanticDuplicateCount > 0
-        ? `Removed ${overlapDuplicateCount + semanticDuplicateCount} duplicate candidate(s) before saving (${overlapDuplicateCount} timing, ${semanticDuplicateCount} semantic).`
+      overlapDuplicateCount + semanticDuplicateCount + existingOverlapDuplicateCount + topUpDuplicateCount > 0
+        ? `Removed ${overlapDuplicateCount + semanticDuplicateCount + existingOverlapDuplicateCount + topUpDuplicateCount} duplicate candidate(s) before saving (${overlapDuplicateCount} timing, ${semanticDuplicateCount} semantic, ${existingOverlapDuplicateCount} existing overlap, ${topUpDuplicateCount} top-up).`
         : "No duplicate candidates were removed before saving.",
       boundaryRejected.length > 0
         ? `Rejected ${boundaryRejected.length} candidate(s) due to boundary checks: ${boundaryRejected.join(" | ")}`
@@ -2562,6 +2899,9 @@ export const __clipIntelligenceTestUtils = {
   shouldPreserveClipDuringRegeneration,
   buildRollingWindows,
   filterCandidatesToPromptWindows,
+  excludeCandidatesOverlappingExisting,
+  hasSignificantClipOverlap,
+  buildCoverageTopUpClipCandidates,
   buildStructuredGenerationSummary,
   selectBestClipCandidates,
   buildHeuristicClipCandidatesFromWindows,

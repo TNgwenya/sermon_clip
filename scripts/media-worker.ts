@@ -1,6 +1,6 @@
 import os from "node:os";
 
-import type { ProcessingJob, ProcessingJobType } from "@prisma/client";
+import type { ProcessingJob } from "@prisma/client";
 import nextEnv from "@next/env";
 
 process.env.WORKER_ENABLED ||= "true";
@@ -221,7 +221,20 @@ async function claimNextJob(): Promise<ProcessingJob | null> {
   });
 }
 
-async function runJob(type: ProcessingJobType, sermonId: string): Promise<string> {
+function shouldAppendGeneratedClips(job: ProcessingJob): boolean {
+  return Boolean(
+    job.generationSummary
+    && typeof job.generationSummary === "object"
+    && !Array.isArray(job.generationSummary)
+    && "append" in job.generationSummary
+    && job.generationSummary.append === true
+  );
+}
+
+async function runJob(job: ProcessingJob): Promise<string> {
+  const type = job.type;
+  const sermonId = job.sermonId;
+
   switch (type) {
     case "PROCESS_SERMON": {
       const { processSermonPipeline } = await import("../src/server/pipeline/processSermonPipeline");
@@ -246,12 +259,13 @@ async function runJob(type: ProcessingJobType, sermonId: string): Promise<string
     case "GENERATE_CLIPS": {
       const { generateClipSuggestions } = await import("../src/server/agents/clipIntelligenceAgent");
       const { prepareGeneratedClipReviewAssets } = await import("../src/server/agents/clipReviewAssetService");
-      const result = await generateClipSuggestions(sermonId, { force: false });
+      const append = shouldAppendGeneratedClips(job);
+      const result = await generateClipSuggestions(sermonId, { force: false, append });
       const previewResult = await prepareGeneratedClipReviewAssets({ sermonId, force: false });
       const previewSummary = `Preview prep: ${previewResult.prepared} prepared, ${previewResult.skipped} skipped, ${previewResult.failed} failed.`;
       return result.reusedExistingSuggestions
         ? `Existing clip suggestions reused. ${previewSummary}`
-        : `Generated ${result.clipCount} clip suggestion(s). ${previewSummary}`;
+        : `Generated ${result.clipCount} ${append ? "new " : ""}clip suggestion(s). ${previewSummary}`;
     }
     case "EXPORT_CLIPS": {
       const { renderApprovedClipsForSermon } = await import("../src/server/agents/clipRenderService");
@@ -296,7 +310,7 @@ async function processNextJob(): Promise<void> {
     await appendJobLog(job.id, `Started ${job.type} on ${workerId}.`);
 
     try {
-      const summary = await runJob(job.type, job.sermonId);
+      const summary = await runJob(job);
       await markJobSucceeded(job.id, summary);
       log("job succeeded", { id: job.id, type: job.type, summary });
     } catch (error) {

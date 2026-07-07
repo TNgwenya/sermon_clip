@@ -1809,6 +1809,7 @@ export async function generateClipSuggestionsAction(
 ): Promise<GenerateClipSuggestionsFormState> {
   const sermonId = String(formData.get("sermonId") ?? "").trim();
   const force = formData.get("force") === "true";
+  const append = formData.get("append") === "true";
 
   if (!sermonId) {
     return {
@@ -1819,6 +1820,12 @@ export async function generateClipSuggestionsAction(
 
   if (!canRunLocalMediaProcessing()) {
     const job = await queueSermonProcessingJob(sermonId, "GENERATE_CLIPS");
+    if (append) {
+      await prisma.processingJob.update({
+        where: { id: job.id },
+        data: { generationSummary: { append: true } },
+      });
+    }
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath(`/sermons/${sermonId}/review`);
     revalidatePath("/");
@@ -1831,7 +1838,7 @@ export async function generateClipSuggestionsAction(
   }
 
   try {
-    const result = await generateClipSuggestions(sermonId, { force });
+    const result = await generateClipSuggestions(sermonId, { force, append });
     const previewSummary = await prepareGeneratedClipPreviews({ sermonId, force });
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath(`/sermons/${sermonId}/review`);
@@ -1841,7 +1848,7 @@ export async function generateClipSuggestionsAction(
       success: true,
       message: result.reusedExistingSuggestions
         ? `Clip suggestions already existed. Existing suggestions were reused. Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`
-        : `Generated ${result.clipCount} clip suggestions. Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`,
+        : `Generated ${result.clipCount} ${append ? "new " : ""}clip suggestions. Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Clip generation failed.";
