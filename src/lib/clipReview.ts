@@ -103,7 +103,7 @@ export function sortClips<T extends ReviewClipModel>(clips: T[], sort: ReviewSor
 }
 
 export function getQueuedMediaAssetsForRemoteBatchAction(action: ReviewBatchAction): ReviewQueuedMediaAsset[] {
-  if (action === "approve" || action === "prepare") {
+  if (action === "prepare") {
     return ["render", "caption", "captionBurn", "overlay", "export"];
   }
 

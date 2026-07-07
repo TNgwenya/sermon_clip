@@ -61,7 +61,8 @@ describe("clip review summaries", () => {
   });
 
   it("queues local worker assets for remote batch media actions", () => {
-    expect(getQueuedMediaAssetsForRemoteBatchAction("approve")).toEqual([
+    expect(getQueuedMediaAssetsForRemoteBatchAction("approve")).toEqual([]);
+    expect(getQueuedMediaAssetsForRemoteBatchAction("prepare")).toEqual([
       "render",
       "caption",
       "captionBurn",

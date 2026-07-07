@@ -28,6 +28,7 @@ import {
 
 export type ProcessSermonPipelineOptions = {
   force?: boolean;
+  parentJobId?: string;
 };
 
 type PipelineStepStatus = "SUCCEEDED" | "SKIPPED" | "FAILED";
@@ -138,7 +139,19 @@ export async function processSermonPipeline(
 
   await ensureSermonFolders(sermon.id, sermon.title);
 
-  const parentJob = await createProcessingJob(sermon.id, "PROCESS_SERMON");
+  const parentJob = options?.parentJobId
+    ? await prisma.processingJob.findUnique({
+        where: { id: options.parentJobId },
+        select: {
+          id: true,
+          sermonId: true,
+          type: true,
+        },
+      })
+    : await createProcessingJob(sermon.id, "PROCESS_SERMON");
+  if (!parentJob || parentJob.sermonId !== sermon.id || parentJob.type !== "PROCESS_SERMON") {
+    throw new Error("The claimed processing job does not match this sermon pipeline.");
+  }
   const steps: PipelineStepResult[] = [];
   let activeStepLabel = "Download video";
 

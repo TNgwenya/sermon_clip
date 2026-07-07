@@ -242,6 +242,38 @@ describe("caption service helpers", () => {
     ).toBe(true);
   });
 
+  it("preserves up-to-date manual Clip Studio caption cues during bulk generation", () => {
+    expect(
+      __captionServiceTestUtils.shouldPreserveManualCaptionCues(
+        {
+          subtitlesGenerated: true,
+          captionStatus: "GENERATED",
+          captionFreshness: "UP_TO_DATE",
+          captionData: {
+            manuallyEdited: true,
+            cues: [{ index: 1, startSeconds: 0, endSeconds: 2, text: "Manual cue" }],
+          },
+        },
+        undefined,
+      ),
+    ).toBe(true);
+
+    expect(
+      __captionServiceTestUtils.shouldPreserveManualCaptionCues(
+        {
+          subtitlesGenerated: true,
+          captionStatus: "GENERATED",
+          captionFreshness: "UP_TO_DATE",
+          captionData: {
+            manuallyEdited: true,
+            cues: [{ index: 1, startSeconds: 0, endSeconds: 2, text: "Manual cue" }],
+          },
+        },
+        { force: true },
+      ),
+    ).toBe(false);
+  });
+
   it("writes subtitle files atomically before captions are marked generated", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caption-atomic-"));
     try {

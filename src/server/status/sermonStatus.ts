@@ -40,6 +40,12 @@ const FAILED_RECOVERY_TRANSITIONS: ReadonlySet<SermonStatus> = new Set([
   "EXPORTED",
 ]);
 
+const RESUME_TRANSITIONS: ReadonlySet<string> = new Set([
+  "DOWNLOADED->TRANSCRIBING",
+  "DOWNLOADED->TRANSCRIBED",
+  "AUDIO_EXTRACTED->TRANSCRIBED",
+]);
+
 function statusIndex(status: SermonStatus): number {
   return SERMON_STATUS_FLOW.indexOf(status);
 }
@@ -61,6 +67,10 @@ export function validateStatusTransition(
   }
 
   if (RETRY_TRANSITIONS[currentStatus] === nextStatus) {
+    return { valid: true };
+  }
+
+  if (RESUME_TRANSITIONS.has(`${currentStatus}->${nextStatus}`)) {
     return { valid: true };
   }
 

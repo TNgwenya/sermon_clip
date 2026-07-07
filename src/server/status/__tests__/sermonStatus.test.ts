@@ -46,6 +46,12 @@ describe("sermon status transitions", () => {
     expect(validateStatusTransition("EXPORTED", "EXPORTING").valid).toBe(true);
   });
 
+  it("allows resumed pipelines to skip already-completed artifact steps", () => {
+    expect(validateStatusTransition("DOWNLOADED", "TRANSCRIBING").valid).toBe(true);
+    expect(validateStatusTransition("DOWNLOADED", "TRANSCRIBED").valid).toBe(true);
+    expect(validateStatusTransition("AUDIO_EXTRACTED", "TRANSCRIBED").valid).toBe(true);
+  });
+
   it("allows export kickoff from clip generation", () => {
     const result = validateStatusTransition("CLIPS_GENERATED", "EXPORTING");
     expect(result.valid).toBe(true);

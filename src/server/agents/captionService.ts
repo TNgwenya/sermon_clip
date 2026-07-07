@@ -41,6 +41,7 @@ type ClipForCaption = Pick<
   | "subtitlesGenerated"
   | "captionStatus"
   | "captionFreshness"
+  | "captionData"
 >;
 
 type TranscriptSegment = {
@@ -335,6 +336,29 @@ function shouldReuseExistingCaptionAsset(
   );
 }
 
+function hasManualCaptionCues(captionData: unknown): boolean {
+  if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
+    return false;
+  }
+
+  const record = captionData as Record<string, unknown>;
+  const cues = record["cues"];
+  return record["manuallyEdited"] === true && Array.isArray(cues) && cues.length > 0;
+}
+
+function shouldPreserveManualCaptionCues(
+  clip: Pick<ClipForCaption, "captionData" | "subtitlesGenerated" | "captionStatus" | "captionFreshness">,
+  options: CaptionGenerationOptions | undefined,
+): boolean {
+  return Boolean(
+    !options?.force &&
+    clip.subtitlesGenerated &&
+    clip.captionStatus === "GENERATED" &&
+    clip.captionFreshness === "UP_TO_DATE" &&
+    hasManualCaptionCues(clip.captionData),
+  );
+}
+
 function getTempSrtPath(srtPath: string): string {
   return srtPath.replace(/\.srt$/i, ".partial.srt");
 }
@@ -380,6 +404,7 @@ async function loadClipForCaption(clipId: string): Promise<ClipForCaption> {
       subtitlesGenerated: true,
       captionStatus: true,
       captionFreshness: true,
+      captionData: true,
     },
   });
 
@@ -709,6 +734,7 @@ export async function generateCaptionsForApprovedClips(
       subtitlesGenerated: true,
       captionStatus: true,
       captionFreshness: true,
+      captionData: true,
     },
   });
 
@@ -748,6 +774,12 @@ export async function generateCaptionsForApprovedClips(
     if (!eligibility.ok) {
       skipped += 1;
       await appendJobLog(job.id, `Caption generation skipped for ${clip.id}: ${eligibility.reason}`);
+      continue;
+    }
+
+    if (shouldPreserveManualCaptionCues(currentClip, options)) {
+      reused += 1;
+      await appendJobLog(job.id, `Caption generation preserved manual Clip Studio cues for ${clip.id}.`);
       continue;
     }
 
@@ -804,6 +836,8 @@ export const __captionServiceTestUtils = {
   validateCaptionCueTiming,
   validateCaptionGenerationEligibility,
   shouldReuseExistingCaptionAsset,
+  hasManualCaptionCues,
+  shouldPreserveManualCaptionCues,
   fileHasBytes,
   writeCaptionFileAtomically,
 };

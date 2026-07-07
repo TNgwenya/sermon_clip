@@ -238,7 +238,7 @@ async function runJob(job: ProcessingJob): Promise<string> {
   switch (type) {
     case "PROCESS_SERMON": {
       const { processSermonPipeline } = await import("../src/server/pipeline/processSermonPipeline");
-      const result = await processSermonPipeline(sermonId);
+      const result = await processSermonPipeline(sermonId, { parentJobId: job.id });
       return result.summary;
     }
     case "DOWNLOAD_VIDEO": {

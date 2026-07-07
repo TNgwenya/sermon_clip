@@ -2962,38 +2962,13 @@ export async function approveClipCandidateAction(clipId: string): Promise<ClipCa
     },
   });
 
-  if (!canRunLocalMediaProcessing()) {
-    const queued = await queueSermonMediaAssetJobs(clip.sermonId);
-    revalidatePath(`/sermons/${clip.sermonId}`);
-    revalidatePath("/");
-
-    return {
-      success: true,
-      message: queued.queued > 0
-        ? "Clip approved. Media preparation was queued for your local worker."
-        : "Clip approved. Media preparation is already queued for your local worker.",
-    };
-  }
-
-  try {
-    await generateCaptionsForClip(clip.id, { force: true });
-  } catch (error) {
-    const captionError = error instanceof Error ? error.message : "Unknown caption generation error.";
-    revalidatePath(`/sermons/${clip.sermonId}`);
-    revalidatePath("/");
-
-    return {
-      success: false,
-      message: `Clip approved, but caption generation failed: ${captionError}`,
-    };
-  }
-
   revalidatePath(`/sermons/${clip.sermonId}`);
+  revalidatePath(`/sermons/${clip.sermonId}/review`);
   revalidatePath("/");
 
   return {
     success: true,
-    message: "Clip approved and captions generated.",
+    message: "Clip approved.",
   };
 }
 
@@ -3045,61 +3020,6 @@ export async function rejectClipCandidateAction(clipId: string): Promise<ClipCan
   };
 }
 
-async function prepareApprovedClipAfterReview(clipId: string, captionStylePresetId: CaptionStylePresetId): Promise<void> {
-  const clip = await prisma.clipCandidate.findUnique({
-    where: { id: clipId },
-    select: {
-      id: true,
-      sermonId: true,
-      exportLayoutStrategy: true,
-      renderStatus: true,
-      captionStatus: true,
-      subtitleFilePath: true,
-      srtPath: true,
-      captionData: true,
-    },
-  });
-
-  if (!clip) {
-    throw new Error("Clip candidate was not found.");
-  }
-
-  if (clip.exportLayoutStrategy !== "SMART_CROP") {
-    await prisma.clipCandidate.update({
-      where: { id: clip.id },
-      data: { exportLayoutStrategy: "SMART_CROP" },
-    });
-  }
-
-  await refreshVideoSubjectTrackingBestEffort(clip.id, clip.sermonId);
-
-  if (clip.renderStatus !== "COMPLETED" || clip.exportLayoutStrategy !== "SMART_CROP") {
-    await renderApprovedClipWithFallback({
-      clipId: clip.id,
-      sermonId: clip.sermonId,
-      exportLayoutStrategy: "SMART_CROP",
-    });
-  }
-
-  const captionPreferences = resolveSavedClipCaptionPreferences(clip.captionData, captionStylePresetId);
-
-  if (captionPreferences.applyCaptionsToClip) {
-    if (clip.captionStatus !== "GENERATED" || !(clip.subtitleFilePath || clip.srtPath)) {
-      await generateCaptionsForClip(clip.id, { force: true });
-    }
-
-    await burnCaptionsIntoRenderedClip(clip.id, {
-      allowReburn: true,
-      force: true,
-      captionStylePresetId: captionPreferences.captionStylePresetId,
-    });
-  } else {
-    await markCaptionBurnSkippedForDisabledCaptions(clip.id, clip.sermonId);
-  }
-
-  await renderClipOverlayBestEffort(clip.id, clip.sermonId);
-}
-
 export async function setClipReviewStatusAction(
   clipId: string,
   status: ClipReviewStatus,
@@ -3133,39 +3053,6 @@ export async function setClipReviewStatusAction(
     where: { id: clip.id },
     data: { status },
   });
-
-  if (status === "APPROVED") {
-    if (!canRunLocalMediaProcessing()) {
-      const queued = await queueSermonMediaAssetJobs(clip.sermonId);
-      revalidatePath(`/sermons/${clip.sermonId}`);
-      revalidatePath(`/sermons/${clip.sermonId}/review`);
-      revalidatePath("/");
-
-      return {
-        success: true,
-        message: queued.queued > 0
-          ? "Clip approved. Media preparation was queued for your local worker."
-          : "Clip approved. Media preparation is already queued for your local worker.",
-      };
-    }
-
-    try {
-      const brandingSettings = await getBrandingSettings();
-      await prepareApprovedClipAfterReview(
-        clip.id,
-        brandingSettings.defaultCaptionStyleName as CaptionStylePresetId,
-      );
-    } catch (error) {
-      const preparationError = error instanceof Error ? error.message : "Unknown approved clip preparation error.";
-      revalidatePath(`/sermons/${clip.sermonId}`);
-      revalidatePath(`/sermons/${clip.sermonId}/review`);
-      revalidatePath("/");
-      return {
-        success: false,
-        message: `Clip approved, but caption burn/overlay preparation failed: ${preparationError}`,
-      };
-    }
-  }
 
   revalidatePath(`/sermons/${clip.sermonId}`);
   revalidatePath(`/sermons/${clip.sermonId}/review`);
@@ -3650,7 +3537,6 @@ export async function runClipBatchReviewAction(input: {
       const queuedRemoteAssets = canRunLocalMediaProcessing()
         ? []
         : getQueuedMediaAssetsForRemoteBatchAction(input.action);
-      const brandingSettings = input.action === "approve" && queuedRemoteAssets.length === 0 ? await getBrandingSettings() : null;
       const clipById = new Map(clips.map((clip) => [clip.id, clip]));
       let processed = 0;
       const failures: Array<{ clipId: string; reason: string }> = [];
@@ -3670,12 +3556,6 @@ export async function runClipBatchReviewAction(input: {
         try {
           if (input.action === "approve") {
             await prisma.clipCandidate.update({ where: { id: clipId }, data: { status: "APPROVED" } });
-            if (queuedRemoteAssets.length === 0) {
-              await prepareApprovedClipAfterReview(
-                clipId,
-                (brandingSettings?.defaultCaptionStyleName ?? "clean-lower") as CaptionStylePresetId,
-              );
-            }
           } else if (input.action === "reject") {
             await prisma.clipCandidate.update({ where: { id: clipId }, data: { status: "REJECTED" } });
           } else if (input.action === "pending") {
@@ -4525,9 +4405,13 @@ export async function updateClipStudioEditsAction(
     ? captionDataRecord["srtPath"]
     : null;
   if (input.applyCaptionsToClip) {
-    await ensureSermonFolders(clip.sermonId);
-    srtPath = getClipSrtPath(clip.sermonId, clip.id);
-    await writeFile(/* turbopackIgnore: true */ srtPath, buildSrtFromEditableCues(normalizedCaptionCues), "utf8");
+    if (canRunLocalMediaProcessing()) {
+      await ensureSermonFolders(clip.sermonId);
+      srtPath = getClipSrtPath(clip.sermonId, clip.id);
+      await writeFile(/* turbopackIgnore: true */ srtPath, buildSrtFromEditableCues(normalizedCaptionCues), "utf8");
+    } else {
+      srtPath = null;
+    }
   }
 
   const previousHashtags = Array.isArray(clip.hashtags)
@@ -4564,7 +4448,7 @@ export async function updateClipStudioEditsAction(
       caption: mainCaption,
       hook: hookText,
       hashtags,
-      ...(input.applyCaptionsToClip && srtPath
+      ...(input.applyCaptionsToClip
         ? {
             captionStatus: "GENERATED" as const,
             subtitleFilePath: srtPath,

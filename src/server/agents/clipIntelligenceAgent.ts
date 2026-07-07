@@ -125,6 +125,7 @@ const MAX_WINDOW_SECONDS = 90;
 const BATCH_SIZE = 4;
 const MAX_BATCH_CLIPS = 4;
 const WINDOW_TARGET_DURATIONS_SECONDS = [40, 60, 90] as const;
+const INLINE_VIDEO_SUBJECT_TRACKING_LIMIT = 6;
 const MAX_TRANSCRIPT_ISLAND_GAP_SECONDS = 12;
 const MAX_REPAIR_EXTENSION_SECONDS = 72;
 const MIN_WINDOW_WORDS = 35;
@@ -2837,11 +2838,17 @@ export async function generateClipSuggestions(
         createdAt: { gte: job.createdAt },
         ...(options?.targetCategory ? { smartClipCategory: options.targetCategory } : {}),
       },
+      orderBy: [
+        { overallPostScore: "desc" },
+        { score: "desc" },
+        { createdAt: "asc" },
+      ],
       select: { id: true },
     });
 
     let trackedClipCount = 0;
-    for (const clip of savedClips) {
+    const clipsToTrack = savedClips.slice(0, INLINE_VIDEO_SUBJECT_TRACKING_LIMIT);
+    for (const clip of clipsToTrack) {
       try {
         const trackingResult = await refreshVideoSubjectTracking(clip.id);
         trackedClipCount += 1;
@@ -2851,11 +2858,17 @@ export async function generateClipSuggestions(
         await appendJobLog(job.id, `Video subject tracking skipped for clip ${clip.id}: ${trackingMessage}`);
       }
     }
+    if (savedClips.length > clipsToTrack.length) {
+      await appendJobLog(
+        job.id,
+        `Video subject tracking deferred for ${savedClips.length - clipsToTrack.length} clip(s) to keep clip generation responsive.`,
+      );
+    }
 
     await updateSermonStatus(sermon.id, "CLIPS_GENERATED");
     const successMessage = [
       `Saved ${dedupedWithBoundaryFields.length} clip suggestions.`,
-      `Video subject tracking prepared for ${trackedClipCount} clip(s).`,
+      `Video subject tracking prepared for ${trackedClipCount}/${savedClips.length} new clip(s).`,
       `Repair used in ${repairUsedCount} batch(es).`,
       `Target duration guidance ${TARGET_MIN_DURATION_SECONDS}-${TARGET_MAX_DURATION_SECONDS}s applied.`,
       `Clip volume target was ${clipVolumeTarget.rangeLabel}; review board has ${totalReviewableSuggestions} option(s).`,
