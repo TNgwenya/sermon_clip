@@ -85,12 +85,102 @@ export async function listSocialAnalyticsConnectors(): Promise<SocialAnalyticsCo
   ];
 }
 
-export function buildAppBaseUrl(): string {
-  return (process.env.NEXT_PUBLIC_APP_URL?.trim() || process.env.WORKER_API_BASE_URL?.trim() || "http://localhost:3000").replace(/\/$/, "");
+export type OAuthProvider = "youtube" | "meta" | "tiktok" | "threads";
+
+type HeaderReader = {
+  get(name: string): string | null;
+};
+
+function normalizeBaseUrl(value: string): string {
+  return value.trim().replace(/\/$/, "");
 }
 
-export function buildOAuthRedirectUri(provider: "youtube" | "meta" | "tiktok" | "threads"): string {
-  return `${buildAppBaseUrl()}/api/oauth/${provider}/callback`;
+function firstHeaderValue(value: string | null): string | null {
+  return value?.split(",").at(0)?.trim() || null;
+}
+
+function isLocalHost(host: string): boolean {
+  const normalized = host.toLowerCase();
+  return normalized.startsWith("localhost")
+    || normalized.startsWith("127.0.0.1")
+    || normalized.startsWith("[::1]");
+}
+
+export function buildAppBaseUrl(baseUrl?: string | null): string {
+  if (baseUrl?.trim()) {
+    return normalizeBaseUrl(baseUrl);
+  }
+
+  return normalizeBaseUrl(process.env.NEXT_PUBLIC_APP_URL?.trim() || process.env.WORKER_API_BASE_URL?.trim() || "http://localhost:3000");
+}
+
+export function buildRequestBaseUrl(headers: HeaderReader): string {
+  const forwardedHost = firstHeaderValue(headers.get("x-forwarded-host"));
+  const host = forwardedHost || firstHeaderValue(headers.get("host"));
+  if (!host) {
+    return buildAppBaseUrl();
+  }
+
+  const forwardedProto = firstHeaderValue(headers.get("x-forwarded-proto"));
+  const proto = forwardedProto || (isLocalHost(host) ? "http" : "https");
+  return buildAppBaseUrl(`${proto}://${host}`);
+}
+
+export function buildOAuthRedirectUri(provider: OAuthProvider, baseUrl?: string | null): string {
+  return `${buildAppBaseUrl(baseUrl)}/api/oauth/${provider}/callback`;
+}
+
+export function buildOAuthRedirectUriFromRequest(provider: OAuthProvider, requestUrl: string): string {
+  return new URL(`/api/oauth/${provider}/callback`, requestUrl).toString();
+}
+
+export function oauthFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes(" is required for ") && normalized.includes(" oauth")) {
+    return "missing_server_oauth_env";
+  }
+
+  if (normalized.includes("redirect_uri_mismatch")
+    || normalized.includes("redirect uri")
+    || normalized.includes("redirect_uri")
+    || normalized.includes("domain of this url")
+    || normalized.includes("url blocked")
+    || normalized.includes("can't load url")
+    || normalized.includes("cant load url")
+  ) {
+    return "redirect_uri_mismatch";
+  }
+
+  if (normalized.includes("invalid_grant")
+    || normalized.includes("authorization code")
+    || normalized.includes("verification code")
+  ) {
+    return "invalid_grant";
+  }
+
+  if (normalized.includes("invalid_client") || normalized.includes("client_secret")) {
+    return "invalid_client";
+  }
+
+  if (normalized.includes("fetch failed") || normalized.includes("network")) {
+    return "provider_network_failed";
+  }
+
+  if (normalized.includes("permission")
+    || normalized.includes("permissions")
+    || normalized.includes("scope")
+    || normalized.includes("not authorized")
+  ) {
+    return "missing_or_unapproved_permission";
+  }
+
+  if (normalized.includes("access token") || normalized.includes("oauth")) {
+    return "oauth_exchange_failed";
+  }
+
+  return "exchange_failed";
 }
 
 export function getMetaOAuthScopes(): string[] {

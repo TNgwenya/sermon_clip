@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { buildOAuthRedirectUri } from "@/lib/socialAnalyticsConnectors";
+import { buildOAuthRedirectUriFromRequest, oauthFailureReason } from "@/lib/socialAnalyticsConnectors";
 import { upsertSocialCredential } from "@/server/integrations/socialCredentials";
 import {
   exchangeYouTubeAuthorizationCode,
@@ -41,7 +41,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     const tokenSet = await exchangeYouTubeAuthorizationCode({
       clientId: requiredEnv("YOUTUBE_CLIENT_ID"),
       clientSecret: requiredEnv("YOUTUBE_CLIENT_SECRET"),
-      redirectUri: buildOAuthRedirectUri("youtube"),
+      redirectUri: buildOAuthRedirectUriFromRequest("youtube", request.url),
       code,
     });
     const channel = await fetchYouTubeChannelIdentity(tokenSet.accessToken);
@@ -65,7 +65,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     });
   } catch (callbackError) {
     console.warn("YouTube OAuth callback failed.", callbackError);
-    return redirectToSettings(request, { oauth: "failed", provider: "youtube", reason: "exchange_failed" });
+    return redirectToSettings(request, { oauth: "failed", provider: "youtube", reason: oauthFailureReason(callbackError) });
   }
 
   return redirectToSettings(request, { oauth: "connected", provider: "youtube" });

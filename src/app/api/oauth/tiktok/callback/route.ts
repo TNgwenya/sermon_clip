@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { buildOAuthRedirectUri } from "@/lib/socialAnalyticsConnectors";
+import { buildOAuthRedirectUriFromRequest, oauthFailureReason } from "@/lib/socialAnalyticsConnectors";
 import {
   exchangeTikTokAuthorizationCode,
   storeTikTokCredential,
@@ -40,13 +40,13 @@ export async function GET(request: Request): Promise<NextResponse> {
     const tokenSet = await exchangeTikTokAuthorizationCode({
       clientKey: requiredEnv("TIKTOK_CLIENT_KEY"),
       clientSecret: requiredEnv("TIKTOK_CLIENT_SECRET"),
-      redirectUri: buildOAuthRedirectUri("tiktok"),
+      redirectUri: buildOAuthRedirectUriFromRequest("tiktok", request.url),
       code,
     });
     await storeTikTokCredential(tokenSet);
   } catch (callbackError) {
     console.warn("TikTok OAuth callback failed.", callbackError);
-    return redirectToSettings(request, { oauth: "failed", provider: "tiktok", reason: "exchange_failed" });
+    return redirectToSettings(request, { oauth: "failed", provider: "tiktok", reason: oauthFailureReason(callbackError) });
   }
 
   return redirectToSettings(request, { oauth: "connected", provider: "tiktok" });

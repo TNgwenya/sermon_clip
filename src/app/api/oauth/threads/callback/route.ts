@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { buildOAuthRedirectUri } from "@/lib/socialAnalyticsConnectors";
+import { buildOAuthRedirectUriFromRequest, oauthFailureReason } from "@/lib/socialAnalyticsConnectors";
 import {
   exchangeThreadsAuthorizationCode,
   exchangeThreadsLongLivedToken,
@@ -42,7 +42,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     const shortLived = await exchangeThreadsAuthorizationCode({
       appId: requiredEnv("THREADS_APP_ID"),
       appSecret,
-      redirectUri: buildOAuthRedirectUri("threads"),
+      redirectUri: buildOAuthRedirectUriFromRequest("threads", request.url),
       code,
     });
     const longLived = await exchangeThreadsLongLivedToken({
@@ -59,7 +59,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     });
   } catch (callbackError) {
     console.warn("Threads OAuth callback failed.", callbackError);
-    return redirectToSettings(request, { oauth: "failed", provider: "threads", reason: "exchange_failed" });
+    return redirectToSettings(request, { oauth: "failed", provider: "threads", reason: oauthFailureReason(callbackError) });
   }
 
   return redirectToSettings(request, { oauth: "connected", provider: "threads" });

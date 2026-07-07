@@ -1,9 +1,11 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 
 import { SectionCard, StatusBadge } from "@/components/ui";
 import {
   buildMetaOAuthUrl,
   buildOAuthRedirectUri,
+  buildRequestBaseUrl,
   buildThreadsOAuthUrl,
   buildTikTokOAuthUrl,
   buildYouTubeOAuthUrl,
@@ -30,6 +32,39 @@ function setupStatusLabel(status: string): string {
   if (status === "needs_setup") return "Developer setup required";
   if (status === "manual") return "Manual tracking";
   return status.replace(/_/g, " ");
+}
+
+function providerLabel(provider: string | undefined): string {
+  if (provider === "meta") return "Meta";
+  if (provider === "youtube") return "YouTube";
+  if (provider === "tiktok") return "TikTok";
+  if (provider === "threads") return "Threads";
+  return provider ?? "Provider";
+}
+
+function oauthFailureMessage(provider: string | undefined, reason: string | undefined): string {
+  const label = providerLabel(provider);
+
+  switch (reason) {
+    case "missing_server_oauth_env":
+      return `${label} OAuth reached this app, but this server is missing the provider app credentials. Add them to the environment for the app handling the callback, then restart or redeploy.`;
+    case "redirect_uri_mismatch":
+      return `${label} rejected the callback URL. Add the exact Redirect URI shown below to the provider app settings, then try again.`;
+    case "invalid_client":
+      return `${label} rejected the app id or secret. Check the provider credentials in this server environment.`;
+    case "invalid_grant":
+      return `${label} rejected the one-time authorization code. Start Connect again after confirming the callback URL matches exactly.`;
+    case "missing_or_unapproved_permission":
+      return `${label} connected, but the requested permission is missing or not approved for this account/app. Check provider app review and account roles.`;
+    case "no_facebook_pages_found":
+      return "Meta authorized your login, but did not return any Facebook Pages. Make sure the Facebook user manages the Page and grants Page access during login.";
+    case "provider_network_failed":
+      return `${label} could not be reached from this server during token exchange. Try again, or check server network access.`;
+    case "oauth_exchange_failed":
+      return `${label} OAuth token exchange failed. Check the server log for the provider error, then retry Connect.`;
+    default:
+      return `${label} OAuth failed: ${reason ?? "unknown error"}.`;
+  }
 }
 
 function platformStatus(input: { authHref: string | null; connectedAccounts?: number; missingEnv?: string[] }): {
@@ -66,7 +101,7 @@ function oauthBanner(params: SearchParams): { tone: "success" | "warning"; title
     return {
       tone: "warning",
       title: "Connector not authorized",
-      message: `${params.provider ?? "Provider"} OAuth failed: ${params.reason ?? "unknown error"}.`,
+      message: oauthFailureMessage(params.provider, params.reason),
     };
   }
 
@@ -75,6 +110,13 @@ function oauthBanner(params: SearchParams): { tone: "success" | "warning"; title
 
 export default async function SocialSettingsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const params = await searchParams;
+  const requestBaseUrl = buildRequestBaseUrl(await headers());
+  const redirectUris = {
+    youtube: buildOAuthRedirectUri("youtube", requestBaseUrl),
+    meta: buildOAuthRedirectUri("meta", requestBaseUrl),
+    tiktok: buildOAuthRedirectUri("tiktok", requestBaseUrl),
+    threads: buildOAuthRedirectUri("threads", requestBaseUrl),
+  };
   const connectors = await listSocialAnalyticsConnectors();
   const youtubeClientId = process.env.YOUTUBE_CLIENT_ID?.trim();
   const metaAppId = process.env.META_APP_ID?.trim();
@@ -83,28 +125,28 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
   const youtubeAuthHref = youtubeClientId
     ? buildYouTubeOAuthUrl({
         clientId: youtubeClientId,
-        redirectUri: buildOAuthRedirectUri("youtube"),
+        redirectUri: redirectUris.youtube,
         state: "sermon-clip-growth-youtube",
       })
     : null;
   const metaAuthHref = metaAppId
     ? buildMetaOAuthUrl({
         appId: metaAppId,
-        redirectUri: buildOAuthRedirectUri("meta"),
+        redirectUri: redirectUris.meta,
         state: "sermon-clip-growth-meta",
       })
     : null;
   const tiktokAuthHref = tiktokClientKey
     ? buildTikTokOAuthUrl({
         clientKey: tiktokClientKey,
-        redirectUri: buildOAuthRedirectUri("tiktok"),
+        redirectUri: redirectUris.tiktok,
         state: "sermon-clip-growth-tiktok",
       })
     : null;
   const threadsAuthHref = threadsAppId
     ? buildThreadsOAuthUrl({
         appId: threadsAppId,
-        redirectUri: buildOAuthRedirectUri("threads"),
+        redirectUri: redirectUris.threads,
         state: "sermon-clip-growth-threads",
       })
     : null;
@@ -197,7 +239,7 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
                   <summary>Setup details</summary>
                   <div className="stack-sm">
                     <p className="muted small">{card.setupDescription}</p>
-                    <p className="muted small">Redirect URI: <code>{buildOAuthRedirectUri(card.provider)}</code></p>
+                    <p className="muted small">Redirect URI: <code>{redirectUris[card.provider]}</code></p>
                     {card.connector?.missingEnv && card.connector.missingEnv.length > 0 ? (
                       <p className="muted small">Developer setup required: {card.connector.missingEnv.join(", ")}</p>
                     ) : null}

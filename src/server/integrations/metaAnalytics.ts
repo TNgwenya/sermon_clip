@@ -8,6 +8,10 @@ type MetaTokenResponse = {
   expires_in?: number;
   error?: {
     message?: string;
+    type?: string;
+    code?: number;
+    error_subcode?: number;
+    fbtrace_id?: string;
   };
 };
 
@@ -19,6 +23,16 @@ type MetaPage = {
     id: string;
     username?: string;
     name?: string;
+  };
+};
+
+type MetaErrorPayload = {
+  error?: {
+    message?: string;
+    type?: string;
+    code?: number;
+    error_subcode?: number;
+    fbtrace_id?: string;
   };
 };
 
@@ -47,6 +61,18 @@ function graphUrl(path: string, params: Record<string, string | undefined>): str
   });
 
   return `https://graph.facebook.com/${GRAPH_VERSION}/${path.replace(/^\//, "")}?${searchParams.toString()}`;
+}
+
+function metaApiError(payload: MetaErrorPayload, fallback: string, response: Response): string {
+  const error = payload.error;
+  const metadata = [
+    `HTTP ${response.status}`,
+    error?.type,
+    typeof error?.code === "number" ? `code ${error.code}` : null,
+    typeof error?.error_subcode === "number" ? `subcode ${error.error_subcode}` : null,
+  ].filter(Boolean).join(", ");
+  const message = error?.message || fallback;
+  return metadata ? `${message} (${metadata})` : message;
 }
 
 function expiresAtFromSeconds(expiresIn: number | undefined, now = new Date()): Date | null {
@@ -92,7 +118,7 @@ export async function exchangeMetaAuthorizationCode(input: {
   const payload = await response.json() as MetaTokenResponse;
 
   if (!response.ok || !payload.access_token) {
-    throw new Error(payload.error?.message || "Unable to exchange Meta authorization code.");
+    throw new Error(metaApiError(payload, "Unable to exchange Meta authorization code.", response));
   }
 
   return {
@@ -116,7 +142,7 @@ export async function exchangeMetaLongLivedToken(input: {
   const payload = await response.json() as MetaTokenResponse;
 
   if (!response.ok || !payload.access_token) {
-    throw new Error(payload.error?.message || "Unable to exchange Meta long-lived token.");
+    throw new Error(metaApiError(payload, "Unable to exchange Meta long-lived token.", response));
   }
 
   return {
@@ -137,10 +163,10 @@ export async function storeMetaPageCredentials(input: {
     fields: "id,name,access_token,instagram_business_account{id,username,name}",
     limit: "50",
   }));
-  const payload = await response.json() as { data?: MetaPage[]; error?: { message?: string } };
+  const payload = await response.json() as { data?: MetaPage[] } & MetaErrorPayload;
 
   if (!response.ok) {
-    throw new Error(payload.error?.message || "Unable to read connected Facebook pages.");
+    throw new Error(metaApiError(payload, "Unable to read connected Facebook pages.", response));
   }
 
   let stored = 0;

@@ -3,9 +3,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildMetaOAuthUrl,
   buildOAuthRedirectUri,
+  buildOAuthRedirectUriFromRequest,
+  buildRequestBaseUrl,
   buildThreadsOAuthUrl,
   buildTikTokOAuthUrl,
   buildYouTubeOAuthUrl,
+  oauthFailureReason,
 } from "@/lib/socialAnalyticsConnectors";
 
 const originalNextPublicAppUrl = process.env.NEXT_PUBLIC_APP_URL;
@@ -24,6 +27,19 @@ describe("social analytics connector OAuth helpers", () => {
     expect(buildOAuthRedirectUri("meta")).toBe("https://church.example/api/oauth/meta/callback");
     expect(buildOAuthRedirectUri("tiktok")).toBe("https://church.example/api/oauth/tiktok/callback");
     expect(buildOAuthRedirectUri("threads")).toBe("https://church.example/api/oauth/threads/callback");
+  });
+
+  it("builds provider callback URLs from the current request host", () => {
+    const localHeaders = new Headers({ host: "localhost:3000" });
+    const vercelHeaders = new Headers({
+      "x-forwarded-host": "sermon-clip.vercel.app",
+      "x-forwarded-proto": "https",
+    });
+
+    expect(buildRequestBaseUrl(localHeaders)).toBe("http://localhost:3000");
+    expect(buildRequestBaseUrl(vercelHeaders)).toBe("https://sermon-clip.vercel.app");
+    expect(buildOAuthRedirectUri("youtube", buildRequestBaseUrl(localHeaders))).toBe("http://localhost:3000/api/oauth/youtube/callback");
+    expect(buildOAuthRedirectUriFromRequest("meta", "http://localhost:3000/api/oauth/meta/callback?code=123")).toBe("http://localhost:3000/api/oauth/meta/callback");
   });
 
   it("includes platform analytics scopes in OAuth URLs", () => {
@@ -55,5 +71,12 @@ describe("social analytics connector OAuth helpers", () => {
     expect(metaUrl.searchParams.get("scope")).toContain("pages_manage_posts");
     expect(metaUrl.searchParams.get("scope")).toContain("instagram_basic");
     expect(metaUrl.searchParams.get("scope")).toContain("instagram_manage_insights");
+  });
+
+  it("normalizes OAuth callback failures into safe setup reasons", () => {
+    expect(oauthFailureReason(new Error("Error 400: redirect_uri_mismatch"))).toBe("redirect_uri_mismatch");
+    expect(oauthFailureReason(new Error("META_APP_SECRET is required for Meta OAuth."))).toBe("missing_server_oauth_env");
+    expect(oauthFailureReason(new Error("Missing pages_manage_posts permission"))).toBe("missing_or_unapproved_permission");
+    expect(oauthFailureReason(new Error("invalid_client"))).toBe("invalid_client");
   });
 });

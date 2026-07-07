@@ -75,6 +75,7 @@ POSTING_WORKER_DRY_RUN=true
 
 `OPENAI_TRANSCRIPTION_MODEL` defaults to `whisper-1` because the clipping pipeline requires segment timestamps for accurate video boundaries.
 `POSTING_WORKER_DRY_RUN` defaults to true unless explicitly set to `false`, so the worker can be tested without posting.
+Social Settings OAuth links use the current app host for callback URLs. Register the exact local and live callback URLs with each provider, for example `http://localhost:3000/api/oauth/youtube/callback` and `https://your-vercel-app.vercel.app/api/oauth/youtube/callback`. Keep `WORKER_API_BASE_URL` pointed at the app the worker should poll; it does not need to match the OAuth callback host.
 
 ## Setup instructions
 

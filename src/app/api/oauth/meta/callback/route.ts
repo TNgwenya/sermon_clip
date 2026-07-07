@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { buildOAuthRedirectUri, getMetaOAuthScopes } from "@/lib/socialAnalyticsConnectors";
+import { buildOAuthRedirectUriFromRequest, getMetaOAuthScopes, oauthFailureReason } from "@/lib/socialAnalyticsConnectors";
 import {
   exchangeMetaAuthorizationCode,
   exchangeMetaLongLivedToken,
@@ -43,7 +43,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     const shortLived = await exchangeMetaAuthorizationCode({
       appId,
       appSecret,
-      redirectUri: buildOAuthRedirectUri("meta"),
+      redirectUri: buildOAuthRedirectUriFromRequest("meta", request.url),
       code,
     });
     const longLived = await exchangeMetaLongLivedToken({
@@ -58,9 +58,13 @@ export async function GET(request: Request): Promise<NextResponse> {
       scopes: getMetaOAuthScopes(),
     });
 
+    if (stored === 0) {
+      return redirectToSettings(request, { oauth: "failed", provider: "meta", reason: "no_facebook_pages_found" });
+    }
+
     return redirectToSettings(request, { oauth: "connected", provider: "meta", accounts: String(stored) });
   } catch (callbackError) {
     console.warn("Meta OAuth callback failed.", callbackError);
-    return redirectToSettings(request, { oauth: "failed", provider: "meta", reason: "exchange_failed" });
+    return redirectToSettings(request, { oauth: "failed", provider: "meta", reason: oauthFailureReason(callbackError) });
   }
 }
