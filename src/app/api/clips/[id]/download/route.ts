@@ -59,6 +59,7 @@ export async function GET(
       captionedVideoPath: true,
       renderedFilePath: true,
       captionData: true,
+      transcriptSafetyStatus: true,
       title: true,
       hook: true,
       caption: true,
@@ -74,6 +75,13 @@ export async function GET(
 
   if (!clip) {
     return NextResponse.json({ error: "Clip not found." }, { status: 404 });
+  }
+
+  if (clip.transcriptSafetyStatus === "REVIEW_REQUIRED") {
+    return NextResponse.json(
+      { error: "Review the local-language transcript before downloading this clip for posting." },
+      { status: 409 },
+    );
   }
 
   if (historyId) {

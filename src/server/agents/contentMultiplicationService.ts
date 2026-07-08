@@ -12,7 +12,8 @@ import {
   type ContentOpportunityRecord,
   type ContentOpportunityType,
 } from "@/server/ai/contentOpportunitySchema";
-import { getOpenAiClient } from "@/server/ai/openaiClient";
+import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
+import { resolveOpenAIChatModel } from "@/server/ai/modelConfig";
 
 type SermonContext = {
   id: string;
@@ -251,18 +252,25 @@ async function callOpportunityModel(
   context: OpportunitySourceContext,
   requestedQuantities: Record<PrismaContentOpportunityType, number>,
 ): Promise<ContentOpportunityRecord[]> {
-  const client = getOpenAiClient(
-    "OPENAI_API_KEY is missing. Add it to your environment before generating content opportunities.",
-  );
+  const model = resolveOpenAIChatModel("contentMultiplication");
 
-  const completion = await client.chat.completions.create({
-    model: "gpt-4o-mini",
+  const completion = await createLoggedChatCompletion({
+    operation: "content_opportunity_generation",
+    sermonId: context.id,
+    model,
     temperature: 0.2,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: buildSystemPrompt() },
       { role: "user", content: buildUserPrompt(context, requestedQuantities) },
     ],
+    promptVersion: "content-opportunities-v1",
+    metadata: {
+      requestedQuantities,
+      transcriptCharacters: context.transcriptFullText.length,
+      language: context.language,
+    },
+    missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before generating content opportunities.",
   });
 
   const raw = completion.choices[0]?.message?.content ?? "";

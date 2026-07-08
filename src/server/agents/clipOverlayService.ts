@@ -1,8 +1,9 @@
 /**
  * Clip Overlay Service — lower-third text overlays for sermon clips.
  *
- * Overlays are rendered onto the plain rendered clip (not the captioned version).
- * The overlay is saved as a separate file so the plain rendered clip is preserved.
+ * Overlays are rendered onto the most polished prepared clip source. When
+ * captions have already been burned in, the captioned file is used so final
+ * exports keep both captions and overlays.
  *
  * Overlay design:
  *  - Semi-transparent dark bar at the lower portion of the frame
@@ -49,6 +50,10 @@ import {
   type BrollCardPosition,
   type BrollCardTone,
 } from "@/lib/clipStudio";
+import {
+  recordClipArtifact,
+  upsertActiveClipEditPlanForClip,
+} from "@/server/agents/clipEditPlanService";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,6 +70,8 @@ type ClipForOverlay = Pick<
   | "status"
   | "renderStatus"
   | "renderedFilePath"
+  | "captionBurnStatus"
+  | "captionedVideoPath"
   | "captionData"
   | "overlayStatus"
   | "overlayVideoPath"
@@ -655,6 +662,8 @@ async function loadClipForOverlay(clipId: string): Promise<ClipForOverlay> {
       status: true,
       renderStatus: true,
       renderedFilePath: true,
+      captionBurnStatus: true,
+      captionedVideoPath: true,
       captionData: true,
       overlayStatus: true,
       overlayVideoPath: true,
@@ -833,7 +842,10 @@ export async function renderClipOverlay(
   const clip = await loadClipForOverlay(clipId);
   await ensureSermonFolders(clip.sermonId);
 
-  const renderedPath = clip.renderedFilePath?.trim() || getClipOutputPath(clip.sermonId, clip.id);
+  const captionedPath = clip.captionBurnStatus === "COMPLETED" && clip.captionedVideoPath?.trim()
+    ? clip.captionedVideoPath.trim()
+    : null;
+  const renderedPath = captionedPath ?? clip.renderedFilePath?.trim() ?? getClipOutputPath(clip.sermonId, clip.id);
   const renderedClipExists = await fileExists(renderedPath);
 
   const sermon = await loadSermonForOverlay(clip.sermonId);
@@ -865,12 +877,28 @@ export async function renderClipOverlay(
   const outputExists = await fileHasBytes(outputPath);
 
   if (outputExists && !options?.allowRerender && !options?.force) {
+    await upsertActiveClipEditPlanForClip({
+      clipCandidateId: clip.id,
+      createdBy: "overlay",
+      createdReason: "existing_overlay_reused",
+    });
+    const outputStats = await stat(outputPath).catch(() => null);
     const renderedAt = new Date();
     await prisma.clipCandidate.update({
       where: { id: clip.id },
       data: buildOverlayMetadata(outputPath),
     });
     await markOverlayAssetCompleted(clip.id, false);
+    await recordClipArtifact({
+      clipCandidateId: clip.id,
+      kind: "OVERLAY",
+      filePath: outputPath,
+      sizeBytes: outputStats?.size ?? null,
+      metadata: {
+        reusedExistingFile: true,
+        sourceWasCaptioned: Boolean(captionedPath),
+      },
+    });
 
     return {
       clipId: clip.id,
@@ -899,6 +927,11 @@ export async function renderClipOverlay(
   const job = await createProcessingJob(clip.sermonId, "RENDER_OVERLAY");
 
   try {
+    await upsertActiveClipEditPlanForClip({
+      clipCandidateId: clip.id,
+      createdBy: "overlay",
+      createdReason: captionedPath ? "overlay_on_captioned_source_requested" : "overlay_requested",
+    });
     await markJobRunning(job.id);
     await appendJobLog(job.id, `Overlay render requested for clip ${clip.id}.`);
 
@@ -993,11 +1026,24 @@ export async function renderClipOverlay(
     await Promise.all(brollOverlayPaths.map((overlayPath) => unlink(/* turbopackIgnore: true */ overlayPath).catch(() => undefined)));
 
     const renderedAt = new Date();
+    const outputStats = await stat(outputPath).catch(() => null);
     await prisma.clipCandidate.update({
       where: { id: clip.id },
       data: buildOverlayMetadata(outputPath),
     });
     await markOverlayAssetCompleted(clip.id, true);
+    await recordClipArtifact({
+      clipCandidateId: clip.id,
+      kind: "OVERLAY",
+      filePath: outputPath,
+      sizeBytes: outputStats?.size ?? null,
+      metadata: {
+        reusedExistingFile: false,
+        sourceWasCaptioned: Boolean(captionedPath),
+        hookOverlayApplied: Boolean(hookOverlaySpec),
+        brollOverlayCount: brollOverlaySpecs.length,
+      },
+    });
     await invalidateAfterOverlayCompleted(
       clip.id,
       "Overlay regenerated. Export assets require regeneration.",
@@ -1028,6 +1074,13 @@ export async function renderClipOverlay(
     );
 
     await failOverlayRender(clip.id, message);
+    await recordClipArtifact({
+      clipCandidateId: clip.id,
+      kind: "OVERLAY",
+      status: "FAILED",
+      filePath: outputPath,
+      errorMessage: message,
+    }).catch(() => undefined);
     await markJobFailed(job.id, message, "Overlay render failed.");
     await appendPipelineLog(clip.sermonId, `Overlay render failed for clip ${clip.id}: ${message}`);
 

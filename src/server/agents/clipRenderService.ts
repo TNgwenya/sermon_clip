@@ -50,6 +50,10 @@ import {
   serializeSpeechCleanupCutPlan,
   type SpeechCleanupCutPlan,
 } from "@/lib/speechCleanupPlan";
+import {
+  recordClipArtifact,
+  upsertActiveClipEditPlanForClip,
+} from "@/server/agents/clipEditPlanService";
 
 type RenderOptions = {
   ffmpegPath?: string;
@@ -891,6 +895,12 @@ export async function renderApprovedClip(
   const outputExists = await fileExists(outputPath);
 
   if (outputExists && !options?.allowRerender && !options?.force) {
+    await upsertActiveClipEditPlanForClip({
+      clipCandidateId: clip.id,
+      createdBy: "render",
+      createdReason: "existing_render_reused",
+    });
+    const outputStats = await stat(outputPath).catch(() => null);
     await prisma.clipCandidate.update({
       where: { id: clip.id },
       data: {
@@ -900,6 +910,16 @@ export async function renderApprovedClip(
       },
     });
     await markRenderAssetCompleted(clip.id, false);
+    await recordClipArtifact({
+      clipCandidateId: clip.id,
+      kind: "RENDERED_SOURCE",
+      filePath: outputPath,
+      sizeBytes: outputStats?.size ?? null,
+      durationSeconds: Number((boundaries.endTimeSeconds - boundaries.startTimeSeconds).toFixed(2)),
+      metadata: {
+        reusedExistingFile: true,
+      },
+    });
 
     return {
       clipId: clip.id,
@@ -929,6 +949,11 @@ export async function renderApprovedClip(
   const renderStartedAt = Date.now();
 
   try {
+    await upsertActiveClipEditPlanForClip({
+      clipCandidateId: clip.id,
+      createdBy: "render",
+      createdReason: "render_requested",
+    });
     await markJobRunning(job.id);
     await appendJobLog(job.id, `Clip render requested for ${clip.id}.`);
 
@@ -1078,7 +1103,24 @@ export async function renderApprovedClip(
         captionData: updatedCaptionData,
       },
     });
+    await upsertActiveClipEditPlanForClip({
+      clipCandidateId: clip.id,
+      createdBy: "render",
+      createdReason: "render_completed_with_cleanup_plan",
+    });
     await markRenderAssetCompleted(clip.id, true);
+    await recordClipArtifact({
+      clipCandidateId: clip.id,
+      kind: "RENDERED_SOURCE",
+      filePath: outputPath,
+      sizeBytes: outputStats.size,
+      durationSeconds: renderedDurationSeconds,
+      metadata: {
+        reusedExistingFile: false,
+        speechCleanupApplied: Boolean(speechCleanupPlan?.enabled),
+        framingPreset,
+      },
+    });
     await invalidateAfterRenderCompleted(
       clip.id,
       "Render asset regenerated. Caption/burn/overlay/export assets now require regeneration.",
@@ -1097,6 +1139,13 @@ export async function renderApprovedClip(
     const message = error instanceof Error ? error.message : "Unknown render error.";
 
     await failClipRender(clip.id, message);
+    await recordClipArtifact({
+      clipCandidateId: clip.id,
+      kind: "RENDERED_SOURCE",
+      status: "FAILED",
+      filePath: outputPath,
+      errorMessage: message,
+    }).catch(() => undefined);
     await markJobFailed(job.id, message, "Clip render failed.");
     await appendPipelineLog(clip.sermonId, `Clip ${clip.id} render failed: ${message}`);
 

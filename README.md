@@ -47,13 +47,29 @@ Create a `.env` file:
 
 OPENAI_API_KEY=your_key_here
 OPENAI_TRANSCRIPTION_MODEL=whisper-1
+OPENAI_CHAT_MODEL=
+OPENAI_CHAT_MAX_ATTEMPTS=3
+OPENAI_CHAT_RETRY_BASE_DELAY_MS=1500
+OPENAI_TRANSCRIPTION_MAX_ATTEMPTS=4
+OPENAI_TRANSCRIPTION_RETRY_BASE_DELAY_MS=2000
 DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require
 
 Optional:
 
 SERMON_STORAGE_ROOT=/custom/path/if/you/want
+OPENAI_CLIP_SELECTION_MODEL=
+OPENAI_CLIP_REPAIR_MODEL=
+OPENAI_SERMON_INTELLIGENCE_MODEL=
+OPENAI_MINISTRY_MOMENT_MODEL=
+OPENAI_CONTENT_MULTIPLICATION_MODEL=
+OPENAI_CLIP_QUALITY_MODEL=
+OPENAI_CLIP_COMPLETENESS_MODEL=
 WORKER_API_TOKEN=shared_worker_secret
 WORKER_API_BASE_URL=https://your-vercel-app.vercel.app
+MEDIA_WORKER_POLL_SECONDS=15
+MEDIA_WORKER_HEARTBEAT_SECONDS=30
+MEDIA_WORKER_STALE_JOB_MINUTES=60
+MEDIA_WORKER_MAX_ATTEMPTS=2
 SCHEDULER_ADMIN_PASSWORD=single_user_dashboard_password
 CONTROL_PANEL_MODE=true
 YOUTUBE_CLIENT_ID=your_google_oauth_client_id
@@ -74,6 +90,8 @@ FACEBOOK_DEFAULT_PUBLISHED=false
 POSTING_WORKER_DRY_RUN=true
 
 `OPENAI_TRANSCRIPTION_MODEL` defaults to `whisper-1` because the clipping pipeline requires segment timestamps for accurate video boundaries.
+Chat-based AI calls go through the shared AI gateway. Use `OPENAI_CHAT_MODEL` as a global override, or task-specific model variables when clip selection, sermon intelligence, ministry moments, content opportunities, quality review, or completeness review need different cost/quality tradeoffs. AI calls are logged as `AiInvocation` records with request hashes, model names, latency, token counts when available, and failure status; raw prompts are not stored by default.
+`MEDIA_WORKER_HEARTBEAT_SECONDS`, `MEDIA_WORKER_STALE_JOB_MINUTES`, and `MEDIA_WORKER_MAX_ATTEMPTS` control media job leases. A stale `RUNNING` job can be reclaimed by another local worker, then marked failed after the configured claim limit.
 `POSTING_WORKER_DRY_RUN` defaults to true unless explicitly set to `false`, so the worker can be tested without posting.
 Social Settings OAuth links use the current app host for callback URLs. Register the exact local and live callback URLs with each provider, for example `http://localhost:3000/api/oauth/youtube/callback` and `https://your-vercel-app.vercel.app/api/oauth/youtube/callback`. Keep `WORKER_API_BASE_URL` pointed at the app the worker should poll; it does not need to match the OAuth callback host.
 
@@ -111,12 +129,17 @@ The automation architecture keeps Vercel Hobby lightweight:
 Run the local worker:
 
 ```bash
+npm run worker:media
 npm run worker:posting
 ```
 
 Useful worker settings:
 - `WORKER_API_BASE_URL`: Vercel or local app URL.
 - `WORKER_API_TOKEN`: bearer token shared with the app.
+- `MEDIA_WORKER_POLL_SECONDS`: defaults to `15`.
+- `MEDIA_WORKER_HEARTBEAT_SECONDS`: defaults to `30`.
+- `MEDIA_WORKER_STALE_JOB_MINUTES`: defaults to `60`.
+- `MEDIA_WORKER_MAX_ATTEMPTS`: defaults to `2`.
 - `POSTING_WORKER_SYNC_SECONDS`: defaults to `60`.
 - `POSTING_WORKER_DUE_CHECK_SECONDS`: defaults to `30`.
 - `POSTING_WORKER_UPCOMING_WINDOW_MINUTES`: defaults to `10080` (7 days).
@@ -168,11 +191,12 @@ Use this section as the source of truth for how each workflow stage is wired.
 3. Human review and approval workflow
   - UI: `src/app/sermons/[id]/clip-review-card.tsx`
   - Actions: approve/reject/edit in `src/server/actions/sermons.ts`
-  - Result: only approved clips progress to render/export paths.
+  - Shared edit plan: `src/server/agents/clipEditPlanService.ts`
+  - Result: only approved clips progress to render/export paths; Studio edits, cleanup cuts, captions, framing, branding, and export settings are snapshotted into active `ClipEditPlan` records.
 4. Approved clip rendering
   - Service: `src/server/agents/clipRenderService.ts`
   - Actions: `renderClipCandidateAction` / `rerenderClipCandidateAction`
-  - Result: rendered source clip artifact + render status metadata.
+  - Result: rendered source clip artifact + render status metadata; `ClipArtifact` rows are tied back to the active `ClipEditPlan`.
 5. Caption generation and burn-in
   - Services: `src/server/agents/captionService.ts`, `src/server/agents/captionBurnService.ts`
   - Actions: `generateClipCaptionsAction`, `burnClipCaptionsAction`, `reburnClipCaptionsAction`
@@ -186,12 +210,13 @@ Use this section as the source of truth for how each workflow stage is wired.
   - Export service: `src/server/agents/clipExportService.ts`
   - Actions: `exportVerticalClipAction`, `reexportVerticalClipAction`
   - Download route: `src/app/api/clips/[id]/download/route.ts`
-  - Result: final vertical MP4 suitable for manual posting.
+  - Result: final vertical MP4 suitable for manual posting. Preview selection and export source selection both prefer exported, overlay, captioned, then rendered files so Studio preview and final output use the same prepared plan path.
 8. Operational diagnostics and reliability visibility
   - Dashboard metrics/checklist: `src/app/page.tsx`
   - Sermon-level operation visibility: `src/app/sermons/[id]/page.tsx`
   - Health consistency diagnostics: `src/server/workflow/operationsDiagnostics.ts`, `src/app/health/page.tsx`
-  - Result: running/failed operation visibility and data/file consistency checks.
+  - Worker queue: `scripts/media-worker.ts`
+  - Result: running/failed/stale operation visibility, media worker heartbeats, stale job reclaim, and data/file consistency checks.
 
 ### Retry actions
 Failures can be retried directly from clip review cards:

@@ -18,8 +18,8 @@ describe("clip preview helpers", () => {
       }),
     ).toEqual([
       "/tmp/exported.mp4",
-      "/tmp/captioned.mp4",
       "/tmp/overlay.mp4",
+      "/tmp/captioned.mp4",
       "/tmp/rendered.mp4",
     ]);
   });

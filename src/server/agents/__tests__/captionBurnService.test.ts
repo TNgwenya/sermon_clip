@@ -77,6 +77,22 @@ describe("caption burn service validation", () => {
     expect(result.reason).toContain("already running");
   });
 
+  it("blocks caption burn while transcript review is still required", () => {
+    const result = __captionBurnTestUtils.validateCaptionBurnEligibility({
+      status: "APPROVED",
+      renderStatus: "COMPLETED",
+      captionStatus: "GENERATED",
+      captionBurnStatus: "NOT_BURNED",
+      renderedClipExists: true,
+      subtitleExists: true,
+      allowReburn: false,
+      transcriptSafetyStatus: "REVIEW_REQUIRED",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("Review the local-language transcript");
+  });
+
   it("builds caption burn metadata payload", () => {
     const burnedAt = new Date("2026-06-17T23:59:00.000Z");
     const metadata = __captionBurnTestUtils.buildCaptionBurnMetadata({

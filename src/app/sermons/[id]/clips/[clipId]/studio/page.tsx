@@ -184,6 +184,9 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       hashtags: true,
       captionData: true,
       transcriptText: true,
+      transcriptSafetyStatus: true,
+      transcriptSafetyReasons: true,
+      transcriptSafetyReviewedAt: true,
       startTimeSeconds: true,
       endTimeSeconds: true,
       durationSeconds: true,
@@ -466,6 +469,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   );
   const preparedFinalReady = hasPreparedMedia && !preparedFinalNeedsUpdate;
   const latestExportRecords = exportHistoryWithFileState.filter((record) => record.isLatest).slice(0, 4);
+  const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
+  const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
 
   return (
     <ClipStudioPreviewProvider
@@ -505,7 +510,14 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 Score {clip.score.toFixed(1)}
               </StatusBadge>
               {clip.contextWarning ? <StatusBadge tone="warning">Needs context</StatusBadge> : null}
+              {transcriptReviewRequired ? <StatusBadge tone="warning">Transcript review needed</StatusBadge> : null}
+              {transcriptReviewed ? <StatusBadge tone="success">Transcript reviewed</StatusBadge> : null}
             </div>
+            {transcriptReviewRequired ? (
+              <p className="warning-banner">
+                Review the local-language wording before preparing this clip. Saving checked caption cues in Studio will clear this safety gate; otherwise captions, export, and posting will stay blocked.
+              </p>
+            ) : null}
           </div>
 
           <div className="clip-studio-topbar-actions">

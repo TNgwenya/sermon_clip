@@ -45,6 +45,7 @@ export type PastorProcessingJobRetryView = {
   type: string;
   status: string;
   updatedAt: Date;
+  heartbeatAt?: Date | null;
 };
 
 export const STALE_ACTIVE_PROCESSING_JOB_MS = 2 * 60 * 60 * 1000;
@@ -105,7 +106,8 @@ export function isStaleActiveProcessingJob(
     return false;
   }
 
-  return now.getTime() - job.updatedAt.getTime() > staleAfterMs;
+  const lastWorkerSignal = job.heartbeatAt ?? job.updatedAt;
+  return now.getTime() - lastWorkerSignal.getTime() > staleAfterMs;
 }
 
 export function derivePastorSermonWorkflow(input: PastorSermonWorkflowInput): PastorSermonWorkflow {

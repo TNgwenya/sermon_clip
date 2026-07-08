@@ -7,7 +7,8 @@ import {
   MINISTRY_TOPICS,
   type AiSermonIntelligence,
 } from "@/server/ai/sermonIntelligenceSchema";
-import { getOpenAiClient } from "@/server/ai/openaiClient";
+import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
+import { resolveOpenAIChatModel } from "@/server/ai/modelConfig";
 import {
   appendJobLog,
   createProcessingJob,
@@ -84,17 +85,23 @@ async function callIntelligenceAI(
   sermon: SermonContext,
   transcriptText: string,
 ): Promise<AiSermonIntelligence> {
-  const openai = getOpenAiClient(
-    "OPENAI_API_KEY is missing. Add it to your environment before generating intelligence.",
-  );
+  const model = resolveOpenAIChatModel("sermonIntelligence");
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+  const response = await createLoggedChatCompletion({
+    operation: "sermon_intelligence",
+    sermonId: sermon.id,
+    model,
     temperature: 0.2,
     messages: [
       { role: "system", content: buildIntelligenceSystemPrompt() },
       { role: "user", content: buildIntelligenceUserPrompt(sermon, transcriptText) },
     ],
+    promptVersion: "sermon-intelligence-v1",
+    metadata: {
+      transcriptCharacters: transcriptText.length,
+      language: sermon.language,
+    },
+    missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before generating intelligence.",
   });
 
   const rawContent = response.choices[0]?.message?.content ?? "";

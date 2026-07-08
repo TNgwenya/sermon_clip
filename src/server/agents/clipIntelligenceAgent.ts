@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import { ZodError } from "zod";
 
 import { prisma } from "@/lib/prisma";
@@ -46,9 +45,15 @@ import {
   type ClipVolumeTarget,
 } from "@/lib/clipVolumeTargets";
 import { type MinistryMomentRecord as PromptMinistryMomentRecord } from "@/server/ai/ministryMomentSchema";
+import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
+import { resolveOpenAIChatModel } from "@/server/ai/modelConfig";
 import { appendPipelineLog } from "@/server/agents/storage";
 import { updateSermonStatus } from "@/server/status/sermonStatus";
 import { refreshVideoSubjectTracking } from "@/server/agents/videoSubjectTrackingService";
+import {
+  decideClipTranscriptSafety,
+  mergeTranscriptSafetyBlocker,
+} from "@/server/agents/localLanguageTranscriptSafety";
 
 export type ClipWindow = {
   windowId: string;
@@ -118,7 +123,6 @@ type TranscriptSegmentRecord = {
   text: string;
 };
 
-const MODEL_NAME = "gpt-4o-mini";
 const WINDOW_STEP_SECONDS = 60;
 const MIN_WINDOW_SECONDS = 30;
 const MAX_WINDOW_SECONDS = 90;
@@ -1829,9 +1833,9 @@ type CandidateScopeResult = {
   formatWarnings: string[];
 };
 
-type BoundaryAdjustedCandidate = ClipJsonCandidate & BoundaryRefinedFields;
+type BoundaryAdjustedCandidate = ClipJsonCandidate & ClipCandidateRuntimeMetadata & BoundaryRefinedFields;
 
-type EnrichedClipCandidate = BoundaryAdjustedCandidate & {
+type EnrichedClipCandidate = BoundaryAdjustedCandidate & ClipCandidateRuntimeMetadata & {
   ministryMomentId?: string | null;
   smartClipCategory: string;
   intendedAudience: string;
@@ -1847,15 +1851,6 @@ type ExistingClipRange = {
   endTimeSeconds: number;
   durationSeconds: number;
 };
-
-function getOpenAiClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is missing. Add it to your environment before generating clips.");
-  }
-
-  return new OpenAI({ apiKey });
-}
 
 function formatSegmentLine(segment: TranscriptSegmentRecord): string {
   return `[${segment.startTimeSeconds.toFixed(1)} - ${segment.endTimeSeconds.toFixed(1)}] ${segment.text.trim()}`;
@@ -2119,15 +2114,24 @@ async function callClipModel(
   );
 
   const rawResponse = options?.rawResponseOverride ?? (await (async () => {
-    const client = getOpenAiClient();
-    const completion = await client.chat.completions.create({
-      model: MODEL_NAME,
+    const model = resolveOpenAIChatModel("clipSelection");
+    const completion = await createLoggedChatCompletion({
+      operation: "clip_selection",
+      sermonId: sermon.id,
+      model,
       response_format: { type: "json_object" },
       temperature: 0.2,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
+      promptVersion: "clip-selection-v1",
+      metadata: {
+        batchWindowCount: batch.length,
+        requestedCount: options?.requestedCount ?? MAX_BATCH_CLIPS,
+        transcriptCharacters: batch.reduce((total, window) => total + window.transcriptText.length, 0),
+      },
+      missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before generating clips.",
     });
 
     return completion.choices[0]?.message?.content ?? "";
@@ -2143,15 +2147,24 @@ async function callClipModel(
   } catch (error) {
     const validationError = formatClipParseError(error);
     const repaired = options?.repairResponseOverride ?? (await (async () => {
-      const client = getOpenAiClient();
-      const repairCompletion = await client.chat.completions.create({
-        model: MODEL_NAME,
+      const model = resolveOpenAIChatModel("clipRepair");
+      const repairCompletion = await createLoggedChatCompletion({
+        operation: "clip_selection_repair",
+        sermonId: sermon.id,
+        model,
         response_format: { type: "json_object" },
         temperature: 0,
         messages: [
           { role: "system", content: buildClipSelectionSystemPrompt() },
           { role: "user", content: buildClipRepairPrompt(rawResponse, validationError, batch) },
         ],
+        promptVersion: "clip-selection-repair-v1",
+        metadata: {
+          validationError: validationError.slice(0, 1000),
+          batchWindowCount: batch.length,
+          rawResponseCharacters: rawResponse.length,
+        },
+        missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before repairing generated clips.",
       });
 
       return repairCompletion.choices[0]?.message?.content ?? "";
@@ -2372,7 +2385,7 @@ export function buildSuggestionDeleteWhere(sermonId: string, targetCategory?: st
   };
 }
 
-function normalizeCandidate(candidate: ClipJsonCandidate): ClipJsonCandidate {
+function normalizeCandidate<T extends ClipJsonCandidate>(candidate: T): T {
   const durationSeconds = Number((candidate.endTimeSeconds - candidate.startTimeSeconds).toFixed(2));
   return {
     ...candidate,
@@ -2530,9 +2543,27 @@ export async function generateClipSuggestions(
         })
       : [];
 
+    const transcriptReadiness = assessTranscriptReadinessForClipping(segments);
+    const transcriptQualityMode = classifyTranscriptQualityForClipGeneration(transcriptReadiness);
+    await appendJobLog(
+      job.id,
+      `Transcript clip-generation mode: ${transcriptQualityMode}. ${transcriptReadiness.reason} Words: ${transcriptReadiness.wordCount}, meaningful segments: ${transcriptReadiness.meaningfulSegmentCount}.`,
+    );
+
     const windows = buildRollingWindows(segments, ministryMoments);
-    if (windows.length === 0) {
+    const transcriptRescueCandidates = transcriptQualityMode === "READY"
+      ? []
+      : buildLowTranscriptTimedFallbackCandidates(segments);
+
+    if (windows.length === 0 && transcriptRescueCandidates.length === 0) {
       throw new Error("Unable to build transcript windows suitable for clip generation.");
+    }
+
+    if (windows.length === 0) {
+      await appendJobLog(
+        job.id,
+        `Transcript windows were unavailable, but ${transcriptRescueCandidates.length} low-transcript rescue candidate(s) will be saved for pastor review.`,
+      );
     }
 
     const sermonContext: SermonContext = {
@@ -2544,7 +2575,7 @@ export async function generateClipSuggestions(
     };
 
     const batches = chunkWindows(windows);
-    const collected: ClipJsonCandidate[] = [];
+    const collected: ClipJsonCandidateWithRuntimeMetadata[] = [];
     let repairUsedCount = 0;
     const rejectedReasons: string[] = [];
 
@@ -2617,6 +2648,14 @@ export async function generateClipSuggestions(
       }
 
       collected.push(...scopedResult.candidates.map(normalizeCandidate));
+    }
+
+    if (transcriptRescueCandidates.length > 0) {
+      collected.push(...transcriptRescueCandidates.map(normalizeCandidate));
+      await appendJobLog(
+        job.id,
+        `Added ${transcriptRescueCandidates.length} low-transcript rescue candidate(s) to protect recall for uncertain transcript sections.`,
+      );
     }
 
     const boundaryAdjusted: EnrichedClipCandidate[] = [];
@@ -2790,42 +2829,63 @@ export async function generateClipSuggestions(
       }
 
       await tx.clipCandidate.createMany({
-        data: dedupedWithBoundaryFields.map((candidate) => ({
-          sermonId: sermon.id,
-          ministryMomentId: candidate.ministryMomentId ?? null,
-          smartClipCategory: candidate.smartClipCategory,
-          recommendationReason: candidate.reasonSelected,
-          intendedAudience: candidate.intendedAudience,
-          ministryValue: candidate.ministryValue,
-          socialValue: candidate.socialValue,
-          suggestedHook: candidate.suggestedHook ?? candidate.hook,
-          suggestedCaption: candidate.suggestedCaption ?? candidate.caption,
-          recommendationConfidence: candidate.recommendationConfidence ?? candidate.score / 10,
-          isAiGenerated: true,
-          isManuallyEdited: false,
-          startTimeSeconds: candidate.startTimeSeconds,
-          endTimeSeconds: candidate.endTimeSeconds,
-          durationSeconds: candidate.durationSeconds,
-          originalStartTimeSeconds: candidate.originalStartTimeSeconds,
-          originalEndTimeSeconds: candidate.originalEndTimeSeconds,
-          adjustedStartTimeSeconds: candidate.adjustedStartTimeSeconds,
-          adjustedEndTimeSeconds: candidate.adjustedEndTimeSeconds,
-          boundaryAdjustmentReason: candidate.boundaryAdjustmentReason,
-          boundaryQuality: candidate.boundaryQuality,
-          exportLayoutStrategy: "SMART_CROP",
-          transcriptText: candidate.transcriptText,
-          title: candidate.title,
-          hook: candidate.hook,
-          caption: candidate.caption,
-          hashtags: candidate.hashtags,
-          score: candidate.score,
-          reasonSelected: candidate.reasonSelected,
-          clipType: candidate.clipType,
-          riskLevel: candidate.riskLevel,
-          riskReasons: candidate.riskReasons,
-          contextWarning: candidate.contextWarning,
-          status: "SUGGESTED",
-        })),
+        data: dedupedWithBoundaryFields.map((candidate) => {
+          const transcriptSafety = decideClipTranscriptSafety({
+            sermonLanguage: sermon.language,
+            transcriptQualityMode,
+            candidate,
+          });
+          const safetyRequiresReview = transcriptSafety.status === "REVIEW_REQUIRED";
+
+          return {
+            sermonId: sermon.id,
+            ministryMomentId: candidate.ministryMomentId ?? null,
+            smartClipCategory: candidate.smartClipCategory,
+            recommendationReason: candidate.reasonSelected,
+            intendedAudience: candidate.intendedAudience,
+            ministryValue: candidate.ministryValue,
+            socialValue: candidate.socialValue,
+            suggestedHook: candidate.suggestedHook ?? candidate.hook,
+            suggestedCaption: candidate.suggestedCaption ?? candidate.caption,
+            recommendationConfidence: candidate.recommendationConfidence ?? candidate.score / 10,
+            isAiGenerated: true,
+            isManuallyEdited: false,
+            startTimeSeconds: candidate.startTimeSeconds,
+            endTimeSeconds: candidate.endTimeSeconds,
+            durationSeconds: candidate.durationSeconds,
+            originalStartTimeSeconds: candidate.originalStartTimeSeconds,
+            originalEndTimeSeconds: candidate.originalEndTimeSeconds,
+            adjustedStartTimeSeconds: candidate.adjustedStartTimeSeconds,
+            adjustedEndTimeSeconds: candidate.adjustedEndTimeSeconds,
+            boundaryAdjustmentReason: candidate.boundaryAdjustmentReason,
+            boundaryQuality: candidate.boundaryQuality,
+            exportLayoutStrategy: "SMART_CROP",
+            transcriptText: candidate.transcriptText,
+            transcriptSafetyStatus: transcriptSafety.status,
+            transcriptSafetyReasons: transcriptSafety.reasons,
+            title: candidate.title,
+            hook: candidate.hook,
+            caption: candidate.caption,
+            hashtags: candidate.hashtags,
+            score: candidate.score,
+            reasonSelected: candidate.reasonSelected,
+            clipType: candidate.clipType,
+            riskLevel: candidate.riskLevel,
+            riskReasons: candidate.riskReasons,
+            contextWarning: safetyRequiresReview ? true : candidate.contextWarning,
+            qualityLabel: safetyRequiresReview ? "NEEDS_EDITING" : undefined,
+            postReadyStatus: safetyRequiresReview ? "NEEDS_EDITING" : undefined,
+            postReadyBlockers: safetyRequiresReview ? mergeTranscriptSafetyBlocker([]) : undefined,
+            recommendedNextAction: safetyRequiresReview ? "REVIEW_CLIP" : undefined,
+            pastorFriendlyReason: safetyRequiresReview
+              ? "Review the local-language transcript before captions, export, or posting."
+              : undefined,
+            qualityWarnings: safetyRequiresReview
+              ? ["LOCAL_LANGUAGE_TRANSCRIPT_REVIEW_REQUIRED"]
+              : undefined,
+            status: "SUGGESTED",
+          };
+        }),
       });
     });
 

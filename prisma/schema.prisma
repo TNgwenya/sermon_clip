@@ -191,8 +191,8 @@ enum ClipExportLayoutStrategy {
   LEFT_FOCUS
   RIGHT_FOCUS
   FIT_BLURRED_BACKGROUND
-  // SMART_CROP is reserved for future AI framing (face detection, speaker tracking).
-  // Do not implement AI framing until explicitly requested.
+  // SMART_CROP uses stored subject tracking/manual crop data when available and
+  // falls back to full-stage framing when confidence is unsafe.
   SMART_CROP
 }
 
@@ -230,6 +230,38 @@ enum AssetFreshness {
   OUTDATED
   NEEDS_REGENERATION
   FAILED
+}
+
+enum ClipEditPlanStatus {
+  ACTIVE
+  SUPERSEDED
+}
+
+enum ClipArtifactKind {
+  RENDERED_SOURCE
+  CAPTIONED
+  OVERLAY
+  EXPORT
+  THUMBNAIL
+  REMOTE_PREVIEW
+}
+
+enum ClipArtifactStatus {
+  READY
+  FAILED
+  DELETED
+}
+
+enum AiInvocationStatus {
+  SUCCEEDED
+  FAILED
+  VALIDATION_FAILED
+}
+
+enum ClipTranscriptSafetyStatus {
+  TRUSTED
+  REVIEW_REQUIRED
+  REVIEWED
 }
 
 enum IntelligenceStatus {
@@ -499,6 +531,9 @@ model Sermon {
   subjectTracks         SermonSubjectTrack[]
   speakerTracks         SermonSpeakerTrack[]
   contentOpportunities  ContentOpportunity[]
+  clipEditPlans         ClipEditPlan[]
+  clipArtifacts         ClipArtifact[]
+  aiInvocations         AiInvocation[]
 }
 
 model BrandingSettings {
@@ -602,6 +637,10 @@ model ClipCandidate {
   thumbnailGeneratedAt             DateTime?
   thumbnailError                   String?
   transcriptText                   String
+  transcriptSafetyStatus           ClipTranscriptSafetyStatus    @default(TRUSTED)
+  transcriptSafetyReasons          Json?
+  transcriptSafetyReviewedAt       DateTime?
+  transcriptSafetyReviewedBy       String?
   title                            String
   hook                             String
   caption                          String
@@ -713,8 +752,12 @@ model ClipCandidate {
   ministryMoment                   MinistryMoment?               @relation(fields: [ministryMomentId], references: [id], onDelete: SetNull)
   relatedContentOpportunities      ContentOpportunity[]          @relation("RelatedClipContentOpportunities")
   videoSubjectTracks               VideoSubjectTrack[]
+  editPlans                        ClipEditPlan[]
+  artifacts                        ClipArtifact[]
+  aiInvocations                    AiInvocation[]
 
   @@index([sermonId])
+  @@index([sermonId, transcriptSafetyStatus])
   @@index([sermonId, smartClipCategory])
   @@index([ministryMomentId])
   @@index([overallPostScore])
@@ -754,11 +797,108 @@ model ProcessingJob {
   errorMessage      String?
   logs              String?
   generationSummary Json?
+  workerId          String?
+  heartbeatAt       DateTime?
+  attemptCount      Int                 @default(0)
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
   sermon            Sermon              @relation(fields: [sermonId], references: [id], onDelete: Cascade)
 
   @@index([sermonId])
+  @@index([status, createdAt])
+  @@index([workerId])
+  @@index([heartbeatAt])
+}
+
+model ClipEditPlan {
+  id                     String             @id @default(cuid())
+  clipCandidateId        String
+  sermonId               String
+  version                Int                @default(1)
+  status                 ClipEditPlanStatus @default(ACTIVE)
+  planHash               String
+  sourceStartTimeSeconds Float
+  sourceEndTimeSeconds   Float
+  cleanedDurationSeconds Float?
+  planJson               Json
+  cleanupPlanJson        Json?
+  captionCueHash         String?
+  cropPlanHash           String?
+  exportSettingsHash     String?
+  createdBy              String             @default("system")
+  createdReason          String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  sermon                 Sermon             @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  clipCandidate          ClipCandidate      @relation(fields: [clipCandidateId], references: [id], onDelete: Cascade)
+  artifacts              ClipArtifact[]
+
+  @@unique([clipCandidateId, version])
+  @@index([clipCandidateId, status])
+  @@index([sermonId])
+  @@index([planHash])
+  @@index([createdAt])
+}
+
+model ClipArtifact {
+  id              String             @id @default(cuid())
+  clipCandidateId String
+  sermonId        String
+  editPlanId      String?
+  kind            ClipArtifactKind
+  status          ClipArtifactStatus @default(READY)
+  freshness       AssetFreshness     @default(UP_TO_DATE)
+  format          ClipExportFormat?
+  planHash        String?
+  filePath        String?
+  objectKey       String?
+  publicUrl       String?
+  sizeBytes       Int?
+  durationSeconds Float?
+  errorMessage    String?
+  metadataJson    Json?
+  generatedAt     DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  sermon          Sermon             @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  clipCandidate   ClipCandidate      @relation(fields: [clipCandidateId], references: [id], onDelete: Cascade)
+  editPlan        ClipEditPlan?      @relation(fields: [editPlanId], references: [id], onDelete: SetNull)
+
+  @@index([clipCandidateId])
+  @@index([sermonId])
+  @@index([editPlanId])
+  @@index([kind])
+  @@index([status])
+  @@index([planHash])
+}
+
+model AiInvocation {
+  id                  String             @id @default(cuid())
+  sermonId            String?
+  clipCandidateId     String?
+  provider            String             @default("openai")
+  operation           String
+  model               String
+  promptVersion       String?
+  requestHash         String?
+  status              AiInvocationStatus
+  inputTokens         Int?
+  outputTokens        Int?
+  totalTokens         Int?
+  estimatedCostMicros BigInt?
+  latencyMs           Int?
+  errorMessage        String?
+  metadataJson        Json?
+  createdAt           DateTime           @default(now())
+  sermon              Sermon?            @relation(fields: [sermonId], references: [id], onDelete: SetNull)
+  clipCandidate       ClipCandidate?     @relation(fields: [clipCandidateId], references: [id], onDelete: SetNull)
+
+  @@index([sermonId])
+  @@index([clipCandidateId])
+  @@index([operation])
+  @@index([model])
+  @@index([status])
+  @@index([createdAt])
 }
 
 // ─── Sermon Intelligence Foundation ───────────────────────────────────────────
@@ -957,21 +1097,21 @@ model ContentOpportunity {
 }
 
 model SocialAccount {
-  id              String                 @id @default(cuid())
-  platform        PostingPlatform
-  label           String
-  handle          String?
-  status          SocialAccountStatus    @default(CONNECTED)
-  externalProvider String?
+  id                String                 @id @default(cuid())
+  platform          PostingPlatform
+  label             String
+  handle            String?
+  status            SocialAccountStatus    @default(CONNECTED)
+  externalProvider  String?
   externalAccountId String?
-  externalPlatform String?
-  profileUrl      String?
-  metadataJson    Json?
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
-  credentials     SocialCredential[]
-  scheduledPosts  ScheduledPost[]
-  metricSnapshots SocialMetricSnapshot[]
+  externalPlatform  String?
+  profileUrl        String?
+  metadataJson      Json?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  credentials       SocialCredential[]
+  scheduledPosts    ScheduledPost[]
+  metricSnapshots   SocialMetricSnapshot[]
 
   @@unique([externalProvider, externalAccountId])
   @@index([platform])

@@ -40,6 +40,11 @@ import {
   remapTimelineRangeToCleanedTime,
   type SpeechCleanupCutPlan,
 } from "@/lib/speechCleanupPlan";
+import {
+  recordClipArtifact,
+  upsertActiveClipEditPlanForClip,
+} from "@/server/agents/clipEditPlanService";
+import { validateTranscriptSafetyForPublishing } from "@/server/agents/localLanguageTranscriptSafety";
 
 type CaptionBurnOptions = {
   ffmpegPath?: string;
@@ -61,6 +66,7 @@ type ClipForCaptionBurn = Pick<
   | "captionData"
   | "captionBurnStatus"
   | "captionedVideoPath"
+  | "transcriptSafetyStatus"
 >;
 
 type CaptionBurnEligibilityInput = {
@@ -71,6 +77,7 @@ type CaptionBurnEligibilityInput = {
   renderedClipExists: boolean;
   subtitleExists: boolean;
   allowReburn: boolean;
+  transcriptSafetyStatus?: ClipCandidate["transcriptSafetyStatus"];
 };
 
 type CaptionBurnEligibility = {
@@ -613,6 +620,13 @@ export function validateCaptionBurnEligibility(input: CaptionBurnEligibilityInpu
     return { ok: false, reason: "Clip must be approved before caption burn." };
   }
 
+  const transcriptSafety = validateTranscriptSafetyForPublishing({
+    transcriptSafetyStatus: input.transcriptSafetyStatus ?? "TRUSTED",
+  });
+  if (!transcriptSafety.ok) {
+    return { ok: false, reason: transcriptSafety.reason };
+  }
+
   if (input.captionBurnStatus === "BURNING") {
     return { ok: false, reason: "Caption burn is already running for this clip." };
   }
@@ -686,6 +700,7 @@ async function loadClipForCaptionBurn(clipId: string): Promise<ClipForCaptionBur
       captionData: true,
       captionBurnStatus: true,
       captionedVideoPath: true,
+      transcriptSafetyStatus: true,
     },
   });
 
@@ -994,6 +1009,7 @@ async function burnCaptionsForClipCore(
     renderedClipExists,
     subtitleExists,
     allowReburn: Boolean(options?.allowReburn),
+    transcriptSafetyStatus: clip.transcriptSafetyStatus,
   });
 
   if (!eligibility.ok) {
@@ -1006,6 +1022,12 @@ async function burnCaptionsForClipCore(
 
   const existingOutput = await fileExists(captionedVideoPath);
   if (existingOutput && !options?.force && !options?.allowReburn) {
+    await upsertActiveClipEditPlanForClip({
+      clipCandidateId: clip.id,
+      createdBy: "caption_burn",
+      createdReason: "existing_captioned_video_reused",
+    });
+    const outputStat = await stat(captionedVideoPath).catch(() => null);
     const burnedAt = new Date();
     const brandingSettings = await getBrandingSettings();
     const captionStylePresetId = resolveClipCaptionStylePresetId(
@@ -1027,6 +1049,17 @@ async function burnCaptionsForClipCore(
       }),
     });
     await markCaptionBurnAssetCompleted(clip.id, false);
+    await recordClipArtifact({
+      clipCandidateId: clip.id,
+      kind: "CAPTIONED",
+      filePath: captionedVideoPath,
+      sizeBytes: outputStat?.size ?? null,
+      metadata: {
+        reusedExistingFile: true,
+        captionStylePresetId,
+        captionPosition,
+      },
+    });
 
     await appendJobLog(jobId, `Reused existing captioned video for clip ${clip.id}.`);
     await appendPipelineLog(clip.sermonId, `Reused captioned video for clip ${clip.id}.`);
@@ -1139,6 +1172,23 @@ async function burnCaptionsForClipCore(
     }),
   });
   await markCaptionBurnAssetCompleted(clip.id, true);
+  await upsertActiveClipEditPlanForClip({
+    clipCandidateId: clip.id,
+    createdBy: "caption_burn",
+    createdReason: "caption_burn_completed",
+  });
+  await recordClipArtifact({
+    clipCandidateId: clip.id,
+    kind: "CAPTIONED",
+    filePath: captionedVideoPath,
+    sizeBytes: outputStat.size,
+    metadata: {
+      reusedExistingFile: false,
+      captionStylePresetId,
+      captionPosition,
+      wordHighlightOverlay: shouldUseWordHighlightOverlay(clip.captionData),
+    },
+  });
 
   await appendJobLog(jobId, `Caption burn completed for clip ${clip.id}.`);
   await appendPipelineLog(clip.sermonId, `Caption burn completed for clip ${clip.id}.`);
@@ -1184,6 +1234,7 @@ export async function burnCaptionsIntoRenderedClip(
     renderedClipExists: await fileExists(renderedPath),
     subtitleExists: await fileExists(subtitlePath),
     allowReburn: Boolean(options?.allowReburn),
+    transcriptSafetyStatus: clip.transcriptSafetyStatus,
   });
 
   if (!eligibility.ok) {
@@ -1214,6 +1265,12 @@ export async function burnCaptionsIntoRenderedClip(
     if (didClaimBurnStart) {
       await failCaptionBurn(clip.id, message).catch(() => undefined);
     }
+    await recordClipArtifact({
+      clipCandidateId: clip.id,
+      kind: "CAPTIONED",
+      status: "FAILED",
+      errorMessage: message,
+    }).catch(() => undefined);
     await markJobFailed(job.id, message, "Caption burn failed.");
     await appendPipelineLog(clip.sermonId, `Caption burn failed for clip ${clip.id}: ${message}`);
     throw new Error(message);

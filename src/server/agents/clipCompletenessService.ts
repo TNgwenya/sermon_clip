@@ -11,7 +11,8 @@ import {
   type TranscriptSegmentBoundary,
 } from "@/server/agents/clipBoundaryRefinement";
 import { analyzeClipCoherence } from "@/server/agents/clipCoherenceAnalysis";
-import { getOpenAiClient } from "@/server/ai/openaiClient";
+import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
+import { resolveOpenAIChatModel } from "@/server/ai/modelConfig";
 
 export const CLIP_COMPLETENESS_ACTIONS = [
   "KEEP_AS_IS",
@@ -106,7 +107,6 @@ type AiCompletenessReview = {
   reason: string;
 };
 
-const MODEL_NAME = "gpt-4o-mini";
 const MAX_SETUP_EXTENSION_SECONDS = 12;
 const MAX_CONCLUSION_EXTENSION_SECONDS = 18;
 const UNRESOLVED_PRONOUN_PATTERN = /^(it|they|them|he|she|him|her|these|those)\b/i;
@@ -799,17 +799,23 @@ async function callCompletenessModel(
     return parseAiResponse(rawResponseOverride);
   }
 
-  const client = getOpenAiClient(
-    "OPENAI_API_KEY is missing. Add it to your environment before reviewing clip completeness.",
-  );
-  const completion = await client.chat.completions.create({
-    model: MODEL_NAME,
+  const model = resolveOpenAIChatModel("clipCompleteness");
+  const completion = await createLoggedChatCompletion({
+    operation: "clip_completeness_review",
+    model,
     response_format: { type: "json_object" },
     temperature: 0.1,
     messages: [
       { role: "system", content: buildSystemPrompt() },
       { role: "user", content: buildUserPrompt(entries, segments) },
     ],
+    promptVersion: "clip-completeness-v1",
+    metadata: {
+      candidateCount: entries.length,
+      transcriptSegmentCount: segments.length,
+      transcriptCharacters: entries.reduce((total, entry) => total + entry.candidate.transcriptText.length, 0),
+    },
+    missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before reviewing clip completeness.",
   });
 
   return parseAiResponse(completion.choices[0]?.message?.content ?? "");

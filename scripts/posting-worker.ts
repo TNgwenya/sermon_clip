@@ -246,6 +246,8 @@ async function processDuePosts(): Promise<void> {
         });
       }
     }
+  } catch (error) {
+    logger.error("due check failed; will retry", errorFields(error));
   } finally {
     posting = false;
   }

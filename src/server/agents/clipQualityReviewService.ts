@@ -1,7 +1,8 @@
 import { z, ZodError } from "zod";
 
-import { getOpenAiClient } from "@/server/ai/openaiClient";
 import type { ClipJsonCandidate } from "@/server/ai/clipJsonSchema";
+import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
+import { resolveOpenAIChatModel } from "@/server/ai/modelConfig";
 
 export const CLIP_QUALITY_RECOMMENDED_ACTIONS = ["KEEP", "EXTEND", "SHORTEN", "MERGE", "REJECT", "NEEDS_REVIEW"] as const;
 export const CLIP_QUALITY_CATEGORIES = [
@@ -85,8 +86,6 @@ export type ClipQualityReview = {
 };
 
 export type ClipQualityReviewedCandidate<T extends ClipQualityCandidateInput> = T & ClipQualityReview;
-
-const MODEL_NAME = "gpt-4o-mini";
 
 const aiReviewSchema = z.object({
   reviews: z.array(z.object({
@@ -603,17 +602,22 @@ async function callQualityModel(candidates: ClipQualityCandidateInput[], rawResp
     return parseQualityResponse(rawResponseOverride);
   }
 
-  const client = getOpenAiClient(
-    "OPENAI_API_KEY is missing. Add it to your environment before reviewing clip quality.",
-  );
-  const completion = await client.chat.completions.create({
-    model: MODEL_NAME,
+  const model = resolveOpenAIChatModel("clipQuality");
+  const completion = await createLoggedChatCompletion({
+    operation: "clip_quality_review",
+    model,
     response_format: { type: "json_object" },
     temperature: 0.1,
     messages: [
       { role: "system", content: buildSystemPrompt() },
       { role: "user", content: buildUserPrompt(candidates) },
     ],
+    promptVersion: "clip-quality-v1",
+    metadata: {
+      candidateCount: candidates.length,
+      transcriptCharacters: candidates.reduce((total, candidate) => total + candidate.transcriptText.length, 0),
+    },
+    missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before reviewing clip quality.",
   });
 
   return parseQualityResponse(completion.choices[0]?.message?.content ?? "");

@@ -55,6 +55,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const readyClips = await prisma.clipCandidate.findMany({
     where: {
       id: { in: clipIds },
+      transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
       OR: [
         { exportStatus: "COMPLETED" },
         { status: "EXPORTED" },

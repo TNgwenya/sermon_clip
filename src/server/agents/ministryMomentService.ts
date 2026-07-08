@@ -6,7 +6,8 @@ import {
   ministryMomentResponseSchema,
   type MinistryMomentRecord,
 } from "@/server/ai/ministryMomentSchema";
-import { getOpenAiClient } from "@/server/ai/openaiClient";
+import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
+import { resolveOpenAIChatModel } from "@/server/ai/modelConfig";
 import { appendPipelineLog } from "@/server/agents/storage";
 import {
   applyInferredSermonWindowToSegments,
@@ -330,19 +331,25 @@ async function loadContext(sermonId: string): Promise<SermonContextPayload | nul
 }
 
 async function parseMomentResponse(context: SermonContextPayload): Promise<MinistryMomentRecord[]> {
-  const client = getOpenAiClient(
-    "OPENAI_API_KEY is missing. Add it to your environment before detecting ministry moments.",
-  );
   const transcriptPrompt = buildUserPrompt(context);
+  const model = resolveOpenAIChatModel("ministryMoment");
 
-  const response = await client.chat.completions.create({
-    model: "gpt-4o-mini",
+  const response = await createLoggedChatCompletion({
+    operation: "ministry_moment_detection",
+    sermonId: context.id,
+    model,
     temperature: 0.2,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: buildSystemPrompt() },
       { role: "user", content: transcriptPrompt },
     ],
+    promptVersion: "ministry-moment-v1",
+    metadata: {
+      transcriptSegmentCount: context.segments.length,
+      language: context.language,
+    },
+    missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before detecting ministry moments.",
   });
 
   const rawContent = response.choices[0]?.message?.content ?? "";

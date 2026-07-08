@@ -26,10 +26,86 @@ const {
   markJobSucceeded,
 } = await import("../src/server/agents/processing");
 
+function positiveNumber(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 const workerId = process.env.MEDIA_WORKER_ID?.trim() || `${os.hostname()}-media-worker`;
-const pollIntervalMs = Number(process.env.MEDIA_WORKER_POLL_SECONDS ?? 15) * 1000;
+const pollIntervalMs = positiveNumber(process.env.MEDIA_WORKER_POLL_SECONDS, 15) * 1000;
+const heartbeatIntervalMs = positiveNumber(process.env.MEDIA_WORKER_HEARTBEAT_SECONDS, 30) * 1000;
+const staleJobMs = positiveNumber(process.env.MEDIA_WORKER_STALE_JOB_MINUTES, 60) * 60 * 1000;
+const maxWorkerAttempts = Math.max(1, Math.floor(positiveNumber(process.env.MEDIA_WORKER_MAX_ATTEMPTS, 2)));
 const logger = createWorkerLogger("media");
 let processing = false;
+
+function staleJobCutoff(): Date {
+  return new Date(Date.now() - staleJobMs);
+}
+
+function staleRunningJobWhere(cutoff: Date) {
+  return {
+    status: "RUNNING" as const,
+    OR: [
+      { heartbeatAt: { lt: cutoff } },
+      { heartbeatAt: null, updatedAt: { lt: cutoff } },
+    ],
+  };
+}
+
+async function failExhaustedStaleJobs(): Promise<void> {
+  const cutoff = staleJobCutoff();
+  const staleJobs = await prisma.processingJob.findMany({
+    where: {
+      ...staleRunningJobWhere(cutoff),
+      attemptCount: { gte: maxWorkerAttempts },
+    },
+    orderBy: { updatedAt: "asc" },
+    take: 10,
+  });
+
+  for (const job of staleJobs) {
+    const message = `Media worker lease expired after ${job.attemptCount}/${maxWorkerAttempts} claim attempt(s).`;
+    await markJobFailed(job.id, message, `${message} Start a new retry from the sermon recovery tools.`);
+    logger.warn("stale job marked failed", {
+      job: job.id,
+      sermon: job.sermonId,
+      type: job.type,
+      attempts: job.attemptCount,
+    });
+  }
+}
+
+function startJobHeartbeat(jobId: string): () => void {
+  const pulse = async () => {
+    try {
+      await prisma.processingJob.updateMany({
+        where: {
+          id: jobId,
+          status: "RUNNING",
+          workerId,
+        },
+        data: {
+          heartbeatAt: new Date(),
+        },
+      });
+    } catch (error) {
+      logger.warn("heartbeat failed", {
+        job: jobId,
+        ...errorFields(error),
+      });
+    }
+  };
+
+  void pulse();
+  const interval = setInterval(() => {
+    void pulse();
+  }, heartbeatIntervalMs);
+
+  return () => {
+    clearInterval(interval);
+  };
+}
 
 async function runCaptionBurnJob(sermonId: string): Promise<string> {
   const clips = await prisma.clipCandidate.findMany({
@@ -175,9 +251,16 @@ async function runOverlayAndExportJob(sermonId: string): Promise<string> {
 }
 
 async function claimNextJob(): Promise<ProcessingJob | null> {
+  await failExhaustedStaleJobs();
+
+  const cutoff = staleJobCutoff();
   const next = await prisma.processingJob.findFirst({
     where: {
-      status: "PENDING",
+      attemptCount: { lt: maxWorkerAttempts },
+      OR: [
+        { status: "PENDING" },
+        staleRunningJobWhere(cutoff),
+      ],
     },
     orderBy: {
       createdAt: "asc",
@@ -191,13 +274,20 @@ async function claimNextJob(): Promise<ProcessingJob | null> {
   const claimed = await prisma.processingJob.updateMany({
     where: {
       id: next.id,
-      status: "PENDING",
+      attemptCount: { lt: maxWorkerAttempts },
+      OR: [
+        { status: "PENDING" },
+        staleRunningJobWhere(cutoff),
+      ],
     },
     data: {
       status: "RUNNING",
       startedAt: new Date(),
+      completedAt: null,
+      heartbeatAt: new Date(),
+      workerId,
+      attemptCount: { increment: 1 },
       errorMessage: null,
-      logs: `[${new Date().toISOString()}] Claimed by ${workerId}.`,
     },
   });
 
@@ -297,7 +387,8 @@ async function processNextJob(): Promise<void> {
 
     const startedAt = Date.now();
     logger.info("claimed job", { job: job.id, sermon: job.sermonId, type: job.type });
-    await appendJobLog(job.id, `Started ${job.type} on ${workerId}.`);
+    await appendJobLog(job.id, `Claimed and started ${job.type} on ${workerId}.`);
+    const stopHeartbeat = startJobHeartbeat(job.id);
 
     try {
       const summary = await runJob(job);
@@ -317,6 +408,8 @@ async function processNextJob(): Promise<void> {
         duration: formatDuration(Date.now() - startedAt),
         error: message,
       });
+    } finally {
+      stopHeartbeat();
     }
   } catch (error) {
     logger.error("poll failed; will retry", errorFields(error));
@@ -329,6 +422,9 @@ async function main(): Promise<void> {
   logger.banner("media worker started", {
     workerId,
     pollEvery: `${pollIntervalMs / 1000}s`,
+    heartbeatEvery: `${heartbeatIntervalMs / 1000}s`,
+    staleAfter: `${staleJobMs / 60_000}m`,
+    maxAttempts: maxWorkerAttempts,
   });
 
   await processNextJob();

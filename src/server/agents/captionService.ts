@@ -21,6 +21,7 @@ import {
   markCaptionAssetCompleted,
   markCaptionAssetFailed,
 } from "@/server/regeneration/dependencies";
+import { validateTranscriptSafetyForPublishing } from "@/server/agents/localLanguageTranscriptSafety";
 
 type CaptionGenerationOptions = {
   force?: boolean;
@@ -42,6 +43,7 @@ type ClipForCaption = Pick<
   | "captionStatus"
   | "captionFreshness"
   | "captionData"
+  | "transcriptSafetyStatus"
 >;
 
 type TranscriptSegment = {
@@ -162,11 +164,23 @@ function resolveClipDurationSeconds(clip: Pick<ClipForCaption, "startTimeSeconds
   return Number((boundaries.endTimeSeconds - boundaries.startTimeSeconds).toFixed(3));
 }
 
-function validateCaptionGenerationEligibility(clip: Pick<ClipForCaption, "id" | "status">): { ok: true } | { ok: false; reason: string } {
+function validateCaptionGenerationEligibility(
+  clip: Pick<ClipForCaption, "id" | "status"> & { transcriptSafetyStatus?: ClipForCaption["transcriptSafetyStatus"] },
+): { ok: true } | { ok: false; reason: string } {
   if (clip.status !== "APPROVED" && clip.status !== "EXPORTED") {
     return {
       ok: false,
       reason: `Clip ${clip.id} must be approved before captions can be generated.`,
+    };
+  }
+
+  const transcriptSafety = validateTranscriptSafetyForPublishing({
+    transcriptSafetyStatus: clip.transcriptSafetyStatus ?? "TRUSTED",
+  });
+  if (!transcriptSafety.ok) {
+    return {
+      ok: false,
+      reason: transcriptSafety.reason,
     };
   }
 
@@ -405,6 +419,7 @@ async function loadClipForCaption(clipId: string): Promise<ClipForCaption> {
       captionStatus: true,
       captionFreshness: true,
       captionData: true,
+      transcriptSafetyStatus: true,
     },
   });
 
@@ -735,6 +750,7 @@ export async function generateCaptionsForApprovedClips(
       captionStatus: true,
       captionFreshness: true,
       captionData: true,
+      transcriptSafetyStatus: true,
     },
   });
 

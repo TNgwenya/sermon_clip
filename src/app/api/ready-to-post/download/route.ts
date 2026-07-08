@@ -35,6 +35,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   const clips = await prisma.clipCandidate.findMany({
     where: {
       ...(selectedClipIds.length > 0 ? { id: { in: selectedClipIds } } : {}),
+      transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
       OR: [
         { exportStatus: "COMPLETED" },
         { status: "EXPORTED" },

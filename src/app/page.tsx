@@ -236,8 +236,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
 
   const allClips = sermons.flatMap((sermon) => sermon.clipCandidates.map((clip) => ({ ...clip, sermon })));
   const postReadyCount = allClips.filter((clip) => (clip.qualityLabel ?? clip.postReadyStatus) === "POST_READY").length;
-  const reviewFirstCount = allClips.filter((clip) => (clip.qualityLabel ?? clip.postReadyStatus) === "GOOD_NEEDS_REVIEW").length;
-  const needsEditingCount = allClips.filter((clip) => (clip.qualityLabel ?? clip.postReadyStatus) === "NEEDS_EDITING").length;
   const exportedCount = allClips.filter((clip) => clip.exportStatus === "COMPLETED" || clip.status === "EXPORTED").length;
   const processingCount = sermons.filter((sermon) => processingStatuses.includes(sermon.status)).length + metrics.runningOperations;
   const failedSermons = sermons.filter((sermon) => sermon.status === "FAILED");
@@ -275,7 +273,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
   const priorityActionLabel = priorityState === "attention"
     ? failedSermonCount > 0
       ? "Open sermon"
-      : "Open health check"
+      : "Review recovery steps"
     : priorityState === "ready"
       ? "Open publishing desk"
       : priorityState === "resume"
@@ -284,7 +282,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
   const attentionDetail = failedOperationCount > 0
     ? outdatedAssetCount > 0
       ? "A failed job and stale clip media need recovery before posting."
-      : "A background job or clip asset failed. Open Health to inspect and retry it."
+      : "A background job or clip file failed. Open the recovery view to inspect and retry it."
     : outdatedAssetCount > 0
       ? "Some approved clip media is stale. Refresh it before posting."
       : "A sermon failed while processing. Open it to retry the failed step.";
@@ -370,8 +368,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
         <StatCard label="Sermons" value={sermons.length} detail="In workspace" />
         <StatCard label="Suggested clips" value={metrics.clipsGenerated} detail="Found moments" tone="accent" />
         <StatCard label="Post-ready" value={postReadyCount} detail="Passed checks" tone="success" />
-        <StatCard label="Review first" value={reviewFirstCount} detail="Good with notes" tone="warning" />
-        <StatCard label="Needs editing" value={needsEditingCount} detail="Before posting" tone="warning" />
         <StatCard label="Prepared files" value={exportedCount || metrics.clipsExported} detail="Downloads" tone="success" />
       </section>
 

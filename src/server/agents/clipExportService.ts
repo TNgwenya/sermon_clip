@@ -42,6 +42,11 @@ import { type ClipBrandingConfig, type WatermarkPosition } from "@/lib/clipBrand
 import { getBrandingOverlayDimensions, renderBrandingOverlayPng } from "@/server/agents/brandingOverlay";
 import { ensureClipThumbnail } from "@/server/agents/clipThumbnailService";
 import { resolveSmartCropCenter, resolveSmartCropTimeline } from "@/server/agents/videoSubjectTrackingService";
+import {
+  recordClipArtifact,
+  upsertActiveClipEditPlanForClip,
+} from "@/server/agents/clipEditPlanService";
+import { validateTranscriptSafetyForPublishing } from "@/server/agents/localLanguageTranscriptSafety";
 
 export type ExportPreset = "VERTICAL_9_16" | "HORIZONTAL_16_9" | "SQUARE_1_1";
 export type ExportLayoutStrategy =
@@ -95,6 +100,7 @@ type ClipForExport = Pick<
   | "overlayVideoPath"
   | "exportStatus"
   | "exportFormat"
+  | "transcriptSafetyStatus"
 > & {
   sermon?: {
     title: string;
@@ -413,12 +419,21 @@ async function failExport(clipId: string, message: string): Promise<void> {
 }
 
 function validateExportEligibility(input: {
-  clip: Pick<ClipForExport, "renderStatus" | "exportStatus" | "exportFormat"> & Record<string, unknown>;
+  clip: Pick<ClipForExport, "renderStatus" | "exportStatus" | "exportFormat"> &
+    { transcriptSafetyStatus?: ClipForExport["transcriptSafetyStatus"] } &
+    Record<string, unknown>;
   sourcePath: string | null;
   sourceExists: boolean;
   format: ExportPreset;
   allowReexport: boolean;
 }): { ok: boolean; reason?: string; shouldMarkFailed?: boolean } {
+  const transcriptSafety = validateTranscriptSafetyForPublishing({
+    transcriptSafetyStatus: input.clip.transcriptSafetyStatus ?? "TRUSTED",
+  });
+  if (!transcriptSafety.ok) {
+    return { ok: false, reason: transcriptSafety.reason, shouldMarkFailed: false };
+  }
+
   if (input.clip.renderStatus !== "COMPLETED") {
     return { ok: false, reason: "Clip must be rendered before export.", shouldMarkFailed: false };
   }
@@ -497,6 +512,7 @@ async function loadClip(clipId: string): Promise<ClipForExport> {
       overlayVideoPath: true,
       exportStatus: true,
       exportFormat: true,
+      transcriptSafetyStatus: true,
       sermon: {
         select: {
           title: true,
@@ -524,12 +540,12 @@ export function resolvePreparedExportSource(
     | "overlayVideoPath"
   >,
 ): string | null {
-  if (clip.captionBurnStatus === "COMPLETED" && clip.captionedVideoPath) {
-    return clip.captionedVideoPath;
-  }
-
   if (clip.overlayStatus === "COMPLETED" && clip.overlayVideoPath) {
     return clip.overlayVideoPath;
+  }
+
+  if (clip.captionBurnStatus === "COMPLETED" && clip.captionedVideoPath) {
+    return clip.captionedVideoPath;
   }
 
   return clip.renderedFilePath;
@@ -551,6 +567,11 @@ export async function exportClipWithPreset(
   const clip = await loadClip(clipId);
   await ensureSermonFolders(clip.sermonId);
 
+  const transcriptSafety = validateTranscriptSafetyForPublishing(clip);
+  if (!transcriptSafety.ok) {
+    throw new Error(transcriptSafety.reason);
+  }
+
   const sourcePath = resolvePreparedExportSource(clip);
   const sourceExists = sourcePath ? await fileHasBytes(sourcePath) : false;
   const outputPath = resolveExportOutputPath({
@@ -570,6 +591,12 @@ export async function exportClipWithPreset(
   const outputExists = await fileHasBytes(outputPath);
 
   if (outputExists && !options?.allowReexport && !options?.force) {
+    await upsertActiveClipEditPlanForClip({
+      clipCandidateId: clip.id,
+      createdBy: "export",
+      createdReason: "existing_export_reused",
+    });
+    const outputStats = await stat(outputPath).catch(() => null);
     await prisma.clipCandidate.update({
       where: { id: clip.id },
       data: {
@@ -591,6 +618,17 @@ export async function exportClipWithPreset(
       exportedFilePath: outputPath,
     }, { ffmpegPath: options?.ffmpegPath });
     await markExportAssetCompleted(clip.id, false);
+    await recordClipArtifact({
+      clipCandidateId: clip.id,
+      kind: "EXPORT",
+      format,
+      filePath: outputPath,
+      sizeBytes: outputStats?.size ?? null,
+      metadata: {
+        reusedExistingFile: true,
+        layoutStrategy,
+      },
+    });
 
     return {
       clipId: clip.id,
@@ -651,6 +689,11 @@ export async function exportClipWithPreset(
   const startedAt = Date.now();
 
   try {
+    await upsertActiveClipEditPlanForClip({
+      clipCandidateId: clip.id,
+      createdBy: "export",
+      createdReason: "export_requested",
+    });
     await markJobRunning(job.id);
     await appendJobLog(job.id, `Export requested for clip ${clip.id} with format ${format}.`);
 
@@ -912,6 +955,20 @@ export async function exportClipWithPreset(
       await appendJobLog(job.id, `Clip poster is not ready yet for ${clip.id}: ${thumbnail.error}`);
     }
     await markExportAssetCompleted(clip.id, true);
+    await recordClipArtifact({
+      clipCandidateId: clip.id,
+      kind: "EXPORT",
+      format,
+      filePath: outputPath,
+      sizeBytes: outputStats.size,
+      metadata: {
+        reusedExistingFile: false,
+        requestedLayoutStrategy: layoutStrategy,
+        effectiveLayoutStrategy,
+        framingDecision: framingDecision.reasonCodes,
+        brandingOverlayApplied: overlayEnabled,
+      },
+    });
 
     const elapsedMs = Date.now() - startedAt;
     await appendPipelineLog(clip.sermonId, `Clip ${clip.id} export ${format} completed in ${elapsedMs}ms.`);
@@ -926,6 +983,17 @@ export async function exportClipWithPreset(
     const message = error instanceof Error ? error.message : "Unknown clip export error.";
     await unlink(getTempPath(outputPath)).catch(() => undefined);
     await failExport(clip.id, message);
+    await recordClipArtifact({
+      clipCandidateId: clip.id,
+      kind: "EXPORT",
+      status: "FAILED",
+      format,
+      filePath: outputPath,
+      errorMessage: message,
+      metadata: {
+        layoutStrategy,
+      },
+    }).catch(() => undefined);
     await markJobFailed(job.id, message, `Clip ${clip.id} export failed.`);
     await appendPipelineLog(clip.sermonId, `Clip ${clip.id} export failed: ${message}`);
     throw new Error(message);

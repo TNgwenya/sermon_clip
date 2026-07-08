@@ -63,6 +63,37 @@ describe("clip export service", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("blocks export while transcript review is still required", () => {
+    const result = __clipExportTestUtils.validateExportEligibility({
+      clip: {
+        id: "clip-1",
+        sermonId: "sermon-1",
+        status: "APPROVED",
+        startTimeSeconds: 10,
+        endTimeSeconds: 70,
+        adjustedStartTimeSeconds: null,
+        adjustedEndTimeSeconds: null,
+        renderStatus: "COMPLETED",
+        renderedFilePath: "/tmp/rendered.mp4",
+        captionBurnStatus: "NOT_BURNED",
+        captionedVideoPath: null,
+        overlayStatus: "NOT_RENDERED",
+        overlayVideoPath: null,
+        exportStatus: "NOT_EXPORTED",
+        exportFormat: null,
+        transcriptSafetyStatus: "REVIEW_REQUIRED",
+      },
+      sourcePath: "/tmp/rendered.mp4",
+      sourceExists: true,
+      format: "VERTICAL_9_16",
+      allowReexport: false,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("Review the local-language transcript");
+    expect(result.shouldMarkFailed).toBe(false);
+  });
+
   it("rejects missing rendered clip source", () => {
     const result = __clipExportTestUtils.validateExportEligibility({
       clip: {
@@ -173,7 +204,7 @@ describe("clip export service", () => {
     expect(metadata.exportedAt).toBeInstanceOf(Date);
   });
 
-  it("prefers captioned prepared output as final export source", () => {
+  it("prefers overlay prepared output as final export source", () => {
     const source = __clipExportTestUtils.resolvePreparedExportSource({
       renderedFilePath: "/tmp/rendered.mp4",
       captionBurnStatus: "COMPLETED",
@@ -182,7 +213,7 @@ describe("clip export service", () => {
       overlayVideoPath: "/tmp/overlay.mp4",
     });
 
-    expect(source).toBe("/tmp/captioned.mp4");
+    expect(source).toBe("/tmp/overlay.mp4");
   });
 
   it("builds center-crop filter for vertical 9:16", () => {

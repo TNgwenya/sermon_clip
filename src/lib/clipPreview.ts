@@ -30,8 +30,8 @@ type ClipPreviewCandidateConfig = {
 
 const BEST_PREVIEW_CANDIDATES: ClipPreviewCandidateConfig[] = [
   { variant: "exported", pathKey: "exportedFilePath", freshnessKey: "exportFreshness" },
-  { variant: "captioned", pathKey: "captionedVideoPath", freshnessKey: "captionBurnFreshness" },
   { variant: "overlay", pathKey: "overlayVideoPath", freshnessKey: "overlayFreshness" },
+  { variant: "captioned", pathKey: "captionedVideoPath", freshnessKey: "captionBurnFreshness" },
   { variant: "rendered", pathKey: "renderedFilePath", freshnessKey: "renderFreshness" },
 ];
 

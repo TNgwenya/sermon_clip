@@ -45,6 +45,9 @@ type ReviewPageData = {
     ministryValue: string | null;
     socialValue: string | null;
     transcriptText: string;
+    transcriptSafetyStatus: "TRUSTED" | "REVIEW_REQUIRED" | "REVIEWED";
+    transcriptSafetyReasons: unknown;
+    transcriptSafetyReviewedAt: Date | null;
     riskLevel: "LOW" | "MEDIUM" | "HIGH";
     riskReasons: unknown;
     contextWarning: boolean;
@@ -172,6 +175,9 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
           ministryValue: true,
           socialValue: true,
           transcriptText: true,
+          transcriptSafetyStatus: true,
+          transcriptSafetyReasons: true,
+          transcriptSafetyReviewedAt: true,
           riskLevel: true,
           riskReasons: true,
           contextWarning: true,
@@ -222,6 +228,8 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
       riskReasons: normalizeStringArray(clip.riskReasons),
       qualityWarnings: normalizeStringArray(clip.qualityWarnings),
       postReadyBlockers: normalizeStringArray(clip.postReadyBlockers),
+      transcriptSafetyReasons: normalizeStringArray(clip.transcriptSafetyReasons),
+      transcriptSafetyReviewedAt: clip.transcriptSafetyReviewedAt?.toISOString() ?? null,
       qualityReviewedAt: clip.qualityReviewedAt?.toISOString() ?? null,
       manualCropUpdatedAt: clip.manualCropUpdatedAt?.toISOString() ?? null,
       smartCropDebugGeneratedAt: clip.smartCropDebugGeneratedAt?.toISOString() ?? null,

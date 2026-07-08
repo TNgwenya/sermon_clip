@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 
 import { getOpenAiClient } from "@/server/ai/openaiClient";
+import { recordAiInvocation } from "@/server/ai/aiInvocationLogger";
 
 export type NormalizedTranscriptSegment = {
   startTimeSeconds: number;
@@ -377,18 +378,37 @@ export async function transcribeAudioWithOpenAI(
   );
   const model = resolveOpenAITranscriptionModel(options?.model);
   assertTimestampedTranscriptionModel(model);
+  const startedAt = Date.now();
 
-  const response = await runTranscriptionRequestWithRetry(
-    () => client.audio.transcriptions.create({
+  let response;
+  try {
+    response = await runTranscriptionRequestWithRetry(
+      () => client.audio.transcriptions.create({
+        model,
+        file: createReadStream(audioPath),
+        response_format: "verbose_json",
+        timestamp_granularities: ["segment", "word"],
+        ...(options?.language ? { language: options.language } : {}),
+        ...(options?.prompt ? { prompt: options.prompt } : {}),
+      }),
+      { onRetry: options?.onRetry },
+    );
+  } catch (error) {
+    await recordAiInvocation({
+      operation: "transcription",
       model,
-      file: createReadStream(audioPath),
-      response_format: "verbose_json",
-      timestamp_granularities: ["segment", "word"],
-      ...(options?.language ? { language: options.language } : {}),
-      ...(options?.prompt ? { prompt: options.prompt } : {}),
-    }),
-    { onRetry: options?.onRetry },
-  );
+      status: "FAILED",
+      latencyMs: Date.now() - startedAt,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      metadata: {
+        language: options?.language ?? null,
+        promptProvided: Boolean(options?.prompt),
+        responseFormat: "verbose_json",
+        timestampGranularities: ["segment", "word"],
+      },
+    });
+    throw error;
+  }
 
   const fullText = typeof response.text === "string" ? response.text.trim() : "";
   const segmentTimestamps = normalizeSegments((response as { segments?: unknown }).segments);
@@ -399,6 +419,23 @@ export async function transcribeAudioWithOpenAI(
     wordTimestamps,
   });
   const language = typeof response.language === "string" ? response.language : undefined;
+
+  await recordAiInvocation({
+    operation: "transcription",
+    model,
+    status: "SUCCEEDED",
+    latencyMs: Date.now() - startedAt,
+    metadata: {
+      language: options?.language ?? null,
+      providerDetectedLanguage: language ?? null,
+      promptProvided: Boolean(options?.prompt),
+      responseFormat: "verbose_json",
+      timestampGranularities: ["segment", "word"],
+      segmentCount: segments.length,
+      wordTimestampCount: wordTimestamps.length,
+      textCharacters: fullText.length,
+    },
+  });
 
   return {
     fullText,

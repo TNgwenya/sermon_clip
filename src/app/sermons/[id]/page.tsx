@@ -36,6 +36,7 @@ type ClipExportFormat = "VERTICAL_9_16" | "HORIZONTAL_16_9" | "SQUARE_1_1";
 type ClipExportLayoutStrategy = "CENTER_CROP" | "LEFT_FOCUS" | "RIGHT_FOCUS" | "FIT_BLURRED_BACKGROUND" | "SMART_CROP";
 type AssetFreshness = "UP_TO_DATE" | "OUTDATED" | "NEEDS_REGENERATION" | "FAILED";
 type ClipQualityLabel = "POST_READY" | "GOOD_NEEDS_REVIEW" | "NEEDS_EDITING" | "REJECT";
+type ClipTranscriptSafetyStatus = "TRUSTED" | "REVIEW_REQUIRED" | "REVIEWED";
 
 type RawClipCandidate = {
   id: string;
@@ -63,6 +64,9 @@ type RawClipCandidate = {
   exportError: string | null;
   exportedFilePath: string | null;
   transcriptText: string;
+  transcriptSafetyStatus: ClipTranscriptSafetyStatus;
+  transcriptSafetyReasons?: unknown;
+  transcriptSafetyReviewedAt?: Date | null;
   title: string;
   hook: string;
   caption: string;
@@ -775,6 +779,9 @@ export default async function SermonDetailPage({
           exportError: true,
           exportedFilePath: true,
           transcriptText: true,
+          transcriptSafetyStatus: true,
+          transcriptSafetyReasons: true,
+          transcriptSafetyReviewedAt: true,
           title: true,
           hook: true,
           caption: true,
@@ -869,6 +876,7 @@ export default async function SermonDetailPage({
     qualityWarnings: normalizeStringArray(clip.qualityWarnings),
     postReadyReasons: normalizeStringArray(clip.postReadyReasons),
     postReadyBlockers: normalizeStringArray(clip.postReadyBlockers),
+    transcriptSafetyReasons: normalizeStringArray(clip.transcriptSafetyReasons),
   }));
 
   const orderedClipCandidates = [...normalizedClipCandidates].sort((a, b) => {
@@ -1222,7 +1230,7 @@ export default async function SermonDetailPage({
         ? "Review suggested clips"
     : pastorWorkflow.nextAction;
   const commandCenterDescription = failedRecoveryCount > 0
-    ? `${failedRecoveryCount} failed ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention before this sermon keeps moving. Open the hidden troubleshooting section when you are ready to retry.`
+    ? `${failedRecoveryCount} failed ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention before this sermon keeps moving. Open Advanced recovery tools when you are ready to retry.`
     : hasLiveProcessingWork && activeProcessingStep
       ? `${activeProcessingStep.label} is running now. Watch the live progress here until the next pastor step is ready.`
       : hasOutdatedAssets
@@ -1340,7 +1348,7 @@ export default async function SermonDetailPage({
               </strong>
               <span>
                 {failedRecoveryCount > 0
-                  ? "Retry and repair controls stay tucked inside Troubleshoot this sermon."
+                  ? "Retry and repair controls stay tucked inside Advanced recovery tools."
                   : "Refresh prepared media before posting stale downloads."}
               </span>
             </div>
@@ -1348,7 +1356,7 @@ export default async function SermonDetailPage({
           <div className="review-priority-actions">
             {failedRecoveryCount > 0 ? (
               <a href="#troubleshoot-this-sermon" className="button primary">
-                Review failed item
+                Open recovery tools
               </a>
             ) : null}
             {failedRecoveryCount === 0 && hasLiveProcessingWork ? (
@@ -1505,14 +1513,14 @@ export default async function SermonDetailPage({
       ) : null}
 
       <details id="troubleshoot-this-sermon" className="advanced-details troubleshoot-details">
-        <summary>Troubleshoot this sermon</summary>
+        <summary>Advanced recovery tools</summary>
         <div className="stack-lg advanced-details-body">
           <section className="card stack-md">
             <div className="stack-sm">
-              <p className="kicker">Recovery actions</p>
-              <h2>Use only when a step fails or needs to be rerun</h2>
+              <p className="kicker">Recovery tools</p>
+              <h2>Retry only the step that failed</h2>
               <p className="muted">
-                Most sermons should move from the live progress panel to Pastor Review without touching these controls. This area is for retrying a failed step, repairing prepared clip assets, or intentionally redoing clip discovery.
+                Most sermons should move from live progress to Pastor Review without touching these controls. Use this area only to retry a failed step, repair prepared clip files, or intentionally redo clip discovery.
               </p>
             </div>
             <div className="troubleshoot-action-grid">
@@ -1621,9 +1629,9 @@ export default async function SermonDetailPage({
           </section>
 
           <section className="card stack-sm">
-            <h2>Rerun a specific generation stage</h2>
+            <h2>Advanced regeneration</h2>
             <p className="muted">
-              Use this only when a particular generated asset is stale or wrong and the normal retry buttons are not enough.
+              Use this only when a specific generated asset is stale or wrong and the normal retry buttons are not enough.
             </p>
             <RegenerationControls sermonId={sermon.id} />
           </section>

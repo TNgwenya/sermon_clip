@@ -96,7 +96,7 @@ export async function appendJobLog(jobId: string, message: string): Promise<void
   }
 }
 
-export async function markJobRunning(jobId: string): Promise<void> {
+export async function markJobRunning(jobId: string, workerId?: string): Promise<void> {
   await retryProcessingJobDbWrite(() => prisma.processingJob.update({
     where: { id: jobId },
     data: {
@@ -104,6 +104,9 @@ export async function markJobRunning(jobId: string): Promise<void> {
       startedAt: new Date(),
       completedAt: null,
       errorMessage: null,
+      heartbeatAt: new Date(),
+      attemptCount: { increment: 1 },
+      ...(workerId ? { workerId } : {}),
     },
   }));
 }
@@ -116,6 +119,7 @@ export async function markJobSucceeded(jobId: string, logs?: string): Promise<vo
     data: {
       status: "SUCCEEDED",
       completedAt: new Date(),
+      heartbeatAt: null,
       logs: mergedLogs,
       errorMessage: null,
     },
@@ -134,6 +138,7 @@ export async function markJobFailed(
     data: {
       status: "FAILED",
       completedAt: new Date(),
+      heartbeatAt: null,
       errorMessage,
       logs: mergedLogs,
     },
@@ -178,6 +183,7 @@ export async function executeRetryableStep({
           status: "PENDING",
           errorMessage: null,
           completedAt: null,
+          heartbeatAt: null,
         },
       });
     }

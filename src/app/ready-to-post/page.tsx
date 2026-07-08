@@ -69,6 +69,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
   };
   const clipWhere: Prisma.ClipCandidateWhereInput = {
     ...scopeWhere,
+    transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
     OR: [
       { exportStatus: "COMPLETED" },
       { status: "EXPORTED" },
@@ -76,6 +77,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
   };
   const preparingWhere: Prisma.ClipCandidateWhereInput = {
     ...scopeWhere,
+    transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
     OR: [
       { renderStatus: { in: ["QUEUED", "RENDERING"] } },
       { captionStatus: "GENERATING" },
@@ -87,6 +89,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
   const approvedWaitingWhere: Prisma.ClipCandidateWhereInput = {
     ...scopeWhere,
     status: "APPROVED",
+    transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
     exportStatus: { not: "COMPLETED" },
     NOT: {
       OR: [
@@ -134,6 +137,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         finalQualityScore: true,
         qualityLabel: true,
         postReadyStatus: true,
+        transcriptSafetyStatus: true,
         postReadyReasons: true,
         postReadyBlockers: true,
         recommendedNextAction: true,

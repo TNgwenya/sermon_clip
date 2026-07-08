@@ -9,6 +9,7 @@ import {
   exportVerticalClipAction,
   generateSmartCropDebugSnapshotAction,
   generateSubtitlesForClipAction,
+  markClipTranscriptReviewedAction,
   renderClipCandidateAction,
   renderClipOverlayAction,
   rerenderClipCandidateAction,
@@ -67,6 +68,9 @@ type ClipReviewItem = {
   intendedAudience: string | null;
   ministryValue: string | null;
   socialValue: string | null;
+  transcriptSafetyStatus: "TRUSTED" | "REVIEW_REQUIRED" | "REVIEWED";
+  transcriptSafetyReasons: string[];
+  transcriptSafetyReviewedAt: string | null;
   status: "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
   riskLevel: ReviewRiskLevel;
   contextWarning: boolean;
@@ -540,9 +544,11 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               clip.renderStatus !== "RENDERING" &&
               clip.renderStatus !== "COMPLETED";
             const canGenerateCaptions =
+              clip.transcriptSafetyStatus !== "REVIEW_REQUIRED" &&
               (clip.status === "APPROVED" || clip.status === "EXPORTED") &&
               clip.captionStatus !== "GENERATING";
             const canBurnCaptions =
+              clip.transcriptSafetyStatus !== "REVIEW_REQUIRED" &&
               clip.renderStatus === "COMPLETED" &&
               clip.captionStatus === "GENERATED" &&
               clip.captionBurnStatus !== "BURNING" &&
@@ -553,12 +559,15 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               clip.overlayStatus !== "RENDERING" &&
               clip.overlayStatus !== "COMPLETED";
             const canExport =
+              clip.transcriptSafetyStatus !== "REVIEW_REQUIRED" &&
               clip.renderStatus === "COMPLETED" &&
               clip.exportStatus !== "EXPORTING" &&
               clip.exportStatus !== "COMPLETED";
             const isSmartCrop = clip.exportLayoutStrategy === "SMART_CROP";
             const manualFramingApplied = hasManualFraming(clip);
             const isFallbackClip = isDeterministicFallbackClip(clip);
+            const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
+            const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
             const canPreviewVideo = clip.canPreviewVideo;
             const isApprovedState = clip.status === "APPROVED" || clip.status === "EXPORTED";
             const isPostReady = clip.status === "EXPORTED" || clip.exportStatus === "COMPLETED";
@@ -612,6 +621,8 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       <span className={`status-pill quality-action-${actionTone}`}>
                         {readinessLabel}
                       </span>
+                      {transcriptReviewRequired ? <span className="status-pill quality-needs-editing">Transcript review needed</span> : null}
+                      {transcriptReviewed ? <span className="status-pill quality-good-needs-review">Transcript reviewed</span> : null}
                       <span className={`status-pill risk-${clip.riskLevel.toLowerCase()}`}>{visibleSignal}</span>
                     </div>
 
@@ -642,6 +653,22 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                           <p className="status-help small">
                             AI selection was unavailable, so this clip came from deterministic sermon-window ranking. Review the moment and boundaries before approving.
                           </p>
+                        ) : null}
+
+                        {transcriptReviewRequired ? (
+                          <div className="warning-banner stack-sm">
+                            <p>
+                              Review the local-language words before captions, export, or posting. This protects good Zulu, Sotho, Xhosa, or Tswana moments from being lost while keeping wrong captions out of final videos.
+                            </p>
+                            <button
+                              type="button"
+                              className="button secondary"
+                              disabled={isPending}
+                              onClick={() => applySingleAction(() => markClipTranscriptReviewedAction(clip.id))}
+                            >
+                              I reviewed the transcript
+                            </button>
+                          </div>
                         ) : null}
 
                         {qualitySignals.length > 0 ? (

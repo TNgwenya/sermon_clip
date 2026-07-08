@@ -1,8 +1,9 @@
 import { stat } from "node:fs/promises";
 
-import type { ClipCandidate, Prisma, ProcessingJob, ProcessingJobStatus, ProcessingJobType } from "@prisma/client";
+import type { ClipCandidate, Prisma, ProcessingJobStatus, ProcessingJobType } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { isStaleActiveProcessingJob } from "@/lib/pastorWorkflow";
 
 export type OperationalMetrics = {
   sermonsProcessed: number;
@@ -64,19 +65,14 @@ export type ProcessingJobRetryCandidate = {
   type: ProcessingJobType;
   status: ProcessingJobStatus;
   updatedAt: Date;
+  heartbeatAt?: Date | null;
 };
 
 type DiagnosticsRepository = {
   countSermons(where?: Prisma.SermonWhereInput): Promise<number>;
   countClips(where?: Prisma.ClipCandidateWhereInput): Promise<number>;
   countProcessingJobs(where?: Prisma.ProcessingJobWhereInput): Promise<number>;
-  findProcessingJobsForDiagnostics(): Promise<Array<Pick<ProcessingJob,
-    | "id"
-    | "sermonId"
-    | "type"
-    | "status"
-    | "updatedAt"
-  >>>;
+  findProcessingJobsForDiagnostics(): Promise<ProcessingJobRetryCandidate[]>;
   findClipsForConsistency(): Promise<Array<Pick<ClipCandidate,
     | "id"
     | "sermonId"
@@ -103,11 +99,14 @@ function countUnresolvedFailedProcessingJobs(
     type: ProcessingJobType;
     status: ProcessingJobStatus;
     updatedAt: Date;
+    heartbeatAt?: Date | null;
   }>,
 ): number {
   const latestBySermonAndType = new Map<string, {
+    type: ProcessingJobType;
     status: ProcessingJobStatus;
     updatedAt: Date;
+    heartbeatAt?: Date | null;
   }>();
 
   for (const job of jobs) {
@@ -115,13 +114,17 @@ function countUnresolvedFailedProcessingJobs(
     const existing = latestBySermonAndType.get(key);
     if (!existing || job.updatedAt > existing.updatedAt) {
       latestBySermonAndType.set(key, {
+        type: job.type,
         status: job.status,
         updatedAt: job.updatedAt,
+        heartbeatAt: job.heartbeatAt,
       });
     }
   }
 
-  return [...latestBySermonAndType.values()].filter((job) => job.status === "FAILED").length;
+  return [...latestBySermonAndType.values()]
+    .filter((job) => job.status === "FAILED" || isStaleActiveProcessingJob(job))
+    .length;
 }
 
 export function selectUnresolvedFailedProcessingJobRetries<T extends ProcessingJobRetryCandidate>(
@@ -139,7 +142,7 @@ export function selectUnresolvedFailedProcessingJobRetries<T extends ProcessingJ
   }
 
   return [...latestBySermonAndType.values()]
-    .filter((job) => job.status === "FAILED")
+    .filter((job) => job.status === "FAILED" || isStaleActiveProcessingJob(job))
     .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())
     .slice(0, limit);
 }
@@ -152,7 +155,7 @@ export function isLatestUnresolvedFailedProcessingJobRetry(
     .filter((job) => job.sermonId === retryJob.sermonId && job.type === retryJob.type)
     .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())[0];
 
-  return latest?.id === retryJob.id && latest.status === "FAILED";
+  return Boolean(latest?.id === retryJob.id && (latest.status === "FAILED" || isStaleActiveProcessingJob(latest)));
 }
 
 async function fileHasBytes(filePath: string): Promise<boolean> {
@@ -602,6 +605,7 @@ const prismaRepository: DiagnosticsRepository = {
         type: true,
         status: true,
         updatedAt: true,
+        heartbeatAt: true,
       },
     });
   },

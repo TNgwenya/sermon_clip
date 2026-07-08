@@ -125,6 +125,11 @@ import {
   serializeSpeechCleanupEdits,
   type SpeechCleanupEdits,
 } from "@/lib/speechCleanupPlan";
+import { upsertActiveClipEditPlanForClip } from "@/server/agents/clipEditPlanService";
+import {
+  removeTranscriptSafetyBlocker,
+  TRANSCRIPT_SAFETY_REVIEW_BLOCKER,
+} from "@/server/agents/localLanguageTranscriptSafety";
 
 export type CreateSermonFormState = {
   success: boolean;
@@ -2972,6 +2977,68 @@ export async function approveClipCandidateAction(clipId: string): Promise<ClipCa
   };
 }
 
+export async function markClipTranscriptReviewedAction(clipId: string): Promise<ClipCandidateActionState> {
+  const normalizedClipId = clipId.trim();
+  if (!normalizedClipId) {
+    return {
+      success: false,
+      message: "Missing clip id for transcript review.",
+    };
+  }
+
+  const clip = await prisma.clipCandidate.findUnique({
+    where: { id: normalizedClipId },
+    select: {
+      id: true,
+      sermonId: true,
+      transcriptSafetyStatus: true,
+      postReadyBlockers: true,
+      qualityWarnings: true,
+    },
+  });
+
+  if (!clip) {
+    return {
+      success: false,
+      message: "Clip candidate was not found.",
+    };
+  }
+
+  const qualityWarnings = Array.isArray(clip.qualityWarnings)
+    ? clip.qualityWarnings.filter((item): item is string => (
+        typeof item === "string" &&
+        item !== "LOCAL_LANGUAGE_TRANSCRIPT_REVIEW_REQUIRED"
+      ))
+    : [];
+
+  await prisma.clipCandidate.update({
+    where: { id: clip.id },
+    data: {
+      transcriptSafetyStatus: "REVIEWED",
+      transcriptSafetyReviewedAt: new Date(),
+      transcriptSafetyReviewedBy: "pastor_review",
+      transcriptSafetyReasons: clip.transcriptSafetyStatus === "REVIEW_REQUIRED"
+        ? ["PASTOR_CONFIRMED_TRANSCRIPT_REVIEW"]
+        : undefined,
+      postReadyBlockers: removeTranscriptSafetyBlocker(clip.postReadyBlockers),
+      qualityWarnings,
+    },
+  });
+
+  await appendPipelineLog(clip.sermonId, `Transcript safety review completed for clip ${clip.id}; blocker "${TRANSCRIPT_SAFETY_REVIEW_BLOCKER}" cleared.`);
+
+  revalidatePath(`/sermons/${clip.sermonId}`);
+  revalidatePath(`/sermons/${clip.sermonId}/review`);
+  revalidatePath(`/sermons/${clip.sermonId}/clips/${clip.id}/studio`);
+  revalidatePath("/ready-to-post");
+  revalidatePath("/");
+
+  return {
+    success: true,
+    message: "Transcript reviewed. Captions and export can now continue.",
+  };
+}
+
 export async function rejectClipCandidateAction(clipId: string): Promise<ClipCandidateActionState> {
   const normalizedClipId = clipId.trim();
   if (!normalizedClipId) {
@@ -3661,6 +3728,7 @@ export async function prepareApprovedClipsAction(input: {
       captionData: true,
       overlayStatus: true,
       exportStatus: true,
+      transcriptSafetyStatus: true,
     },
   });
 
@@ -3704,6 +3772,10 @@ export async function prepareApprovedClipsAction(input: {
 
       for (const clip of clips) {
         try {
+          if (clip.transcriptSafetyStatus === "REVIEW_REQUIRED") {
+            throw new Error("Review the local-language transcript before preparing captions, export, or posting.");
+          }
+
           const plan = buildPrepareClipPlan(clip);
           const captionDataRecord =
             clip.captionData && typeof clip.captionData === "object" && !Array.isArray(clip.captionData)
@@ -4218,6 +4290,8 @@ export async function updateClipStudioEditsAction(
       captionData: true,
       captionBurnStatus: true,
       exportStatus: true,
+      transcriptSafetyStatus: true,
+      postReadyBlockers: true,
     },
   });
 
@@ -4493,6 +4567,15 @@ export async function updateClipStudioEditsAction(
         },
       },
       isManuallyEdited: true,
+      ...(input.applyCaptionsToClip && normalizedCaptionCues.length > 0
+        ? {
+            transcriptSafetyStatus: "REVIEWED" as const,
+            transcriptSafetyReviewedAt: new Date(),
+            transcriptSafetyReviewedBy: "clip_studio",
+            transcriptSafetyReasons: ["CAPTION_CUES_MANUALLY_REVIEWED"],
+            postReadyBlockers: removeTranscriptSafetyBlocker(clip.postReadyBlockers),
+          }
+        : {}),
       ...(clip.status === "EXPORTED" ? { status: "APPROVED" as const } : {}),
     },
   });
@@ -4553,6 +4636,12 @@ export async function updateClipStudioEditsAction(
       `Regeneration invalidation completed for clip ${clip.id}: overlay/export freshness updated.`,
     );
   }
+
+  await upsertActiveClipEditPlanForClip({
+    clipCandidateId: clip.id,
+    createdBy: "studio",
+    createdReason: "clip_studio_edits_saved",
+  });
 
   revalidatePath(`/sermons/${clip.sermonId}`);
   revalidatePath(`/sermons/${clip.sermonId}/review`);
@@ -4699,6 +4788,12 @@ export async function updateClipExportSettingsAction(
     );
   }
 
+  await upsertActiveClipEditPlanForClip({
+    clipCandidateId: clip.id,
+    createdBy: "studio",
+    createdReason: "clip_studio_export_settings_saved",
+  });
+
   revalidatePath(`/sermons/${clip.sermonId}`);
   revalidatePath(`/sermons/${clip.sermonId}/review`);
   revalidatePath(`/sermons/${clip.sermonId}/clips/${clip.id}/studio`);
@@ -4815,6 +4910,12 @@ export async function updateClipBrandingAction(input: {
     );
     await appendPipelineLog(clip.sermonId, `Regeneration invalidation completed for clip ${clip.id}: overlay/export freshness updated.`);
   }
+
+  await upsertActiveClipEditPlanForClip({
+    clipCandidateId: clip.id,
+    createdBy: "studio",
+    createdReason: "clip_studio_branding_saved",
+  });
 
   revalidatePath(`/sermons/${clip.sermonId}`);
   revalidatePath(`/sermons/${clip.sermonId}/review`);
@@ -5494,13 +5595,22 @@ export async function prepareClipStudioForPostingAction(
 
   const clip = await prisma.clipCandidate.findUnique({
     where: { id: clipId },
-    select: { id: true, sermonId: true },
+    select: { id: true, sermonId: true, transcriptSafetyStatus: true },
   });
 
   if (!clip) {
     return {
       success: false,
       message: "Clip candidate was not found.",
+      results: [],
+      warnings: editResult.warnings,
+    };
+  }
+
+  if (clip.transcriptSafetyStatus === "REVIEW_REQUIRED") {
+    return {
+      success: false,
+      message: "Review the local-language transcript or save checked caption cues before preparing this clip for posting.",
       results: [],
       warnings: editResult.warnings,
     };

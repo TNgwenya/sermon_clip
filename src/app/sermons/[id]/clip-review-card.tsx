@@ -8,6 +8,7 @@ import {
   burnSubtitlesForClipAction,
   exportVerticalClipAction,
   generateSubtitlesForClipAction,
+  markClipTranscriptReviewedAction,
   reburnSubtitlesForClipAction,
   reexportVerticalClipAction,
   regenerateClipOutdatedAssetsAction,
@@ -41,6 +42,7 @@ type ClipExportFormat = "VERTICAL_9_16" | "HORIZONTAL_16_9" | "SQUARE_1_1";
 type ClipExportLayoutStrategy = "CENTER_CROP" | "LEFT_FOCUS" | "RIGHT_FOCUS" | "FIT_BLURRED_BACKGROUND" | "SMART_CROP";
 type AssetFreshness = "UP_TO_DATE" | "OUTDATED" | "NEEDS_REGENERATION" | "FAILED";
 type ClipQualityLabel = "POST_READY" | "GOOD_NEEDS_REVIEW" | "NEEDS_EDITING" | "REJECT";
+type ClipTranscriptSafetyStatus = "TRUSTED" | "REVIEW_REQUIRED" | "REVIEWED";
 
 type ClipReviewCardProps = {
   clip: {
@@ -67,6 +69,9 @@ type ClipReviewCardProps = {
     exportError: string | null;
     exportedFilePath: string | null;
     transcriptText: string;
+    transcriptSafetyStatus: ClipTranscriptSafetyStatus;
+    transcriptSafetyReasons?: string[];
+    transcriptSafetyReviewedAt?: Date | null;
     title: string;
     hook: string;
     caption: string;
@@ -327,6 +332,10 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
     runAction(() => rejectClipCandidateAction(clip.id));
   }
 
+  function onMarkTranscriptReviewed() {
+    runAction(() => markClipTranscriptReviewedAction(clip.id));
+  }
+
   function onEditStart() {
     if (isExported) {
       setActionMessage("Ready-to-post clips are locked. Open Clip Studio and prepare a new version if you need changes.");
@@ -451,6 +460,8 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
   const captionBurnFreshnessClass = `status-pill freshness-${clip.captionBurnFreshness.toLowerCase().replace(/_/g, "-")}`;
   const overlayFreshnessClass = `status-pill freshness-${clip.overlayFreshness.toLowerCase().replace(/_/g, "-")}`;
   const exportFreshnessClass = `status-pill freshness-${clip.exportFreshness.toLowerCase().replace(/_/g, "-")}`;
+  const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
+  const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
 
   return (
     <article className={cardClassName}>
@@ -459,6 +470,8 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
         <div className="clip-badge-row">
           <span className={statusBadgeClass}>{clip.status}</span>
           <span className={qualityBadgeClass}>{toQualityLabel(qualityLabel)}</span>
+          {transcriptReviewRequired ? <span className="status-pill quality-needs-editing">Transcript review needed</span> : null}
+          {transcriptReviewed ? <span className="status-pill quality-good-needs-review">Transcript reviewed</span> : null}
           {clip.renderStatus === "COMPLETED" ? <span className="status-pill">Rendered preview available</span> : null}
           <span className={riskBadgeClass}>{clip.riskLevel} RISK</span>
           {clip.smartClipCategory ? <span className="status-pill">{clip.smartClipCategory}</span> : null}
@@ -467,6 +480,29 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
 
       {!isEditing ? (
         <div className="stack-sm">
+          {transcriptReviewRequired ? (
+            <div className="warning-banner stack-sm">
+              <p>
+                <strong>Review the words before captions or export.</strong> This clip may include local-language wording the transcript misunderstood. Watch the moment and check the transcript before creating captions or a final post.
+              </p>
+              {clip.transcriptSafetyReasons && clip.transcriptSafetyReasons.length > 0 ? (
+                <p className="muted small">Reason: {clip.transcriptSafetyReasons.map((reason) => reason.replace(/_/g, " ").toLowerCase()).join(", ")}</p>
+              ) : null}
+              <button
+                type="button"
+                className="button secondary"
+                onClick={onMarkTranscriptReviewed}
+                disabled={isPending}
+              >
+                I reviewed the transcript
+              </button>
+            </div>
+          ) : null}
+          {transcriptReviewed ? (
+            <p className="status-help">
+              Transcript reviewed{clip.transcriptSafetyReviewedAt ? ` on ${new Date(clip.transcriptSafetyReviewedAt).toLocaleString()}` : ""}.
+            </p>
+          ) : null}
           <p>
             <strong>Hook:</strong> {clip.hook}
           </p>
@@ -983,6 +1019,7 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
           onClick={onExportVertical}
           disabled={
             isPending ||
+            transcriptReviewRequired ||
             clip.renderStatus !== "COMPLETED" ||
             clip.exportStatus === "EXPORTING" ||
             clip.exportStatus === "COMPLETED"
@@ -994,7 +1031,7 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
           type="button"
           className="button tertiary"
           onClick={onReexportVertical}
-          disabled={isPending || clip.exportStatus !== "COMPLETED"}
+          disabled={isPending || transcriptReviewRequired || clip.exportStatus !== "COMPLETED"}
         >
           Re-export Vertical
         </button>
@@ -1002,7 +1039,7 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
           type="button"
           className="button tertiary"
           onClick={onRegenerateCaptions}
-          disabled={isPending || (clip.status !== "APPROVED" && clip.status !== "EXPORTED")}
+          disabled={isPending || transcriptReviewRequired || (clip.status !== "APPROVED" && clip.status !== "EXPORTED")}
         >
           Regenerate Captions
         </button>
@@ -1012,6 +1049,7 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
           onClick={onBurnCaptions}
           disabled={
             isPending ||
+            transcriptReviewRequired ||
             clip.status !== "APPROVED" ||
             clip.renderStatus !== "COMPLETED" ||
             captionStatus !== "GENERATED" ||
@@ -1025,7 +1063,7 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
           type="button"
           className="button tertiary"
           onClick={onReburnCaptions}
-          disabled={isPending || clip.renderStatus !== "COMPLETED" || captionStatus !== "GENERATED"}
+          disabled={isPending || transcriptReviewRequired || clip.renderStatus !== "COMPLETED" || captionStatus !== "GENERATED"}
         >
           Re-burn Captions
         </button>
