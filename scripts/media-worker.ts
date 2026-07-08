@@ -300,14 +300,20 @@ async function claimNextJob(): Promise<ProcessingJob | null> {
   });
 }
 
-function shouldAppendGeneratedClips(job: ProcessingJob): boolean {
-  return Boolean(
-    job.generationSummary
+function generationSummary(job: ProcessingJob): Record<string, unknown> | null {
+  return job.generationSummary
     && typeof job.generationSummary === "object"
     && !Array.isArray(job.generationSummary)
-    && "append" in job.generationSummary
-    && job.generationSummary.append === true
-  );
+    ? job.generationSummary as Record<string, unknown>
+    : null;
+}
+
+function shouldAppendGeneratedClips(job: ProcessingJob): boolean {
+  return generationSummary(job)?.append === true;
+}
+
+function shouldRedoGeneratedClips(job: ProcessingJob): boolean {
+  return generationSummary(job)?.mode === "redo";
 }
 
 async function runJob(job: ProcessingJob): Promise<string> {
@@ -336,6 +342,15 @@ async function runJob(job: ProcessingJob): Promise<string> {
       return result.reusedExistingTranscript ? "Existing transcript reused." : "Audio transcribed.";
     }
     case "GENERATE_CLIPS": {
+      if (shouldRedoGeneratedClips(job)) {
+        const { redoClipGenerationFromTranscript } = await import("../src/server/agents/clipRedoService");
+        const result = await redoClipGenerationFromTranscript(sermonId, { currentJobId: job.id });
+        if (!result.success && result.generatedClips === undefined) {
+          throw new Error(result.message);
+        }
+        return result.message;
+      }
+
       const { generateClipSuggestions } = await import("../src/server/agents/clipIntelligenceAgent");
       const { prepareGeneratedClipReviewAssets } = await import("../src/server/agents/clipReviewAssetService");
       const append = shouldAppendGeneratedClips(job);

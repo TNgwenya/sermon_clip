@@ -23,7 +23,6 @@ import {
   appendPipelineLog,
   ensureSermonFolders,
   getAudioPath,
-  getClipFolderPath,
   getLegacySermonStoragePath,
   getClipSrtPath,
   getSermonStoragePath,
@@ -41,6 +40,10 @@ import {
 import type { ClipQualityRefreshSummary } from "@/server/agents/clipQualityRefreshService";
 import type { ClipSuggestionCurationSummary } from "@/server/agents/clipSuggestionCurationService";
 import { prepareGeneratedClipReviewAssets } from "@/server/agents/clipReviewAssetService";
+import {
+  redoClipGenerationFromTranscript,
+  validateRedoClipGenerationReadiness,
+} from "@/server/agents/clipRedoService";
 import {
   deleteClipPreviewFromR2,
   deletePostingMediaFromR2,
@@ -1912,180 +1915,43 @@ export async function redoClipGenerationFromTranscriptAction(
     };
   }
 
+  const readiness = await validateRedoClipGenerationReadiness(sermonId);
+  if (!readiness.ok) {
+    return {
+      success: false,
+      message: readiness.message,
+    };
+  }
+
   if (!canRunLocalMediaProcessing()) {
-    return {
-      success: false,
-      message: "Redo clip generation is local-worker only for now. Run it from the local app so deleted clips can be regenerated immediately.",
-    };
-  }
-
-  const sermon = await prisma.sermon.findUnique({
-    where: { id: sermonId },
-    select: {
-      id: true,
-      transcriptJsonPath: true,
-      _count: {
-        select: {
-          transcriptSegments: true,
-        },
-      },
-      clipCandidates: {
-        select: {
-          id: true,
-        },
-      },
-      processingJobs: {
-        where: {
-          status: { in: ["PENDING", "RUNNING"] },
-        },
-        select: {
-          id: true,
-          type: true,
-          status: true,
-        },
-        take: 5,
-      },
-    },
-  });
-
-  if (!sermon) {
-    return {
-      success: false,
-      message: "Sermon was not found.",
-    };
-  }
-
-  if (!sermon.transcriptJsonPath || sermon._count.transcriptSegments === 0) {
-    return {
-      success: false,
-      message: "A completed transcript is required before redoing clip generation.",
-    };
-  }
-
-  if (sermon.processingJobs.length > 0) {
-    return {
-      success: false,
-      message: "A processing job is already running for this sermon. Wait for it to finish before redoing clip generation.",
-    };
-  }
-
-  const runningClipOperationCount = await prisma.clipCandidate.count({
-    where: {
-      sermonId,
-      OR: [
-        { renderStatus: "RENDERING" },
-        { exportStatus: "EXPORTING" },
-        { captionStatus: "GENERATING" },
-        { captionBurnStatus: "BURNING" },
-        { overlayStatus: "RENDERING" },
-      ],
-    },
-  });
-
-  if (runningClipOperationCount > 0) {
-    return {
-      success: false,
-      message: "One or more clip operations are still running. Wait for them to finish before redoing clip generation.",
-    };
-  }
-
-  const oldClipIds = sermon.clipCandidates.map((clip) => clip.id);
-  const oldClipIdSet = new Set(oldClipIds);
-  let clearedDrafts = 0;
-  let clearedScheduledPosts = 0;
-  let clearedPackages = 0;
-
-  try {
-    await appendPipelineLog(sermonId, `Redo clip generation requested. Removing ${oldClipIds.length} existing clip candidate(s).`);
-
-    if (oldClipIds.length > 0) {
-      const [drafts, scheduledPosts] = await Promise.all([
-        prisma.postingDraft.findMany({
-          select: {
-            id: true,
-            clipIdsJson: true,
-          },
-        }),
-        prisma.scheduledPost.findMany({
-          select: {
-            id: true,
-            clipIdsJson: true,
-          },
-        }),
-      ]);
-      const draftIdsToDelete = drafts
-        .filter((draft) => jsonStringArrayIncludesAny(draft.clipIdsJson, oldClipIdSet))
-        .map((draft) => draft.id);
-      const scheduledPostIdsToDelete = scheduledPosts
-        .filter((post) => jsonStringArrayIncludesAny(post.clipIdsJson, oldClipIdSet))
-        .map((post) => post.id);
-
-      await prisma.$transaction(async (tx) => {
-        if (scheduledPostIdsToDelete.length > 0) {
-          const result = await tx.scheduledPost.deleteMany({
-            where: { id: { in: scheduledPostIdsToDelete } },
-          });
-          clearedScheduledPosts = result.count;
-        }
-
-        if (draftIdsToDelete.length > 0) {
-          const result = await tx.postingDraft.deleteMany({
-            where: { id: { in: draftIdsToDelete } },
-          });
-          clearedDrafts = result.count;
-        }
-
-        await tx.contentOpportunity.updateMany({
-          where: { relatedClipId: { in: oldClipIds } },
-          data: { relatedClipId: null },
-        });
-
-        await tx.clipCandidate.deleteMany({
-          where: { sermonId },
-        });
-
-        await tx.sermon.update({
-          where: { id: sermonId },
-          data: { status: "TRANSCRIBED" },
-        });
-      });
-
-      clearedPackages = await prunePostingPackageHistoryByClipIds(oldClipIds);
-    } else {
-      await prisma.sermon.update({
-        where: { id: sermonId },
-        data: { status: "TRANSCRIBED" },
+    const job = await queueSermonProcessingJob(sermonId, "GENERATE_CLIPS");
+    if (!job.reusedExisting) {
+      await prisma.processingJob.update({
+        where: { id: job.id },
+        data: { generationSummary: { mode: "redo" } },
       });
     }
+    revalidatePath(`/sermons/${sermonId}`);
+    revalidatePath(`/sermons/${sermonId}/review`);
+    revalidatePath("/ready-to-post");
+    revalidatePath("/");
+    return {
+      success: true,
+      message: job.reusedExisting
+        ? "Redo clip generation is already queued for your media worker."
+        : "Redo clip generation queued for your media worker. Existing generated clips will be replaced after the worker starts.",
+    };
+  }
 
-    await rm(getClipFolderPath(sermonId), { recursive: true, force: true });
-    await ensureSermonFolders(sermonId);
-    await appendPipelineLog(
-      sermonId,
-      `Generated clip cache cleared. Drafts removed: ${clearedDrafts}; scheduled posts removed: ${clearedScheduledPosts}; packages pruned: ${clearedPackages}.`,
-    );
-
-    const generationResult = await generateClipSuggestions(sermonId, { force: true });
-    const previewSummary = await prepareGeneratedClipPreviews({ sermonId, force: true });
+  try {
+    const result = await redoClipGenerationFromTranscript(sermonId);
 
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath(`/sermons/${sermonId}/review`);
     revalidatePath("/ready-to-post");
     revalidatePath("/");
 
-    return {
-      success: previewSummary.failed === 0,
-      message: previewSummary.failed === 0
-        ? `Redo complete. Deleted ${oldClipIds.length} old clip(s), generated ${generationResult.clipCount} new suggestion(s), and prepared ${previewSummary.prepared} preview(s).`
-        : `Redo completed with preview issues. Deleted ${oldClipIds.length} old clip(s), generated ${generationResult.clipCount} new suggestion(s), prepared ${previewSummary.prepared} preview(s), and ${previewSummary.failed} preview(s) need attention.`,
-      deletedClips: oldClipIds.length,
-      generatedClips: generationResult.clipCount,
-      clearedDrafts,
-      clearedScheduledPosts,
-      clearedPackages,
-      previewPrepared: previewSummary.prepared,
-      previewFailed: previewSummary.failed,
-    };
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Redo clip generation failed.";
     await appendPipelineLog(sermonId, `Redo clip generation failed: ${message}`);
@@ -2095,10 +1961,6 @@ export async function redoClipGenerationFromTranscriptAction(
     return {
       success: false,
       message,
-      deletedClips: oldClipIds.length,
-      clearedDrafts,
-      clearedScheduledPosts,
-      clearedPackages,
     };
   }
 }
