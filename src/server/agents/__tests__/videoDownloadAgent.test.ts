@@ -3,40 +3,72 @@ import { describe, expect, it } from "vitest";
 import { __videoDownloadTestUtils } from "@/server/agents/videoDownloadAgent";
 
 describe("videoDownloadAgent helpers", () => {
-  it("builds balanced yt-dlp args with faster fragments and direct mp4 preference", () => {
-    const args = __videoDownloadTestUtils.buildBaseDownloadArgs(
-      "https://www.youtube.com/watch?v=abc123",
-      "/tmp/source.mp4",
-    );
-
-    const format = args[args.indexOf("-f") + 1];
-
-    expect(args).toContain("--merge-output-format");
-    expect(args).toContain("mp4");
-    expect(args).toContain("--newline");
-    expect(args).toContain("--retries");
-    expect(args).toContain("3");
-    expect(args).toContain("--concurrent-fragments");
-    expect(args).toContain("8");
-    expect(args).toContain("--force-ipv4");
-    expect(format).toContain("best[ext=mp4][height<=1080]");
-  });
-
-  it("allows fast and best source download modes through env", () => {
+  it("builds best-quality yt-dlp args by default with faster fragments and direct mp4 preference", () => {
     const originalMode = process.env.SOURCE_VIDEO_DOWNLOAD_MODE;
+    const originalQualityMode = process.env.SOURCE_DOWNLOAD_QUALITY_MODE;
     try {
-      process.env.SOURCE_VIDEO_DOWNLOAD_MODE = "FAST";
-      const fastArgs = __videoDownloadTestUtils.buildBaseDownloadArgs("https://youtu.be/abc123", "/tmp/source.mp4");
-      expect(fastArgs[fastArgs.indexOf("-f") + 1]).toContain("height<=720");
+      delete process.env.SOURCE_VIDEO_DOWNLOAD_MODE;
+      delete process.env.SOURCE_DOWNLOAD_QUALITY_MODE;
+      const args = __videoDownloadTestUtils.buildBaseDownloadArgs(
+        "https://www.youtube.com/watch?v=abc123",
+        "/tmp/source.mp4",
+      );
 
-      process.env.SOURCE_VIDEO_DOWNLOAD_MODE = "BEST";
-      const bestArgs = __videoDownloadTestUtils.buildBaseDownloadArgs("https://youtu.be/abc123", "/tmp/source.mp4");
-      expect(bestArgs[bestArgs.indexOf("-f") + 1]).toBe("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best");
+      const format = args[args.indexOf("-f") + 1];
+
+      expect(args).toContain("--merge-output-format");
+      expect(args).toContain("mp4");
+      expect(args).toContain("--newline");
+      expect(args).toContain("--retries");
+      expect(args).toContain("3");
+      expect(args).toContain("--concurrent-fragments");
+      expect(args).toContain("8");
+      expect(args).toContain("--force-ipv4");
+      expect(format).toBe("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best");
     } finally {
       if (originalMode === undefined) {
         delete process.env.SOURCE_VIDEO_DOWNLOAD_MODE;
       } else {
         process.env.SOURCE_VIDEO_DOWNLOAD_MODE = originalMode;
+      }
+      if (originalQualityMode === undefined) {
+        delete process.env.SOURCE_DOWNLOAD_QUALITY_MODE;
+      } else {
+        process.env.SOURCE_DOWNLOAD_QUALITY_MODE = originalQualityMode;
+      }
+    }
+  });
+
+  it("allows fast, balanced, and best source download modes through env", () => {
+    const originalMode = process.env.SOURCE_VIDEO_DOWNLOAD_MODE;
+    const originalQualityMode = process.env.SOURCE_DOWNLOAD_QUALITY_MODE;
+    try {
+      process.env.SOURCE_VIDEO_DOWNLOAD_MODE = "FAST";
+      const fastArgs = __videoDownloadTestUtils.buildBaseDownloadArgs("https://youtu.be/abc123", "/tmp/source.mp4");
+      expect(fastArgs[fastArgs.indexOf("-f") + 1]).toContain("height<=720");
+
+      process.env.SOURCE_VIDEO_DOWNLOAD_MODE = "BALANCED";
+      const balancedArgs = __videoDownloadTestUtils.buildBaseDownloadArgs("https://youtu.be/abc123", "/tmp/source.mp4");
+      expect(balancedArgs[balancedArgs.indexOf("-f") + 1]).toContain("height<=1080");
+
+      process.env.SOURCE_VIDEO_DOWNLOAD_MODE = "BEST";
+      const bestArgs = __videoDownloadTestUtils.buildBaseDownloadArgs("https://youtu.be/abc123", "/tmp/source.mp4");
+      expect(bestArgs[bestArgs.indexOf("-f") + 1]).toBe("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best");
+
+      delete process.env.SOURCE_VIDEO_DOWNLOAD_MODE;
+      process.env.SOURCE_DOWNLOAD_QUALITY_MODE = "FAST";
+      const aliasArgs = __videoDownloadTestUtils.buildBaseDownloadArgs("https://youtu.be/abc123", "/tmp/source.mp4");
+      expect(aliasArgs[aliasArgs.indexOf("-f") + 1]).toContain("height<=720");
+    } finally {
+      if (originalMode === undefined) {
+        delete process.env.SOURCE_VIDEO_DOWNLOAD_MODE;
+      } else {
+        process.env.SOURCE_VIDEO_DOWNLOAD_MODE = originalMode;
+      }
+      if (originalQualityMode === undefined) {
+        delete process.env.SOURCE_DOWNLOAD_QUALITY_MODE;
+      } else {
+        process.env.SOURCE_DOWNLOAD_QUALITY_MODE = originalQualityMode;
       }
     }
   });

@@ -54,6 +54,10 @@ import {
   recordClipArtifact,
   upsertActiveClipEditPlanForClip,
 } from "@/server/agents/clipEditPlanService";
+import {
+  buildVideoEncoderArgs,
+  resolvePreferredVideoEncoder,
+} from "@/server/media/videoEncoding";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -741,6 +745,7 @@ async function runFfmpegOverlay(input: {
   jobId: string;
 }): Promise<void> {
   const command = commandFor(input.ffmpegPath);
+  const videoEncoder = resolvePreferredVideoEncoder("overlay");
   const args = [
     "-y",
     "-i",
@@ -766,12 +771,7 @@ async function runFfmpegOverlay(input: {
     "[v]",
     "-map",
     "0:a?",
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-crf",
-    "23",
+    ...buildVideoEncoderArgs(videoEncoder, "overlay"),
     "-c:a",
     "copy",
     "-movflags",
@@ -779,7 +779,7 @@ async function runFfmpegOverlay(input: {
     input.outputPath,
   );
 
-  await appendPipelineLog(input.sermonId, "Overlay render started.");
+  await appendPipelineLog(input.sermonId, `Overlay render started with encoder: ${videoEncoder}.`);
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, {

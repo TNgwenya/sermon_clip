@@ -29,7 +29,7 @@ const SOURCE_DOWNLOAD_FORMATS: Record<SourceDownloadQualityMode, string> = {
   BALANCED: "best[ext=mp4][height<=1080]/bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
   BEST: "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
 };
-const DEFAULT_SOURCE_DOWNLOAD_QUALITY_MODE: SourceDownloadQualityMode = "BALANCED";
+const DEFAULT_SOURCE_DOWNLOAD_QUALITY_MODE: SourceDownloadQualityMode = "BEST";
 const DEFAULT_YT_DLP_CONCURRENT_FRAGMENTS = 8;
 const MAX_YT_DLP_CONCURRENT_FRAGMENTS = 16;
 
@@ -145,7 +145,9 @@ type DownloadRunResult = {
 };
 
 function buildBaseDownloadArgs(youtubeUrl: string, sourceVideoPath: string): string[] {
-  const qualityMode = normalizeSourceDownloadQualityMode(process.env.SOURCE_VIDEO_DOWNLOAD_MODE);
+  const qualityMode = normalizeSourceDownloadQualityMode(
+    process.env.SOURCE_VIDEO_DOWNLOAD_MODE ?? process.env.SOURCE_DOWNLOAD_QUALITY_MODE,
+  );
   const concurrentFragments = resolveConcurrentFragments(process.env.YT_DLP_CONCURRENT_FRAGMENTS);
   return [
     youtubeUrl,

@@ -45,6 +45,12 @@ import {
   upsertActiveClipEditPlanForClip,
 } from "@/server/agents/clipEditPlanService";
 import { validateTranscriptSafetyForPublishing } from "@/server/agents/localLanguageTranscriptSafety";
+import {
+  SOFTWARE_VIDEO_ENCODER,
+  buildVideoEncoderArgs as buildSharedVideoEncoderArgs,
+  resolvePreferredVideoEncoder as resolveSharedPreferredVideoEncoder,
+  shouldRetryWithSoftwareEncoder,
+} from "@/server/media/videoEncoding";
 
 type CaptionBurnOptions = {
   ffmpegPath?: string;
@@ -102,51 +108,22 @@ type CaptionCueOverlay = {
 
 type CaptionSafeArea = "STANDARD" | "RAISED" | "LOWER_MINIMAL";
 
-const FALLBACK_VIDEO_ENCODER = "libx264";
-const HARDWARE_VIDEO_ENCODER = "h264_videotoolbox";
+const FALLBACK_VIDEO_ENCODER = SOFTWARE_VIDEO_ENCODER;
 
 function commandFor(binaryPath?: string): string {
   return binaryPath?.trim() || "ffmpeg";
 }
 
 function resolvePreferredVideoEncoder(): string {
-  return process.env.CLIP_CAPTION_BURN_VIDEO_ENCODER?.trim()
-    || process.env.CLIP_RENDER_VIDEO_ENCODER?.trim()
-    || process.env.CLIP_EXPORT_VIDEO_ENCODER?.trim()
-    || (process.platform === "darwin" ? HARDWARE_VIDEO_ENCODER : FALLBACK_VIDEO_ENCODER);
+  return resolveSharedPreferredVideoEncoder("caption");
 }
 
 function isHardwareVideoEncoder(encoder: string): boolean {
-  return encoder === HARDWARE_VIDEO_ENCODER || encoder.includes("videotoolbox");
+  return shouldRetryWithSoftwareEncoder(encoder);
 }
 
 function buildVideoEncoderArgs(encoder: string): string[] {
-  if (encoder === HARDWARE_VIDEO_ENCODER) {
-    return [
-      "-c:v",
-      HARDWARE_VIDEO_ENCODER,
-      "-b:v",
-      process.env.CLIP_CAPTION_BURN_VIDEO_BITRATE?.trim()
-        || process.env.CLIP_RENDER_VIDEO_BITRATE?.trim()
-        || process.env.CLIP_EXPORT_VIDEO_BITRATE?.trim()
-        || "5000k",
-      "-allow_sw",
-      "1",
-    ];
-  }
-
-  if (encoder !== FALLBACK_VIDEO_ENCODER) {
-    return ["-c:v", encoder];
-  }
-
-  return [
-    "-c:v",
-    FALLBACK_VIDEO_ENCODER,
-    "-preset",
-    "veryfast",
-    "-crf",
-    "23",
-  ];
+  return buildSharedVideoEncoderArgs(encoder, "caption");
 }
 
 function getTempBurnPath(outputPath: string): string {

@@ -39,6 +39,28 @@ const maxWorkerAttempts = Math.max(1, Math.floor(positiveNumber(process.env.MEDI
 const logger = createWorkerLogger("media");
 let processing = false;
 
+const SERMON_STAGE_ORDER = [
+  "CREATED",
+  "DOWNLOADING",
+  "DOWNLOADED",
+  "AUDIO_EXTRACTING",
+  "AUDIO_EXTRACTED",
+  "TRANSCRIBING",
+  "TRANSCRIBED",
+  "GENERATING_CLIPS",
+  "CLIPS_GENERATED",
+  "REVIEWING",
+  "EXPORTING",
+  "EXPORTED",
+  "FAILED",
+] as const;
+
+const OBSOLETE_STAGE_JOB_TARGETS = {
+  DOWNLOAD_VIDEO: "DOWNLOADING",
+  EXTRACT_AUDIO: "AUDIO_EXTRACTING",
+  TRANSCRIBE_AUDIO: "TRANSCRIBING",
+} as const;
+
 function staleJobCutoff(): Date {
   return new Date(Date.now() - staleJobMs);
 }
@@ -316,9 +338,43 @@ function shouldRedoGeneratedClips(job: ProcessingJob): boolean {
   return generationSummary(job)?.mode === "redo";
 }
 
+function stageIndex(status: string): number {
+  return SERMON_STAGE_ORDER.findIndex((stage) => stage === status);
+}
+
+async function skipObsoleteStageJob(job: ProcessingJob): Promise<string | null> {
+  const targetStatus = OBSOLETE_STAGE_JOB_TARGETS[job.type as keyof typeof OBSOLETE_STAGE_JOB_TARGETS];
+  if (!targetStatus) {
+    return null;
+  }
+
+  const sermon = await prisma.sermon.findUnique({
+    where: { id: job.sermonId },
+    select: { status: true },
+  });
+  if (!sermon) {
+    throw new Error(`Sermon ${job.sermonId} was not found.`);
+  }
+
+  const currentIndex = stageIndex(sermon.status);
+  const targetIndex = stageIndex(targetStatus);
+  if (currentIndex <= targetIndex || currentIndex === -1 || targetIndex === -1) {
+    return null;
+  }
+
+  const message = `Skipped obsolete ${job.type} job because sermon is already ${sermon.status}.`;
+  await appendJobLog(job.id, message);
+  return message;
+}
+
 async function runJob(job: ProcessingJob): Promise<string> {
   const type = job.type;
   const sermonId = job.sermonId;
+
+  const obsoleteStageMessage = await skipObsoleteStageJob(job);
+  if (obsoleteStageMessage) {
+    return obsoleteStageMessage;
+  }
 
   switch (type) {
     case "PROCESS_SERMON": {

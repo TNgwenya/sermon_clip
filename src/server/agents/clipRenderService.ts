@@ -27,6 +27,11 @@ import {
   getMediaDimensions,
   getMediaDurationSeconds,
 } from "@/server/media/ffmpeg";
+import {
+  buildVideoEncoderArgs as buildSharedVideoEncoderArgs,
+  resolveAudioBitrate,
+  resolvePreferredVideoEncoder as resolveSharedPreferredVideoEncoder,
+} from "@/server/media/videoEncoding";
 import { resolveSmartCropCenter, resolveSmartCropTimeline } from "@/server/agents/videoSubjectTrackingService";
 import {
   buildVerticalFramingFilter,
@@ -186,9 +191,6 @@ type RenderSmartCrop = {
 
 type BatchRenderClip = Pick<ClipCandidate, "renderStatus" | "renderFreshness">;
 
-const FALLBACK_VIDEO_ENCODER = "libx264";
-const HARDWARE_VIDEO_ENCODER = "h264_videotoolbox";
-
 function commandFor(binaryPath?: string): string {
   return binaryPath?.trim() || "ffmpeg";
 }
@@ -211,35 +213,11 @@ function roundSeconds(value: number): number {
 }
 
 function resolvePreferredVideoEncoder(): string {
-  return process.env.CLIP_RENDER_VIDEO_ENCODER?.trim()
-    || process.env.CLIP_EXPORT_VIDEO_ENCODER?.trim()
-    || (process.platform === "darwin" ? HARDWARE_VIDEO_ENCODER : FALLBACK_VIDEO_ENCODER);
+  return resolveSharedPreferredVideoEncoder("render");
 }
 
 function buildVideoEncoderArgs(encoder: string): string[] {
-  if (encoder === HARDWARE_VIDEO_ENCODER) {
-    return [
-      "-c:v",
-      HARDWARE_VIDEO_ENCODER,
-      "-b:v",
-      process.env.CLIP_RENDER_VIDEO_BITRATE?.trim() || process.env.CLIP_EXPORT_VIDEO_BITRATE?.trim() || "5000k",
-      "-allow_sw",
-      "1",
-    ];
-  }
-
-  if (encoder !== FALLBACK_VIDEO_ENCODER) {
-    return ["-c:v", encoder];
-  }
-
-  return [
-    "-c:v",
-    FALLBACK_VIDEO_ENCODER,
-    "-preset",
-    "veryfast",
-    "-crf",
-    "23",
-  ];
+  return buildSharedVideoEncoderArgs(encoder, "render");
 }
 
 function resolveRenderConcurrency(value?: number | null): number {
@@ -708,7 +686,7 @@ async function runFfmpegRender(input: {
     "-c:a",
     "aac",
     "-b:a",
-    "128k",
+    resolveAudioBitrate("render"),
     "-movflags",
     "+faststart",
     input.outputPath,

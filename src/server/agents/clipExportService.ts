@@ -23,9 +23,17 @@ import {
   getClipExportFolderPath,
   getClipFormatExportPath,
   getClipFormatExportPathVersioned,
+  getSourceVideoPath,
 } from "@/server/agents/storage";
 import { buildClipExportBaseName, buildSermonExportDirectoryName } from "@/lib/exportNaming";
 import { checkFfmpegInstalled, getMediaDimensions } from "@/server/media/ffmpeg";
+import {
+  SOFTWARE_VIDEO_ENCODER,
+  buildVideoEncoderArgs as buildSharedVideoEncoderArgs,
+  resolveAudioBitrate,
+  resolvePreferredVideoEncoder as resolveSharedPreferredVideoEncoder,
+  shouldRetryWithSoftwareEncoder,
+} from "@/server/media/videoEncoding";
 import {
   buildVerticalFramingFilter,
   getSmartCropFilterRiskReason,
@@ -47,6 +55,7 @@ import {
   upsertActiveClipEditPlanForClip,
 } from "@/server/agents/clipEditPlanService";
 import { validateTranscriptSafetyForPublishing } from "@/server/agents/localLanguageTranscriptSafety";
+import { extractSpeechCleanupCutPlan } from "@/lib/speechCleanupPlan";
 
 export type ExportPreset = "VERTICAL_9_16" | "HORIZONTAL_16_9" | "SQUARE_1_1";
 export type ExportLayoutStrategy =
@@ -106,6 +115,7 @@ type ClipForExport = Pick<
     title: string;
     speakerName: string;
     sermonDate: Date | null;
+    sourceVideoPath: string | null;
   } | null;
 };
 
@@ -113,6 +123,22 @@ type ExportSpec = {
   width: number;
   height: number;
   format: ExportPreset;
+};
+
+type ExportSourceKind =
+  | "ORIGINAL_SERMON"
+  | "PREPARED_OVERLAY"
+  | "PREPARED_CAPTIONED"
+  | "PREPARED_RENDERED";
+
+type ExportSourceSelection = {
+  sourcePath: string | null;
+  kind: ExportSourceKind;
+  reason: string;
+  trim?: {
+    startTimeSeconds: number;
+    endTimeSeconds: number;
+  };
 };
 
 const EXPORT_SPECS: Record<ExportPreset, ExportSpec> = {
@@ -133,50 +159,22 @@ const EXPORT_SPECS: Record<ExportPreset, ExportSpec> = {
   },
 };
 
-const FALLBACK_VIDEO_ENCODER = "libx264";
-const HARDWARE_VIDEO_ENCODER = "h264_videotoolbox";
+const FALLBACK_VIDEO_ENCODER = SOFTWARE_VIDEO_ENCODER;
 
 function commandFor(binaryPath?: string): string {
   return binaryPath?.trim() || "ffmpeg";
 }
 
 function resolvePreferredVideoEncoder(): string {
-  const override = process.env.CLIP_EXPORT_VIDEO_ENCODER?.trim() || process.env.CLIP_RENDER_VIDEO_ENCODER?.trim();
-  if (override) {
-    return override;
-  }
-
-  return process.platform === "darwin" ? HARDWARE_VIDEO_ENCODER : FALLBACK_VIDEO_ENCODER;
+  return resolveSharedPreferredVideoEncoder("export");
 }
 
 function isHardwareVideoEncoder(encoder: string): boolean {
-  return encoder !== FALLBACK_VIDEO_ENCODER;
+  return shouldRetryWithSoftwareEncoder(encoder);
 }
 
 function buildVideoEncoderArgs(encoder: string): string[] {
-  if (encoder === HARDWARE_VIDEO_ENCODER) {
-    return [
-      "-c:v",
-      HARDWARE_VIDEO_ENCODER,
-      "-b:v",
-      process.env.CLIP_EXPORT_VIDEO_BITRATE?.trim() || process.env.CLIP_RENDER_VIDEO_BITRATE?.trim() || "5000k",
-      "-allow_sw",
-      "1",
-    ];
-  }
-
-  if (encoder !== FALLBACK_VIDEO_ENCODER) {
-    return ["-c:v", encoder];
-  }
-
-  return [
-    "-c:v",
-    FALLBACK_VIDEO_ENCODER,
-    "-preset",
-    "veryfast",
-    "-crf",
-    "20",
-  ];
+  return buildSharedVideoEncoderArgs(encoder, "export");
 }
 
 async function fileHasBytes(filePath: string): Promise<boolean> {
@@ -302,14 +300,24 @@ async function runFfmpeg(input: {
   sermonId: string;
   jobId: string;
   videoEncoder?: string;
+  trim?: {
+    startTimeSeconds: number;
+    endTimeSeconds: number;
+  };
 }): Promise<void> {
   const command = commandFor(input.ffmpegPath);
   const videoEncoder = input.videoEncoder ?? resolvePreferredVideoEncoder();
-  const args = [
-    "-y",
-    "-i",
-    input.sourcePath,
-  ];
+  const args = ["-y"];
+  if (input.trim) {
+    const durationSeconds = Math.max(0.01, input.trim.endTimeSeconds - input.trim.startTimeSeconds);
+    args.push(
+      "-ss",
+      String(input.trim.startTimeSeconds),
+      "-t",
+      String(Number(durationSeconds.toFixed(3))),
+    );
+  }
+  args.push("-i", input.sourcePath);
 
   if (input.brandingOverlayPath) {
     args.push("-loop", "1", "-i", input.brandingOverlayPath);
@@ -326,13 +334,16 @@ async function runFfmpeg(input: {
     "-c:a",
     "aac",
     "-b:a",
-    "128k",
+    resolveAudioBitrate("export"),
     "-movflags",
     "+faststart",
     input.outputPath,
   );
 
-  await appendPipelineLog(input.sermonId, `Clip export started from ${input.sourcePath} with encoder: ${videoEncoder}.`);
+  const trimSummary = input.trim
+    ? ` range ${input.trim.startTimeSeconds.toFixed(2)}-${input.trim.endTimeSeconds.toFixed(2)}s`
+    : "";
+  await appendPipelineLog(input.sermonId, `Clip export started from ${input.sourcePath}${trimSummary} with encoder: ${videoEncoder}.`);
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, {
@@ -377,11 +388,20 @@ function appendBrandingOverlayFilter(baseFilter: string): string {
   return `${baseFilter}; [1:v]format=rgba[branding]; [v][branding]overlay=0:0:shortest=1,format=yuv420p[v]`;
 }
 
-async function validateVideoInput(inputPath: string, ffmpegPath?: string): Promise<void> {
+async function validateVideoInput(
+  inputPath: string,
+  ffmpegPath?: string,
+  trim?: { startTimeSeconds: number; endTimeSeconds: number },
+): Promise<void> {
   const command = commandFor(ffmpegPath);
+  const args = ["-v", "error"];
+  if (trim) {
+    args.push("-ss", String(trim.startTimeSeconds));
+  }
+  args.push("-i", inputPath, "-t", "2", "-f", "null", "-");
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, ["-v", "error", "-i", inputPath, "-f", "null", "-"], {
+    const child = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
     });
@@ -393,7 +413,7 @@ async function validateVideoInput(inputPath: string, ffmpegPath?: string): Promi
     });
 
     child.on("error", (error) => {
-      reject(new Error(`Unable to validate source clip: ${error.message}`));
+      reject(new Error(`Unable to validate source video: ${error.message}`));
     });
 
     child.on("close", (code) => {
@@ -402,7 +422,7 @@ async function validateVideoInput(inputPath: string, ffmpegPath?: string): Promi
         return;
       }
 
-      reject(new Error(`Rendered clip is not a valid video input. ${stderr.trim().slice(-800)}`.trim()));
+      reject(new Error(`Video source is not a valid export input. ${stderr.trim().slice(-800)}`.trim()));
     });
   });
 }
@@ -518,6 +538,7 @@ async function loadClip(clipId: string): Promise<ClipForExport> {
           title: true,
           speakerName: true,
           sermonDate: true,
+          sourceVideoPath: true,
         },
       },
     },
@@ -530,6 +551,49 @@ async function loadClip(clipId: string): Promise<ClipForExport> {
   return clip;
 }
 
+function resolveRenderBoundaries(clip: Pick<ClipForExport, "startTimeSeconds" | "endTimeSeconds" | "adjustedStartTimeSeconds" | "adjustedEndTimeSeconds">): {
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+} {
+  return {
+    startTimeSeconds: clip.adjustedStartTimeSeconds ?? clip.startTimeSeconds,
+    endTimeSeconds: clip.adjustedEndTimeSeconds ?? clip.endTimeSeconds,
+  };
+}
+
+function resolvePreparedExportSourceSelection(
+  clip: Pick<
+    ClipForExport,
+    | "renderedFilePath"
+    | "captionBurnStatus"
+    | "captionedVideoPath"
+    | "overlayStatus"
+    | "overlayVideoPath"
+  >,
+): ExportSourceSelection {
+  if (clip.overlayStatus === "COMPLETED" && clip.overlayVideoPath) {
+    return {
+      sourcePath: clip.overlayVideoPath,
+      kind: "PREPARED_OVERLAY",
+      reason: "Prepared overlay output preserves approved captions and branding overlays.",
+    };
+  }
+
+  if (clip.captionBurnStatus === "COMPLETED" && clip.captionedVideoPath) {
+    return {
+      sourcePath: clip.captionedVideoPath,
+      kind: "PREPARED_CAPTIONED",
+      reason: "Prepared captioned output preserves approved burned-in captions.",
+    };
+  }
+
+  return {
+    sourcePath: clip.renderedFilePath,
+    kind: "PREPARED_RENDERED",
+    reason: "Prepared rendered clip is the safest available export source.",
+  };
+}
+
 export function resolvePreparedExportSource(
   clip: Pick<
     ClipForExport,
@@ -540,15 +604,81 @@ export function resolvePreparedExportSource(
     | "overlayVideoPath"
   >,
 ): string | null {
-  if (clip.overlayStatus === "COMPLETED" && clip.overlayVideoPath) {
-    return clip.overlayVideoPath;
+  return resolvePreparedExportSourceSelection(clip).sourcePath;
+}
+
+function hasPreparedVisualLayers(
+  clip: Pick<ClipForExport, "captionBurnStatus" | "captionedVideoPath" | "overlayStatus" | "overlayVideoPath">,
+): boolean {
+  return Boolean(
+    (clip.overlayStatus === "COMPLETED" && clip.overlayVideoPath)
+    || (clip.captionBurnStatus === "COMPLETED" && clip.captionedVideoPath),
+  );
+}
+
+function hasSpeechCleanupCutPlan(clip: Pick<ClipForExport, "captionData">): boolean {
+  return Boolean(extractSpeechCleanupCutPlan(clip.captionData));
+}
+
+function uniquePaths(paths: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of paths) {
+    const value = item?.trim();
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
   }
 
-  if (clip.captionBurnStatus === "COMPLETED" && clip.captionedVideoPath) {
-    return clip.captionedVideoPath;
+  return result;
+}
+
+async function resolveOriginalSermonSourcePath(clip: Pick<ClipForExport, "sermonId" | "sermon">): Promise<string | null> {
+  const candidates = uniquePaths([
+    getSourceVideoPath(clip.sermonId),
+    clip.sermon?.sourceVideoPath,
+  ]);
+
+  for (const candidate of candidates) {
+    if (await fileHasBytes(candidate)) {
+      return candidate;
+    }
   }
 
-  return clip.renderedFilePath;
+  return null;
+}
+
+async function resolveBestExportSource(clip: ClipForExport): Promise<ExportSourceSelection> {
+  const prepared = resolvePreparedExportSourceSelection(clip);
+
+  if (hasPreparedVisualLayers(clip)) {
+    return prepared;
+  }
+
+  if (hasSpeechCleanupCutPlan(clip)) {
+    return {
+      ...prepared,
+      reason: "Prepared rendered clip preserves the approved speech cleanup cut plan.",
+    };
+  }
+
+  const originalSourcePath = await resolveOriginalSermonSourcePath(clip);
+  if (!originalSourcePath) {
+    return {
+      ...prepared,
+      reason: "Original sermon source was unavailable, so the prepared rendered clip is used.",
+    };
+  }
+
+  const boundaries = resolveRenderBoundaries(clip);
+  return {
+    sourcePath: originalSourcePath,
+    kind: "ORIGINAL_SERMON",
+    reason: "Original sermon source avoids an extra generation of video compression.",
+    trim: boundaries,
+  };
 }
 
 export async function exportClipWithPreset(
@@ -572,7 +702,8 @@ export async function exportClipWithPreset(
     throw new Error(transcriptSafety.reason);
   }
 
-  const sourcePath = resolvePreparedExportSource(clip);
+  const exportSource = await resolveBestExportSource(clip);
+  const sourcePath = exportSource.sourcePath;
   const sourceExists = sourcePath ? await fileHasBytes(sourcePath) : false;
   const outputPath = resolveExportOutputPath({
     sermonId: clip.sermonId,
@@ -627,6 +758,7 @@ export async function exportClipWithPreset(
       metadata: {
         reusedExistingFile: true,
         layoutStrategy,
+        sourceKind: exportSource.kind,
       },
     });
 
@@ -664,7 +796,7 @@ export async function exportClipWithPreset(
     throw new Error("Prepared video source is missing.");
   }
 
-  await validateVideoInput(exportSourcePath, options?.ffmpegPath);
+  await validateVideoInput(exportSourcePath, options?.ffmpegPath, exportSource.trim);
 
   const queued = await prisma.clipCandidate.updateMany({
     where: {
@@ -696,6 +828,8 @@ export async function exportClipWithPreset(
     });
     await markJobRunning(job.id);
     await appendJobLog(job.id, `Export requested for clip ${clip.id} with format ${format}.`);
+    await appendJobLog(job.id, `Export source selected: ${exportSource.kind}. ${exportSource.reason}`);
+    await appendPipelineLog(clip.sermonId, `Export source selected for clip ${clip.id}: ${exportSource.kind}. ${exportSource.reason}`);
 
     await prisma.clipCandidate.update({
       where: { id: clip.id },
@@ -835,9 +969,10 @@ export async function exportClipWithPreset(
     }
 
     const preferredVideoEncoder = resolvePreferredVideoEncoder();
+    let completedVideoEncoder = preferredVideoEncoder;
     const exportWithEncoder = async (videoEncoder: string) => {
       await runFfmpeg({
-        sourcePath: sourcePath!,
+        sourcePath: exportSourcePath,
         outputPath: tempPath,
         ffmpegPath: options?.ffmpegPath,
         filter: fullFilter,
@@ -845,7 +980,9 @@ export async function exportClipWithPreset(
         sermonId: clip.sermonId,
         jobId: job.id,
         videoEncoder,
+        trim: exportSource.trim,
       });
+      completedVideoEncoder = videoEncoder;
     };
 
     try {
@@ -877,16 +1014,19 @@ export async function exportClipWithPreset(
       await appendPipelineLog(clip.sermonId, `${smartCropRuntimeFallbackReason} Clip ${clip.id}.`);
       await appendJobLog(job.id, `${smartCropRuntimeFallbackReason} Original error: ${message}`);
 
+      const fallbackVideoEncoder = isHardwareVideoEncoder(preferredVideoEncoder) ? FALLBACK_VIDEO_ENCODER : preferredVideoEncoder;
       await runFfmpeg({
-        sourcePath: sourcePath!,
+        sourcePath: exportSourcePath,
         outputPath: tempPath,
         ffmpegPath: options?.ffmpegPath,
         filter: fullFilter,
         brandingOverlayPath: overlayEnabled ? brandingOverlayPath : undefined,
         sermonId: clip.sermonId,
         jobId: job.id,
-        videoEncoder: isHardwareVideoEncoder(preferredVideoEncoder) ? FALLBACK_VIDEO_ENCODER : preferredVideoEncoder,
+        videoEncoder: fallbackVideoEncoder,
+        trim: exportSource.trim,
       });
+      completedVideoEncoder = fallbackVideoEncoder;
     }
 
     await rename(tempPath, outputPath);
@@ -930,6 +1070,20 @@ export async function exportClipWithPreset(
             frameQualitySummary: framingDecision.frameQualitySummary,
             updatedAt: new Date().toISOString(),
           },
+          exportSource: {
+            kind: exportSource.kind,
+            reason: exportSource.reason,
+            trim: exportSource.trim ?? null,
+            updatedAt: new Date().toISOString(),
+          },
+          exportQualityProfile: {
+            videoEncoder: completedVideoEncoder,
+            audioBitrate: resolveAudioBitrate("export"),
+            targetWidth: spec.width,
+            targetHeight: spec.height,
+            format,
+            updatedAt: new Date().toISOString(),
+          },
         },
         visualQualityScore: framingDecision.visualQualityScore,
         visualReadinessScore: framingDecision.visualQualityScore,
@@ -954,6 +1108,11 @@ export async function exportClipWithPreset(
     } else if (thumbnail.error) {
       await appendJobLog(job.id, `Clip poster is not ready yet for ${clip.id}: ${thumbnail.error}`);
     }
+    await upsertActiveClipEditPlanForClip({
+      clipCandidateId: clip.id,
+      createdBy: "export",
+      createdReason: "export_completed_with_quality_profile",
+    });
     await markExportAssetCompleted(clip.id, true);
     await recordClipArtifact({
       clipCandidateId: clip.id,
@@ -967,6 +1126,11 @@ export async function exportClipWithPreset(
         effectiveLayoutStrategy,
         framingDecision: framingDecision.reasonCodes,
         brandingOverlayApplied: overlayEnabled,
+        sourceKind: exportSource.kind,
+        sourceReason: exportSource.reason,
+        sourceTrim: exportSource.trim ?? null,
+        videoEncoder: completedVideoEncoder,
+        audioBitrate: resolveAudioBitrate("export"),
       },
     });
 
@@ -1023,6 +1187,7 @@ export const __clipExportTestUtils = {
   getSmartCropFilterRiskReason,
   fileHasBytes,
   resolvePreparedExportSource,
+  resolveBestExportSource,
   buildReadableExportFileStem,
   resolveOutputPath(input: {
     sermonId: string;

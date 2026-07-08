@@ -216,6 +216,116 @@ describe("clip export service", () => {
     expect(source).toBe("/tmp/overlay.mp4");
   });
 
+  it("prefers the original sermon source for final export when no prepared visual layers or cleanup would be lost", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "clip-export-source-"));
+    try {
+      const originalSourcePath = path.join(tempDir, "source.mp4");
+      const sermonId = `sermon-${path.basename(tempDir)}`;
+      await writeFile(originalSourcePath, "source-video");
+
+      const selection = await __clipExportTestUtils.resolveBestExportSource({
+        id: "clip-1",
+        title: "Clip",
+        hook: null,
+        caption: null,
+        transcriptText: "Transcript",
+        smartClipCategory: null,
+        ministryValue: null,
+        emotionalImpactScore: 8,
+        hookStrengthScore: 8,
+        shareabilityScore: 8,
+        manualCropKeyframes: null,
+        captionData: null,
+        sermonId,
+        status: "APPROVED",
+        startTimeSeconds: 10,
+        endTimeSeconds: 70,
+        adjustedStartTimeSeconds: 12,
+        adjustedEndTimeSeconds: 68,
+        renderStatus: "COMPLETED",
+        renderedFilePath: path.join(tempDir, "rendered.mp4"),
+        captionBurnStatus: "NOT_BURNED",
+        captionedVideoPath: null,
+        overlayStatus: "NOT_RENDERED",
+        overlayVideoPath: null,
+        exportStatus: "NOT_EXPORTED",
+        exportFormat: null,
+        transcriptSafetyStatus: "TRUSTED",
+        sermon: {
+          title: "Sermon",
+          speakerName: "Pastor",
+          sermonDate: null,
+          sourceVideoPath: originalSourcePath,
+        },
+      } as unknown as Parameters<typeof __clipExportTestUtils.resolveBestExportSource>[0]);
+
+      expect(selection.kind).toBe("ORIGINAL_SERMON");
+      expect(selection.sourcePath).toBe(originalSourcePath);
+      expect(selection.trim).toEqual({ startTimeSeconds: 12, endTimeSeconds: 68 });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps prepared captioned output so final export does not lose approved captions", async () => {
+    const selection = await __clipExportTestUtils.resolveBestExportSource({
+      renderedFilePath: "/tmp/rendered.mp4",
+      captionBurnStatus: "COMPLETED",
+      captionedVideoPath: "/tmp/captioned.mp4",
+      overlayStatus: "NOT_RENDERED",
+      overlayVideoPath: null,
+      captionData: null,
+      sermonId: "sermon-1",
+      sermon: { sourceVideoPath: "/tmp/source.mp4", title: "Sermon", speakerName: "Pastor", sermonDate: null },
+      startTimeSeconds: 10,
+      endTimeSeconds: 70,
+      adjustedStartTimeSeconds: null,
+      adjustedEndTimeSeconds: null,
+    } as unknown as Parameters<typeof __clipExportTestUtils.resolveBestExportSource>[0]);
+
+    expect(selection.kind).toBe("PREPARED_CAPTIONED");
+    expect(selection.sourcePath).toBe("/tmp/captioned.mp4");
+    expect(selection.trim).toBeUndefined();
+  });
+
+  it("keeps prepared rendered output when speech cleanup changed the approved cut plan", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "clip-export-cleanup-"));
+    try {
+      const originalSourcePath = path.join(tempDir, "source.mp4");
+      const sermonId = `sermon-${path.basename(tempDir)}`;
+      await writeFile(originalSourcePath, "source-video");
+
+      const selection = await __clipExportTestUtils.resolveBestExportSource({
+        renderedFilePath: "/tmp/rendered.mp4",
+        captionBurnStatus: "NOT_BURNED",
+        captionedVideoPath: null,
+        overlayStatus: "NOT_RENDERED",
+        overlayVideoPath: null,
+        captionData: {
+          speechCleanupPlan: {
+            enabled: true,
+            sourceStartSeconds: 1,
+            sourceEndSeconds: 30,
+            cleanedDurationSeconds: 28,
+            cuts: [{ startSeconds: 12, endSeconds: 14, removedSeconds: 2 }],
+          },
+        },
+        sermonId,
+        sermon: { sourceVideoPath: originalSourcePath, title: "Sermon", speakerName: "Pastor", sermonDate: null },
+        startTimeSeconds: 10,
+        endTimeSeconds: 70,
+        adjustedStartTimeSeconds: null,
+        adjustedEndTimeSeconds: null,
+      } as unknown as Parameters<typeof __clipExportTestUtils.resolveBestExportSource>[0]);
+
+      expect(selection.kind).toBe("PREPARED_RENDERED");
+      expect(selection.sourcePath).toBe("/tmp/rendered.mp4");
+      expect(selection.reason).toContain("speech cleanup");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("builds center-crop filter for vertical 9:16", () => {
     const filter = __clipExportTestUtils.buildVideoFilter(
       { format: "VERTICAL_9_16", width: 1080, height: 1920 },

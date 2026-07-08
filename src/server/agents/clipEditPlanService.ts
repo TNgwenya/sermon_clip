@@ -78,6 +78,8 @@ function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot 
     exportLayoutStrategy: clip.exportLayoutStrategy,
     exportSettings: captionData["exportSettings"] ?? null,
     framingPersonality: captionData["framingPersonality"] ?? null,
+    exportSource: captionData["exportSource"] ?? null,
+    exportQualityProfile: captionData["exportQualityProfile"] ?? null,
   };
   const planDocument = {
     schemaVersion: CLIP_EDIT_PLAN_SCHEMA_VERSION,
