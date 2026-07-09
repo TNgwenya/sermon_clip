@@ -810,6 +810,21 @@ model ProcessingJob {
   @@index([heartbeatAt])
 }
 
+model WorkerHeartbeat {
+  id            String   @id @default(cuid())
+  workerType    String
+  workerId      String
+  status        String   @default("ONLINE")
+  dryRun        Boolean  @default(false)
+  detailsJson   Json?
+  heartbeatAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([workerType, workerId])
+  @@index([workerType, heartbeatAt])
+}
+
 model ClipEditPlan {
   id                     String             @id @default(cuid())
   clipCandidateId        String

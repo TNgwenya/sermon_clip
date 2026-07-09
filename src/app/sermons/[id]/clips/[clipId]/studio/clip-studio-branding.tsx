@@ -6,6 +6,8 @@ import { SectionCard, StatusBadge } from "@/components/ui";
 import {
   BRANDING_PRESET_DESCRIPTIONS,
   BRANDING_PRESET_LABELS,
+  DEFAULT_INTRO_DURATION_SECONDS,
+  DEFAULT_OUTRO_DURATION_SECONDS,
   SELECTABLE_BRANDING_PRESETS,
   buildBrandingSummary,
   type BrandBackgroundStyle,
@@ -41,6 +43,12 @@ export function ClipStudioBranding({
   const [lowerThirdEnabled, setLowerThirdEnabled] = useState(initialConfig.lowerThirdEnabled);
   const [introEnabled, setIntroEnabled] = useState(initialConfig.introEnabled);
   const [outroEnabled, setOutroEnabled] = useState(initialConfig.outroEnabled);
+  const [introDurationSeconds, setIntroDurationSeconds] = useState(
+    initialConfig.introDurationSeconds ?? DEFAULT_INTRO_DURATION_SECONDS,
+  );
+  const [outroDurationSeconds, setOutroDurationSeconds] = useState(
+    initialConfig.outroDurationSeconds ?? DEFAULT_OUTRO_DURATION_SECONDS,
+  );
   const [backgroundStyle, setBackgroundStyle] = useState<BrandBackgroundStyle>(initialConfig.backgroundStyle);
   const [themeColor, setThemeColor] = useState(initialConfig.themeColor ?? "");
 
@@ -55,6 +63,8 @@ export function ClipStudioBranding({
       lowerThirdEnabled,
       introEnabled,
       outroEnabled,
+      introDurationSeconds,
+      outroDurationSeconds,
       backgroundStyle,
       themeColor: themeColor.trim().length > 0 ? themeColor.trim() : null,
     }),
@@ -67,7 +77,9 @@ export function ClipStudioBranding({
       watermarkEnabled,
       lowerThirdEnabled,
       introEnabled,
+      introDurationSeconds,
       outroEnabled,
+      outroDurationSeconds,
       backgroundStyle,
       themeColor,
     ],
@@ -98,11 +110,10 @@ export function ClipStudioBranding({
           <p>Branding choices update the preview immediately. Prepare for Posting renders these layers.</p>
         </div>
 
-        {!logoAvailable ? (
-          <p className="warning-banner">
-            Add your church logo and brand style in Brand settings.
-          </p>
-        ) : null}
+        <p className="muted small">
+          Prepared clips currently use your church name as the watermark.
+          {logoAvailable ? " Your saved logo remains available in Brand settings." : " You can still add a logo in Brand settings for future logo treatments."}
+        </p>
 
         <label className="review-checkbox-row">
           <input
@@ -166,7 +177,7 @@ export function ClipStudioBranding({
               checked={watermarkEnabled}
               onChange={(event) => setWatermarkEnabled(event.target.checked)}
             />
-            <span>Add watermark</span>
+            <span>Add church name watermark</span>
           </label>
 
           <label className="review-checkbox-row">
@@ -187,6 +198,21 @@ export function ClipStudioBranding({
             <span>Intro</span>
           </label>
 
+          {previewConfig.introEnabled ? (
+            <label className="stack-sm">
+              Intro duration
+              <input
+                type="range"
+                min={1}
+                max={8}
+                step={0.5}
+                value={introDurationSeconds}
+                onChange={(event) => setIntroDurationSeconds(Number(event.target.value))}
+              />
+              <span className="muted small">{introDurationSeconds.toFixed(1)} seconds from the opening</span>
+            </label>
+          ) : null}
+
           <label className="review-checkbox-row">
             <input
               type="checkbox"
@@ -195,6 +221,21 @@ export function ClipStudioBranding({
             />
             <span>Outro</span>
           </label>
+
+          {previewConfig.outroEnabled ? (
+            <label className="stack-sm">
+              Outro duration
+              <input
+                type="range"
+                min={1}
+                max={8}
+                step={0.5}
+                value={outroDurationSeconds}
+                onChange={(event) => setOutroDurationSeconds(Number(event.target.value))}
+              />
+              <span className="muted small">{outroDurationSeconds.toFixed(1)} seconds before the clip ends</span>
+            </label>
+          ) : null}
         </fieldset>
 
         <label className="stack-sm">
@@ -205,9 +246,9 @@ export function ClipStudioBranding({
             disabled={isPending || !enabled}
           >
             <option value="NONE">Clean video</option>
-            <option value="SOFT_GRADIENT">Soft gradient</option>
-            <option value="SOLID_BRAND">Brand color</option>
-            <option value="BLURRED_TINT">Blurred tint</option>
+            <option value="SOFT_GRADIENT">Soft color wash</option>
+            <option value="SOLID_BRAND">Brand color wash</option>
+            <option value="BLURRED_TINT">Light color tint</option>
           </select>
         </label>
 
@@ -225,9 +266,9 @@ export function ClipStudioBranding({
         <div className={enabled ? "stack-sm clip-studio-brand-preview" : "stack-sm clip-studio-brand-preview is-disabled"}>
           <p className="muted small">Branding preview</p>
           <div className={`clip-studio-brand-frame background-${backgroundStyle.toLowerCase().replace(/_/g, "-")}`} style={previewStyle}>
-            {enabled && previewConfig.introEnabled ? <div className="clip-studio-brand-intro">Intro</div> : null}
+            {enabled && previewConfig.introEnabled ? <div className="clip-studio-brand-intro">Opening · {introDurationSeconds.toFixed(1)}s</div> : null}
             {enabled && watermarkEnabled ? (
-              <div className="clip-studio-brand-watermark">{churchName ? churchName.slice(0, 2).toUpperCase() : "SC"}</div>
+              <div className="clip-studio-brand-watermark">{churchName || "Church"}</div>
             ) : null}
             {enabled && lowerThirdEnabled ? (
               <div className="clip-studio-brand-lower-third">
@@ -237,14 +278,14 @@ export function ClipStudioBranding({
             ) : (
               <div className="clip-studio-brand-clean-label">Clean clip preview</div>
             )}
-            {enabled && previewConfig.outroEnabled ? <div className="clip-studio-brand-outro">Outro</div> : null}
+            {enabled && previewConfig.outroEnabled ? <div className="clip-studio-brand-outro">Closing · {outroDurationSeconds.toFixed(1)}s</div> : null}
           </div>
           <p>{previewSummary}</p>
           <p className="muted small">
             Church name: {churchName || "Not available"} · Sermon title: {sermonTitle || "Not available"} ·
             Preacher name: {preacherName || "Not available"}
           </p>
-          <p className="muted small">Logo: {logoAvailable ? "Available" : "Missing"}</p>
+          <p className="muted small">Brand logo saved: {logoAvailable ? "Yes" : "No"} · current prepared watermark uses church name text</p>
         </div>
       </div>
     </SectionCard>

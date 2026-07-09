@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type SermonLiveRefreshProps = {
@@ -26,19 +26,10 @@ export function SermonLiveRefresh({
 }: SermonLiveRefreshProps) {
   const router = useRouter();
   const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
-  const [refreshCount, setRefreshCount] = useState(0);
-  const nextCheckLabel = useMemo(() => {
-    if (!enabled) {
-      return "Live updates are paused until work starts again.";
-    }
-
-    return `Checking again about every ${Math.round(intervalMs / 1000)} seconds.`;
-  }, [enabled, intervalMs]);
   const checkedAtLabel = lastCheckedAt ? formatCheckedAt(lastCheckedAt) : "just now";
 
   function refreshNow() {
     setLastCheckedAt(new Date());
-    setRefreshCount((current) => current + 1);
     router.refresh();
   }
 
@@ -49,7 +40,6 @@ export function SermonLiveRefresh({
 
     const timer = window.setInterval(() => {
       setLastCheckedAt(new Date());
-      setRefreshCount((current) => current + 1);
       router.refresh();
     }, intervalMs);
 
@@ -59,16 +49,14 @@ export function SermonLiveRefresh({
   return (
     <div className={`live-refresh-panel ${enabled ? "is-live" : "is-paused"}`} aria-live="polite">
       <div>
-        <p className="muted small">{enabled ? "Live progress is on" : "Progress is waiting"}</p>
+        <p className="muted small">{enabled ? "Updating automatically" : "Waiting to continue"}</p>
         <strong>{activeStepLabel}</strong>
         <p className="muted small">
-          {progressPercent}% complete · Last checked {checkedAtLabel}
-          {refreshCount > 0 ? ` · ${refreshCount} update${refreshCount === 1 ? "" : "s"}` : ""}
+          {progressPercent}% complete · Updated {checkedAtLabel}
         </p>
-        <p className="muted small">{nextCheckLabel}</p>
       </div>
       <button type="button" className="button tertiary" onClick={refreshNow}>
-        Check now
+        Refresh now
       </button>
     </div>
   );

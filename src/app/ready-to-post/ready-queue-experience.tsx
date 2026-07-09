@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { CopyCaptionButton } from "@/app/ready-to-post/copy-caption-button";
 import { ReadyQueueActions, SchedulePostButton } from "@/app/ready-to-post/ready-queue-actions";
-import { ScheduleDraftModal } from "@/app/ready-to-post/schedule-draft-modal";
+import { ScheduleDraftModal, type ScheduleDraftClipSummary } from "@/app/ready-to-post/schedule-draft-modal";
 import { ClipAssetRecoveryButton } from "@/components/clip-asset-recovery-button";
 import { EmptyState } from "@/components/ui";
 import {
@@ -18,19 +19,26 @@ import {
 } from "@/lib/readyToPost";
 import type { PostingDraft } from "@/lib/postingDrafts";
 import type { PostingPackageHistoryItem } from "@/lib/postingPackages";
+import { listCanonicalPlatformPayloads } from "@/lib/publishingPayload";
+import type { PublishingServiceHealth } from "@/lib/publishingServiceHealth";
 import {
   buildPostingCalendarDays,
   suggestNextCalendarSlot,
   toDateTimeLocalInputValue,
 } from "@/lib/postingSchedule";
-import type { ScheduledPost } from "@/lib/scheduledPosts";
+import type { ManualPublishingStatus, RestorablePublishingStatus, ScheduledPost } from "@/lib/scheduledPosts";
 import type { SocialAccount } from "@/lib/socialAccounts";
+import { formatSecondsForPastorView } from "@/lib/sermonSegment";
 
 export type ReadyQueueClip = {
   id: string;
   title: string;
   hook: string;
   caption: string;
+  shortCaption?: string | null;
+  platformCaption?: string | null;
+  coverFrameSelected?: boolean;
+  coverFrameTimeSeconds?: number | null;
   hashtags: unknown;
   score: number;
   finalQualityScore: number | null;
@@ -67,6 +75,7 @@ type ReadyQueueExperienceProps = {
   packageHistory: PostingPackageHistoryItem[];
   initialSocialAccounts: SocialAccount[];
   initialScheduledPosts: ScheduledPost[];
+  initialPublishingServiceHealth: PublishingServiceHealth;
   controlPanelMode?: boolean;
 };
 
@@ -76,6 +85,17 @@ type CalendarStatusFilter = "ACTIVE" | "ALL" | PublishingFilter;
 type CalendarPlatformFilter = "ALL" | ScheduledPost["platform"];
 type ClipQualityFilter = "ALL" | "POST_READY" | "GOOD_NEEDS_REVIEW" | "NEEDS_EDITING" | "REJECT" | "NEEDS_REVIEW";
 type ClipQualityLabel = "POST_READY" | "GOOD_NEEDS_REVIEW" | "NEEDS_EDITING" | "REJECT";
+type PublishingConfirmationAction = "QUEUE" | "MARK_POSTED" | "SKIP" | "CANCEL";
+type PublishingConfirmation = {
+  action: PublishingConfirmationAction;
+  post: ScheduledPost;
+};
+type PublishingCorrection = {
+  postId: string;
+  status: RestorablePublishingStatus;
+  expectedCurrentStatus: "POSTED" | "SKIPPED";
+  label: string;
+};
 
 const VIDEO_PREVIEW_LABELS: Record<VideoPreviewState, string> = {
   poster: "Preview idle",
@@ -130,11 +150,13 @@ const QUALITY_LABELS: Record<ClipQualityLabel, string> = {
 
 const PLATFORMS: ScheduledPost["platform"][] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
 const INTERNAL_QUALITY_WARNINGS = new Set(["AI_REVIEW_FAILED", "FALLBACK_REVIEW"]);
-const SOCIAL_CALENDAR_DAY_COUNT = 14;
+const DESKTOP_CALENDAR_DAY_COUNT = 14;
+const COMPACT_CALENDAR_DAY_COUNT = 7;
 const ACTIVE_CALENDAR_STATUSES = new Set<ScheduledPost["status"]>([
   "PLANNED",
   "READY_FOR_MEDIA_TEAM",
   "POSTING",
+  "FAILED",
   "PRIVATE_ONLY_UNVERIFIED",
 ]);
 const HIDE_FROM_READY_STATUSES = new Set<ScheduledPost["status"]>([
@@ -167,12 +189,31 @@ function getPlatformCaption(clip: ReadyQueueClip, platform: ScheduledPost["platf
   return getPlatformHandoff(clip, platform)?.captionText ?? clip.caption;
 }
 
+function buildScheduleClipSummary(clip: ReadyQueueClip): ScheduleDraftClipSummary {
+  return {
+    id: clip.id,
+    title: clip.title,
+    caption: clip.caption,
+    platformPayloads: listCanonicalPlatformPayloads({
+      title: clip.title,
+      hook: clip.hook,
+      caption: clip.caption,
+      shortCaption: clip.shortCaption,
+      platformCaption: clip.platformCaption,
+      hashtags: clip.hashtags,
+      intendedAudience: clip.intendedAudience,
+    }),
+  };
+}
+
 function getPlatformHandoff(clip: ReadyQueueClip, platform: ScheduledPost["platform"]): PlatformUploadHandoff | null {
   const readyPackage = buildReadyToPostPackage({
     clipId: clip.id,
     title: clip.title,
     hook: clip.hook,
     caption: clip.caption,
+    shortCaption: clip.shortCaption,
+    platformCaption: clip.platformCaption,
     hashtags: clip.hashtags,
     estimatedBytes: clip.estimatedBytes,
     smartClipCategory: clip.smartClipCategory,
@@ -213,6 +254,295 @@ function buildScheduledPostTitle(post: ScheduledPost, clips: ReadyQueueClip[]): 
 
 function getPlatformClass(platform: ScheduledPost["platform"]): string {
   return platform.toLowerCase().replace(/\s+/g, "-");
+}
+
+function getPlatformUploadActionLabel(platform: ScheduledPost["platform"]): string {
+  return platform === "YouTube Shorts" ? "Open YouTube Studio upload" : `Open ${platform} upload`;
+}
+
+function getPublishingConfirmationCopy(confirmation: PublishingConfirmation): {
+  eyebrow: string;
+  title: string;
+  description: string;
+  confirmLabel: string;
+  tone: "primary" | "secondary";
+} {
+  switch (confirmation.action) {
+    case "QUEUE":
+      return {
+        eyebrow: "Publishing check",
+        title: `Queue this ${confirmation.post.platform} post now?`,
+        description: "Sermon Clip will send this prepared post to the connected publishing service. Review the channel, copy, and media before continuing.",
+        confirmLabel: "Queue for publishing",
+        tone: "primary",
+      };
+    case "MARK_POSTED":
+      return {
+        eyebrow: "Publishing receipt",
+        title: "Confirm this post is live",
+        description: "Use this after you have completed the platform upload. The post will move out of the active publishing plan and into history.",
+        confirmLabel: "Yes, it is live",
+        tone: "primary",
+      };
+    case "SKIP":
+      if (confirmation.post.status === "PRIVATE_ONLY_UNVERIFIED") {
+        return {
+          eyebrow: "Resolve publishing check",
+          title: "Confirm this post is not live",
+          description: "Use this only after checking the platform. Sermon Clip will record that this upload is not live and keep the prepared clip available.",
+          confirmLabel: "Not live — skip it",
+          tone: "secondary",
+        };
+      }
+      return {
+        eyebrow: "Update the plan",
+        title: "Skip this planned post?",
+        description: "The prepared clip will stay available, but this platform plan will be removed from the active queue and kept in history.",
+        confirmLabel: "Skip this post",
+        tone: "secondary",
+      };
+    case "CANCEL":
+      return {
+        eyebrow: "Remove from calendar",
+        title: "Cancel this scheduled post?",
+        description: "This removes the schedule entry from the calendar. Your prepared clip and its approved copy will not be deleted.",
+        confirmLabel: "Cancel scheduled post",
+        tone: "secondary",
+      };
+  }
+}
+
+function PublishingConfirmationDialog({
+  confirmation,
+  pending,
+  onClose,
+  onConfirm,
+}: {
+  confirmation: PublishingConfirmation;
+  pending: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const copy = getPublishingConfirmationCopy(confirmation);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !pending) {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, pending]);
+
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  const scheduledLabel = confirmation.post.scheduledFor
+    ? new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(confirmation.post.scheduledFor))
+    : "No exact time";
+
+  return createPortal(
+    <div className="feature-modal-backdrop" role="presentation" onClick={pending ? undefined : onClose}>
+      <section
+        className="feature-modal publishing-confirmation-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="publishing-confirmation-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="stack-sm">
+          <p className="kicker">{copy.eyebrow}</p>
+          <h2 id="publishing-confirmation-title">{copy.title}</h2>
+          <p className="muted">{copy.description}</p>
+        </div>
+        <dl className="publishing-confirmation-summary">
+          <div><dt>Platform</dt><dd>{confirmation.post.platform}</dd></div>
+          <div><dt>Channel</dt><dd>{confirmation.post.socialAccountLabel ?? "Media team handoff"}</dd></div>
+          <div><dt>Plan</dt><dd>{scheduledLabel}</dd></div>
+        </dl>
+        <div className="publishing-confirmation-actions">
+          <button type="button" className="button tertiary" onClick={onClose} disabled={pending} autoFocus>
+            Keep plan
+          </button>
+          <button type="button" className={`button ${copy.tone}`} onClick={onConfirm} disabled={pending}>
+            {pending ? "Updating..." : copy.confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
+function PublishingFeedback({
+  message,
+  correction,
+  pending,
+  onCorrect,
+}: {
+  message: string;
+  correction: PublishingCorrection | null;
+  pending: boolean;
+  onCorrect: (postId: string, status: RestorablePublishingStatus, expectedCurrentStatus: "POSTED" | "SKIPPED") => void;
+}) {
+  if (!message) {
+    return null;
+  }
+
+  const isError = /could not|choose|select|needs to/i.test(message);
+  return (
+    <div className={`publishing-feedback ${isError ? "is-error" : "is-success"}`} role="status" aria-live="polite">
+      <span>{message}</span>
+      {correction && !isError ? (
+        <button
+          type="button"
+          className="button tertiary"
+          onClick={() => onCorrect(correction.postId, correction.status, correction.expectedCurrentStatus)}
+          disabled={pending}
+        >
+          {pending ? "Reopening..." : correction.label}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function publishingWorkerStatusLabel(status: ScheduledPost["workerStatus"]): string {
+  switch (status) {
+    case "CLAIMED":
+      return "Claimed by publishing service";
+    case "POSTING":
+      return "Sending to platform";
+    case "SUCCEEDED":
+      return "Platform handoff completed";
+    case "FAILED":
+      return "Platform handoff failed";
+    default:
+      return "Waiting in queue";
+  }
+}
+
+function isPublishingInFlight(post: ScheduledPost): boolean {
+  return post.status === "POSTING"
+    || Boolean(post.claimedAt)
+    || post.workerStatus === "CLAIMED"
+    || post.workerStatus === "POSTING";
+}
+
+function canReschedulePublishingPost(post: ScheduledPost): boolean {
+  return (post.status === "PLANNED" || post.status === "READY_FOR_MEDIA_TEAM" || post.status === "FAILED")
+    && !post.externalPostId
+    && !post.publishedUrl
+    && !post.finalPrivacyStatus;
+}
+
+function canCancelPublishingPost(post: ScheduledPost): boolean {
+  return post.attemptCount === 0
+    && !post.externalPostId
+    && !post.publishedUrl
+    && !post.finalPrivacyStatus
+    && (post.status === "PLANNED"
+      || post.status === "READY_FOR_MEDIA_TEAM"
+      || post.status === "FAILED"
+      || post.status === "SKIPPED");
+}
+
+function canRestorePublishingPost(post: ScheduledPost): boolean {
+  return post.attemptCount === 0
+    && !post.externalPostId
+    && !post.publishedUrl
+    && !post.finalPrivacyStatus;
+}
+
+function getRestorablePublishingStatus(post: ScheduledPost): RestorablePublishingStatus | null {
+  return post.status === "PLANNED"
+    || post.status === "READY_FOR_MEDIA_TEAM"
+    || post.status === "FAILED"
+    || post.status === "PRIVATE_ONLY_UNVERIFIED"
+    || post.status === "SKIPPED"
+    ? post.status
+    : null;
+}
+
+function PublishingTechnicalDetails({ post }: { post: ScheduledPost }) {
+  return (
+    <details className="publishing-post-diagnostics">
+      <summary>Technical details</summary>
+      <dl>
+        <div><dt>Worker state</dt><dd>{publishingWorkerStatusLabel(post.workerStatus)}</dd></div>
+        <div><dt>Attempts</dt><dd>{post.attemptCount}</dd></div>
+        <div>
+          <dt>Last attempt</dt>
+          <dd>{post.lastAttemptAt ? new Intl.DateTimeFormat(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          }).format(new Date(post.lastAttemptAt)) : "Not attempted"}</dd>
+        </div>
+        <div><dt>Platform result</dt><dd>{post.finalPrivacyStatus ?? "Not reported"}</dd></div>
+        <div><dt>Support reference</dt><dd>{post.id.slice(-10)}</dd></div>
+      </dl>
+    </details>
+  );
+}
+
+function formatPublishingError(message: string): string {
+  if (/confirmation was interrupted/i.test(message)) {
+    return "Publishing stopped before Sermon Clip could confirm the result. Check the platform before retrying.";
+  }
+
+  if (/received this upload|accepted this post|uploaded privately|as unpublished|check .* before retrying/i.test(message)) {
+    return "The platform received this upload, but Sermon Clip could not confirm it is live. Check the platform before taking another action.";
+  }
+
+  if (/unauthori[sz]ed|\b401\b|oauth|access token|refresh token/i.test(message)) {
+    return "This publishing channel needs to be reconnected before Sermon Clip can try again.";
+  }
+
+  if (/forbidden|\b403\b|permission/i.test(message)) {
+    return "This channel does not currently allow Sermon Clip to publish. Review its permissions, then retry.";
+  }
+
+  if (/timeout|timed out|network|fetch/i.test(message)) {
+    return "The publishing service could not reach this channel. Check the connection and retry in a moment.";
+  }
+
+  return "Publishing could not be completed. Review the channel connection, then retry this post.";
+}
+
+function publishingServiceLabel(health: PublishingServiceHealth): string {
+  if (health.status === "ONLINE") {
+    return health.dryRun ? "Publishing service online · test mode" : "Automatic publishing online";
+  }
+
+  if (health.status === "STALE") {
+    return "Automatic publishing is waiting";
+  }
+
+  return "Automatic publishing is not connected yet";
+}
+
+function formatPublishingServiceLastSeen(health: PublishingServiceHealth): string {
+  if (!health.lastSeenAt) {
+    return "No service signal recorded";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(health.lastSeenAt));
 }
 
 function PlatformIcon({ platform }: { platform: ScheduledPost["platform"] }) {
@@ -448,14 +778,19 @@ export function ReadyQueueExperience({
   packageHistory,
   initialSocialAccounts,
   initialScheduledPosts,
+  initialPublishingServiceHealth,
   controlPanelMode = false,
 }: ReadyQueueExperienceProps) {
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<PostingDraft[]>(initialDrafts);
   const [socialAccounts, setSocialAccounts] = useState<SocialAccount[]>(initialSocialAccounts);
   const [scheduledPosts, setScheduledPosts] = useState<ScheduledPost[]>(initialScheduledPosts);
+  const [publishingServiceHealth, setPublishingServiceHealth] = useState(initialPublishingServiceHealth);
   const [publishingMessage, setPublishingMessage] = useState("");
   const [pendingScheduledPostId, setPendingScheduledPostId] = useState<string | null>(null);
+  const [publishingConfirmation, setPublishingConfirmation] = useState<PublishingConfirmation | null>(null);
+  const [publishingConfirmationPending, setPublishingConfirmationPending] = useState(false);
+  const [publishingCorrection, setPublishingCorrection] = useState<PublishingCorrection | null>(null);
   const [publishingFilter, setPublishingFilter] = useState<PublishingFilter>("PLANNED");
   const [qualityFilter, setQualityFilter] = useState<ClipQualityFilter>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
@@ -467,17 +802,29 @@ export function ReadyQueueExperience({
     date.setHours(0, 0, 0, 0);
     return date;
   });
+  const [compactPlanner, setCompactPlanner] = useState(false);
   const [calendarPlatformFilter, setCalendarPlatformFilter] = useState<CalendarPlatformFilter>("ALL");
   const [calendarStatusFilter, setCalendarStatusFilter] = useState<CalendarStatusFilter>("ACTIVE");
   const [calendarScheduleIntent, setCalendarScheduleIntent] = useState<{
     key: string;
     clipIds: string[];
-    clipDetails: Array<{ id: string; title: string; caption: string }>;
+    clipDetails: ScheduleDraftClipSummary[];
     postingSlot: string;
     scheduledFor: string;
   } | null>(null);
   const [rescheduleValues, setRescheduleValues] = useState<Record<string, string>>({});
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const refreshPublishingServiceHealth = useCallback(async () => {
+    try {
+      const response = await fetch("/api/ready-to-post/publishing-health", { cache: "no-store" });
+      const data = await response.json();
+      if (response.ok && data.health) {
+        setPublishingServiceHealth(data.health);
+      }
+    } catch {
+      // Preserve the last known signal when the status check itself is unavailable.
+    }
+  }, []);
   const clipScopeIdSet = useMemo(() => clipScopeIds ? new Set(clipScopeIds) : null, [clipScopeIds]);
   const scheduledClipIds = useMemo(() => {
     const ids = new Set<string>();
@@ -532,6 +879,8 @@ export function ReadyQueueExperience({
       title: selectedClip.title,
       hook: selectedClip.hook,
       caption: selectedClip.caption,
+      shortCaption: selectedClip.shortCaption,
+      platformCaption: selectedClip.platformCaption,
       hashtags: selectedClip.hashtags,
       estimatedBytes: selectedClip.estimatedBytes,
       smartClipCategory: selectedClip.smartClipCategory,
@@ -539,6 +888,7 @@ export function ReadyQueueExperience({
     })
     : null;
   const selectedQualityLabel = selectedClip ? getQualityLabel(selectedClip) : null;
+  const selectedNeedsEditorialReview = selectedQualityLabel !== "POST_READY";
   const selectedQualityIssues = selectedClip ? buildReadinessIssues(selectedClip) : [];
   const selectedQualitySummary = selectedClip
     ? sanitizePastorFacingQualityText(selectedClip.qualitySummary) ??
@@ -549,6 +899,9 @@ export function ReadyQueueExperience({
   const selectedNextActionLabel = selectedClip ? formatRecommendedNextAction(selectedClip.recommendedNextAction) : null;
   const activeHandoff = selectedReadyPackage?.handoffs.find((handoff) => handoff.platform === activeCaptionPlatform)
     ?? selectedReadyPackage?.handoffs[0]
+    ?? null;
+  const activePlatformPayload = selectedReadyPackage?.platformPayloads.find((payload) => payload.platform === activeCaptionPlatform)
+    ?? selectedReadyPackage?.platformPayloads[0]
     ?? null;
   const activeCaptionVariant = selectedReadyPackage?.variants.find((variant) => variant.platform === activeCaptionPlatform)
     ?? selectedReadyPackage?.variants[0]
@@ -575,10 +928,11 @@ export function ReadyQueueExperience({
     && matchesCalendarStatus(post, calendarStatusFilter)
     && matchesCalendarPlatform(post, calendarPlatformFilter)
   )), [calendarPlatformFilter, calendarStatusFilter, scopedScheduledPosts]);
+  const calendarDayCount = compactPlanner ? COMPACT_CALENDAR_DAY_COUNT : DESKTOP_CALENDAR_DAY_COUNT;
   const calendarDays = useMemo(() => buildPostingCalendarDays(calendarPosts, {
     startDate: calendarStartDate,
-    dayCount: SOCIAL_CALENDAR_DAY_COUNT,
-  }), [calendarPosts, calendarStartDate]);
+    dayCount: calendarDayCount,
+  }), [calendarDayCount, calendarPosts, calendarStartDate]);
   const unscheduledCalendarPosts = useMemo(() => scopedScheduledPosts.filter((post) => (
     !post.scheduledFor
     && matchesCalendarStatus(post, calendarStatusFilter)
@@ -592,10 +946,28 @@ export function ReadyQueueExperience({
   const calendarClipDetails = calendarClipIds
     .map((clipId) => clips.find((clip) => clip.id === clipId))
     .filter((clip): clip is ReadyQueueClip => Boolean(clip))
-    .map((clip) => ({ id: clip.id, title: clip.title, caption: clip.caption }));
-  const calendarWindowLabel = buildCalendarWindowLabel(calendarStartDate, SOCIAL_CALENDAR_DAY_COUNT);
-  const calendarPlannedCount = calendarPosts.filter((post) => ACTIVE_CALENDAR_STATUSES.has(post.status)).length;
-  const calendarPostedCount = calendarPosts.filter((post) => post.status === "POSTED").length;
+    .map(buildScheduleClipSummary);
+  const calendarWindowLabel = buildCalendarWindowLabel(calendarStartDate, calendarDayCount);
+  const calendarWindowPosts = calendarDays.flatMap((day) => day.posts);
+  const calendarPlannedCount = calendarWindowPosts.filter((post) => ACTIVE_CALENDAR_STATUSES.has(post.status)).length;
+  const calendarPostedCount = calendarWindowPosts.filter((post) => post.status === "POSTED").length;
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 760px)");
+    const syncPlannerMode = () => setCompactPlanner(mediaQuery.matches);
+
+    syncPlannerMode();
+    mediaQuery.addEventListener("change", syncPlannerMode);
+    return () => mediaQuery.removeEventListener("change", syncPlannerMode);
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void refreshPublishingServiceHealth();
+    }, 30_000);
+
+    return () => window.clearInterval(interval);
+  }, [refreshPublishingServiceHealth]);
 
   function toggleClip(clipId: string) {
     setFocusedClipId(clipId);
@@ -662,6 +1034,8 @@ export function ReadyQueueExperience({
 
   function addDraft(draft: PostingDraft) {
     setDrafts((current) => [draft, ...current].slice(0, 6));
+    setPublishingCorrection(null);
+    setPublishingMessage("Publishing plan saved. It appears in history and on the calendar when a time is set.");
     void refreshScheduledPosts();
   }
 
@@ -679,10 +1053,11 @@ export function ReadyQueueExperience({
   async function patchScheduledPost(
     postId: string,
     body:
-      | { status: "READY_FOR_MEDIA_TEAM" | "POSTED" | "FAILED" | "SKIPPED" }
+      | { status: ManualPublishingStatus }
       | { action: "POST_NOW" }
+      | { action: "RESTORE_PREVIOUS"; restoreStatus: RestorablePublishingStatus; expectedCurrentStatus: "POSTED" | "SKIPPED" }
       | { scheduledFor: string; timezone?: string },
-  ) {
+  ): Promise<boolean> {
     setPendingScheduledPostId(postId);
     setPublishingMessage("");
     try {
@@ -694,29 +1069,37 @@ export function ReadyQueueExperience({
       const data = await response.json();
       if (!response.ok) {
         setPublishingMessage(data.error ?? "Could not update this scheduled post.");
-        return;
+        return false;
       }
       setScheduledPosts((current) => current.map((post) => (post.id === postId ? data.scheduledPost : post)));
       if ("action" in body && body.action === "POST_NOW") {
-        setPublishingMessage("Post moved to now. The Mac worker will pick it up on its next check.");
+        const previousPost = scheduledPosts.find((post) => post.id === postId);
+        setPublishingMessage(previousPost?.status === "FAILED"
+          ? "Publishing retry queued. The publishing service will try again on its next check."
+          : "Post queued for publishing. The publishing service will pick it up on its next check.");
+      } else if ("action" in body && body.action === "RESTORE_PREVIOUS") {
+        setPublishingMessage("The post was restored to its previous publishing status.");
       } else if ("scheduledFor" in body) {
         setPublishingMessage("Scheduled post time updated.");
       } else if ("status" in body) {
         setPublishingMessage(body.status === "POSTED" ? "Post marked as published." : "Scheduled post updated.");
       }
+      return true;
     } catch {
       setPublishingMessage("Could not update this scheduled post.");
+      return false;
     } finally {
       setPendingScheduledPostId(null);
     }
   }
 
-  async function updateScheduledPostStatus(postId: string, status: "READY_FOR_MEDIA_TEAM" | "POSTED" | "FAILED" | "SKIPPED") {
-    await patchScheduledPost(postId, { status });
+  async function updateScheduledPostStatus(postId: string, status: ManualPublishingStatus) {
+    return patchScheduledPost(postId, { status });
   }
 
-  async function postScheduledPostNow(postId: string) {
-    await patchScheduledPost(postId, { action: "POST_NOW" });
+  async function queueScheduledPostForPublishing(postId: string) {
+    setPublishingCorrection(null);
+    return patchScheduledPost(postId, { action: "POST_NOW" });
   }
 
   function updateRescheduleValue(post: ScheduledPost, value: string) {
@@ -745,7 +1128,7 @@ export function ReadyQueueExperience({
     });
   }
 
-  async function cancelScheduledPost(postId: string) {
+  async function cancelScheduledPost(postId: string): Promise<boolean> {
     setPendingScheduledPostId(postId);
     setPublishingMessage("");
     try {
@@ -757,15 +1140,85 @@ export function ReadyQueueExperience({
       const data = await response.json();
       if (!response.ok) {
         setPublishingMessage(data.error ?? "Could not cancel this scheduled post.");
-        return;
+        return false;
       }
 
       setScheduledPosts((current) => current.filter((post) => post.id !== postId));
+      setPublishingCorrection(null);
       setPublishingMessage("Scheduled post cancelled.");
+      return true;
     } catch {
       setPublishingMessage("Could not cancel this scheduled post.");
+      return false;
     } finally {
       setPendingScheduledPostId(null);
+    }
+  }
+
+  function requestPublishingConfirmation(post: ScheduledPost, action: PublishingConfirmationAction) {
+    setPublishingConfirmation({ post, action });
+  }
+
+  async function confirmPublishingAction() {
+    if (!publishingConfirmation) {
+      return;
+    }
+
+    const { action, post } = publishingConfirmation;
+    setPublishingConfirmationPending(true);
+    let updated = false;
+
+    if (action === "QUEUE") {
+      updated = await queueScheduledPostForPublishing(post.id);
+    } else if (action === "MARK_POSTED") {
+      updated = await updateScheduledPostStatus(post.id, "POSTED");
+      if (updated) {
+        const previousStatus = canRestorePublishingPost(post) ? getRestorablePublishingStatus(post) : null;
+        setPublishingCorrection(previousStatus
+          ? {
+            postId: post.id,
+            status: previousStatus,
+            expectedCurrentStatus: "POSTED",
+            label: "Restore previous status",
+          }
+          : null);
+      }
+    } else if (action === "SKIP") {
+      updated = await updateScheduledPostStatus(post.id, "SKIPPED");
+      if (updated) {
+        const previousStatus = canRestorePublishingPost(post) ? getRestorablePublishingStatus(post) : null;
+        setPublishingCorrection(previousStatus
+          ? {
+            postId: post.id,
+            status: previousStatus,
+            expectedCurrentStatus: "SKIPPED",
+            label: "Restore previous status",
+          }
+          : null);
+      }
+    } else {
+      updated = await cancelScheduledPost(post.id);
+    }
+
+    setPublishingConfirmationPending(false);
+    if (updated) {
+      setPublishingConfirmation(null);
+    }
+  }
+
+  async function correctPublishingStatus(
+    postId: string,
+    status: RestorablePublishingStatus,
+    expectedCurrentStatus: "POSTED" | "SKIPPED",
+  ) {
+    const updated = await patchScheduledPost(postId, {
+      action: "RESTORE_PREVIOUS",
+      restoreStatus: status,
+      expectedCurrentStatus,
+    });
+    if (updated) {
+      setPublishingCorrection(null);
+      setPublishingMessage("The post was restored to its previous publishing status.");
     }
   }
 
@@ -836,13 +1289,13 @@ export function ReadyQueueExperience({
 
   return (
     <>
-      <section className="publishing-desk-grid ready-master-detail" aria-label="Publishing workspace">
-        <div className="publishing-board-panel">
+      <section id="ready-clips" className="publishing-desk-grid ready-master-detail premium-ready-workspace" aria-label="Publishing workspace">
+        <div className="publishing-board-panel premium-ready-clip-picker">
           <div className="publishing-section-head">
             <div>
-              <p className="kicker">Prepared clips</p>
-              <h2>Choose what to post next</h2>
-              <p className="muted small">Preview a finished clip, copy the caption, then download or schedule it.</p>
+              <p className="kicker">Stage 1 · Choose a clip</p>
+              <h2>What should your church share next?</h2>
+              <p className="muted small">Select a finished moment to open its video, caption, and posting options.</p>
             </div>
           </div>
           <div className="ready-filter-row">
@@ -901,7 +1354,13 @@ export function ReadyQueueExperience({
                       {controlPanelMode ? (
                         <strong className="asset-tray-thumb-placeholder" aria-hidden="true">SC</strong>
                       ) : (
-                        <Image src={`/api/clips/${clip.id}/thumbnail`} alt="" width={72} height={128} />
+                        <Image
+                          src={`/api/clips/${clip.id}/thumbnail`}
+                          alt=""
+                          width={72}
+                          height={128}
+                          unoptimized
+                        />
                       )}
                       <span>{isFocused ? "Previewing" : "Preview"}</span>
                     </button>
@@ -913,12 +1372,12 @@ export function ReadyQueueExperience({
                       <p className="muted small">{clip.sermon.title}</p>
                       <div className="ready-tray-state-row">
                         <span className={`status-pill ${clip.mediaReady ? "status-exported" : "quality-reject"}`}>
-                          {clip.mediaReady ? "Ready" : "Needs repair"}
+                          {clip.mediaReady ? "Video prepared" : "Video needs repair"}
                         </span>
                         <span className={`status-pill ${getQualityToneClass(qualityLabel)}`}>
                           {getQualityLabelText(qualityLabel)}
                         </span>
-                        {isBatchSelected ? <span className="status-pill">Selected</span> : null}
+                        {isBatchSelected ? <span className="status-pill premium-batch-selected">Selected for batch</span> : null}
                       </div>
                     </div>
                   </article>
@@ -928,12 +1387,12 @@ export function ReadyQueueExperience({
           )}
         </div>
 
-        <aside className="selected-asset-panel" aria-label="Selected prepared clip">
+        <aside className="selected-asset-panel premium-ready-composer" aria-label="Selected prepared clip">
           {selectedClip && selectedReadyPackage ? (
             <>
               <div className="publishing-section-head compact">
                 <div>
-                  <p className="kicker">Preview and post</p>
+                  <p className="kicker">Stage 2 · Prepare the post</p>
                   <h2>{selectedClip.title}</h2>
                   <p className="muted small">{selectedClip.sermon.title}</p>
                 </div>
@@ -943,34 +1402,17 @@ export function ReadyQueueExperience({
               </div>
               <div className={`selected-action-summary ${selectedClip.mediaReady ? "is-ready" : "needs-attention"}`}>
                 <div>
-                  <strong>{selectedClip.mediaReady ? "Media prepared" : "Needs media refresh"}</strong>
+                  <strong>{selectedClip.mediaReady ? "Posting video prepared" : "Posting video needs a refresh"}</strong>
                   <span>
                     {selectedClip.mediaReady
-                      ? "Copy the caption, download, or schedule this clip."
+                      ? selectedNeedsEditorialReview
+                        ? "Rendering is complete. Review the separate editorial readiness note before publishing."
+                        : "Rendering and editorial review are complete. This clip is ready for its final handoff."
                       : "This clip is blocked until its media is repaired."}
                   </span>
                 </div>
-                <span className="status-pill">{selectedClip.mediaReady ? "Next: schedule" : "Next: repair"}</span>
+                <span className="status-pill">{selectedClip.mediaReady ? "Media: prepared" : "Media: repair"}</span>
               </div>
-              <details className="selected-quality-panel selected-quality-details">
-                <summary>Readiness note</summary>
-                <div className="selected-quality-summary">
-                  <strong>{selectedQualitySummary}</strong>
-                  {selectedNextActionLabel ? <span>{selectedNextActionLabel}</span> : null}
-                </div>
-                <div className="selected-metric-grid" aria-label="Quality metrics">
-                  <div><span>Visual</span><strong>{formatScore(selectedClip.visualConfidenceScore)}</strong></div>
-                  <div><span>Audio</span><strong>{formatScore(selectedClip.audioQualityScore)}</strong></div>
-                  <div><span>Captions</span><strong>{formatScore(selectedClip.captionQualityScore)}</strong></div>
-                </div>
-                {selectedQualityIssues.length > 0 ? (
-                  <ul className="selected-warning-list" aria-label="Quality issues">
-                    {selectedQualityIssues.slice(0, 4).map((issue) => <li key={issue}>{issue}</li>)}
-                  </ul>
-                ) : (
-                  <p className="muted small">No quality blockers are currently attached to this clip.</p>
-                )}
-              </details>
               {(!controlPanelMode || selectedClip.remotePreviewUrl) ? <div
                 className="video-card-shell ready-video-shell selected-asset-video"
                 data-preview-state={videoPreviewStates[selectedClip.id] ?? "poster"}
@@ -991,7 +1433,7 @@ export function ReadyQueueExperience({
                   onEnded={() => setVideoPreviewState(selectedClip.id, "ready")}
                   onError={() => setVideoPreviewState(selectedClip.id, "error")}
                 />
-                <span className="video-quality-pill">{selectedClip.mediaReady ? "Media prepared" : "Needs repair"}</span>
+                <span className="video-quality-pill">{selectedClip.mediaReady ? "Video prepared" : "Video needs repair"}</span>
                 <span className={`video-state-pill video-state-${videoPreviewStates[selectedClip.id] ?? "poster"}`}>{VIDEO_PREVIEW_LABELS[videoPreviewStates[selectedClip.id] ?? "poster"]}</span>
                 <button
                   type="button"
@@ -1008,15 +1450,148 @@ export function ReadyQueueExperience({
                   <p className="muted small">This clip does not have a remote preview yet. Use the Mac app for local preview, or refresh review assets before previewing remotely.</p>
                 </div>
               )}
+              <div className="selected-action-summary">
+                <div>
+                  <strong>{selectedClip.coverFrameSelected ? "Chosen cover frame included" : "Automatic cover frame included"}</strong>
+                  <span>
+                    {selectedClip.coverFrameSelected && typeof selectedClip.coverFrameTimeSeconds === "number"
+                      ? `The saved frame at ${formatSecondsForPastorView(selectedClip.coverFrameTimeSeconds)} is used as this clip’s poster. Confirm it in each platform before publishing.`
+                      : "Sermon Clip is using a neutral automatic poster. Choose a deliberate frame in Clip Studio for stronger presentation."}
+                  </span>
+                </div>
+                <a
+                  className="button tertiary"
+                  href={`/api/clips/${selectedClip.id}/thumbnail?download=cover`}
+                  download={`${selectedClip.title}-cover.jpg`}
+                >
+                  Download cover
+                </a>
+              </div>
+              <details className="selected-quality-panel selected-quality-details">
+                <summary>Readiness note</summary>
+                <div className="selected-quality-summary">
+                  <strong>{selectedQualitySummary}</strong>
+                  {selectedNextActionLabel ? <span>{selectedNextActionLabel}</span> : null}
+                </div>
+                <div className="selected-metric-grid" aria-label="Quality metrics">
+                  <div><span>Visual</span><strong>{formatScore(selectedClip.visualConfidenceScore)}</strong></div>
+                  <div><span>Audio</span><strong>{formatScore(selectedClip.audioQualityScore)}</strong></div>
+                  <div><span>Captions</span><strong>{formatScore(selectedClip.captionQualityScore)}</strong></div>
+                </div>
+                {selectedQualityIssues.length > 0 ? (
+                  <ul className="selected-warning-list" aria-label="Quality issues">
+                    {selectedQualityIssues.slice(0, 4).map((issue) => <li key={issue}>{issue}</li>)}
+                  </ul>
+                ) : (
+                  <p className="muted small">No quality blockers are currently attached to this clip.</p>
+                )}
+              </details>
+              {selectedClip.mediaReady ? (
+                <details className="platform-caption-panel platform-caption-details premium-platform-copy" open>
+                  <summary>Suggested copy for manual upload</summary>
+                  <p className="muted small premium-platform-copy-intro">
+                    Choose a platform, review the suggestion, then follow the handoff below. Scheduling confirms its own post copy separately.
+                  </p>
+                  <div className="platform-caption-tabs" role="group" aria-label="Platform caption previews">
+                    {PLATFORMS.map((platform) => (
+                      <button
+                        key={platform}
+                        type="button"
+                        aria-pressed={activeCaptionPlatform === platform}
+                        className={activeCaptionPlatform === platform ? "active" : ""}
+                        onClick={() => setActiveCaptionPlatform(platform)}
+                      >
+                        <PlatformIcon platform={platform} />
+                        {platform}
+                      </button>
+                    ))}
+                  </div>
+                  {activeHandoff ? (
+                    <div className="platform-caption-card">
+                      <div className="publishing-section-head compact">
+                        <div>
+                          <p className="kicker">{activeHandoff.platform}</p>
+                          <h3>{activeCaptionVariant?.label ?? `${activeHandoff.platform} handoff`} suggestion</h3>
+                        </div>
+                        <span className="status-pill">
+                          {activeHandoff.captionText.length}
+                          {activePlatformPayload ? ` / ${activePlatformPayload.constraints.captionMaxCharacters}` : ""} chars
+                        </span>
+                      </div>
+                      <div className="platform-handoff-stack">
+                        <div>
+                          <span>Title</span>
+                          <p>{activeHandoff.titleText}</p>
+                        </div>
+                        <div>
+                          <span>Caption</span>
+                          <p>{activeHandoff.captionText || "Caption pending."}</p>
+                        </div>
+                        {activePlatformPayload ? (
+                          <>
+                            <div>
+                              <span>Why this version fits</span>
+                              <p>{activePlatformPayload.guidance.rationale}</p>
+                            </div>
+                            <div>
+                              <span>Final platform check</span>
+                              <p>{activePlatformPayload.guidance.formatChecks[0]}</p>
+                              <small className="muted">{activePlatformPayload.guidance.callToAction}</small>
+                            </div>
+                          </>
+                        ) : null}
+                      </div>
+                      <ol className="premium-manual-handoff" aria-label={`${activeHandoff.platform} manual upload handoff`}>
+                        <li>
+                          <span>1</span>
+                          <div><strong>Download the final video</strong><small>Use the prepared vertical video with captions and branding.</small></div>
+                          {!controlPanelMode ? (
+                            <a className="button secondary" href={selectedReadyPackage.downloadHref}>Download video</a>
+                          ) : (
+                            <span className="status-pill">Download in Mac app</span>
+                          )}
+                        </li>
+                        <li>
+                          <span>2</span>
+                          <div><strong>Copy the suggested platform copy</strong><small>Review and adjust it in the platform before publishing.</small></div>
+                          <CopyCaptionButton
+                            label={activeHandoff.platform === "YouTube Shorts" ? "Copy suggested title" : "Copy suggested caption"}
+                            text={activeHandoff.primaryCopyText}
+                          />
+                        </li>
+                        <li>
+                          <span>3</span>
+                          <div><strong>Open the platform upload</strong><small>Upload the video, paste the copy, and confirm the cover and privacy.</small></div>
+                          <a className="button tertiary" href={activeHandoff.uploadUrl} target="_blank" rel="noreferrer">
+                            {getPlatformUploadActionLabel(activeHandoff.platform)}
+                          </a>
+                        </li>
+                      </ol>
+                      <div className="caption-copy-grid premium-handoff-extras">
+                        {activeHandoff.platform === "YouTube Shorts" ? <CopyCaptionButton label="Copy suggested caption" text={activeHandoff.captionText} /> : null}
+                        <CopyCaptionButton label="Copy hashtags" text={(activePlatformPayload?.hashtags ?? selectedReadyPackage.hashtags).join(" ")} />
+                      </div>
+                    </div>
+                  ) : null}
+                </details>
+              ) : null}
+              <div className="premium-ready-finish-heading">
+                <span>3</span>
+                <div>
+                  <strong>{selectedClip.mediaReady ? selectedNeedsEditorialReview ? "Review, then download or schedule" : "Download or schedule" : "Refresh the final media"}</strong>
+                  <small>{selectedClip.mediaReady ? selectedNeedsEditorialReview ? "The video is prepared; editorial readiness still needs your decision." : "Choose the handoff that fits your media team." : "Repair the prepared file before it can be posted."}</small>
+                </div>
+              </div>
               <div className="selected-asset-actions">
                 {selectedClip.mediaReady ? (
                   <>
                     {!controlPanelMode ? <a className="button primary" href={selectedReadyPackage.downloadHref}>Download video</a> : null}
-                    <CopyCaptionButton label="Copy caption" text={activeHandoff?.captionText ?? selectedClip.caption} />
+                    <CopyCaptionButton label="Copy suggested copy" text={activeHandoff?.captionText ?? selectedClip.caption} />
                     <SchedulePostButton
                       clipId={selectedClip.id}
-                      clipDetails={[{ id: selectedClip.id, title: selectedClip.title, caption: selectedClip.caption }]}
+                      clipDetails={[buildScheduleClipSummary(selectedClip)]}
                       label="Schedule"
+                      initialPlatform={activeCaptionPlatform}
                       socialAccounts={socialAccounts}
                       onDraftCreated={addDraft}
                     />
@@ -1031,62 +1606,16 @@ export function ReadyQueueExperience({
                 )}
                 <Link href={`/sermons/${selectedClip.sermon.id}/clips/${selectedClip.id}/studio`} className="button tertiary">Edit clip</Link>
               </div>
-              {selectedClip.mediaReady ? (
-                <details className="platform-caption-panel platform-caption-details">
-                  <summary>Platform captions</summary>
-                  <div className="platform-caption-tabs" role="tablist" aria-label="Platform caption previews">
-                    {PLATFORMS.map((platform) => (
-                      <button
-                        key={platform}
-                        type="button"
-                        className={activeCaptionPlatform === platform ? "active" : ""}
-                        onClick={() => setActiveCaptionPlatform(platform)}
-                      >
-                        <PlatformIcon platform={platform} />
-                        {platform}
-                      </button>
-                    ))}
-                  </div>
-                  {activeHandoff ? (
-                    <div className="platform-caption-card">
-                      <div className="publishing-section-head compact">
-                        <div>
-                          <p className="kicker">{activeHandoff.platform}</p>
-                          <h3>{activeCaptionVariant?.label ?? `${activeHandoff.platform} handoff`}</h3>
-                        </div>
-                        <span className="status-pill">{activeHandoff.captionText.length} chars</span>
-                      </div>
-                      <div className="platform-handoff-stack">
-                        <div>
-                          <span>Title</span>
-                          <p>{activeHandoff.titleText}</p>
-                        </div>
-                        <div>
-                          <span>Caption</span>
-                          <p>{activeHandoff.captionText || "Caption pending."}</p>
-                        </div>
-                      </div>
-                      <div className="caption-copy-grid">
-                        <CopyCaptionButton label={activeHandoff.primaryCopyLabel} text={activeHandoff.primaryCopyText} />
-                        {activeHandoff.platform === "YouTube Shorts" ? <CopyCaptionButton label="Copy caption" text={activeHandoff.captionText} /> : null}
-                        <CopyCaptionButton label="Copy hashtags" text={selectedReadyPackage.hashtags.join(" ")} />
-                        <a className="button tertiary" href={activeHandoff.uploadUrl} target="_blank" rel="noreferrer">
-                          Open {activeHandoff.platform === "YouTube Shorts" ? "Studio" : activeHandoff.platform}
-                        </a>
-                      </div>
-                    </div>
-                  ) : null}
-                </details>
-              ) : null}
               <div className="ready-mobile-action-bar" aria-label="Selected clip actions">
                 {selectedClip.mediaReady ? (
                   <>
                     {!controlPanelMode ? <a className="button primary" href={selectedReadyPackage.downloadHref}>Download</a> : null}
-                    <CopyCaptionButton label="Copy caption" text={activeHandoff?.captionText ?? selectedClip.caption} />
+                    <CopyCaptionButton label="Copy suggested copy" text={activeHandoff?.captionText ?? selectedClip.caption} />
                     <SchedulePostButton
                       clipId={selectedClip.id}
-                      clipDetails={[{ id: selectedClip.id, title: selectedClip.title, caption: selectedClip.caption }]}
+                      clipDetails={[buildScheduleClipSummary(selectedClip)]}
                       label="Schedule"
+                      initialPlatform={activeCaptionPlatform}
                       socialAccounts={socialAccounts}
                       onDraftCreated={addDraft}
                     />
@@ -1114,23 +1643,23 @@ export function ReadyQueueExperience({
         </aside>
       </section>
 
-      <section className="social-calendar-panel" aria-label="Social media calendar">
+      <section id="posting-calendar" className="social-calendar-panel premium-ready-calendar" aria-label="Social media calendar">
         <div className="social-calendar-header">
           <div>
-            <p className="kicker">Social media calendar</p>
-            <h2>Schedule your posts</h2>
+            <p className="kicker">Plan ahead</p>
+            <h2>Social media calendar</h2>
             <p className="muted small">
               Pick a day, schedule the selected clip, then track each platform post through publishing.
             </p>
           </div>
           <div className="social-calendar-window-controls" aria-label="Calendar window controls">
-            <button type="button" className="button tertiary" onClick={() => moveCalendarWindow(-SOCIAL_CALENDAR_DAY_COUNT)}>
+            <button type="button" className="button tertiary" onClick={() => moveCalendarWindow(-calendarDayCount)}>
               Previous
             </button>
             <button type="button" className="button tertiary" onClick={resetCalendarWindow}>
               Today
             </button>
-            <button type="button" className="button tertiary" onClick={() => moveCalendarWindow(SOCIAL_CALENDAR_DAY_COUNT)}>
+            <button type="button" className="button tertiary" onClick={() => moveCalendarWindow(calendarDayCount)}>
               Next
             </button>
             <button type="button" className="button secondary" onClick={refreshScheduledPosts}>
@@ -1138,6 +1667,29 @@ export function ReadyQueueExperience({
             </button>
           </div>
         </div>
+
+        <section className={`publishing-service-card is-${publishingServiceHealth.status.toLowerCase()}`} aria-label="Automatic publishing service status">
+          <div className="publishing-service-copy">
+            <span className="publishing-service-indicator" aria-hidden="true" />
+            <div>
+              <strong>{publishingServiceLabel(publishingServiceHealth)}</strong>
+              <p className="muted small">{publishingServiceHealth.summary}</p>
+            </div>
+          </div>
+          <div className="publishing-service-actions">
+            <button type="button" className="button tertiary" onClick={() => void refreshPublishingServiceHealth()}>
+              Check service
+            </button>
+            <details className="publishing-service-details">
+              <summary>Technical details</summary>
+              <dl>
+                <div><dt>Last signal</dt><dd>{formatPublishingServiceLastSeen(publishingServiceHealth)}</dd></div>
+                <div><dt>Service mode</dt><dd>{publishingServiceHealth.status !== "ONLINE" ? "Not reported" : publishingServiceHealth.dryRun ? "Test mode" : "Live publishing"}</dd></div>
+                <div><dt>Worker reference</dt><dd>{publishingServiceHealth.workerId ?? "Not recorded"}</dd></div>
+              </dl>
+            </details>
+          </div>
+        </section>
 
         <div className="social-calendar-toolbar">
           <div className="social-calendar-summary">
@@ -1161,7 +1713,12 @@ export function ReadyQueueExperience({
           </label>
         </div>
 
-        {publishingMessage ? <p className={publishingMessage.includes("Could not") || publishingMessage.includes("Select") ? "error-banner" : "success-banner"}>{publishingMessage}</p> : null}
+        <PublishingFeedback
+          message={publishingMessage}
+          correction={publishingCorrection}
+          pending={Boolean(pendingScheduledPostId)}
+          onCorrect={(postId, status, expectedCurrentStatus) => void correctPublishingStatus(postId, status, expectedCurrentStatus)}
+        />
 
         <div className="social-calendar-grid" aria-label="Upcoming social media posts">
           {calendarDays.map((day) => (
@@ -1200,7 +1757,16 @@ export function ReadyQueueExperience({
                   const title = buildScheduledPostTitle(post, clips);
                   const captionText = buildScheduledPostCaption(post, clips);
                   const isPending = pendingScheduledPostId === post.id;
-                  const canPostNow = post.automationMode === "AUTOMATIC" && (post.status === "PLANNED" || post.status === "FAILED");
+                  const publishingLocked = isPublishingInFlight(post);
+                  const canReschedule = canReschedulePublishingPost(post);
+                  const canCancel = canCancelPublishingPost(post);
+                  const canQueueForPublishing = post.automationMode === "AUTOMATIC"
+                    && (post.status === "PLANNED" || post.status === "FAILED")
+                    && !post.externalPostId
+                    && !post.publishedUrl
+                    && !post.finalPrivacyStatus;
+                  const queueActionLabel = post.status === "FAILED" ? "Retry publishing" : "Queue for publishing";
+                  const queuePendingLabel = post.status === "FAILED" ? "Retrying..." : "Queuing...";
 
                   return (
                     <div key={post.id} className={`social-calendar-post ${getCalendarPostToneClass(post)}`}>
@@ -1217,7 +1783,13 @@ export function ReadyQueueExperience({
                           </span>
                           <span className="status-pill">{post.automationMode === "AUTOMATIC" ? "Automatic" : "Manual"}</span>
                         </div>
-                        {post.publishError ? <p className="error-banner">{post.publishError}</p> : null}
+                        {post.publishError ? (
+                          <div className="error-banner stack-sm">
+                            <span>{formatPublishingError(post.publishError)}</span>
+                            <Link href="/settings/social" className="text-link small">Review social channels</Link>
+                          </div>
+                        ) : null}
+                        {post.automationMode === "AUTOMATIC" ? <PublishingTechnicalDetails post={post} /> : null}
                       </div>
                       <div className="social-calendar-post-actions">
                         <label className="social-calendar-reschedule-field" htmlFor={`reschedule-${post.id}`}>
@@ -1227,44 +1799,46 @@ export function ReadyQueueExperience({
                             type="datetime-local"
                             value={rescheduleValues[post.id] ?? (post.scheduledFor ? toDateTimeLocalInputValue(new Date(post.scheduledFor)) : "")}
                             onChange={(event) => updateRescheduleValue(post, event.target.value)}
-                            disabled={isPending || post.status === "POSTED"}
+                            disabled={isPending || publishingLocked || !canReschedule}
                           />
                         </label>
                         <button
                           type="button"
                           className="button tertiary"
                           onClick={() => reschedulePost(post)}
-                          disabled={isPending || post.status === "POSTED"}
+                          disabled={isPending || publishingLocked || !canReschedule}
                         >
                           {isPending ? "Saving..." : "Save time"}
                         </button>
-                        {canPostNow ? (
+                        {canQueueForPublishing ? (
                           <button
                             type="button"
                             className="button tertiary"
-                            onClick={() => postScheduledPostNow(post.id)}
+                            onClick={() => requestPublishingConfirmation(post, "QUEUE")}
                             disabled={isPending}
                           >
-                            {isPending ? "Moving..." : "Post now"}
+                            {isPending ? queuePendingLabel : queueActionLabel}
                           </button>
                         ) : null}
                         <CopyCaptionButton label="Copy caption" text={captionText || "Caption pending"} />
                         <button
                           type="button"
                           className="button tertiary"
-                          onClick={() => updateScheduledPostStatus(post.id, "POSTED")}
-                          disabled={isPending || post.status === "POSTED"}
+                          onClick={() => requestPublishingConfirmation(post, "MARK_POSTED")}
+                          disabled={isPending || publishingLocked || post.status === "POSTED"}
                         >
                           {isPending ? "Updating..." : "Mark posted"}
                         </button>
-                        <button
-                          type="button"
-                          className="button tertiary"
-                          onClick={() => cancelScheduledPost(post.id)}
-                          disabled={isPending || post.status === "POSTED"}
-                        >
-                          Cancel
-                        </button>
+                        {canCancel ? (
+                          <button
+                            type="button"
+                            className="button tertiary"
+                            onClick={() => requestPublishingConfirmation(post, "CANCEL")}
+                            disabled={isPending || publishingLocked}
+                          >
+                            Cancel
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                   );
@@ -1296,8 +1870,8 @@ export function ReadyQueueExperience({
                     <button
                       type="button"
                       className="button tertiary"
-                      onClick={() => updateScheduledPostStatus(post.id, "POSTED")}
-                      disabled={pendingScheduledPostId === post.id || post.status === "POSTED"}
+                      onClick={() => requestPublishingConfirmation(post, "MARK_POSTED")}
+                      disabled={pendingScheduledPostId === post.id || isPublishingInFlight(post) || post.status === "POSTED"}
                     >
                       Mark posted
                     </button>
@@ -1309,7 +1883,7 @@ export function ReadyQueueExperience({
         ) : null}
       </section>
 
-      <section className="ready-support-grid" aria-label="Publishing support">
+      <section id="publishing-support" className="ready-support-grid premium-ready-support" aria-label="Publishing support">
         <details className="posting-draft-panel compact-panel ready-support-details">
           <summary>
             <div>
@@ -1368,7 +1942,7 @@ export function ReadyQueueExperience({
             selectedCount={selectedDownloadableClipIds.length}
             downloadHref={batchDownloadHref}
             selectedClipIds={selectedDownloadableClipIds}
-            clipDetails={downloadableClips.map((clip) => ({ id: clip.id, title: clip.title, caption: clip.caption }))}
+            clipDetails={downloadableClips.map(buildScheduleClipSummary)}
             socialAccounts={socialAccounts}
             onSelectAll={selectAll}
             onClearSelection={clearSelection}
@@ -1412,7 +1986,12 @@ export function ReadyQueueExperience({
             </div>
           </div>
 
-          {publishingMessage ? <p className={publishingMessage.includes("Could not") ? "error-banner" : "success-banner"}>{publishingMessage}</p> : null}
+          <PublishingFeedback
+            message={publishingMessage}
+            correction={publishingCorrection}
+            pending={Boolean(pendingScheduledPostId)}
+            onCorrect={(postId, status, expectedCurrentStatus) => void correctPublishingStatus(postId, status, expectedCurrentStatus)}
+          />
 
           {scopedScheduledPosts.length === 0 ? (
             <div className="publishing-empty-state">
@@ -1437,7 +2016,15 @@ export function ReadyQueueExperience({
                 const firstClip = post.clipIds.map((clipId) => clips.find((clip) => clip.id === clipId)).find(Boolean);
                 const platformHandoff = firstClip ? getPlatformHandoff(firstClip, post.platform) : null;
                 const isPending = pendingScheduledPostId === post.id;
-                const canPostNow = post.automationMode === "AUTOMATIC" && (post.status === "PLANNED" || post.status === "FAILED");
+                const publishingLocked = isPublishingInFlight(post);
+                const canQueueForPublishing = post.automationMode === "AUTOMATIC"
+                  && (post.status === "PLANNED" || post.status === "FAILED")
+                  && !post.externalPostId
+                  && !post.publishedUrl
+                  && !post.finalPrivacyStatus;
+                const queueActionLabel = post.status === "FAILED" ? "Retry publishing" : "Queue for publishing";
+                const queuePendingLabel = post.status === "FAILED" ? "Retrying..." : "Queuing...";
+                const savedPrimaryCopy = post.platform === "YouTube Shorts" ? title : captionText;
 
                 return (
                   <article key={post.id} className="manual-publishing-card">
@@ -1462,9 +2049,17 @@ export function ReadyQueueExperience({
                         <p className="muted small">{post.automationMode === "AUTOMATIC" ? "Automatic" : "Manual"} · No exact time set</p>
                       )}
                       {post.note ? <p className="muted small">{post.note}</p> : null}
-                      {post.publishError ? <p className="error-banner">{post.publishError}</p> : null}
+                      {post.publishError ? (
+                        <div className="error-banner stack-sm">
+                          <span>{formatPublishingError(post.publishError)}</span>
+                          <Link href="/settings/social" className="text-link small">Review social channels</Link>
+                        </div>
+                      ) : null}
+                      {post.automationMode === "AUTOMATIC" ? <PublishingTechnicalDetails post={post} /> : null}
                       {post.publishedUrl ? (
-                        <a className="text-link small" href={post.publishedUrl} target="_blank" rel="noreferrer">View published post</a>
+                        <a className="text-link small" href={post.publishedUrl} target="_blank" rel="noreferrer">
+                          {post.status === "POSTED" ? "View published post" : "Review platform result"}
+                        </a>
                       ) : null}
                       <div className="clip-badge-row">
                         <span className={`status-pill ${post.status === "POSTED" ? "status-exported" : ""}`}>
@@ -1479,30 +2074,30 @@ export function ReadyQueueExperience({
                       </div>
                     </div>
                     <div className="manual-publishing-actions">
-                      {canPostNow ? (
+                      {canQueueForPublishing ? (
                         <button
                           type="button"
                           className="button primary"
-                          onClick={() => postScheduledPostNow(post.id)}
+                          onClick={() => requestPublishingConfirmation(post, "QUEUE")}
                           disabled={isPending}
                         >
-                          {isPending ? "Moving..." : "Post now"}
+                          {isPending ? queuePendingLabel : queueActionLabel}
                         </button>
                       ) : null}
                       {post.automationMode === "MANUAL" && !controlPanelMode ? <a className="button secondary" href={downloadHref}>Download</a> : null}
                       <CopyCaptionButton
-                        label={platformHandoff?.primaryCopyLabel ?? (post.platform === "YouTube Shorts" ? "Copy title" : "Copy caption")}
-                        text={platformHandoff?.primaryCopyText ?? (captionText || `${post.platform} caption pending`)}
+                        label={post.platform === "YouTube Shorts" ? "Copy title" : "Copy caption"}
+                        text={savedPrimaryCopy || platformHandoff?.primaryCopyText || `${post.platform} copy pending`}
                       />
                       {post.platform === "YouTube Shorts" ? <CopyCaptionButton label="Copy caption" text={captionText || "Caption pending"} /> : null}
                       {post.automationMode === "MANUAL" ? <a className="button tertiary" href={platformHandoff?.uploadUrl ?? "#"} target="_blank" rel="noreferrer">
-                        Open {post.platform === "YouTube Shorts" ? "Studio" : post.platform}
+                        {getPlatformUploadActionLabel(post.platform)}
                       </a> : null}
                       <button
                         type="button"
-                        className={canPostNow ? "button tertiary" : "button primary"}
-                        onClick={() => updateScheduledPostStatus(post.id, "POSTED")}
-                        disabled={isPending || post.status === "POSTED"}
+                        className={canQueueForPublishing ? "button tertiary" : "button primary"}
+                        onClick={() => requestPublishingConfirmation(post, "MARK_POSTED")}
+                        disabled={isPending || publishingLocked || post.status === "POSTED"}
                       >
                         {isPending ? "Updating..." : "Mark posted"}
                       </button>
@@ -1510,8 +2105,8 @@ export function ReadyQueueExperience({
                         <button
                           type="button"
                           className="button tertiary"
-                          onClick={() => updateScheduledPostStatus(post.id, "SKIPPED")}
-                          disabled={isPending || post.status === "SKIPPED"}
+                          onClick={() => requestPublishingConfirmation(post, "SKIP")}
+                          disabled={isPending || publishingLocked || post.status === "SKIPPED"}
                         >
                           Skip
                         </button>
@@ -1540,6 +2135,14 @@ export function ReadyQueueExperience({
             addDraft(draft);
             setCalendarScheduleIntent(null);
           }}
+        />
+      ) : null}
+      {publishingConfirmation ? (
+        <PublishingConfirmationDialog
+          confirmation={publishingConfirmation}
+          pending={publishingConfirmationPending}
+          onClose={() => setPublishingConfirmation(null)}
+          onConfirm={() => void confirmPublishingAction()}
         />
       ) : null}
     </>

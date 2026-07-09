@@ -29,6 +29,17 @@ describe("clip selection prompt", () => {
     expect(prompt).toContain("only counts as a landing when the same spoken sentence carries personal pastoral payoff");
   });
 
+  it("requests grounded, non-repetitive content-package alternatives", () => {
+    const prompt = buildClipSelectionSystemPrompt();
+
+    expect(prompt).toContain("For every clip, include captionPackage");
+    expect(prompt).toContain("two or three distinct titleOptions and hookOptions");
+    expect(prompt).toContain("short caption should stay under 140 characters");
+    expect(prompt).toContain("never add false urgency");
+    expect(prompt).toContain("Do not repeat the same sentence across fields");
+    expect(prompt).toContain('"ctaOptions"');
+  });
+
   it("asks the model to explain the landing phrase in each selected clip", () => {
     const prompt = buildClipSelectionUserPrompt(
       {

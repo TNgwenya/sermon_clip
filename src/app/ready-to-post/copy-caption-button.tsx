@@ -8,17 +8,26 @@ type CopyCaptionButtonProps = {
 };
 
 export function CopyCaptionButton({ label, text }: CopyCaptionButtonProps) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   async function copyCaption() {
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1600);
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard access is unavailable.");
+      }
+
+      await navigator.clipboard.writeText(text);
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1600);
+    } catch {
+      setCopyState("failed");
+      window.setTimeout(() => setCopyState("idle"), 2600);
+    }
   }
 
   return (
-    <button type="button" className="button secondary" onClick={copyCaption}>
-      {copied ? "Copied" : label}
+    <button type="button" className="button secondary" onClick={copyCaption} aria-live="polite">
+      {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed · Try again" : label}
     </button>
   );
 }

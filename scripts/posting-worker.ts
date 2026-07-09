@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import os from "node:os";
 
 import type { AutomationPost, UploadResult } from "./posting-platforms.ts";
-import { uploadPlatformPost } from "./posting-platforms.ts";
+import { AmbiguousPlatformPublishError, uploadPlatformPost } from "./posting-platforms.ts";
 import { uploadPostingMediaToR2, type StagedMedia } from "./posting-media-staging.ts";
 import { createWorkerLogger, errorFields, formatBytes, formatDuration } from "./worker-log.ts";
 
@@ -11,9 +11,18 @@ const apiBaseUrl = (process.env.WORKER_API_BASE_URL?.trim() || "http://localhost
 const apiToken = process.env.WORKER_API_TOKEN?.trim() || "";
 const syncIntervalMs = Number(process.env.POSTING_WORKER_SYNC_SECONDS ?? 60) * 1000;
 const dueCheckIntervalMs = Number(process.env.POSTING_WORKER_DUE_CHECK_SECONDS ?? 30) * 1000;
+const heartbeatIntervalMs = Number(process.env.POSTING_WORKER_HEARTBEAT_SECONDS ?? 30) * 1000;
 const dryRun = process.env.POSTING_WORKER_DRY_RUN !== "false";
 const upcomingWindowMinutes = Number(process.env.POSTING_WORKER_UPCOMING_WINDOW_MINUTES ?? 10080);
 const seenCompletions = new Set<string>();
+const dryRunObservedPosts = new Set<string>();
+const activeLeasePostIds = new Set<string>();
+const pendingCompletions = new Map<string, {
+  post: AutomationPost;
+  result: UploadResult;
+  startedAt: number;
+  platformAccepted: boolean;
+}>();
 const logger = createWorkerLogger("posting");
 let cachedPosts: AutomationPost[] = [];
 let syncing = false;
@@ -22,6 +31,13 @@ let posting = false;
 type PublishErrorWithStagedMedia = Error & {
   stagedMedia?: StagedMedia;
 };
+
+class CompletionPersistenceError extends Error {
+  constructor(message: string, readonly statusCode: number) {
+    super(message);
+    this.name = "CompletionPersistenceError";
+  }
+}
 
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
@@ -58,6 +74,46 @@ async function syncUpcomingPosts(): Promise<void> {
     logger.error("sync failed", errorFields(error));
   } finally {
     syncing = false;
+  }
+}
+
+async function sendHeartbeat(): Promise<void> {
+  try {
+    const response = await apiFetch("/api/automation/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        workerId,
+        dryRun,
+        cachedPostCount: cachedPosts.length,
+        capabilities: {
+          zernioConfigured: Boolean(process.env.ZERNIO_API_KEY?.trim()),
+          youtubeConfigured: Boolean(
+            process.env.YOUTUBE_CLIENT_ID?.trim()
+            && process.env.YOUTUBE_CLIENT_SECRET?.trim()
+            && process.env.YOUTUBE_REFRESH_TOKEN?.trim()
+          ),
+          youtubeOAuthClientConfigured: Boolean(
+            process.env.YOUTUBE_CLIENT_ID?.trim()
+            && process.env.YOUTUBE_CLIENT_SECRET?.trim()
+          ),
+          facebookConfigured: Boolean(
+            process.env.FACEBOOK_PAGE_ID?.trim()
+            && process.env.FACEBOOK_PAGE_ACCESS_TOKEN?.trim()
+          ),
+          youtubePrivacy: process.env.YOUTUBE_DEFAULT_PRIVACY_STATUS?.trim() || "private",
+          youtubeApiVerified: process.env.YOUTUBE_API_VERIFIED === "true",
+          facebookPublishesImmediately: process.env.FACEBOOK_DEFAULT_PUBLISHED === "true",
+          tiktokPrivacy: process.env.ZERNIO_TIKTOK_PRIVACY_LEVEL?.trim() || null,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error ?? `Heartbeat failed with ${response.status}`);
+    }
+  } catch (error) {
+    logger.warn("heartbeat failed", errorFields(error));
   }
 }
 
@@ -98,11 +154,79 @@ async function completePost(post: AutomationPost, result: UploadResult): Promise
 
   if (!response.ok) {
     const data = await response.json().catch(() => null);
-    throw new Error(data?.error ?? `Completion failed with ${response.status}`);
+    throw new CompletionPersistenceError(data?.error ?? `Completion failed with ${response.status}`, response.status);
   }
 
   seenCompletions.add(post.idempotencyKey);
+  activeLeasePostIds.delete(post.id);
   cachedPosts = cachedPosts.filter((item) => item.id !== post.id);
+}
+
+async function renewActiveClaims(): Promise<void> {
+  for (const postId of activeLeasePostIds) {
+    try {
+      const response = await apiFetch(`/api/automation/scheduled-posts/${postId}/heartbeat`, {
+        method: "POST",
+        body: JSON.stringify({ workerId }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        if (response.status === 409) {
+          activeLeasePostIds.delete(postId);
+        }
+        throw new Error(data?.error ?? `Claim heartbeat failed with ${response.status}`);
+      }
+    } catch (error) {
+      logger.warn("publishing claim heartbeat failed", {
+        post: postId,
+        ...errorFields(error),
+      });
+    }
+  }
+}
+
+async function flushPendingCompletions(): Promise<void> {
+  for (const [postId, pending] of pendingCompletions) {
+    try {
+      await completePost(pending.post, pending.result);
+      pendingCompletions.delete(postId);
+      logger.success("publishing receipt recorded after retry", {
+        post: postId,
+        platform: pending.post.platform,
+        status: pending.result.status,
+        platformAccepted: pending.platformAccepted,
+      });
+    } catch (error) {
+      if (error instanceof CompletionPersistenceError && error.statusCode === 404) {
+        pendingCompletions.delete(postId);
+        activeLeasePostIds.delete(postId);
+        logger.error("publishing receipt needs manual verification; platform upload will not be repeated", {
+          post: postId,
+          platform: pending.post.platform,
+          platformAccepted: pending.platformAccepted,
+          duration: formatDuration(Date.now() - pending.startedAt),
+        });
+        continue;
+      }
+      logger.error("publishing receipt still pending; platform upload will not be repeated", {
+        post: postId,
+        platform: pending.post.platform,
+        platformAccepted: pending.platformAccepted,
+        duration: formatDuration(Date.now() - pending.startedAt),
+        ...errorFields(error),
+      });
+    }
+  }
+}
+
+function rememberPendingCompletion(input: {
+  post: AutomationPost;
+  result: UploadResult;
+  startedAt: number;
+  platformAccepted: boolean;
+}): void {
+  pendingCompletions.set(input.post.id, input);
+  cachedPosts = cachedPosts.filter((item) => item.id !== input.post.id);
 }
 
 async function firstExistingFile(candidates: string[]): Promise<{ path: string; size: number }> {
@@ -195,6 +319,7 @@ async function processDuePosts(): Promise<void> {
 
   posting = true;
   try {
+    await flushPendingCompletions();
     const now = Date.now();
     const duePosts = cachedPosts.filter((post) => {
       if (!post.scheduledFor || seenCompletions.has(post.idempotencyKey)) {
@@ -204,12 +329,28 @@ async function processDuePosts(): Promise<void> {
       return new Date(post.scheduledFor).getTime() <= now;
     });
 
+    if (dryRun) {
+      for (const post of duePosts) {
+        if (dryRunObservedPosts.has(post.id)) {
+          continue;
+        }
+        dryRunObservedPosts.add(post.id);
+        logger.warn("dry-run observed due post without claiming it", {
+          post: post.id,
+          platform: post.platform,
+          scheduledFor: post.scheduledFor,
+        });
+      }
+      return;
+    }
+
     for (const post of duePosts) {
       const startedAt = Date.now();
       const claimed = await claimPost(post);
       if (!claimed) {
         continue;
       }
+      activeLeasePostIds.add(post.id);
 
       logger.info("publishing post", {
         post: post.id,
@@ -217,8 +358,45 @@ async function processDuePosts(): Promise<void> {
         account: post.socialAccountExternalAccountId ?? post.socialAccountId ?? "default",
       });
 
+      let result: UploadResult;
       try {
-        const result = await publishPost(post);
+        result = await publishPost(post);
+      } catch (error) {
+        const publishError = error instanceof Error ? error.message : String(error);
+        const stagedMedia = error instanceof Error ? (error as PublishErrorWithStagedMedia).stagedMedia : undefined;
+        const ambiguousPlatformResult = error instanceof AmbiguousPlatformPublishError;
+        const failedResult: UploadResult = {
+          status: ambiguousPlatformResult ? "PRIVATE_ONLY_UNVERIFIED" : "FAILED",
+          publishError,
+          mediaObjectKey: stagedMedia?.objectKey,
+          mediaPublicUrl: stagedMedia?.publicUrl,
+          mediaUploadedAt: stagedMedia?.uploadedAt,
+        };
+        try {
+          await completePost(post, failedResult);
+        } catch (completionError) {
+          rememberPendingCompletion({
+            post,
+            result: failedResult,
+            startedAt,
+            platformAccepted: ambiguousPlatformResult,
+          });
+          logger.error("publishing failure could not be recorded; receipt retry queued", {
+            post: post.id,
+            platform: post.platform,
+            ...errorFields(completionError),
+          });
+        }
+        logger.error("post failed", {
+          post: post.id,
+          platform: post.platform,
+          duration: formatDuration(Date.now() - startedAt),
+          error: publishError,
+        });
+        continue;
+      }
+
+      try {
         await completePost(post, result);
         logger.success("post completed", {
           post: post.id,
@@ -228,21 +406,20 @@ async function processDuePosts(): Promise<void> {
           privacy: result.finalPrivacyStatus,
           externalPost: result.externalPostId,
         });
-      } catch (error) {
-        const publishError = error instanceof Error ? error.message : String(error);
-        const stagedMedia = error instanceof Error ? (error as PublishErrorWithStagedMedia).stagedMedia : undefined;
-        await completePost(post, {
-          status: "FAILED",
-          publishError,
-          mediaObjectKey: stagedMedia?.objectKey,
-          mediaPublicUrl: stagedMedia?.publicUrl,
-          mediaUploadedAt: stagedMedia?.uploadedAt,
+      } catch (completionError) {
+        rememberPendingCompletion({
+          post,
+          result,
+          startedAt,
+          platformAccepted: result.status !== "FAILED",
         });
-        logger.error("post failed", {
+        logger.error("platform response received but publishing receipt could not be recorded; upload will not be repeated", {
           post: post.id,
           platform: post.platform,
           duration: formatDuration(Date.now() - startedAt),
-          error: publishError,
+          status: result.status,
+          externalPost: result.externalPostId,
+          ...errorFields(completionError),
         });
       }
     }
@@ -260,8 +437,10 @@ async function main(): Promise<void> {
     dryRun,
     syncEvery: `${syncIntervalMs / 1000}s`,
     dueEvery: `${dueCheckIntervalMs / 1000}s`,
+    heartbeatEvery: `${heartbeatIntervalMs / 1000}s`,
   });
 
+  await sendHeartbeat();
   await syncUpcomingPosts();
   await processDuePosts();
 
@@ -272,6 +451,11 @@ async function main(): Promise<void> {
   setInterval(() => {
     void processDuePosts();
   }, dueCheckIntervalMs);
+
+  setInterval(() => {
+    void sendHeartbeat();
+    void renewActiveClaims();
+  }, heartbeatIntervalMs);
 }
 
 process.on("SIGINT", () => {

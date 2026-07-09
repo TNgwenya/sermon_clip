@@ -235,7 +235,13 @@ function useClipStudioTranscriptState({
   momentTitle,
   smartClipCategory,
 }: ClipStudioTranscriptPanelProps) {
-  const { editPreview, previewClock, requestPreviewPlayback, seekPreviewTo } = useClipStudioPreview();
+  const {
+    editPreview,
+    isDraftDirty,
+    previewClock,
+    requestPreviewPlayback,
+    seekPreviewTo,
+  } = useClipStudioPreview();
   const activeClipStartSeconds = editPreview.startSeconds ?? clipStartSeconds;
   const activeClipEndSeconds = editPreview.endSeconds ?? clipEndSeconds;
   const durationSeconds = Math.max(0.1, editPreview.durationSeconds ?? clipDurationSeconds ?? activeClipEndSeconds - activeClipStartSeconds);
@@ -306,6 +312,7 @@ function useClipStudioTranscriptState({
     activeClipStartSeconds,
     activeCaptionCues,
     editPreview,
+    isDraftDirty,
     cleanupPlan,
     durationSeconds,
     editableCleanupCuts,
@@ -341,6 +348,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     activeClipEndSeconds,
     activeClipStartSeconds,
     durationSeconds,
+    isDraftDirty,
     seekToAbsolute,
     selectedSegmentIds,
     tags,
@@ -417,13 +425,21 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
   }
 
   return (
-    <aside className="card clip-studio-transcript-rail stack-md" aria-label="Transcript editor" data-testid="clip-studio-transcript-panel">
+    <aside
+      id="clip-studio-transcript"
+      className="card clip-studio-transcript-rail stack-md"
+      aria-label="Clip transcript editor"
+      data-testid="clip-studio-transcript-panel"
+      tabIndex={-1}
+    >
       <div className="section-heading-row">
         <div>
-          <p className="kicker">Transcript editor</p>
-          <h2>Sermon text</h2>
+          <p className="kicker">Clip transcript</p>
+          <h2>On-video words</h2>
         </div>
-        <StatusBadge tone="success">Preview updated</StatusBadge>
+        <StatusBadge tone={isDraftDirty ? "warning" : "success"}>
+          {isDraftDirty ? "Unsaved draft" : "Saved settings"}
+        </StatusBadge>
       </div>
 
       <div className="clip-studio-transcript-range">
@@ -457,9 +473,9 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
               {formatSecondsForPastorView(focusedSegment.startTimeSeconds)} - {formatSecondsForPastorView(focusedSegment.endTimeSeconds)}
             </strong>
             <label className="stack-sm clip-studio-transcript-word-editor">
-              Words
+              On-video words
               <textarea
-                aria-label="Edit selected transcript words"
+                aria-label="Edit on-video words for the selected line"
                 className="clip-studio-caption-textarea"
                 value={getSegmentDisplayText(focusedSegment)}
                 onChange={(event) => dispatchTranscriptTextUpdate(focusedSegment, event.target.value)}
@@ -517,7 +533,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
         </div>
       ) : null}
 
-      <div className="clip-studio-transcript-list" aria-label="Clickable transcript lines">
+      <div className="clip-studio-transcript-list" aria-label="Clip transcript lines">
         {transcriptSegments.length > 0 ? (
           transcriptSegments.map((segment, index) => {
             const isSelected = selectedSegmentIds.has(segment.id);

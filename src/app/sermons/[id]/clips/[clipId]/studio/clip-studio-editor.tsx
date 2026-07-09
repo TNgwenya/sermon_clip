@@ -1,6 +1,6 @@
 "use client";
 
-import { type CSSProperties, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { SectionCard, StatusBadge } from "@/components/ui";
 import { formatSecondsForPastorView, formatSecondsForTimestampInput } from "@/lib/sermonSegment";
@@ -55,6 +55,9 @@ import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/c
 type ClipStudioEditorProps = {
   initialStartTimeSeconds: number;
   initialEndTimeSeconds: number;
+  initialTitle: string;
+  initialEditorialHook: string;
+  initialMainCaption: string;
   initialShortCaption: string;
   initialPlatformCaption: string;
   initialHashtags: string[];
@@ -65,12 +68,17 @@ type ClipStudioEditorProps = {
   initialCaptionAppearance: CaptionAppearanceSettings;
   brandCaptionStylePresetId: string;
   suggestedHook: string;
+  suggestedCaption: string;
+  titleOptions: string[];
+  hookOptions: string[];
+  ctaOptions: string[];
   initialHookOverlay: HookOverlayConfig;
   initialBrollLayer: BrollLayerConfig;
   initialSpeechCleanup: SpeechCleanupSettings;
   initialSpeechCleanupEdits: SpeechCleanupEdits | null;
   initialAudioSilenceEvents: SpeechCleanupAudioSilenceEvent[];
   initialAudioSilenceAnalyzed: boolean;
+  audioSilenceReviewUrl: string | null;
   transcriptSegments: Array<{
     id: string;
     startTimeSeconds: number;
@@ -86,6 +94,13 @@ type ClipStudioEditorProps = {
 };
 
 type TranscriptSegmentOption = ClipStudioEditorProps["transcriptSegments"][number];
+type AudioSilenceReviewStatus = "idle" | "loading" | "ready" | "unavailable";
+
+type DeferredAudioSilenceReview = {
+  status: AudioSilenceReviewStatus;
+  events: SpeechCleanupAudioSilenceEvent[];
+  analyzed: boolean;
+};
 
 const QUICK_CLIP_LENGTH_SECONDS = [30, 45, 60, 90];
 const EMPTY_AUDIO_SILENCE_EVENTS: SpeechCleanupAudioSilenceEvent[] = [];
@@ -102,6 +117,7 @@ const BROLL_POSITION_OPTIONS: Array<{ value: BrollCardPosition; label: string }>
 ];
 
 type CreatorReviewStatus = "ready" | "warning" | "needs-work";
+type CreatorReviewPriority = "required" | "recommended" | "optional";
 
 type CreatorReviewAction =
   | "fix-timing"
@@ -122,9 +138,19 @@ type CreatorReviewItem = {
   actionLabel?: string;
 };
 
+type CreatorReviewChecklistItem = CreatorReviewItem & {
+  priority: CreatorReviewPriority;
+};
+
 type StudioDraftSnapshot = {
   startTimestamp: string;
   endTimestamp: string;
+  title: string;
+  editorialHook: string;
+  mainCaption: string;
+  shortCaption: string;
+  platformCaption: string;
+  hashtags: string;
   applyCaptionsToClip: boolean;
   captionStylePresetId: string;
   captionPosition: CaptionPosition;
@@ -258,38 +284,6 @@ function getStudioDraftSnapshotKey(snapshot: StudioDraftSnapshot): string {
   return JSON.stringify(snapshot);
 }
 
-function getCreatorReviewTone(score: number, hasBlockingIssue: boolean): "success" | "accent" | "warning" | "danger" {
-  if (hasBlockingIssue || score < 55) {
-    return "danger";
-  }
-
-  if (score < 74) {
-    return "warning";
-  }
-
-  if (score < 88) {
-    return "accent";
-  }
-
-  return "success";
-}
-
-function getCreatorReviewLabel(score: number, hasBlockingIssue: boolean): string {
-  if (hasBlockingIssue || score < 55) {
-    return "Needs review";
-  }
-
-  if (score < 74) {
-    return "Close";
-  }
-
-  if (score < 88) {
-    return "Strong draft";
-  }
-
-  return "Post-ready";
-}
-
 function getCreatorReviewStatusLabel(status: CreatorReviewStatus): string {
   if (status === "needs-work") {
     return "Needs work";
@@ -323,9 +317,39 @@ function isKeyboardEditingTarget(target: EventTarget | null): boolean {
   return target.isContentEditable || tagName === "input" || tagName === "textarea" || tagName === "select";
 }
 
+function sanitizeAudioSilenceReviewEvents(value: unknown): SpeechCleanupAudioSilenceEvent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return [];
+    }
+
+    const event = item as Record<string, unknown>;
+    const startSeconds = event["startSeconds"];
+    const endSeconds = event["endSeconds"];
+    const durationSeconds = event["durationSeconds"];
+    if (
+      typeof startSeconds !== "number" || !Number.isFinite(startSeconds) ||
+      typeof endSeconds !== "number" || !Number.isFinite(endSeconds) ||
+      typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds) ||
+      startSeconds < 0 || endSeconds <= startSeconds || durationSeconds < 0
+    ) {
+      return [];
+    }
+
+    return [{ startSeconds, endSeconds, durationSeconds }];
+  });
+}
+
 export function ClipStudioEditor({
   initialStartTimeSeconds,
   initialEndTimeSeconds,
+  initialTitle,
+  initialEditorialHook,
+  initialMainCaption,
   initialShortCaption,
   initialPlatformCaption,
   initialHashtags,
@@ -336,12 +360,17 @@ export function ClipStudioEditor({
   initialCaptionAppearance,
   brandCaptionStylePresetId,
   suggestedHook,
+  suggestedCaption,
+  titleOptions,
+  hookOptions,
+  ctaOptions,
   initialHookOverlay,
   initialBrollLayer,
   initialSpeechCleanup,
   initialSpeechCleanupEdits,
   initialAudioSilenceEvents,
   initialAudioSilenceAnalyzed,
+  audioSilenceReviewUrl,
   transcriptSegments,
   knownDurationSeconds,
   captionQualityScore,
@@ -350,13 +379,29 @@ export function ClipStudioEditor({
   translationUncertainty,
   captionImprovementSuggestions,
 }: ClipStudioEditorProps) {
-  const { previewClock, requestPreviewPlayback, seekPreviewTo, updateEditPreview } = useClipStudioPreview();
+  const {
+    isDraftDirty,
+    previewClock,
+    requestPreviewPlayback,
+    seekPreviewTo,
+    updateEditPreview,
+  } = useClipStudioPreview();
   const isPending = false;
   const historyRestorePendingRef = useRef(false);
   const lastHistorySnapshotRef = useRef<StudioDraftSnapshot | null>(null);
+  const audioReviewSectionRef = useRef<HTMLDetailsElement | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusSuccess, setStatusSuccess] = useState(true);
   const [draftHistory, setDraftHistory] = useState<StudioDraftHistory>({ past: [], future: [] });
+  const [audioSilenceReview, setAudioSilenceReview] = useState<DeferredAudioSilenceReview>(() => ({
+    status: initialAudioSilenceAnalyzed
+      ? "ready"
+      : audioSilenceReviewUrl
+        ? "idle"
+        : "unavailable",
+    events: initialAudioSilenceEvents,
+    analyzed: initialAudioSilenceAnalyzed,
+  }));
 
   const [startTimestamp, setStartTimestamp] = useState(
     formatSecondsForTimestampInput(initialStartTimeSeconds),
@@ -364,9 +409,12 @@ export function ClipStudioEditor({
   const [endTimestamp, setEndTimestamp] = useState(
     formatSecondsForTimestampInput(initialEndTimeSeconds),
   );
-  const shortCaption = initialShortCaption;
-  const platformCaption = initialPlatformCaption;
-  const hashtags = hashtagsToEditorInput(initialHashtags);
+  const [title, setTitle] = useState(initialTitle);
+  const [editorialHook, setEditorialHook] = useState(initialEditorialHook);
+  const [mainCaption, setMainCaption] = useState(initialMainCaption);
+  const [shortCaption, setShortCaption] = useState(initialShortCaption);
+  const [platformCaption, setPlatformCaption] = useState(initialPlatformCaption);
+  const [hashtags, setHashtags] = useState(() => hashtagsToEditorInput(initialHashtags));
   const [applyCaptionsToClip, setApplyCaptionsToClip] = useState(initialApplyCaptionsToClip);
   const [captionStylePresetId, setCaptionStylePresetId] = useState(initialCaptionStylePresetId);
   const [captionPosition, setCaptionPosition] = useState<CaptionPosition>(initialCaptionPosition);
@@ -392,6 +440,92 @@ export function ClipStudioEditor({
   const resolvedCaptionStyleId = captionStylePresetId || brandCaptionStylePresetId;
   const resolvedCaptionStyle = useMemo(() => resolveCaptionStylePreset(resolvedCaptionStyleId), [resolvedCaptionStyleId]);
 
+  useEffect(() => {
+    if (!audioSilenceReviewUrl || initialAudioSilenceAnalyzed) {
+      return undefined;
+    }
+
+    const reviewSection = audioReviewSectionRef.current;
+    if (!reviewSection) {
+      return undefined;
+    }
+
+    let started = false;
+    let disposed = false;
+    let controller: AbortController | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const startDeferredReview = () => {
+      if (started || disposed) {
+        return;
+      }
+
+      started = true;
+      controller = new AbortController();
+      setAudioSilenceReview((current) => ({ ...current, status: "loading" }));
+
+      void fetch(audioSilenceReviewUrl, {
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error("Audio review is unavailable.");
+          }
+
+          return response.json() as Promise<{ analyzed?: unknown; events?: unknown }>;
+        })
+        .then((payload) => {
+          if (disposed) {
+            return;
+          }
+
+          if (payload.analyzed !== true) {
+            setAudioSilenceReview({ status: "unavailable", events: [], analyzed: false });
+            return;
+          }
+
+          setAudioSilenceReview({
+            status: "ready",
+            events: sanitizeAudioSilenceReviewEvents(payload.events),
+            analyzed: true,
+          });
+        })
+        .catch((error: unknown) => {
+          if (disposed || (error instanceof DOMException && error.name === "AbortError")) {
+            return;
+          }
+
+          setAudioSilenceReview({ status: "unavailable", events: [], analyzed: false });
+        });
+    };
+
+    let observer: IntersectionObserver | null = null;
+    if ("IntersectionObserver" in window) {
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            observer?.disconnect();
+            startDeferredReview();
+          }
+        },
+        { rootMargin: "320px 0px" },
+      );
+      observer.observe(reviewSection);
+    } else {
+      fallbackTimer = setTimeout(startDeferredReview, 0);
+    }
+
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+      if (fallbackTimer !== null) {
+        clearTimeout(fallbackTimer);
+      }
+      controller?.abort();
+    };
+  }, [audioSilenceReviewUrl, initialAudioSilenceAnalyzed]);
+
   const timingPreview = useMemo(
     () =>
       validateClipStudioTiming({
@@ -404,6 +538,7 @@ export function ClipStudioEditor({
   const fieldErrors: typeof timingPreview.fieldErrors & {
     captionCues?: string;
     hook?: string;
+    hashtags?: string;
   } = timingPreview.fieldErrors;
   const generatedCaptionCues = useMemo(() => {
     if (timingPreview.startSeconds !== null && timingPreview.endSeconds !== null) {
@@ -512,8 +647,21 @@ export function ClipStudioEditor({
     timingPreview.endSeconds !== null &&
     Math.abs(timingPreview.startSeconds - initialStartTimeSeconds) < 0.05 &&
     Math.abs(timingPreview.endSeconds - initialEndTimeSeconds) < 0.05;
-  const activeAudioSilenceEvents = audioSilenceMatchesCurrentTiming ? initialAudioSilenceEvents : EMPTY_AUDIO_SILENCE_EVENTS;
-  const activeAudioSilenceAnalyzed = audioSilenceMatchesCurrentTiming ? initialAudioSilenceAnalyzed : false;
+  const activeAudioSilenceEvents = audioSilenceMatchesCurrentTiming
+    ? audioSilenceReview.events
+    : EMPTY_AUDIO_SILENCE_EVENTS;
+  const activeAudioSilenceAnalyzed = audioSilenceMatchesCurrentTiming ? audioSilenceReview.analyzed : false;
+  const audioSilenceReviewMessage = !audioSilenceMatchesCurrentTiming
+    ? "Exact pause markers apply to the saved timing. Save or reset these boundaries to check the revised clip."
+    : audioSilenceReview.status === "loading"
+      ? "Checking the source audio for exact silent sections. You can keep editing while this runs."
+      : audioSilenceReview.status === "ready"
+        ? audioSilenceReview.events.length > 0
+          ? `Source audio checked · ${audioSilenceReview.events.length} confirmed silent section${audioSilenceReview.events.length === 1 ? "" : "s"}.`
+          : "Source audio checked. No confirmed silent sections were found."
+        : audioSilenceReview.status === "idle"
+          ? "Exact pause analysis will begin when the Audio workspace comes into view."
+          : "Exact audio analysis is unavailable right now. Transcript timing remains active, and final preparation keeps its normal media checks.";
   const speechCleanupPreviewPlan = useMemo(
     () =>
       buildSpeechCleanupPreviewPlan({
@@ -635,6 +783,12 @@ export function ClipStudioEditor({
     () => ({
       startTimestamp,
       endTimestamp,
+      title,
+      editorialHook,
+      mainCaption,
+      shortCaption,
+      platformCaption,
+      hashtags,
       applyCaptionsToClip,
       captionStylePresetId,
       captionPosition,
@@ -656,13 +810,19 @@ export function ClipStudioEditor({
       captionPosition,
       captionStylePresetId,
       endTimestamp,
+      editorialHook,
       firstSegmentId,
       focusedSegmentId,
+      hashtags,
       hookOverlay,
       lastSegmentId,
+      mainCaption,
+      platformCaption,
+      shortCaption,
       speechCleanup,
       speechCleanupEdits,
       startTimestamp,
+      title,
     ],
   );
 
@@ -680,7 +840,9 @@ export function ClipStudioEditor({
       startSeconds: timingPreview.startSeconds,
       endSeconds: timingPreview.endSeconds,
       durationSeconds: timingPreview.durationSeconds,
-      mainCaption: onVideoCaptionText,
+      title,
+      editorialHook,
+      mainCaption,
       shortCaption,
       platformCaption,
       onVideoCaptionText,
@@ -704,7 +866,9 @@ export function ClipStudioEditor({
       durationLabel,
       endTimestamp,
       captionCues,
+      editorialHook,
       hashtags,
+      mainCaption,
       onVideoCaptionText,
       applyCaptionsToClip,
       captionAppearance,
@@ -713,6 +877,7 @@ export function ClipStudioEditor({
       resolvedCaptionStyle.id,
       shortCaption,
       startTimestamp,
+      title,
       hookOverlay,
       brollLayer,
       speechCleanup,
@@ -802,6 +967,12 @@ export function ClipStudioEditor({
     historyRestorePendingRef.current = true;
     setStartTimestamp(nextSnapshot.startTimestamp);
     setEndTimestamp(nextSnapshot.endTimestamp);
+    setTitle(nextSnapshot.title);
+    setEditorialHook(nextSnapshot.editorialHook);
+    setMainCaption(nextSnapshot.mainCaption);
+    setShortCaption(nextSnapshot.shortCaption);
+    setPlatformCaption(nextSnapshot.platformCaption);
+    setHashtags(nextSnapshot.hashtags);
     setApplyCaptionsToClip(nextSnapshot.applyCaptionsToClip);
     setCaptionStylePresetId(nextSnapshot.captionStylePresetId);
     setCaptionPosition(nextSnapshot.captionPosition);
@@ -1312,6 +1483,26 @@ export function ClipStudioEditor({
     }));
   }
 
+  function useSuggestedPostHook() {
+    if (!suggestedHook.trim()) {
+      return;
+    }
+
+    setEditorialHook(suggestedHook.trim());
+    setStatusSuccess(true);
+    setStatusMessage("Suggested post opener applied. Review it before preparing.");
+  }
+
+  function useSuggestedPostCaption() {
+    if (!suggestedCaption.trim()) {
+      return;
+    }
+
+    setMainCaption(suggestedCaption.trim());
+    setStatusSuccess(true);
+    setStatusMessage("Suggested post caption applied. Review it before preparing.");
+  }
+
   function getBrollSeedText(): string {
     return trimBrollText(
       focusedSegment?.text ||
@@ -1467,6 +1658,13 @@ export function ClipStudioEditor({
     }
 
     requestPreviewPlayback();
+    const preview = document.getElementById("clip-studio-preview");
+    if (preview && window.matchMedia("(max-width: 880px)").matches) {
+      preview.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        block: "start",
+      });
+    }
   }
 
   useEffect(() => {
@@ -1549,7 +1747,7 @@ export function ClipStudioEditor({
         }
       }
 
-      if (event.metaKey || event.ctrlKey || event.altKey || isEditingTarget) {
+      if (event.metaKey || event.ctrlKey || isEditingTarget || !event.altKey || event.repeat) {
         return;
       }
 
@@ -1559,21 +1757,13 @@ export function ClipStudioEditor({
         return;
       }
 
-      if (key === "arrowleft" || key === "arrowright") {
-        event.preventDefault();
-        const direction = key === "arrowleft" ? -1 : 1;
-        const stepSeconds = event.shiftKey ? 5 : 1;
-        seekPreviewTo(Math.max(0, previewClock.currentSeconds + direction * stepSeconds));
-        return;
-      }
-
-      if (event.key === "[") {
+      if (event.code === "BracketLeft") {
         event.preventDefault();
         applyBoundaryFromAbsoluteSeconds((timingPreview.startSeconds ?? initialStartTimeSeconds) + previewClock.currentSeconds, "start");
         return;
       }
 
-      if (event.key === "]") {
+      if (event.code === "BracketRight") {
         event.preventDefault();
         applyBoundaryFromAbsoluteSeconds((timingPreview.startSeconds ?? initialStartTimeSeconds) + previewClock.currentSeconds, "end");
         return;
@@ -1683,7 +1873,6 @@ export function ClipStudioEditor({
   const canRedoDraft = draftHistory.future.length > 0;
   const creatorReview = useMemo(() => {
     const items: CreatorReviewItem[] = [];
-    let score = 100;
     const durationSeconds = timingPreview.durationSeconds;
     const captionTextWordCount = countWords(onVideoCaptionText);
     const longCaptionCueCount = captionCues.filter((cue) => countWords(cue.text) > 16).length;
@@ -1694,10 +1883,9 @@ export function ClipStudioEditor({
       ? brollLayer.cards.filter((card) => card.enabled && card.text.trim().length > 0)
       : [];
     const audioCleanupEnabled = speechCleanup.removeDeadAir && speechCleanup.tightenLongPauses;
-    const socialCopyReady = Boolean(shortCaption.trim() || platformCaption.trim() || hashtags.trim());
+    const socialCopyReady = Boolean(mainCaption.trim() && (shortCaption.trim() || platformCaption.trim() || hashtags.trim()));
 
     if (!timingPreview.isValid || durationSeconds === null) {
-      score -= 26;
       items.push({
         id: "timing",
         label: "Timing",
@@ -1707,7 +1895,6 @@ export function ClipStudioEditor({
         actionLabel: "Draft 60s",
       });
     } else if (durationSeconds < 30 || durationSeconds > 120) {
-      score -= 9;
       items.push({
         id: "timing",
         label: "Timing",
@@ -1726,7 +1913,6 @@ export function ClipStudioEditor({
     }
 
     if (!applyCaptionsToClip || !hasCaptionText) {
-      score -= 18;
       items.push({
         id: "captions",
         label: "Captions",
@@ -1736,7 +1922,6 @@ export function ClipStudioEditor({
         actionLabel: "Turn on",
       });
     } else if ((captionQualityScore !== null && captionQualityScore < 0.58) || captionWarnings.length >= 2) {
-      score -= 14;
       items.push({
         id: "captions",
         label: "Captions",
@@ -1749,7 +1934,6 @@ export function ClipStudioEditor({
       captionImprovementSuggestions.length > 0 ||
       Boolean(translationUncertainty)
     ) {
-      score -= 7;
       items.push({
         id: "captions",
         label: "Captions",
@@ -1757,7 +1941,6 @@ export function ClipStudioEditor({
         detail: "Captions are present, but the AI feedback still has review notes.",
       });
     } else if (averageCueWords > 14 || longCaptionCueCount > 0 || captionAppearance.maxLines > 3) {
-      score -= 5;
       items.push({
         id: "captions",
         label: "Captions",
@@ -1776,7 +1959,6 @@ export function ClipStudioEditor({
     }
 
     if (!hasHookText) {
-      score -= 8;
       items.push({
         id: "hook",
         label: "Hook",
@@ -1786,7 +1968,6 @@ export function ClipStudioEditor({
         actionLabel: "Add hook",
       });
     } else if (hookCaptionWarning) {
-      score -= 8;
       items.push({
         id: "hook",
         label: "Hook",
@@ -1805,7 +1986,6 @@ export function ClipStudioEditor({
     }
 
     if (activeBrollCards.length === 0) {
-      score -= durationSeconds !== null && durationSeconds >= 45 ? 7 : 4;
       items.push({
         id: "broll",
         label: "Visual layer",
@@ -1824,7 +2004,6 @@ export function ClipStudioEditor({
     }
 
     if (!audioCleanupEnabled) {
-      score -= 6;
       items.push({
         id: "audio",
         label: "Pacing",
@@ -1850,7 +2029,6 @@ export function ClipStudioEditor({
     }
 
     if (!socialCopyReady) {
-      score -= 5;
       items.push({
         id: "copy",
         label: "Post copy",
@@ -1866,15 +2044,43 @@ export function ClipStudioEditor({
       });
     }
 
-    const hasBlockingIssue = items.some((item) => item.status === "needs-work");
-    const normalizedScore = Math.max(0, Math.min(hasBlockingIssue ? 82 : 100, Math.round(score)));
+    const checklistItems: CreatorReviewChecklistItem[] = items.map((item) => ({
+      ...item,
+      priority:
+        item.id === "timing" || (item.id === "captions" && applyCaptionsToClip)
+          ? "required"
+          : item.id === "captions" || item.id === "hook" || item.id === "audio"
+            ? "recommended"
+            : "optional",
+    }));
+    const summarizePriority = (priority: CreatorReviewPriority) => {
+      const priorityItems = checklistItems.filter((item) => item.priority === priority);
+      return {
+        priority,
+        ready: priorityItems.filter((item) => item.status === "ready").length,
+        total: priorityItems.length,
+        needsWork: priorityItems.filter((item) => item.status === "needs-work").length,
+      };
+    };
+    const summary = [
+      summarizePriority("required"),
+      summarizePriority("recommended"),
+      summarizePriority("optional"),
+    ];
+    const required = summary[0];
+    const recommended = summary[1];
+    const hasRequiredWork = Boolean(required && required.ready < required.total);
+    const hasRecommendedWork = Boolean(recommended && recommended.ready < recommended.total);
 
     return {
-      items,
-      score: normalizedScore,
-      label: getCreatorReviewLabel(normalizedScore, hasBlockingIssue),
-      tone: getCreatorReviewTone(normalizedScore, hasBlockingIssue),
-      scoreStyle: { "--creator-review-score": `${normalizedScore}%` } as CSSProperties,
+      items: checklistItems,
+      summary,
+      label: hasRequiredWork
+        ? "Required checks remain"
+        : hasRecommendedWork
+          ? "Ready with suggestions"
+          : "Ready to prepare",
+      tone: hasRequiredWork ? "danger" as const : hasRecommendedWork ? "accent" as const : "success" as const,
     };
   }, [
     applyCaptionsToClip,
@@ -1886,6 +2092,7 @@ export function ClipStudioEditor({
     captionWarnings.length,
     durationLabel,
     hashtags,
+    mainCaption,
     hookCaptionWarning,
     hookOverlay.durationSeconds,
     hookOverlay.enabled,
@@ -2213,10 +2420,15 @@ export function ClipStudioEditor({
       </SectionCard>
       </div>
 
-      <SectionCard title="Creator Review" className="clip-studio-creator-review">
+      <SectionCard title="Final check" className="clip-studio-creator-review">
         <div className="clip-studio-creator-review-hero">
-          <div className="clip-studio-creator-review-meter" style={creatorReview.scoreStyle} aria-label={`Creator readiness ${creatorReview.score}%`}>
-            <span>{creatorReview.score}</span>
+          <div className="clip-studio-review-checklist-summary" aria-label="Preparation checklist summary">
+            {creatorReview.summary.map((group) => (
+              <span key={group.priority} className={`is-${group.priority}`}>
+                <strong>{group.ready}/{group.total}</strong>
+                {group.priority}
+              </span>
+            ))}
           </div>
           <div className="clip-studio-creator-review-summary">
             <div className="actions-row">
@@ -2226,7 +2438,7 @@ export function ClipStudioEditor({
               </button>
             </div>
             <p className="muted small">
-              {creatorReview.items.filter((item) => item.status === "ready").length} of {creatorReview.items.length} checks are ready for posting.
+              Required checks protect the final video. Recommended and optional ideas can be skipped when they do not fit the sermon moment.
             </p>
           </div>
         </div>
@@ -2239,10 +2451,11 @@ export function ClipStudioEditor({
             >
               <div>
                 <div className="clip-studio-creator-review-item-head">
-                  <strong>{item.label}</strong>
-                  <StatusBadge tone={getCreatorReviewStatusTone(item.status)}>
-                    {getCreatorReviewStatusLabel(item.status)}
-                  </StatusBadge>
+                  <div>
+                    <span className={`clip-studio-review-priority is-${item.priority}`}>{item.priority}</span>
+                    <strong>{item.label}</strong>
+                  </div>
+                  <StatusBadge tone={getCreatorReviewStatusTone(item.status)}>{getCreatorReviewStatusLabel(item.status)}</StatusBadge>
                 </div>
                 <p className="muted small">{item.detail}</p>
               </div>
@@ -2261,13 +2474,14 @@ export function ClipStudioEditor({
         </div>
       </SectionCard>
 
-      <details className="clip-studio-editor-disclosure" open>
+      <details ref={audioReviewSectionRef} className="clip-studio-editor-disclosure" open>
         <summary>
           <span>Audio</span>
         </summary>
       <SectionCard title="Audio">
         <div className="stack-md">
           <p className="status-help">{speechCleanupSummary}</p>
+          <p className="muted small" role="status">{audioSilenceReviewMessage}</p>
           <label className="clip-studio-toggle-row">
             <input
               type="checkbox"
@@ -2327,6 +2541,136 @@ export function ClipStudioEditor({
         </div>
       </SectionCard>
       </details>
+
+      <SectionCard
+        title="Post copy"
+        description="Prepare the words that travel with the video on social platforms. These fields do not change the timed words shown inside the clip."
+      >
+        <div className="stack-md">
+          <div className="clip-studio-effect-note">
+            <StatusBadge tone="accent">Separate from subtitles</StatusBadge>
+            <p>On-video captions stay in the caption editor below. This copy is used for publishing and download packages.</p>
+          </div>
+
+          <label className="stack-sm">
+            Clip title
+            <input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="A clear title for this sermon moment"
+              disabled={isPending}
+            />
+          </label>
+          {titleOptions.length > 0 ? (
+            <div className="stack-sm">
+              <span className="muted small">Transcript-grounded title ideas</span>
+              <div className="actions-row">
+                {titleOptions.filter((option) => option.trim() && option.trim() !== title.trim()).slice(0, 3).map((option) => (
+                  <button key={option} type="button" className="button tertiary" onClick={() => setTitle(option.trim())} disabled={isPending}>
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <label className="stack-sm">
+            Post opener
+            <textarea
+              className="clip-studio-caption-textarea"
+              value={editorialHook}
+              onChange={(event) => setEditorialHook(event.target.value)}
+              placeholder="A grounded opening line for the social post"
+              disabled={isPending}
+            />
+          </label>
+          {suggestedHook.trim() && suggestedHook.trim() !== editorialHook.trim() ? (
+            <button type="button" className="button secondary" onClick={useSuggestedPostHook} disabled={isPending}>
+              Use suggested opener
+            </button>
+          ) : null}
+          {hookOptions.length > 0 ? (
+            <div className="actions-row" aria-label="Alternative post openers">
+              {hookOptions.filter((option) => option.trim() && option.trim() !== editorialHook.trim()).slice(0, 3).map((option) => (
+                <button key={option} type="button" className="button tertiary" onClick={() => setEditorialHook(option.trim())} disabled={isPending}>
+                  {option}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <label className="stack-sm">
+            Main post caption
+            <textarea
+              className="clip-studio-caption-textarea"
+              value={mainCaption}
+              onChange={(event) => setMainCaption(event.target.value)}
+              placeholder="Explain why this sermon moment matters"
+              disabled={isPending}
+            />
+          </label>
+          {suggestedCaption.trim() && suggestedCaption.trim() !== mainCaption.trim() ? (
+            <button type="button" className="button secondary" onClick={useSuggestedPostCaption} disabled={isPending}>
+              Use suggested caption
+            </button>
+          ) : null}
+
+          {ctaOptions.length > 0 ? (
+            <div className="stack-sm">
+              <span className="muted small">Optional ministry next steps</span>
+              <div className="actions-row">
+                {ctaOptions.slice(0, 3).map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    className="button tertiary"
+                    onClick={() => setMainCaption((current) => `${current.trim()}${current.trim() ? "\n\n" : ""}${option.trim()}`)}
+                    disabled={isPending || !option.trim() || mainCaption.includes(option.trim())}
+                  >
+                    Add: {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="review-edit-grid">
+            <label className="stack-sm">
+              Short caption
+              <textarea
+                className="clip-studio-caption-textarea"
+                value={shortCaption}
+                onChange={(event) => setShortCaption(event.target.value)}
+                placeholder="A concise version for fast-moving feeds"
+                disabled={isPending}
+              />
+            </label>
+            <label className="stack-sm">
+              Direct platform caption
+              <textarea
+                className="clip-studio-caption-textarea"
+                value={platformCaption}
+                onChange={(event) => setPlatformCaption(event.target.value)}
+                placeholder="A more conversational alternative"
+                disabled={isPending}
+              />
+            </label>
+          </div>
+
+          <label className="stack-sm">
+            Hashtags
+            <input
+              value={hashtags}
+              onChange={(event) => setHashtags(event.target.value)}
+              placeholder="#faith #sermon #church"
+              disabled={isPending}
+              aria-invalid={Boolean(fieldErrors?.hashtags)}
+            />
+            <span className="muted small">Use only tags that genuinely describe this moment.</span>
+          </label>
+          {fieldErrors?.hashtags ? <span className="error-text small">{fieldErrors.hashtags}</span> : null}
+        </div>
+      </SectionCard>
 
       <SectionCard title="On-video captions & hook">
         <div className="stack-md clip-studio-caption-form">
@@ -2612,7 +2956,7 @@ export function ClipStudioEditor({
             {hookCaptionWarning ? <p className="warning-banner">{hookCaptionWarning}</p> : null}
             {suggestedHook.trim() ? (
               <button type="button" className="button secondary" onClick={useSuggestedHook} disabled={isPending}>
-                Use suggested hook
+                Use suggestion as on-screen hook
               </button>
             ) : null}
 
@@ -2896,7 +3240,9 @@ export function ClipStudioEditor({
       <div className="clip-studio-save-strip">
         <div>
           <p className="muted small">Studio draft</p>
-          <p className="clip-studio-save-title">Preview updated</p>
+          <p className="clip-studio-save-title">
+            {isDraftDirty ? "Unsaved draft" : "Saved settings"}
+          </p>
         </div>
 
         <div className="clip-studio-history-actions" aria-label="Draft history controls">

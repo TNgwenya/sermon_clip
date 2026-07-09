@@ -1,9 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
 import type { PostingAutomationMode, PostingDraft, PostingPlatform } from "@/lib/postingDrafts";
 import { formatScheduleInterval, suggestScheduleIntervalMinutes, toDateTimeLocalInputValue } from "@/lib/postingSchedule";
+import type { CanonicalPlatformPayload } from "@/lib/publishingPayload";
+import type { PublishingPreflightPacket } from "@/lib/publishingPreflight";
 import type { SocialAccount } from "@/lib/socialAccounts";
 
 const platforms: PostingPlatform[] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
@@ -13,7 +17,37 @@ export type ScheduleDraftClipSummary = {
   id: string;
   title: string;
   caption: string;
+  platformPayloads?: CanonicalPlatformPayload[];
 };
+
+type EditablePlatformCopy = Record<PostingPlatform, { title: string; caption: string }>;
+
+function buildEditablePlatformCopy(clip: ScheduleDraftClipSummary): EditablePlatformCopy {
+  const payloads = new Map((clip.platformPayloads ?? []).map((payload) => [payload.platform, payload]));
+  return Object.fromEntries(platforms.map((platform) => {
+    const payload = payloads.get(platform);
+    return [platform, {
+      title: payload?.title ?? clip.title,
+      caption: payload?.caption ?? clip.caption,
+    }];
+  })) as EditablePlatformCopy;
+}
+
+function platformId(platform: PostingPlatform): string {
+  return platform.toLowerCase().replace(/\s+/g, "-");
+}
+
+function platformCopyLimits(platform: PostingPlatform): { title: number; caption: number } {
+  if (platform === "Facebook") {
+    return { title: 255, caption: 63_206 };
+  }
+
+  if (platform === "YouTube Shorts") {
+    return { title: 100, caption: 5000 };
+  }
+
+  return { title: 2200, caption: 2200 };
+}
 
 function formatPlanTime(date: Date): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -30,6 +64,7 @@ type ScheduleDraftModalProps = {
   clipDetails?: ScheduleDraftClipSummary[];
   socialAccounts?: SocialAccount[];
   initialAutomationMode?: PostingAutomationMode;
+  initialPlatform?: PostingPlatform | null;
   initialPostingSlot?: string | null;
   initialScheduledFor?: string | null;
   open: boolean;
@@ -43,6 +78,7 @@ function hasSyncedZernioAccount(accounts: SocialAccount[], platform: PostingPlat
     && account.status === "CONNECTED"
     && account.externalProvider === "zernio"
     && Boolean(account.externalAccountId)
+    && account.externalPlatform?.toLowerCase() === platform.toLowerCase()
   ));
 }
 
@@ -67,24 +103,34 @@ function isAutomaticPublishingAccount(account: SocialAccount): boolean {
     return true;
   }
 
-  return account.externalProvider === "zernio" && Boolean(account.externalAccountId);
+  return account.externalProvider === "zernio"
+    && Boolean(account.externalAccountId)
+    && account.externalPlatform?.toLowerCase() === account.platform.toLowerCase();
+}
+
+function isVerifiedAutomaticPublishingAccount(account: SocialAccount): boolean {
+  return account.status === "CONNECTED"
+    && Boolean(account.externalProvider)
+    && Boolean(account.externalAccountId)
+    && (account.externalProvider !== "zernio" || isAutomaticPublishingAccount(account));
 }
 
 function buildPlatformHint(input: {
   disabled: boolean;
   automationMode: PostingAutomationMode;
-  connectedAccountCount: number;
   selectableAccountCount: number;
 }): string {
   if (input.disabled) {
-    return "Connect synced account";
+    return "Verified publishing account required";
   }
 
   if (input.selectableAccountCount > 0) {
-    return `${input.selectableAccountCount} account${input.selectableAccountCount === 1 ? "" : "s"}`;
+    return input.automationMode === "AUTOMATIC"
+      ? `${input.selectableAccountCount} saved channel${input.selectableAccountCount === 1 ? "" : "s"}`
+      : `${input.selectableAccountCount} handoff channel${input.selectableAccountCount === 1 ? "" : "s"}`;
   }
 
-  return input.automationMode === "AUTOMATIC" ? "Configured channel" : "Media team handoff";
+  return input.automationMode === "AUTOMATIC" ? "Verify publishing setup" : "No saved channel required";
 }
 
 export function ScheduleDraftModal({
@@ -92,6 +138,7 @@ export function ScheduleDraftModal({
   clipDetails = [],
   socialAccounts = [],
   initialAutomationMode,
+  initialPlatform,
   initialPostingSlot,
   initialScheduledFor,
   open,
@@ -103,8 +150,10 @@ export function ScheduleDraftModal({
     id: clipId,
     title: clipDetailsById.get(clipId)?.title || `Clip ${index + 1}`,
     caption: clipDetailsById.get(clipId)?.caption || "",
+    platformPayloads: clipDetailsById.get(clipId)?.platformPayloads,
   })), [clipDetailsById, clipIds]);
   const automaticPlatforms = buildAutomaticPlatforms(socialAccounts);
+  const hasVerifiedAutomaticCapability = socialAccounts.some(isVerifiedAutomaticPublishingAccount);
   const accountsByPlatform = useMemo(() => platforms.reduce((accumulator, platform) => ({
     ...accumulator,
     [platform]: socialAccounts.filter((account) => account.platform === platform && account.status === "CONNECTED"),
@@ -115,15 +164,23 @@ export function ScheduleDraftModal({
     : automaticPlatforms.has("TikTok")
       ? "TikTok"
       : "YouTube Shorts";
-  const [selectedPlatforms, setSelectedPlatforms] = useState<PostingPlatform[]>([defaultAutomaticPlatform]);
+  const shouldDefaultAutomatic = hasVerifiedAutomaticCapability && initialAutomationMode !== "MANUAL";
+  const defaultPlatform = shouldDefaultAutomatic
+    ? initialPlatform && automaticPlatforms.has(initialPlatform) ? initialPlatform : defaultAutomaticPlatform
+    : initialPlatform
+      ?? socialAccounts.find((account) => account.status === "CONNECTED")?.platform
+      ?? defaultAutomaticPlatform;
+  const [selectedPlatforms, setSelectedPlatforms] = useState<PostingPlatform[]>([defaultPlatform]);
   const [orderedClipIds, setOrderedClipIds] = useState(() => clipIds);
-  const [clipCopyById, setClipCopyById] = useState<Record<string, { title: string; caption: string }>>(() => (
-    Object.fromEntries(fallbackClipDetails.map((clip) => [clip.id, { title: clip.title, caption: clip.caption }]))
+  const [platformCopyByClipId, setPlatformCopyByClipId] = useState<Record<string, EditablePlatformCopy>>(() => (
+    Object.fromEntries(fallbackClipDetails.map((clip) => [clip.id, buildEditablePlatformCopy(clip)]))
   ));
   const [selectedSocialAccountIdsByPlatform, setSelectedSocialAccountIdsByPlatform] = useState<AccountSelectionsByPlatform>(() => (
     buildDefaultAccountSelections(socialAccounts)
   ));
-  const [automationMode, setAutomationMode] = useState<PostingAutomationMode>(initialAutomationMode ?? "AUTOMATIC");
+  const [automationMode, setAutomationMode] = useState<PostingAutomationMode>(() => (
+    shouldDefaultAutomatic ? "AUTOMATIC" : "MANUAL"
+  ));
   const selectableAccountsByPlatform = useMemo(() => platforms.reduce((accumulator, platform) => ({
     ...accumulator,
     [platform]: accountsByPlatform[platform].filter((account) => (
@@ -144,10 +201,9 @@ export function ScheduleDraftModal({
     ].filter((slot): slot is string => Boolean(slot && slot.length > 0))))
   ), [initialPostingSlot]);
   const [postingSlot, setPostingSlot] = useState(postingSlotOptions[0] ?? postingSlots[0]);
-  const [title, setTitle] = useState("");
-  const [caption, setCaption] = useState("");
   const [note, setNote] = useState("");
   const [message, setMessage] = useState("");
+  const [preflight, setPreflight] = useState<PublishingPreflightPacket | null>(null);
   const [pending, setPending] = useState(false);
   const intervalOptions = useMemo(() => {
     const options = [
@@ -182,6 +238,10 @@ export function ScheduleDraftModal({
     selectableAccountsByPlatform[platform].length > 0
     && (resolvedSocialAccountIdsByPlatform[platform]?.length ?? 0) === 0
   ));
+  const hasMissingPlatformCopy = orderedClipIds.some((clipId) => selectedPlatforms.some((platform) => {
+    const copy = platformCopyByClipId[clipId]?.[platform];
+    return !copy?.title.trim() || !copy.caption.trim();
+  }));
   const schedulePreview = useMemo(() => {
     const start = new Date(scheduledFor);
     if (automationMode !== "AUTOMATIC" || Number.isNaN(start.getTime())) {
@@ -191,12 +251,14 @@ export function ScheduleDraftModal({
     const interval = orderedClipIds.length > 1 ? scheduleIntervalMinutes : 0;
     return orderedClipIds.slice(0, 8).map((clipId, index) => ({
       clipId,
-      label: clipCopyById[clipId]?.title || clipDetailsById.get(clipId)?.title || `Clip ${index + 1}`,
+      label: platformCopyByClipId[clipId]?.[selectedPlatforms[0] ?? "TikTok"]?.title
+        || clipDetailsById.get(clipId)?.title
+        || `Clip ${index + 1}`,
       scheduledFor: new Date(start.getTime() + index * interval * 60_000),
     }));
-  }, [automationMode, clipCopyById, clipDetailsById, orderedClipIds, scheduleIntervalMinutes, scheduledFor]);
+  }, [automationMode, clipDetailsById, orderedClipIds, platformCopyByClipId, scheduleIntervalMinutes, scheduledFor, selectedPlatforms]);
 
-  if (!open) {
+  if (!open || typeof document === "undefined") {
     return null;
   }
 
@@ -205,6 +267,7 @@ export function ScheduleDraftModal({
       return;
     }
 
+    setPreflight(null);
     setSelectedPlatforms((current) => (
       current.includes(platform)
         ? current.filter((item) => item !== platform)
@@ -213,6 +276,7 @@ export function ScheduleDraftModal({
   }
 
   function toggleSocialAccount(platform: PostingPlatform, accountId: string) {
+    setPreflight(null);
     setSelectedSocialAccountIdsByPlatform((current) => {
       const currentIds = resolvedSocialAccountIdsByPlatform[platform] ?? [];
       const nextIds = currentIds.includes(accountId)
@@ -227,6 +291,7 @@ export function ScheduleDraftModal({
   }
 
   function changeAutomationMode(mode: PostingAutomationMode) {
+    setPreflight(null);
     setAutomationMode(mode);
     if (mode === "AUTOMATIC") {
       setSelectedPlatforms((current) => {
@@ -259,13 +324,20 @@ export function ScheduleDraftModal({
     });
   }
 
-  function updateClipCopy(clipId: string, field: "title" | "caption", value: string) {
-    setClipCopyById((current) => ({
+  function updateClipCopy(clipId: string, platform: PostingPlatform, field: "title" | "caption", value: string) {
+    setPlatformCopyByClipId((current) => ({
       ...current,
       [clipId]: {
-        title: current[clipId]?.title ?? clipDetailsById.get(clipId)?.title ?? "",
-        caption: current[clipId]?.caption ?? clipDetailsById.get(clipId)?.caption ?? "",
-        [field]: value,
+        ...(current[clipId] ?? buildEditablePlatformCopy(clipDetailsById.get(clipId) ?? {
+          id: clipId,
+          title: "Sermon clip",
+          caption: "",
+        })),
+        [platform]: {
+          title: current[clipId]?.[platform]?.title ?? clipDetailsById.get(clipId)?.title ?? "",
+          caption: current[clipId]?.[platform]?.caption ?? clipDetailsById.get(clipId)?.caption ?? "",
+          [field]: value,
+        },
       },
     }));
   }
@@ -274,29 +346,52 @@ export function ScheduleDraftModal({
     setPending(true);
     setMessage("");
     try {
+      const socialAccountIdsByPlatform = selectedPlatforms.reduce((accumulator, platform) => {
+        const accountIds = resolvedSocialAccountIdsByPlatform[platform]?.filter(Boolean) ?? [];
+        return accountIds.length > 0 ? { ...accumulator, [platform]: accountIds } : accumulator;
+      }, {} as AccountSelectionsByPlatform);
+      const platformCopy = orderedClipIds.reduce((accumulator, clipId) => ({
+        ...accumulator,
+        [clipId]: selectedPlatforms.reduce((copies, platform) => ({
+          ...copies,
+          [platform]: platformCopyByClipId[clipId]?.[platform] ?? {
+            title: clipDetailsById.get(clipId)?.title ?? "Sermon clip",
+            caption: clipDetailsById.get(clipId)?.caption ?? "",
+          },
+        }), {} as Partial<EditablePlatformCopy>),
+      }), {} as Record<string, Partial<EditablePlatformCopy>>);
+      const requestBody = {
+        clipIds: orderedClipIds,
+        platforms: selectedPlatforms,
+        socialAccountIdsByPlatform,
+        automationMode,
+        scheduledFor: automationMode === "AUTOMATIC" ? new Date(scheduledFor).toISOString() : null,
+        timezone,
+        postingSlot,
+        note,
+        scheduleIntervalMinutes: orderedClipIds.length > 1 ? scheduleIntervalMinutes : 0,
+        platformCopyByClipId: platformCopy,
+      };
+      const preflightResponse = await fetch("/api/ready-to-post/preflight", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+      const preflightResult = await preflightResponse.json();
+      if (!preflightResponse.ok || !preflightResult.preflight) {
+        setMessage(preflightResult.error ?? "Could not check publishing readiness.");
+        return;
+      }
+      setPreflight(preflightResult.preflight);
+      if (!preflightResult.preflight.canSchedule) {
+        setMessage("Publishing checks found an item to resolve before scheduling.");
+        return;
+      }
+
       const response = await fetch("/api/ready-to-post/drafts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clipIds: orderedClipIds,
-          platforms: selectedPlatforms,
-          socialAccountIdsByPlatform: selectedPlatforms.reduce((accumulator, platform) => {
-            const accountIds = resolvedSocialAccountIdsByPlatform[platform]?.filter(Boolean) ?? [];
-            return accountIds.length > 0 ? { ...accumulator, [platform]: accountIds } : accumulator;
-          }, {} as AccountSelectionsByPlatform),
-          automationMode,
-          scheduledFor: automationMode === "AUTOMATIC" ? new Date(scheduledFor).toISOString() : null,
-          timezone,
-          postingSlot,
-          title,
-          caption,
-          note,
-          scheduleIntervalMinutes: orderedClipIds.length > 1 ? scheduleIntervalMinutes : 0,
-          clipCopyById: orderedClipIds.reduce((accumulator, clipId) => {
-            const copy = clipCopyById[clipId];
-            return copy ? { ...accumulator, [clipId]: copy } : accumulator;
-          }, {} as Record<string, { title: string; caption: string }>),
-        }),
+        body: JSON.stringify(requestBody),
       });
       const result = await response.json();
       if (!response.ok) {
@@ -312,7 +407,7 @@ export function ScheduleDraftModal({
     }
   }
 
-  return (
+  return createPortal(
     <div className="feature-modal-backdrop" role="presentation" onClick={onClose}>
       <section
         className="feature-modal schedule-draft-modal"
@@ -327,6 +422,7 @@ export function ScheduleDraftModal({
         <div className="stack-sm">
           <p className="kicker">Publishing</p>
           <h2 id="schedule-draft-title">Schedule post</h2>
+          <p className="muted">Choose whether Sermon Clip should queue a verified publishing connection or prepare a clear handoff for your media team.</p>
         </div>
 
         <div className="schedule-draft-summary">
@@ -347,7 +443,10 @@ export function ScheduleDraftModal({
                 checked={automationMode === "AUTOMATIC"}
                 onChange={() => changeAutomationMode("AUTOMATIC")}
               />
-              <span>Automatic</span>
+              <span className="platform-toggle-copy">
+                <strong>Publish automatically</strong>
+                <small>Requires a configured publishing connection and queues the post for the chosen time.</small>
+              </span>
             </label>
             <label className="selection-check platform-toggle">
               <input
@@ -356,9 +455,29 @@ export function ScheduleDraftModal({
                 checked={automationMode === "MANUAL"}
                 onChange={() => changeAutomationMode("MANUAL")}
               />
-              <span>Manual</span>
+              <span className="platform-toggle-copy">
+                <strong>Prepare for manual upload</strong>
+                <small>Your team downloads the video, copies the approved text, and posts it themselves.</small>
+              </span>
             </label>
           </div>
+          {automationMode === "AUTOMATIC" && !hasVerifiedAutomaticCapability ? (
+            <div className="schedule-mode-guidance needs-attention">
+              <strong>Confirm publishing setup first</strong>
+              <p className="muted small">No verified automatic publishing account is visible here. This workspace may use server-managed publishing, but Sermon Clip cannot confirm that from this screen.</p>
+              <Link href="/settings/social" className="text-link small">Review social channels</Link>
+            </div>
+          ) : automationMode === "AUTOMATIC" ? (
+            <div className="schedule-mode-guidance is-ready">
+              <strong>Verified publishing account found</strong>
+              <p className="muted small">Choose one of the available channels below and review the exact time before scheduling.</p>
+            </div>
+          ) : (
+            <div className="schedule-mode-guidance">
+              <strong>Your team stays in control</strong>
+              <p className="muted small">Saving this plan will not publish anything automatically.</p>
+            </div>
+          )}
         </div>
 
         <div className="schedule-fieldset">
@@ -366,7 +485,6 @@ export function ScheduleDraftModal({
           <div className="platform-toggle-grid">
             {platforms.map((platform) => {
               const disabled = automationMode === "AUTOMATIC" && !automaticPlatforms.has(platform);
-              const connectedAccountCount = accountsByPlatform[platform].length;
               const selectableAccountCount = selectableAccountsByPlatform[platform].length;
               return (
               <label key={platform} className="selection-check platform-toggle">
@@ -378,7 +496,7 @@ export function ScheduleDraftModal({
                 />
                 <span className="platform-toggle-copy">
                   <strong>{platform}</strong>
-                  <small>{buildPlatformHint({ disabled, automationMode, connectedAccountCount, selectableAccountCount })}</small>
+                  <small>{buildPlatformHint({ disabled, automationMode, selectableAccountCount })}</small>
                 </span>
               </label>
               );
@@ -418,10 +536,13 @@ export function ScheduleDraftModal({
           <div className="bulk-scheduler-list">
             {orderedClipIds.map((clipId, index) => {
               const clip = clipDetailsById.get(clipId);
-              const copy = clipCopyById[clipId] ?? {
-                title: clip?.title ?? `Clip ${index + 1}`,
-                caption: clip?.caption ?? "",
-              };
+              const copies = platformCopyByClipId[clipId]
+                ?? buildEditablePlatformCopy(clip ?? {
+                  id: clipId,
+                  title: `Clip ${index + 1}`,
+                  caption: "",
+                });
+              const rowTitle = copies[selectedPlatforms[0] ?? "TikTok"].title || clip?.title || `Clip ${index + 1}`;
               return (
                 <article key={clipId} className="bulk-scheduler-row">
                   <div className="bulk-scheduler-order">
@@ -436,24 +557,36 @@ export function ScheduleDraftModal({
                     />
                   </div>
                   <div className="bulk-scheduler-copy">
-                    <label htmlFor={`bulk-title-${clipId}`}>Title</label>
-                    <input
-                      id={`bulk-title-${clipId}`}
-                      value={copy.title}
-                      onChange={(event) => updateClipCopy(clipId, "title", event.target.value)}
-                      placeholder={clip?.title ?? "Clip title"}
-                    />
-                    <label htmlFor={`bulk-caption-${clipId}`}>Caption</label>
-                    <textarea
-                      id={`bulk-caption-${clipId}`}
-                      value={copy.caption}
-                      onChange={(event) => updateClipCopy(clipId, "caption", event.target.value)}
-                      rows={3}
-                      placeholder="Generated caption or post description"
-                    />
+                    {selectedPlatforms.map((platform) => {
+                      const copy = copies[platform];
+                      const idSuffix = `${clipId}-${platformId(platform)}`;
+                      const limits = platformCopyLimits(platform);
+                      return (
+                        <fieldset key={platform} className="schedule-fieldset">
+                          <legend>{platform} copy</legend>
+                          <label htmlFor={`bulk-title-${idSuffix}`}>Title</label>
+                          <input
+                            id={`bulk-title-${idSuffix}`}
+                            value={copy.title}
+                            onChange={(event) => updateClipCopy(clipId, platform, "title", event.target.value)}
+                            placeholder={clip?.title ?? "Clip title"}
+                            maxLength={limits.title}
+                          />
+                          <label htmlFor={`bulk-caption-${idSuffix}`}>Caption</label>
+                          <textarea
+                            id={`bulk-caption-${idSuffix}`}
+                            value={copy.caption}
+                            onChange={(event) => updateClipCopy(clipId, platform, "caption", event.target.value)}
+                            rows={3}
+                            placeholder="Generated platform caption"
+                            maxLength={limits.caption}
+                          />
+                        </fieldset>
+                      );
+                    })}
                   </div>
                   {orderedClipIds.length > 1 ? (
-                    <div className="bulk-scheduler-row-actions" aria-label={`Move ${copy.title || `clip ${index + 1}`}`}>
+                    <div className="bulk-scheduler-row-actions" aria-label={`Move ${rowTitle}`}>
                       <button type="button" className="button tertiary" onClick={() => moveClip(clipId, -1)} disabled={index === 0}>
                         Up
                       </button>
@@ -540,28 +673,7 @@ export function ScheduleDraftModal({
         ) : null}
 
         <details className="schedule-optional-fields">
-          <summary>Optional copy and note</summary>
-          <div className="schedule-fieldset">
-            <label htmlFor="postTitle">Post title</label>
-            <input
-              id="postTitle"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="Use clip title when blank"
-            />
-          </div>
-
-          <div className="schedule-fieldset">
-            <label htmlFor="postCaption">Caption</label>
-            <textarea
-              id="postCaption"
-              value={caption}
-              onChange={(event) => setCaption(event.target.value)}
-              rows={3}
-              placeholder="Use generated clip caption when blank"
-            />
-          </div>
-
+          <summary>Optional media team note</summary>
           <div className="schedule-fieldset">
             <label htmlFor="draftNote">Media team note</label>
             <textarea
@@ -574,15 +686,38 @@ export function ScheduleDraftModal({
           </div>
         </details>
 
-        {message ? <p className={message.includes("Could not") ? "error-banner" : "success-banner"}>{message}</p> : null}
+        {preflight ? (
+          <div className={`schedule-mode-guidance ${preflight.canSchedule ? "is-ready" : "needs-attention"}`}>
+            <strong>
+              {preflight.canSchedule
+                ? `Publishing checks passed${preflight.warningCount > 0 ? ` with ${preflight.warningCount} note${preflight.warningCount === 1 ? "" : "s"}` : ""}`
+                : `${preflight.blockerCount} publishing check${preflight.blockerCount === 1 ? " needs" : "s need"} attention`}
+            </strong>
+            <details open={!preflight.canSchedule}>
+              <summary>View account, media, format, duration, framing, and privacy checks</summary>
+              <ul>
+                {preflight.checks.map((check) => (
+                  <li key={check.id}>
+                    <strong>{check.status === "PASS" ? "Ready" : check.status === "WARNING" ? "Review" : "Resolve"}: {check.label}</strong>
+                    <span className="muted small"> {check.summary}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          </div>
+        ) : null}
+
+        {message ? <p className={message.includes("Could not") || message.includes("resolve") ? "error-banner" : "success-banner"}>{message}</p> : null}
         {hasMissingAccountSelection ? <p className="error-banner">Select at least one account for each chosen platform.</p> : null}
+        {hasMissingPlatformCopy ? <p className="error-banner">Add a title and caption for every selected platform before scheduling.</p> : null}
 
         <div className="feature-modal-footer">
-          <button type="button" className="button primary" onClick={createDraft} disabled={pending || selectedPlatforms.length === 0 || hasMissingAccountSelection}>
-            {pending ? "Saving..." : automationMode === "AUTOMATIC" ? "Schedule post" : "Save posting draft"}
+          <button type="button" className="button primary" onClick={createDraft} disabled={pending || selectedPlatforms.length === 0 || hasMissingAccountSelection || hasMissingPlatformCopy}>
+            {pending ? "Checking publishing setup..." : automationMode === "AUTOMATIC" ? "Check & schedule post" : "Check & save posting draft"}
           </button>
         </div>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }

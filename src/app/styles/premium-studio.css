@@ -1,0 +1,784 @@
+/* Route-scoped Clip Studio chrome. Editing and preview behavior remain in their feature components. */
+.clip-studio-shell {
+  --studio-canvas: #090b0a;
+  --studio-surface: #111512;
+  --studio-surface-raised: #171c18;
+  --studio-surface-soft: #1d241f;
+  --studio-line: rgba(221, 235, 226, 0.11);
+  --studio-line-strong: rgba(138, 219, 193, 0.28);
+  --studio-text: #f3f4ef;
+  --studio-muted: #a9b0aa;
+  --studio-accent: #8adbc1;
+  --studio-accent-soft: rgba(138, 219, 193, 0.11);
+  --studio-warning: #efc47e;
+  --studio-danger: #f29393;
+  width: min(100%, 1760px);
+  max-width: none;
+  gap: 1.1rem;
+  padding: 1.25rem clamp(1rem, 2vw, 2rem) 4rem;
+  color: var(--studio-text);
+}
+
+.clip-studio-shell .clip-studio-topbar {
+  border: 1px solid var(--studio-line);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(138, 219, 193, 0.08), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent),
+    var(--studio-surface);
+  padding: clamp(1rem, 1.7vw, 1.4rem);
+}
+
+.clip-studio-shell .clip-studio-topbar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: clamp(1rem, 2.5vw, 2rem);
+  align-items: start;
+}
+
+.clip-studio-shell .clip-studio-title-block {
+  display: grid;
+  gap: 0.8rem;
+  min-width: 0;
+  max-width: 64rem;
+}
+
+.clip-studio-shell .clip-studio-topbar h1 {
+  max-width: 42rem;
+  font-size: clamp(1.75rem, 2.4vw, 2.55rem);
+  line-height: 1.04;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+.clip-studio-shell .clip-studio-topbar-subtitle {
+  color: var(--studio-muted);
+  font-size: 0.98rem;
+}
+
+.clip-studio-shell .clip-studio-primary-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+.clip-studio-shell .clip-studio-primary-status > .small {
+  font-variant-numeric: tabular-nums;
+}
+
+.clip-studio-shell .clip-studio-status-details {
+  width: min(100%, 38rem);
+  border-top: 1px solid rgba(221, 235, 226, 0.08);
+}
+
+.clip-studio-shell .clip-studio-status-details > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  align-items: center;
+  min-height: 44px;
+  color: var(--studio-text);
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+.clip-studio-shell .clip-studio-status-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.clip-studio-shell .clip-studio-status-details > summary::after {
+  content: "+";
+  display: grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--studio-muted);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.clip-studio-shell .clip-studio-status-details[open] > summary::after {
+  content: "−";
+}
+
+.clip-studio-shell .clip-studio-status-details .clip-studio-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  padding: 0.2rem 0 0.8rem;
+}
+
+.clip-studio-shell .clip-studio-topbar-actions {
+  display: grid;
+  grid-template-columns: auto;
+  gap: 0.7rem;
+  justify-items: end;
+  min-width: min(100%, 19rem);
+}
+
+.clip-studio-shell .clip-studio-context-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: flex-end;
+}
+
+.clip-studio-shell .clip-studio-context-actions .button {
+  background: transparent;
+  border-color: var(--studio-line);
+  color: var(--studio-muted);
+}
+
+.clip-studio-shell .clip-studio-context-actions .button:hover {
+  border-color: var(--studio-line-strong);
+  background: var(--studio-accent-soft);
+  color: var(--studio-text);
+}
+
+.clip-studio-shell .clip-studio-prepare-control {
+  min-width: min(100%, 19rem);
+  justify-items: stretch;
+}
+
+.clip-studio-shell .clip-studio-prepare-state {
+  justify-content: flex-end;
+}
+
+.clip-studio-shell .clip-studio-prepare-button {
+  width: 100%;
+}
+
+.clip-studio-shell .clip-studio-ready-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.55rem;
+}
+
+.clip-studio-shell .clip-studio-ready-actions .button {
+  min-height: 2.75rem;
+}
+
+.clip-studio-shell .clip-studio-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.72fr) minmax(460px, 1.42fr) minmax(350px, 0.92fr);
+  grid-template-areas: "transcript preview tools";
+  gap: clamp(0.85rem, 1.3vw, 1.25rem);
+  align-items: start;
+}
+
+.clip-studio-shell .clip-studio-layout > * {
+  min-width: 0;
+}
+
+.clip-studio-shell .clip-studio-transcript-rail {
+  grid-area: transcript;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  border-color: var(--studio-line);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(138, 219, 193, 0.055), transparent 28%),
+    var(--studio-surface);
+  scrollbar-gutter: stable;
+}
+
+.clip-studio-shell .clip-studio-preview-column {
+  grid-area: preview;
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  padding-right: 0.15rem;
+  scrollbar-gutter: stable;
+}
+
+.clip-studio-shell .clip-studio-main-column {
+  grid-area: tools;
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  padding-right: 0.15rem;
+  scrollbar-gutter: stable;
+}
+
+.clip-studio-shell .clip-studio-preview-card {
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+  border-color: var(--studio-line-strong);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(138, 219, 193, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 34%),
+    #0d110f;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+  padding: clamp(0.85rem, 1.4vw, 1.15rem);
+}
+
+.clip-studio-shell .clip-studio-preview-card > .section-heading-row {
+  align-items: center;
+}
+
+.clip-studio-shell .clip-studio-preview-card > .section-heading-row h2 {
+  font-size: clamp(1.1rem, 1.5vw, 1.35rem);
+}
+
+.clip-studio-shell .clip-studio-video-shell {
+  gap: 0.75rem;
+}
+
+.clip-studio-shell .clip-studio-live-frame {
+  max-height: min(66vh, 760px);
+  border-color: rgba(221, 235, 226, 0.2);
+  border-radius: 14px;
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.36);
+}
+
+.clip-studio-shell .clip-studio-live-frame.has-manual-crop .clip-studio-video {
+  transition:
+    object-position 120ms linear,
+    transform 120ms linear,
+    transform-origin 120ms linear;
+}
+
+.clip-studio-shell .clip-studio-live-frame.frame-smart.has-manual-crop::after {
+  content: "Custom motion";
+}
+
+.clip-studio-shell .clip-studio-live-frame.frame-smart:not(.has-manual-crop)::after {
+  content: "Auto preview";
+}
+
+.clip-studio-shell .clip-studio-live-frame.format-vertical {
+  width: min(100%, 440px);
+}
+
+.clip-studio-shell .clip-studio-player-controls {
+  width: min(100%, 440px);
+  min-height: 52px;
+  border-color: var(--studio-line);
+  background: rgba(8, 11, 9, 0.88);
+  padding: 0.4rem 0.5rem;
+}
+
+.clip-studio-shell .clip-studio-preview-spec,
+.clip-studio-shell .clip-studio-decision-bar,
+.clip-studio-shell .clip-studio-bottom-timeline {
+  border-color: var(--studio-line);
+  background: rgba(14, 18, 15, 0.88);
+}
+
+.clip-studio-shell .clip-studio-preview-truth-note {
+  margin: 0;
+  color: var(--studio-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.clip-studio-shell .clip-studio-bottom-timeline {
+  border-radius: 14px;
+}
+
+.clip-studio-shell .clip-studio-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.clip-studio-shell .clip-studio-mobile-taskbar {
+  display: none;
+}
+
+.clip-studio-shell .clip-studio-workbench-head {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-row: auto;
+  gap: 0.65rem;
+  align-items: stretch;
+  border: 1px solid var(--studio-line);
+  border-radius: 14px;
+  background: rgba(15, 19, 16, 0.96);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+  padding: 0.75rem;
+  backdrop-filter: blur(16px);
+}
+
+.clip-studio-shell .clip-studio-workbench-head > div:first-child {
+  display: flex;
+  gap: 0.55rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.clip-studio-shell .clip-studio-workbench-head h2 {
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.clip-studio-shell .clip-studio-workbench-head .kicker {
+  color: var(--studio-muted);
+  font-size: 0.7rem;
+}
+
+.clip-studio-shell .clip-studio-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  width: 100%;
+  gap: 0.25rem;
+  border: 0;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 0.25rem;
+}
+
+.clip-studio-shell .clip-studio-tab {
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--studio-muted);
+  padding: 0.55rem 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 760;
+  line-height: 1.1;
+  text-align: center;
+  white-space: normal;
+}
+
+.clip-studio-shell .clip-studio-tab:hover {
+  border-color: var(--studio-line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--studio-text);
+}
+
+.clip-studio-shell .clip-studio-tab.is-active {
+  border-color: rgba(138, 219, 193, 0.24);
+  background: var(--studio-accent-soft);
+  color: #ddfff3;
+  box-shadow: inset 0 0 0 1px rgba(138, 219, 193, 0.05);
+}
+
+.clip-studio-shell .clip-studio-tab:focus-visible,
+.clip-studio-shell .clip-studio-tab-panel:focus-visible,
+.clip-studio-shell .clip-studio-status-details > summary:focus-visible {
+  outline: 3px solid rgba(138, 219, 193, 0.78);
+  outline-offset: 3px;
+}
+
+.clip-studio-shell .clip-studio-tab-panel {
+  grid-column: 1;
+  min-width: 0;
+  scroll-margin-top: 5.5rem;
+}
+
+.clip-studio-shell #clip-studio-preview,
+.clip-studio-shell #clip-studio-transcript,
+.clip-studio-shell #clip-studio-tools {
+  scroll-margin-top: 1rem;
+}
+
+.clip-studio-shell .clip-studio-tab-panel[hidden] {
+  display: none;
+}
+
+.clip-studio-shell .clip-studio-workbench .section-card,
+.clip-studio-shell .clip-studio-details,
+.clip-studio-shell .clip-studio-editor-disclosure {
+  border-color: var(--studio-line);
+  border-radius: 14px;
+  background: var(--studio-surface);
+}
+
+.clip-studio-shell .clip-studio-workbench .section-card {
+  padding: clamp(0.9rem, 1.3vw, 1.15rem);
+}
+
+.clip-studio-shell .clip-studio-review-checklist-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+  min-width: min(100%, 16rem);
+}
+
+.clip-studio-shell .clip-studio-review-checklist-summary > span {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+  border: 1px solid var(--studio-line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--studio-muted);
+  padding: 0.55rem 0.48rem;
+  font-size: 0.62rem;
+  font-weight: 760;
+  line-height: 1.15;
+  text-transform: capitalize;
+}
+
+.clip-studio-shell .clip-studio-review-checklist-summary > span.is-required {
+  border-color: rgba(138, 219, 193, 0.28);
+  background: rgba(138, 219, 193, 0.08);
+}
+
+.clip-studio-shell .clip-studio-review-checklist-summary strong {
+  color: var(--studio-text);
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.clip-studio-shell .clip-studio-creator-review-item-head > div:first-child {
+  display: grid;
+  gap: 0.28rem;
+  justify-items: start;
+  min-width: 0;
+}
+
+.clip-studio-shell .clip-studio-review-priority {
+  color: var(--studio-muted);
+  font-size: 0.62rem;
+  font-weight: 820;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.clip-studio-shell .clip-studio-review-priority.is-required {
+  color: #b9f5df;
+}
+
+.clip-studio-shell .clip-studio-review-priority.is-recommended {
+  color: #d8ddff;
+}
+
+.clip-studio-shell .clip-studio-diagnostics-disclosure {
+  grid-column: 1;
+  opacity: 0.88;
+}
+
+.clip-studio-shell .clip-studio-diagnostics-disclosure > summary {
+  min-height: 44px;
+}
+
+.clip-studio-shell .button,
+.clip-studio-shell button,
+.clip-studio-shell summary {
+  min-height: 44px;
+}
+
+.clip-studio-shell input:not([type="checkbox"]):not([type="radio"]):not([type="color"]),
+.clip-studio-shell select {
+  min-height: 44px;
+}
+
+.clip-studio-shell .pill,
+.clip-studio-shell .status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.8rem;
+  border: 1px solid var(--studio-line);
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--studio-text);
+  padding: 0.28rem 0.58rem;
+  font-size: 0.74rem;
+  font-weight: 750;
+  line-height: 1.1;
+}
+
+.clip-studio-shell .pill.tone-success,
+.clip-studio-shell .status-pill.tone-success {
+  border-color: rgba(138, 219, 193, 0.28);
+  background: rgba(138, 219, 193, 0.1);
+  color: #d9fff2;
+}
+
+.clip-studio-shell .pill.tone-warning,
+.clip-studio-shell .status-pill.tone-warning {
+  border-color: rgba(239, 196, 126, 0.32);
+  background: rgba(239, 196, 126, 0.1);
+  color: #ffe7ba;
+}
+
+.clip-studio-shell .pill.tone-danger,
+.clip-studio-shell .status-pill.tone-danger {
+  border-color: rgba(242, 147, 147, 0.34);
+  background: rgba(242, 147, 147, 0.1);
+  color: #ffd2d2;
+}
+
+.clip-studio-shell .pill.tone-accent,
+.clip-studio-shell .status-pill.tone-accent,
+.clip-studio-shell .pill.tone-info,
+.clip-studio-shell .status-pill.tone-info {
+  border-color: rgba(151, 168, 239, 0.32);
+  background: rgba(151, 168, 239, 0.1);
+  color: #e1e6ff;
+}
+
+.clip-studio-shell .warning-banner {
+  width: min(100%, 46rem);
+  border-color: rgba(239, 196, 126, 0.28);
+  background: rgba(239, 196, 126, 0.075);
+  color: #ffe7ba;
+}
+
+.clip-studio-shell .clip-studio-live-collision-warning {
+  position: absolute;
+  right: 0.7rem;
+  bottom: 0.7rem;
+  left: 0.7rem;
+  z-index: 8;
+  border: 1px solid rgba(239, 196, 126, 0.38);
+  border-radius: 0.75rem;
+  background: rgba(20, 15, 9, 0.9);
+  color: #ffe7ba;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  text-align: center;
+  pointer-events: none;
+}
+
+@media (max-width: 1480px) {
+  .clip-studio-shell {
+    width: 100%;
+    padding-inline: 1rem;
+  }
+
+  .clip-studio-shell .clip-studio-layout {
+    grid-template-columns: minmax(420px, 1.15fr) minmax(320px, 0.85fr);
+    grid-template-areas:
+      "preview transcript"
+      "tools tools";
+  }
+
+  .clip-studio-shell .clip-studio-preview-column,
+  .clip-studio-shell .clip-studio-main-column {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .clip-studio-shell .clip-studio-transcript-rail {
+    position: static;
+    max-height: 680px;
+  }
+
+  .clip-studio-shell .clip-studio-workbench-head {
+    position: sticky;
+    top: 0.5rem;
+  }
+}
+
+@media (max-width: 1279px) {
+  .clip-studio-shell {
+    padding-bottom: calc(8rem + var(--mobile-nav-height, 5rem));
+  }
+
+  .clip-studio-shell .clip-studio-mobile-taskbar {
+    position: fixed;
+    z-index: 90;
+    right: 50%;
+    bottom: calc(var(--mobile-nav-height, 5rem) + env(safe-area-inset-bottom) + 0.55rem);
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    width: min(calc(100vw - 1rem), 50rem);
+    gap: 0.22rem;
+    border: 1px solid var(--studio-line-strong);
+    border-radius: 15px;
+    background: rgba(12, 16, 13, 0.94);
+    box-shadow: 0 16px 46px rgba(0, 0, 0, 0.38);
+    padding: 0.3rem;
+    transform: translateX(50%);
+    backdrop-filter: blur(18px) saturate(130%);
+  }
+
+  .clip-studio-shell .clip-studio-mobile-task {
+    min-width: 0;
+    min-height: 46px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--studio-muted);
+    padding: 0.38rem 0.2rem;
+    font-size: 0.7rem;
+    font-weight: 780;
+    line-height: 1.1;
+  }
+
+  .clip-studio-shell .clip-studio-mobile-task:hover,
+  .clip-studio-shell .clip-studio-mobile-task.is-active {
+    border-color: rgba(138, 219, 193, 0.24);
+    background: var(--studio-accent-soft);
+    color: #ddfff3;
+  }
+
+  .clip-studio-shell #clip-studio-preview,
+  .clip-studio-shell #clip-studio-transcript,
+  .clip-studio-shell .clip-studio-tab-panel {
+    scroll-margin-top: 0.75rem;
+    scroll-margin-bottom: 8rem;
+  }
+}
+
+@media (max-width: 880px) {
+  .clip-studio-shell {
+    padding: 0.85rem 0.8rem calc(8rem + var(--mobile-nav-height, 5rem));
+  }
+
+  .clip-studio-shell .clip-studio-topbar-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .clip-studio-shell .clip-studio-topbar-actions {
+    width: 100%;
+    min-width: 0;
+    justify-items: stretch;
+  }
+
+  .clip-studio-shell .clip-studio-context-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
+  .clip-studio-shell .clip-studio-context-actions .button {
+    width: 100%;
+  }
+
+  .clip-studio-shell .clip-studio-prepare-control {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .clip-studio-shell .clip-studio-prepare-state {
+    justify-content: flex-start;
+  }
+
+  .clip-studio-shell .clip-studio-ready-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .clip-studio-shell .clip-studio-ready-actions .button {
+    width: 100%;
+  }
+
+  .clip-studio-shell .clip-studio-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "preview"
+      "transcript"
+      "tools";
+  }
+
+  .clip-studio-shell .clip-studio-transcript-rail {
+    max-height: none;
+  }
+
+  .clip-studio-shell .clip-studio-workbench-head {
+    position: static;
+  }
+
+  .clip-studio-shell .clip-studio-live-frame {
+    max-height: 64vh;
+  }
+}
+
+@media (max-width: 560px) {
+  .clip-studio-shell .clip-studio-mobile-taskbar {
+    width: calc(100vw - 0.7rem);
+    gap: 0.1rem;
+    border-radius: 13px;
+    padding: 0.22rem;
+  }
+
+  .clip-studio-shell .clip-studio-mobile-task {
+    min-height: 44px;
+    border-radius: 8px;
+    font-size: 0.65rem;
+  }
+
+  .clip-studio-shell .clip-studio-creator-review-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .clip-studio-shell .clip-studio-review-checklist-summary {
+    width: 100%;
+  }
+
+  .clip-studio-shell .clip-studio-topbar {
+    border-radius: 14px;
+    padding: 0.9rem;
+  }
+
+  .clip-studio-shell .clip-studio-topbar h1 {
+    font-size: clamp(1.5rem, 8vw, 1.9rem);
+  }
+
+  .clip-studio-shell .clip-studio-primary-status {
+    display: grid;
+    justify-items: start;
+  }
+
+  .clip-studio-shell .clip-studio-status-details > summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .clip-studio-shell .clip-studio-status-details > summary .small {
+    display: none;
+  }
+
+  .clip-studio-shell .clip-studio-context-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .clip-studio-shell .clip-studio-tabs {
+    display: flex;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .clip-studio-shell .clip-studio-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .clip-studio-shell .clip-studio-tab {
+    flex: 1 0 5.4rem;
+  }
+
+  .clip-studio-shell .clip-studio-player-controls {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .clip-studio-shell .clip-studio-player-controls > span {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+  .clip-studio-shell .clip-studio-decision-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-studio-shell *,
+  .clip-studio-shell *::before,
+  .clip-studio-shell *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

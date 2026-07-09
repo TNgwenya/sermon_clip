@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import type { PostingDraft } from "@/lib/postingDrafts";
+import type { PostingDraft, PostingPlatform } from "@/lib/postingDrafts";
 import type { SocialAccount } from "@/lib/socialAccounts";
 import { ScheduleDraftModal, type ScheduleDraftClipSummary } from "@/app/ready-to-post/schedule-draft-modal";
 import { SocialAccountModal } from "@/app/ready-to-post/social-account-modal";
@@ -100,11 +100,19 @@ type SchedulePostButtonProps = {
   clipId: string;
   clipDetails?: ScheduleDraftClipSummary[];
   label?: string;
+  initialPlatform?: PostingPlatform;
   socialAccounts?: SocialAccount[];
   onDraftCreated?: (draft: PostingDraft) => void;
 };
 
-export function SchedulePostButton({ clipId, clipDetails = [], label = "Schedule post", socialAccounts = [], onDraftCreated }: SchedulePostButtonProps) {
+export function SchedulePostButton({
+  clipId,
+  clipDetails = [],
+  label = "Schedule post",
+  initialPlatform,
+  socialAccounts = [],
+  onDraftCreated,
+}: SchedulePostButtonProps) {
   const [scheduleOpen, setScheduleOpen] = useState(false);
 
   return (
@@ -117,6 +125,7 @@ export function SchedulePostButton({ clipId, clipDetails = [], label = "Schedule
         clipIds={[clipId]}
         clipDetails={clipDetails.filter((clip) => clip.id === clipId)}
         socialAccounts={socialAccounts}
+        initialPlatform={initialPlatform}
         open={scheduleOpen}
         onClose={() => setScheduleOpen(false)}
         onCreated={(draft) => {

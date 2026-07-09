@@ -25,9 +25,19 @@ export type ReviewClipModel = {
   recommendedNextAction?: string | null;
   overallPostScore?: number | null;
   hookStrengthScore?: number | null;
+  hookScore?: number | null;
   standaloneClarityScore?: number | null;
+  emotionalImpactScore?: number | null;
+  ministryValueScore?: number | null;
+  sermonValueScore?: number | null;
+  shareabilityScore?: number | null;
+  socialShareabilityScore?: number | null;
+  arcCompletenessScore?: number | null;
   contextSafetyScore?: number | null;
   visualReadinessScore?: number | null;
+  bestPlatform?: string | null;
+  qualityReviewedAt?: string | Date | null;
+  qualityReviewSource?: "AI" | "FALLBACK" | null;
   recommendedAction?: ReviewRecommendedAction | null;
   qualityClipCategory?: ReviewQualityCategory | null;
   qualitySummary?: string | null;
@@ -127,7 +137,12 @@ export function getQueuedMediaAssetsForRemoteBatchAction(action: ReviewBatchActi
 }
 
 export function getClipPostScore(clip: Pick<ReviewClipModel, "overallPostScore" | "score">): number {
-  return ("finalQualityScore" in clip && typeof clip.finalQualityScore === "number" ? clip.finalQualityScore : null) ?? clip.overallPostScore ?? clip.score;
+  const value = ("finalQualityScore" in clip && typeof clip.finalQualityScore === "number" ? clip.finalQualityScore : null)
+    ?? clip.overallPostScore
+    ?? clip.score;
+  if (!Number.isFinite(value)) return 0;
+  if (value > 10 && value <= 100) return value / 10;
+  return Math.min(10, Math.max(0, value));
 }
 
 function formatScore(value: number | null | undefined): string {
@@ -140,7 +155,7 @@ export function getRecommendedActionLabel(action: ReviewRecommendedAction | null
   }
 
   const labels: Record<ReviewRecommendedAction, string> = {
-    KEEP: "Ready to post",
+    KEEP: "Strong moment",
     NEEDS_REVIEW: "Needs pastor review",
     REJECT: "Weak clip",
     EXTEND: "May need more context",
@@ -152,11 +167,11 @@ export function getRecommendedActionLabel(action: ReviewRecommendedAction | null
 }
 
 export function getProfessionalQualityLabel(label: ReviewProfessionalQualityLabel | null | undefined): string {
-  if (label === "POST_READY") return "Post-ready";
-  if (label === "GOOD_NEEDS_REVIEW") return "Good, review first";
-  if (label === "NEEDS_EDITING") return "Needs editing";
-  if (label === "REJECT") return "Not recommended";
-  return "Needs review";
+  if (label === "POST_READY") return "Strong moment";
+  if (label === "GOOD_NEEDS_REVIEW") return "Strong — check context";
+  if (label === "NEEDS_EDITING") return "Worth refining";
+  if (label === "REJECT") return "Choose another moment";
+  return "Review this moment";
 }
 
 export function getQualityCategoryLabel(category: ReviewQualityCategory | string | null | undefined): string {
@@ -199,6 +214,98 @@ function getReadinessFromScore(score: number | null | undefined, strongLabel: st
   return { label: weakLabel, tone: "weak", scoreLabel: formatScore(score) };
 }
 
+function getQualityFreshness(
+  clip: ReviewClipModel,
+  hasQualityReview: boolean,
+): {
+  state: "current" | "review" | "unassessed";
+  label: string;
+  detail: string;
+} {
+  if (!hasQualityReview) {
+    return {
+      state: "unassessed",
+      label: "Content guidance not assessed",
+      detail: "Watch the moment yourself, or run Check readiness for transcript-grounded guidance.",
+    };
+  }
+
+  if (!clip.qualityReviewedAt) {
+    return {
+      state: "review",
+      label: "Content guidance needs a refresh",
+      detail: "The saved score may predate a copy edit. Recheck before using it as a decision signal.",
+    };
+  }
+
+  if (clip.qualityReviewSource === "FALLBACK") {
+    return {
+      state: "review",
+      label: "Transcript-based estimate",
+      detail: "The full content review was unavailable, so treat these signals as guidance and confirm the moment yourself.",
+    };
+  }
+
+  return {
+    state: "current",
+    label: "Content guidance is current",
+    detail: "Signals were checked against the saved clip transcript. Your pastoral judgment remains the final decision.",
+  };
+}
+
+function getRecommendedNextStep(clip: ReviewClipModel): string {
+  const action = clip.recommendedNextAction ?? clip.recommendedAction;
+  if (!action) return "Watch the full moment, then approve it or refine it in Studio.";
+
+  const labels: Record<string, string> = {
+    POST_NOW: "Approve this moment, then finish captions and branding in Studio.",
+    KEEP: "Approve this moment, then finish captions and branding in Studio.",
+    REVIEW_CLIP: "Watch the full moment and confirm the wording before approval.",
+    NEEDS_REVIEW: "Watch the full moment and confirm the wording before approval.",
+    REVIEW_OPENING: "Check whether the opening makes sense without the sermon around it.",
+    REVIEW_START_TRIM: "Tighten the opening so the first sentence starts cleanly.",
+    REVIEW_ENDING: "Check that the final sentence lands before moving to Studio.",
+    EXTEND_CONTEXT: "Add a little more sermon context before approving this moment.",
+    EXTEND: "Add a little more sermon context before approving this moment.",
+    SHORTEN: "Trim repetition while protecting the main point and landing.",
+    REVIEW_CAPTION: "Confirm that the post copy reflects the spoken message accurately.",
+    FIX_CAPTIONS: "Open Studio and repair the on-video captions before export.",
+    FIX_CROP: "Open Studio and confirm the speaker stays framed throughout.",
+    RERENDER: "Rebuild the preview before making a final decision.",
+    REJECT: "Do not use this moment unless the message or boundaries are substantially revised.",
+  };
+
+  return labels[action] ?? action.replace(/_/g, " ").toLowerCase().replace(/^\w/, (letter) => letter.toUpperCase());
+}
+
+function getPlatformFit(clip: ReviewClipModel): {
+  label: string;
+  reason: string;
+  assessed: boolean;
+} {
+  const platform = clip.bestPlatform?.trim();
+  if (!platform) {
+    return {
+      label: "Choose in Studio",
+      reason: "No channel has been recommended yet. Confirm the final length and opening before choosing a platform.",
+      assessed: false,
+    };
+  }
+
+  const normalized = platform.toLowerCase();
+  const reason = normalized.includes("tiktok")
+    ? "The opening and short running time suit a fast, hook-led viewing pattern."
+    : normalized.includes("instagram")
+      ? "This concise, emotionally clear moment should read well in a visual-first Reels feed."
+      : normalized.includes("youtube")
+        ? "The complete teaching arc and running time suit viewers who expect a self-contained Short."
+        : normalized.includes("facebook")
+          ? "The fuller context and shareable ministry message suit a church community feed."
+          : "This channel was suggested from the clip's saved content and duration review.";
+
+  return { label: platform, reason, assessed: true };
+}
+
 export function buildClipQualityView(clip: ReviewClipModel, rank: number): {
   rankLabel: string;
   scoreLabel: string;
@@ -211,12 +318,20 @@ export function buildClipQualityView(clip: ReviewClipModel, rank: number): {
   messageClarity: { label: string; tone: "good" | "review" | "weak" | "neutral"; scoreLabel: string };
   contextSafety: { label: string; tone: "good" | "review" | "weak" | "neutral"; scoreLabel: string };
   visualReadiness: { label: string; tone: "good" | "review" | "weak" | "neutral"; scoreLabel: string };
+  openingStrength: { label: string; tone: "good" | "review" | "weak" | "neutral"; scoreLabel: string };
+  ministryImpact: { label: string; tone: "good" | "review" | "weak" | "neutral"; scoreLabel: string };
+  emotionalResonance: { label: string; tone: "good" | "review" | "weak" | "neutral"; scoreLabel: string };
+  completeness: { label: string; tone: "good" | "review" | "weak" | "neutral"; scoreLabel: string };
+  socialFit: { label: string; tone: "good" | "review" | "weak" | "neutral"; scoreLabel: string };
+  platformFit: { label: string; reason: string; assessed: boolean };
+  freshness: { state: "current" | "review" | "unassessed"; label: string; detail: string };
+  nextStep: string;
   hasQualityReview: boolean;
 } {
   const score = getClipPostScore(clip);
   const professionalLabel = clip.qualityLabel ?? clip.postReadyStatus ?? null;
   const hasQualityReview = typeof clip.finalQualityScore === "number" || typeof clip.overallPostScore === "number" || Boolean(clip.recommendedAction || clip.qualitySummary || clip.pastorFriendlyReason);
-  const actionTone =
+  const actionTone: "good" | "review" | "weak" | "neutral" =
     professionalLabel === "POST_READY"
       ? "good"
       : professionalLabel === "GOOD_NEEDS_REVIEW" || professionalLabel === "NEEDS_EDITING"
@@ -238,24 +353,34 @@ export function buildClipQualityView(clip: ReviewClipModel, rank: number): {
     "Context needs review",
   );
 
-  return {
+  const qualityView = {
     rankLabel: rank === 0 ? "Best first post" : `Post pick #${rank + 1}`,
     scoreLabel: formatScore(score),
     scoreSourceLabel: typeof clip.finalQualityScore === "number"
       ? "Quality score"
       : typeof clip.overallPostScore === "number"
         ? "Post score"
-        : "Legacy score",
+        : "Earlier estimate",
     actionLabel: professionalLabel ? getProfessionalQualityLabel(professionalLabel) : getRecommendedActionLabel(clip.recommendedAction),
     actionTone,
     categoryLabel: getQualityCategoryLabel(clip.qualityClipCategory),
     reason: clip.pastorFriendlyReason ?? clip.qualitySummary ?? "This older clip is ready for a quick pastor review. Check the preview, caption, and framing before posting.",
-    postReadiness: getReadinessFromScore(score, "Strong post-ready clip", "Worth reviewing", "Weak post candidate"),
+    postReadiness: getReadinessFromScore(score, "Strong content potential", "Worth reviewing", "Choose another moment"),
     messageClarity: getReadinessFromScore(clip.standaloneClarityScore, "Message stands alone", "May need more context", "Message may feel incomplete"),
     contextSafety,
     visualReadiness: getReadinessFromScore(clip.visualReadinessScore, "Video looks ready", "Check framing", "Video needs review"),
+    openingStrength: getReadinessFromScore(clip.hookStrengthScore ?? clip.hookScore, "Opening earns attention", "Opening is worth checking", "Opening may lose viewers"),
+    ministryImpact: getReadinessFromScore(clip.ministryValueScore ?? clip.sermonValueScore, "Strong ministry value", "Useful with a quick review", "Ministry takeaway feels light"),
+    emotionalResonance: getReadinessFromScore(clip.emotionalImpactScore, "Emotion supports the message", "Resonance is moderate", "Emotional pull feels limited"),
+    completeness: getReadinessFromScore(clip.arcCompletenessScore, "Thought lands completely", "Check the ending", "Thought may feel unfinished"),
+    socialFit: getReadinessFromScore(clip.socialShareabilityScore ?? clip.shareabilityScore, "Strong sharing potential", "Channel fit is worth checking", "Social fit may be limited"),
+    platformFit: getPlatformFit(clip),
+    freshness: getQualityFreshness(clip, hasQualityReview),
+    nextStep: getRecommendedNextStep(clip),
     hasQualityReview,
   };
+
+  return qualityView;
 }
 
 export function buildClipWarnings(clip: ReviewClipModel): string[] {

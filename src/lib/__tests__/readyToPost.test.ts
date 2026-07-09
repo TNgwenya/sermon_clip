@@ -36,6 +36,9 @@ describe("ready-to-post package", () => {
       "For young adults.",
     );
     expect(variants.find((variant) => variant.platform === "Facebook")?.text).toContain(
+      "Jesus Meets Us In The Storm",
+    );
+    expect(variants.find((variant) => variant.platform === "Facebook")?.text).not.toContain(
       "share with someone who needs encouragement",
     );
   });
@@ -146,6 +149,9 @@ describe("ready-to-post package", () => {
       "YouTube Shorts",
       "Facebook",
     ]);
+    expect(readyPackage.platformPayloads.find((payload) => payload.platform === "TikTok")?.caption).toBe(
+      readyPackage.handoffs.find((handoff) => handoff.platform === "TikTok")?.captionText,
+    );
   });
 
   it("keeps pastor-facing quality summaries unchanged", () => {

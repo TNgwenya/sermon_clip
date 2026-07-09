@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { __clipIntelligenceTestUtils, type ClipWindow } from "@/server/agents/clipIntelligenceAgent";
+import { clipJsonCandidateSchema } from "@/server/ai/clipJsonSchema";
 
 describe("clip intelligence generation summary", () => {
   type ClipWindowFixtureInput = Omit<ClipWindow, "segments"> & {
@@ -2579,6 +2580,102 @@ describe("clip intelligence generation summary", () => {
     expect(result.accepted).toBe(true);
     expect(result.score).toBeGreaterThanOrEqual(0.9);
     expect(result.orderedFlowRatio).toBe(1);
+  });
+
+  it("persists transcript provenance, grounded arc evidence, and supplied content intelligence", () => {
+    const segments = [
+      {
+        startTimeSeconds: 100,
+        endTimeSeconds: 112,
+        text: "Paul tells Timothy to stir up the gift of God that is already inside him.",
+      },
+      {
+        startTimeSeconds: 112,
+        endTimeSeconds: 124,
+        text: "That means fear cannot be the leader of your obedience anymore.",
+      },
+      {
+        startTimeSeconds: 124,
+        endTimeSeconds: 136,
+        text: "So this week choose one act of obedience and serve with what God placed in your hand.",
+      },
+    ];
+    const transcriptText = segments.map((segment) => segment.text).join(" ");
+    const candidate = clipJsonCandidateSchema.parse({
+      startTimeSeconds: 100,
+      endTimeSeconds: 136,
+      durationSeconds: 36,
+      transcriptText,
+      title: "Stir Up What God Gave You",
+      hook: "Fear cannot lead your obedience anymore.",
+      caption: "God has already placed something in your hand. Choose one faithful act of obedience this week.",
+      suggestedHook: "What has God already placed in your hand?",
+      suggestedCaption: "Choose one faithful act of obedience this week.",
+      hashtags: ["#Faith", "#Discipleship"],
+      score: 8.5,
+      reasonSelected: "A grounded call from scripture to practical obedience.",
+      landingSentence: "So this week choose one act of obedience and serve with what God placed in your hand.",
+      clipType: "teaching",
+      smartClipCategory: "Best Discipleship Clip",
+      intendedAudience: "Believers discerning their next faithful step",
+      ministryValue: "Connects scripture to practical obedience.",
+      socialValue: "A clear challenge that stands alone.",
+      riskLevel: "LOW",
+      riskReasons: [],
+      contextWarning: false,
+      captionPackage: {
+        primaryCaption: "God has already placed something in your hand. Choose one faithful act this week.",
+        shortCaption: "Choose the faithful step.",
+        platformCaption: "What has God already placed in your hand? Choose the faithful step this week.",
+        optionalHashtags: ["#Faith", "#Discipleship"],
+        captionQualityScore: 8.2,
+        captionReason: "Grounded in the spoken application.",
+        captionWarnings: [],
+      },
+      socialPotential: {
+        ministryValueScore: 8.7,
+        socialMediaPotentialScore: 8.1,
+        hookStrength: 8.3,
+        clarityScore: 8.4,
+        emotionalImpactScore: 7.6,
+        shareabilityScore: 8,
+        standaloneUsefulnessScore: 8.5,
+        whyMayPerformWell: "The challenge is clear and immediately useful.",
+        whyMayNotPerformWell: "The scripture reference may need a caption for new viewers.",
+        recommendedPlatforms: ["Instagram Reels", "YouTube Shorts"],
+      },
+      selectionReasoning: {
+        clipSummary: "Scripture becomes a practical call to obedience.",
+        whySelected: "It moves from teaching to a concrete response.",
+        usefulForAudience: "It gives viewers one next step.",
+        ministryCategory: "Discipleship",
+        shortFormSuitability: "The thought lands within one self-contained moment.",
+        needsCaptionOrContextSupport: false,
+        captionOrContextSupportReason: "The spoken thought is self-contained.",
+      },
+    });
+
+    const evidence = __clipIntelligenceTestUtils.buildGeneratedClipEvidence({
+      ...candidate,
+      responseFormat: "LEGACY_TIMESTAMPS",
+    }, segments);
+    const debug = evidence.qualityDebugSnapshot as Record<string, unknown>;
+    const grounding = debug.transcriptGrounding as Record<string, unknown>;
+    const provenance = debug.provenance as Record<string, unknown>;
+    const captionData = evidence.captionData as Record<string, unknown>;
+
+    expect(grounding.score).toBe(1);
+    expect(grounding.orderedFlowRatio).toBe(1);
+    expect(provenance.source).toBe("AI_MODEL");
+    expect(captionData.captionPackage).toMatchObject({ shortCaption: "Choose the faithful step." });
+    expect(captionData.contentIntelligence).toMatchObject({
+      source: "AI_MODEL",
+      selectionReasoning: expect.objectContaining({ ministryCategory: "Discipleship" }),
+    });
+    expect(evidence.hookStrengthScore).toBe(8.3);
+    expect(evidence.standaloneClarityScore).toBe(8.5);
+    expect(evidence.bestPlatform).toBe("Instagram Reels");
+    expect(evidence.arcCompletenessScore).toBeGreaterThan(6);
   });
 
   it("accepts candidates only when the selected range contains the spoken sermon landing", () => {

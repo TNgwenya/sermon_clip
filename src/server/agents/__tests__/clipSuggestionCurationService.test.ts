@@ -228,7 +228,7 @@ describe("clip suggestion curation service", () => {
     expect(summary.decisions.find((decision) => decision.clipId === "repairable-payoff")).toMatchObject({ action: "KEEP" });
   });
 
-  it("rejects suggestions without enough transcript evidence or grounding proof", () => {
+  it("rejects weak transcript evidence but preserves legacy suggestions that predate grounding proof", () => {
     const summary = planAiSuggestionCuration([
       clip({ id: "strong", qualityLabel: "POST_READY", postReadyStatus: "POST_READY", finalQualityScore: 8.6 }),
       clip({ id: "thin-transcript", transcriptText: "God is faithful. Choose prayer today.", finalQualityScore: 9 }),
@@ -243,8 +243,8 @@ describe("clip suggestion curation service", () => {
       reason: expect.stringContaining("too thin"),
     });
     expect(summary.decisions.find((decision) => decision.clipId === "missing-grounding")).toMatchObject({
-      action: "REJECT",
-      reason: expect.stringContaining("grounding proof"),
+      action: "KEEP",
+      reason: expect.stringContaining("predates saved transcript-grounding evidence"),
     });
     expect(summary.decisions.find((decision) => decision.clipId === "weak-grounding")).toMatchObject({
       action: "REJECT",

@@ -14,6 +14,9 @@ export type CaptionPackage = {
   primaryCaption: string | null;
   shortCaption: string | null;
   platformCaption: string | null;
+  titleOptions: string[];
+  hookOptions: string[];
+  ctaOptions: string[];
   hashtags: string[];
   qualityScore: number | null;
   qualityReason: string | null;
@@ -430,6 +433,9 @@ export function extractCaptionPackage(
     primaryCaption: null,
     shortCaption: null,
     platformCaption: null,
+    titleOptions: [],
+    hookOptions: [],
+    ctaOptions: [],
     hashtags: fallbackHashtags,
     qualityScore: null,
     qualityReason: null,
@@ -471,6 +477,9 @@ export function extractCaptionPackage(
   const hashtags = asStringArray(data["hashtags"]);
   const packageHashtags = asStringArray(captionPackage?.["optionalHashtags"]);
   const resolvedHashtags = hashtags.length > 0 ? hashtags : packageHashtags.length > 0 ? packageHashtags : fallbackHashtags;
+  const titleOptions = asStringArray(captionPackage?.["titleOptions"]);
+  const hookOptions = asStringArray(captionPackage?.["hookOptions"]);
+  const ctaOptions = asStringArray(captionPackage?.["ctaOptions"]);
 
   const qualityScore =
     normalizeQualityScore(data["qualityScore"]) ?? normalizeQualityScore(captionPackage?.["captionQualityScore"]);
@@ -494,6 +503,9 @@ export function extractCaptionPackage(
     primaryCaption,
     shortCaption,
     platformCaption,
+    titleOptions,
+    hookOptions,
+    ctaOptions,
     hashtags: resolvedHashtags,
     qualityScore,
     qualityReason,

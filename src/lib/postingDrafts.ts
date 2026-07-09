@@ -15,6 +15,7 @@ export type ClipPostCopy = {
   caption?: string;
   note?: string;
 };
+export type PlatformClipPostCopy = Partial<Record<PostingPlatform, ClipPostCopy>>;
 
 export type PostingDraft = {
   id: string;
@@ -174,6 +175,7 @@ export async function createPostingDraft(input: {
   title?: string;
   note?: string;
   clipCopyById?: Record<string, ClipPostCopy>;
+  platformCopyByClipId?: Record<string, PlatformClipPostCopy>;
 }): Promise<PostingDraft> {
   const automationMode = input.automationMode ?? "MANUAL";
   const scheduledFor = input.scheduledFor ?? null;
@@ -185,6 +187,7 @@ export async function createPostingDraft(input: {
   const title = input.title?.trim() ?? "";
   const note = input.note?.trim() ?? "";
   const clipCopyById = input.clipCopyById ?? {};
+  const platformCopyByClipId = input.platformCopyByClipId ?? {};
 
   const draft = await prisma.$transaction(async (tx) => {
     const created = await tx.postingDraft.create({
@@ -223,7 +226,8 @@ export async function createPostingDraft(input: {
         const clipScheduledFor = clipSchedule.scheduledFor;
         const clipPostingSlot = buildPostingSlot(clipScheduledFor, input.postingSlot);
         const clipIds = [clipSchedule.clipId];
-        const clipCopy = clipCopyById[clipSchedule.clipId];
+        const clipCopy = platformCopyByClipId[clipSchedule.clipId]?.[platform]
+          ?? clipCopyById[clipSchedule.clipId];
         const clipTitle = clipCopy?.title?.trim() || title;
         const clipCaption = clipCopy?.caption?.trim() || caption;
         const clipNote = clipCopy?.note?.trim() || note;

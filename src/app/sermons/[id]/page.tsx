@@ -1012,47 +1012,28 @@ export default async function SermonDetailPage({
 
   const processSteps = [
     {
-      label: "Download video",
+      label: "Prepare sermon video",
       complete: hasSourceVideo,
       jobType: "DOWNLOAD_VIDEO",
     },
     {
-      label: "Extract audio",
+      label: "Prepare sermon audio",
       complete: hasAudioFile,
       jobType: "EXTRACT_AUDIO",
     },
     {
-      label: "Transcribe sermon",
+      label: "Create sermon transcript",
       complete: hasTranscriptRecord && hasTranscriptSegments && Boolean(sermon.transcriptJsonPath),
       jobType: "TRANSCRIBE_AUDIO",
     },
     {
-      label: "Generate clip suggestions",
+      label: "Find meaningful moments",
       complete: clipGenerationComplete,
       jobType: "GENERATE_CLIPS",
-    },
-    {
-      label: "Review and approve clips",
-      complete: hasReadyClips,
-      jobType: null,
-    },
-    {
-      label: "Export approved clips",
-      complete: hasExportedClips,
-      jobType: "EXPORT_CLIPS",
-    },
-    {
-      label: "Generate clip captions",
-      complete: hasGeneratedCaptions,
-      jobType: "GENERATE_SUBTITLES",
     },
   ] as const;
 
   function getChecklistStatus(label: (typeof processSteps)[number]): string {
-    if (!label.jobType) {
-      return label.complete ? "Complete" : "Pending";
-    }
-
     const jobStatus = jobStatusByType[label.jobType];
     if (jobStatus === "FAILED") {
       return "Failed";
@@ -1084,7 +1065,7 @@ export default async function SermonDetailPage({
 
   const processingTheaterSteps = processSteps.map((step) => {
     const status = getChecklistStatus(step);
-    const stepJob = step.jobType ? processingJobs.find((job) => job.type === step.jobType) ?? null : null;
+    const stepJob = processingJobs.find((job) => job.type === step.jobType) ?? null;
     return {
       ...step,
       status,
@@ -1104,21 +1085,29 @@ export default async function SermonDetailPage({
     };
   });
   const completedProcessingSteps = processingTheaterSteps.filter((step) => step.state === "done").length;
-  const activeSermonStatuses = new Set<SermonStatus>([
+  const analysisJobTypes = new Set(["DOWNLOAD_VIDEO", "EXTRACT_AUDIO", "TRANSCRIBE_AUDIO", "GENERATE_CLIPS"]);
+  const activeAnalysisStatuses = new Set<SermonStatus>([
     "DOWNLOADING",
     "AUDIO_EXTRACTING",
     "TRANSCRIBING",
     "GENERATING_CLIPS",
-    "EXPORTING",
   ]);
+  const hasLiveAnalysisWork =
+    processingJobs.some((job) => (
+      analysisJobTypes.has(job.type) &&
+      (job.status === "RUNNING" || job.status === "PENDING") &&
+      !isStaleActiveProcessingJob(job)
+    )) ||
+    activeAnalysisStatuses.has(sermon.status);
   const hasLiveProcessingWork =
     operationSummary.running > 0 ||
     processingJobs.some((job) => (
       (job.status === "RUNNING" || job.status === "PENDING") &&
       !isStaleActiveProcessingJob(job)
     )) ||
-    activeSermonStatuses.has(sermon.status);
-  const activeProcessingStep = hasLiveProcessingWork
+    hasLiveAnalysisWork ||
+    sermon.status === "EXPORTING";
+  const activeProcessingStep = hasLiveAnalysisWork
     ? processingTheaterSteps.find((step) => step.state === "active")
       ?? processingTheaterSteps.find((step) => step.state === "pending")
       ?? processingTheaterSteps[processingTheaterSteps.length - 1]
@@ -1188,12 +1177,16 @@ export default async function SermonDetailPage({
           }
     : null;
   const activeStepProgressFraction =
-    activeProcessingStep?.state === "active" && operationProgressView
-      ? (operationProgressView.progressPercent ?? activeJobProgressPercent ?? 25) / 100
+    activeProcessingStep?.state === "active" && typeof operationProgressView?.progressPercent === "number"
+      ? operationProgressView.progressPercent / 100
       : 0;
   const processingProgressPercent = Math.min(
     100,
     Math.round(((completedProcessingSteps + activeStepProgressFraction) / processingTheaterSteps.length) * 100),
+  );
+  const activeAnalysisStageNumber = Math.max(
+    1,
+    processingTheaterSteps.findIndex((step) => step.label === activeProcessingStep?.label) + 1,
   );
   const pastorProcessingMessage = activeProcessingStep?.state === "done"
     ? "The sermon is ready for the next pastor action."
@@ -1222,7 +1215,7 @@ export default async function SermonDetailPage({
   });
   const commandCenterTitle = failedRecoveryCount > 0
     ? "Resolve failed item"
-    : hasLiveProcessingWork && activeProcessingStep
+    : hasLiveAnalysisWork && activeProcessingStep
     ? activeProcessingStep.label
     : hasExportedClips
       ? "Ready to post"
@@ -1231,8 +1224,10 @@ export default async function SermonDetailPage({
     : pastorWorkflow.nextAction;
   const commandCenterDescription = failedRecoveryCount > 0
     ? `${failedRecoveryCount} failed ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention before this sermon keeps moving. Open Advanced recovery tools when you are ready to retry.`
-    : hasLiveProcessingWork && activeProcessingStep
-      ? `${activeProcessingStep.label} is running now. Watch the live progress here until the next pastor step is ready.`
+    : hasLiveAnalysisWork && activeProcessingStep
+      ? activeProcessingStep.state === "active"
+        ? `${activeProcessingStep.label} is running now. You can follow this stage below or leave while Sermon Clip keeps working.`
+        : `${activeProcessingStep.label} is waiting to begin. Sermon Clip will continue automatically when this stage is ready.`
       : hasOutdatedAssets
         ? `${operationSummary.outdated} prepared ${operationSummary.outdated === 1 ? "asset needs" : "assets need"} a refresh before posting.`
         : hasExportedClips
@@ -1249,6 +1244,7 @@ export default async function SermonDetailPage({
   const previewClips = orderedClipCandidates
     .filter((clip) => clip.status !== "REJECTED")
     .slice(0, 4);
+  const nextApprovedClip = orderedClipCandidates.find((clip) => clip.status === "APPROVED") ?? null;
   const previewableClipIds = new Set(
     (await Promise.all(
       previewClips.map(async (clip) => (await hasClipPreviewMedia(clip) ? clip.id : null)),
@@ -1258,7 +1254,7 @@ export default async function SermonDetailPage({
   const hasPastorReviewFeed = clipCounts.total > 0;
   const pastorReviewFeedIsPrimaryAction =
     failedRecoveryCount === 0 &&
-    !hasLiveProcessingWork &&
+    !hasLiveAnalysisWork &&
     (pastorWorkflow.primaryAction === "review" || pastorWorkflow.primaryAction === "prepare");
 
   const publishingChecklist = [
@@ -1325,9 +1321,9 @@ export default async function SermonDetailPage({
   ];
 
   return (
-    <main className="container sermon-detail-shell stack-lg">
+    <main id="main-content" className="container sermon-detail-shell premium-sermon-workspace stack-lg">
       <header className="sermon-detail-hero stack-sm">
-        <p className="kicker">Sermon Detail</p>
+        <p className="kicker">Sermon workspace</p>
         <h1>{sermon.title}</h1>
         <p className="muted">
           {sermon.speakerName} at {sermon.churchName}. {statusDescriptions[sermon.status]}
@@ -1359,36 +1355,41 @@ export default async function SermonDetailPage({
                 Open recovery tools
               </a>
             ) : null}
-            {failedRecoveryCount === 0 && hasLiveProcessingWork ? (
+            {failedRecoveryCount === 0 && hasLiveAnalysisWork ? (
               <a href="#processing-progress" className="button primary">
-                View live progress
+                Follow progress
               </a>
             ) : null}
-            {failedRecoveryCount === 0 && !hasLiveProcessingWork && pastorWorkflow.primaryAction === "process" ? (
+            {failedRecoveryCount === 0 && !hasLiveAnalysisWork && pastorWorkflow.primaryAction === "process" ? (
               <ProcessSermonButton sermonId={sermon.id} />
             ) : null}
-            {failedRecoveryCount === 0 && !hasLiveProcessingWork && pastorWorkflow.primaryAction === "review" ? (
+            {failedRecoveryCount === 0 && !hasLiveAnalysisWork && pastorWorkflow.primaryAction === "review" ? (
               <Link href={`/sermons/${sermon.id}/review`} className="button primary">
-                Pastor Review Feed
+                Review suggested clips
               </Link>
             ) : null}
-            {failedRecoveryCount === 0 && !hasLiveProcessingWork && pastorWorkflow.primaryAction === "prepare" ? (
-              <Link href={`/sermons/${sermon.id}/review`} className="button primary">
-                Pastor Review Feed
+            {failedRecoveryCount === 0 && !hasLiveAnalysisWork && pastorWorkflow.primaryAction === "prepare" ? (
+              <Link
+                href={nextApprovedClip
+                  ? `/sermons/${sermon.id}/clips/${nextApprovedClip.id}/studio`
+                  : `/sermons/${sermon.id}/review`}
+                className="button primary"
+              >
+                {nextApprovedClip ? "Continue in Clip Studio" : "Review suggested clips"}
               </Link>
             ) : null}
-            {failedRecoveryCount === 0 && !hasLiveProcessingWork && pastorWorkflow.primaryAction === "post" ? (
+            {failedRecoveryCount === 0 && !hasLiveAnalysisWork && pastorWorkflow.primaryAction === "post" ? (
               <Link href={`/ready-to-post?sermonId=${sermon.id}`} className="button primary">
-                Open ready-to-post queue
+                Prepare posts
               </Link>
             ) : null}
             {hasPastorReviewFeed && !pastorReviewFeedIsPrimaryAction ? (
               <Link href={`/sermons/${sermon.id}/review`} className="button secondary">
-                Pastor Review Feed
+                Review clips
               </Link>
             ) : null}
             <Link href={`/sermons/${sermon.id}/intelligence`} className="button tertiary">
-              Ministry insights
+              Sermon insights
             </Link>
           </div>
         </div>
@@ -1396,7 +1397,7 @@ export default async function SermonDetailPage({
         <div className="sermon-command-stats">
           <article>
             <span className="muted small">Suggested</span>
-            <strong>{clipCounts.total}</strong>
+            <strong>{clipCounts.suggested}</strong>
           </article>
           <article>
             <span className="muted small">Approved</span>
@@ -1435,17 +1436,21 @@ export default async function SermonDetailPage({
         </section>
       ) : null}
 
-      {hasLiveProcessingWork && activeProcessingStep && operationProgressView ? (
+      {hasLiveAnalysisWork && activeProcessingStep && operationProgressView ? (
       <section id="processing-progress" className="processing-theater" aria-label="Sermon processing progress">
         <div className="processing-theater-copy stack-sm">
-          <p className="kicker">Processing progress</p>
+          <p className="kicker">Sermon analysis</p>
           <h2>{activeProcessingStep.label}</h2>
           <p className="muted">{pastorProcessingMessage}</p>
+          <p className="analysis-stage-count">
+            <strong>Stage {activeAnalysisStageNumber} of {processingTheaterSteps.length}</strong>
+            <span>Video → Audio → Transcript → Moments</span>
+          </p>
           <div className="processing-progress-bar" aria-label={`${processingProgressPercent}% complete`}>
             <span style={{ width: `${processingProgressPercent}%` }} />
           </div>
-          <p className="muted small">
-            {processingProgressPercent}% complete · Current sermon status: {statusDescriptions[sermon.status]}
+          <p className="muted small processing-leave-note">
+            {completedProcessingSteps} of {processingTheaterSteps.length} stages complete · You can leave this page while Sermon Clip keeps working.
           </p>
           <div className="current-operation-card">
             <div className="current-operation-heading">
@@ -1461,39 +1466,48 @@ export default async function SermonDetailPage({
               className={`processing-progress-bar ${operationProgressView.progressPercent === null ? "indeterminate" : ""}`}
               aria-label={`Current operation progress: ${operationProgressView.progressLabel}`}
             >
-              <span style={{ width: `${operationProgressView.progressPercent ?? 55}%` }} />
+              <span
+                style={operationProgressView.progressPercent === null
+                  ? undefined
+                  : { width: `${operationProgressView.progressPercent}%` }}
+              />
             </div>
-            <div className="operation-metrics-grid">
-              <article>
-                <span className="muted small">Progress</span>
-                <strong>{operationProgressView.progressLabel}</strong>
-              </article>
-              <article>
-                <span className="muted small">{operationProgressView.metricTwoLabel}</span>
-                <strong>{operationProgressView.metricTwoValue}</strong>
-                {operationProgressView.metricTwoDetail ? <span className="muted small">{operationProgressView.metricTwoDetail}</span> : null}
-              </article>
-              <article>
-                <span className="muted small">{operationProgressView.metricThreeLabel}</span>
-                <strong>{operationProgressView.metricThreeValue}</strong>
-              </article>
-              <article>
-                <span className="muted small">{operationProgressView.metricFourLabel}</span>
-                <strong>{operationProgressView.metricFourValue}</strong>
-                {operationProgressView.metricFourDetail ? <span className="muted small">{operationProgressView.metricFourDetail}</span> : null}
-              </article>
+            <div className="current-operation-summary">
+              <strong>{operationProgressView.progressLabel}</strong>
+              <span className="muted small">Sermon Clip will move to the next stage automatically.</span>
             </div>
-            <p className="muted small">{operationProgressView.detail}</p>
+            <details className="processing-technical-details">
+              <summary>View transfer details</summary>
+              <div className="operation-metrics-grid">
+                <article>
+                  <span className="muted small">Progress</span>
+                  <strong>{operationProgressView.progressLabel}</strong>
+                </article>
+                <article>
+                  <span className="muted small">{operationProgressView.metricTwoLabel}</span>
+                  <strong>{operationProgressView.metricTwoValue}</strong>
+                  {operationProgressView.metricTwoDetail ? <span className="muted small">{operationProgressView.metricTwoDetail}</span> : null}
+                </article>
+                <article>
+                  <span className="muted small">{operationProgressView.metricThreeLabel}</span>
+                  <strong>{operationProgressView.metricThreeValue}</strong>
+                </article>
+                <article>
+                  <span className="muted small">{operationProgressView.metricFourLabel}</span>
+                  <strong>{operationProgressView.metricFourValue}</strong>
+                  {operationProgressView.metricFourDetail ? <span className="muted small">{operationProgressView.metricFourDetail}</span> : null}
+                </article>
+              </div>
+              <p className="muted small">{operationProgressView.detail}</p>
+              {latestTheaterJob ? (
+                <p className="muted small">
+                  Latest operation: {pastorJobStepLabel(latestTheaterJob.type)} · {latestTheaterJob.status.toLowerCase()}
+                </p>
+              ) : null}
+            </details>
           </div>
-          {latestTheaterJob ? (
-            <p className="muted small">
-              Latest work: {pastorJobStepLabel(latestTheaterJob.type)} · {latestTheaterJob.status.toLowerCase()}
-            </p>
-          ) : (
-            <p className="muted small">No background work has started yet.</p>
-          )}
           <SermonLiveRefresh
-            enabled={hasLiveProcessingWork}
+            enabled={hasLiveAnalysisWork}
             progressPercent={processingProgressPercent}
             activeStepLabel={activeProcessingStep.label}
           />

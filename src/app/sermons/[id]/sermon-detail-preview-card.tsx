@@ -55,7 +55,12 @@ export function SermonDetailPreviewCard({
   const [previewFailed, setPreviewFailed] = useState(false);
   const canPreview = canPreviewVideo && !previewFailed;
   const hookLine = clip.suggestedHook?.trim() || clip.hook;
-  const actionLabel = clip.status === "EXPORTED" ? "Ready" : clip.status === "APPROVED" ? "Open studio" : "Review";
+  const actionLabel = clip.status === "EXPORTED" ? "Ready" : clip.status === "APPROVED" ? "Studio" : "Review";
+  const actionHref = clip.status === "EXPORTED"
+    ? `/ready-to-post?sermonId=${sermonId}&clipId=${clip.id}`
+    : clip.status === "APPROVED"
+      ? `/sermons/${sermonId}/clips/${clip.id}/studio`
+      : `/sermons/${sermonId}/review#clip-${clip.id}`;
 
   function stopPreview() {
     const video = videoRef.current;
@@ -89,7 +94,7 @@ export function SermonDetailPreviewCard({
 
   return (
     <Link
-      href={`/sermons/${sermonId}/clips/${clip.id}/studio`}
+      href={actionHref}
       className="sermon-preview-card"
       onPointerEnter={onPointerEnter}
       onPointerLeave={stopPreview}
@@ -125,7 +130,7 @@ export function SermonDetailPreviewCard({
         </div>
         <strong>{clip.title}</strong>
         <p>{hookLine}</p>
-        <span className="muted small">AI score {clip.score.toFixed(1)}/10</span>
+        <span className="muted small">Clip potential {clip.score.toFixed(1)}/10</span>
       </div>
     </Link>
   );

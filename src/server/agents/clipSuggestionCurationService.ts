@@ -5,6 +5,7 @@ import {
   hasHardQualityWarning,
   isHardQualityWarning,
   isRepairableQualityWarning,
+  transcriptGroundingSnapshot,
 } from "@/server/agents/clipCandidatePolicy";
 import { semanticDedupeCandidates } from "@/server/agents/semanticDedupe";
 import { resolveClipVolumeTarget } from "@/lib/clipVolumeTargets";
@@ -169,6 +170,16 @@ export function planAiSuggestionCuration(
   const candidatesToRank: CuratableClipSuggestion[] = [];
 
   for (const clip of reviewable) {
+    const grounding = transcriptGroundingSnapshot(clip);
+    if (!grounding || grounding.score === null) {
+      decisions.set(clip.id, {
+        clipId: clip.id,
+        action: "KEEP",
+        reason: "Kept for manual review because this older suggestion predates saved transcript-grounding evidence.",
+      });
+      continue;
+    }
+
     const weakReason = buildWeakRejectReason(clip);
     if (weakReason) {
       decisions.set(clip.id, {

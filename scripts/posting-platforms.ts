@@ -58,6 +58,19 @@ export type UploadResult = {
   mediaUploadedAt?: string;
 };
 
+export class AmbiguousPlatformPublishError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "AmbiguousPlatformPublishError";
+  }
+}
+
+const AMBIGUOUS_UPLOAD_RESPONSE_STATUSES = new Set([408, 429]);
+
+function isAmbiguousUploadResponse(status: number): boolean {
+  return status >= 500 || AMBIGUOUS_UPLOAD_RESPONSE_STATUSES.has(status);
+}
+
 type FetchLike = typeof fetch;
 type YouTubeTokenSource = {
   source: "stored" | "env";
@@ -203,13 +216,24 @@ export function extractHashtags(value: unknown): string[] {
     .map((item) => item.trim().startsWith("#") ? item.trim() : `#${item.trim()}`);
 }
 
+export function extractHashtagsFromText(value: string): string[] {
+  return Array.from(new Set(value.match(/#[\p{L}\p{N}_]+/gu) ?? []));
+}
+
+function resolvePostHashtags(post: AutomationPost): string[] {
+  const savedCaption = post.caption.trim();
+  return savedCaption
+    ? extractHashtagsFromText(savedCaption)
+    : Array.from(new Set(post.clips.flatMap((clip) => extractHashtags(clip.hashtags))));
+}
+
 export function buildYouTubeText(post: AutomationPost): { title: string; description: string; tags: string[] } {
   const firstClip = post.clips[0];
-  const hashtags = Array.from(new Set(post.clips.flatMap((clip) => extractHashtags(clip.hashtags))));
+  const hashtags = resolvePostHashtags(post);
   const title = (post.title || firstClip?.title || "Sermon clip").slice(0, 100);
-  const caption = post.caption || firstClip?.caption || "";
-  const description = [
-    caption,
+  const savedCaption = post.caption.trim();
+  const description = savedCaption || [
+    firstClip?.caption || "",
     hashtags.length > 0 ? hashtags.join(" ") : "#Shorts",
     firstClip?.sermon.churchName ? `From ${firstClip.sermon.churchName}` : "",
   ].filter(Boolean).join("\n\n");
@@ -221,10 +245,35 @@ export function buildYouTubeText(post: AutomationPost): { title: string; descrip
   };
 }
 
+export function buildYouTubeUploadResult(input: {
+  videoId: string;
+  requestedPrivacy: string;
+  apiVerified: boolean;
+}): UploadResult {
+  const privacyStatus = input.apiVerified ? input.requestedPrivacy : "private";
+  const privateOnly = privacyStatus === "private";
+  const privateReason = !input.apiVerified && input.requestedPrivacy !== "private"
+    ? "Uploaded privately because YOUTUBE_API_VERIFIED is not true. Complete Google API verification before public API publishing."
+    : "Uploaded privately. Review the video in YouTube Studio before making it public.";
+
+  return {
+    status: privateOnly ? "PRIVATE_ONLY_UNVERIFIED" : "POSTED",
+    externalPostId: input.videoId,
+    publishedUrl: `https://www.youtube.com/watch?v=${input.videoId}`,
+    finalPrivacyStatus: privacyStatus,
+    publishError: privateOnly ? privateReason : undefined,
+  };
+}
+
 export function buildTikTokTitle(post: AutomationPost): string {
   const firstClip = post.clips[0];
-  const hashtags = Array.from(new Set(post.clips.flatMap((clip) => extractHashtags(clip.hashtags))));
-  const title = post.caption || firstClip?.caption || post.title || firstClip?.title || "Sermon clip";
+  const savedCaption = post.caption.trim();
+  if (savedCaption) {
+    return clampText(savedCaption, TIKTOK_MAX_TITLE_LENGTH);
+  }
+
+  const hashtags = resolvePostHashtags(post);
+  const title = firstClip?.caption || post.title || firstClip?.title || "Sermon clip";
   const tagText = hashtags.length > 0 ? `\n\n${hashtags.join(" ")}` : "";
 
   return clampText(`${title}${tagText}`, TIKTOK_MAX_TITLE_LENGTH);
@@ -325,7 +374,7 @@ export function buildZernioPostRequest(
     }],
     publishNow: true,
     timezone: post.timezone || undefined,
-    hashtags: Array.from(new Set(post.clips.flatMap((clip) => extractHashtags(clip.hashtags)))),
+    hashtags: resolvePostHashtags(post),
     metadata: {
       sermonClipScheduledPostId: post.id,
       sermonClipClipIds: post.clips.map((clip) => clip.id),
@@ -356,38 +405,54 @@ export async function uploadZernioVideo(
     const result = await createZernioPost(request, fetchImpl);
     resultPost = result.post ?? result.existingPost ?? null;
   } catch (error) {
-    if (!(error instanceof ZernioApiError) || error.status !== 409 || !error.existingPostId) {
+    if (!(error instanceof ZernioApiError)) {
+      throw new AmbiguousPlatformPublishError(
+        `Zernio did not return a final response. Check ${post.platform} before retrying this post.`,
+        { cause: error },
+      );
+    }
+    if (isAmbiguousUploadResponse(error.status)) {
+      throw new AmbiguousPlatformPublishError(
+        `Zernio returned ${error.status} after the publishing request. Check ${post.platform} before retrying this post.`,
+        { cause: error },
+      );
+    }
+    if (error.status !== 409 || !error.existingPostId) {
       throw error;
     }
 
     const existingPost = await getZernioPost(error.existingPostId, fetchImpl);
-    const publishedUrl = getPublishedPlatformUrl(existingPost, zernioPlatform);
-    if (!publishedUrl) {
-      throw error;
-    }
-
-    resultPost = existingPost;
+    resultPost = existingPost ?? { _id: error.existingPostId, status: "unknown" };
   }
 
   if (!resultPost) {
-    throw new Error("Zernio did not return a post.");
+    throw new AmbiguousPlatformPublishError(
+      `Zernio accepted the request without a final post record. Check ${post.platform} before retrying this post.`,
+    );
   }
 
+  const platformStatus = (getPlatformStatus(resultPost, zernioPlatform) ?? resultPost.status ?? "unknown").toLowerCase();
+  const publishedUrl = getPublishedPlatformUrl(resultPost, zernioPlatform) ?? undefined;
+  const publicationConfirmed = Boolean(publishedUrl) && ["published", "posted", "completed", "success"].includes(platformStatus);
+
   return {
-    status: "POSTED",
+    status: publicationConfirmed ? "POSTED" : "PRIVATE_ONLY_UNVERIFIED",
     externalPostId: zernioPostId(resultPost),
-    publishedUrl: getPublishedPlatformUrl(resultPost, zernioPlatform) ?? undefined,
-    finalPrivacyStatus: getPlatformStatus(resultPost, zernioPlatform) ?? resultPost.status,
+    publishedUrl,
+    finalPrivacyStatus: platformStatus,
+    publishError: publicationConfirmed
+      ? undefined
+      : `Zernio accepted this post with ${platformStatus} status. Confirm it on ${post.platform} before marking it posted.`,
   };
 }
 
 export function buildFacebookText(post: AutomationPost): { title: string; description: string; published: boolean } {
   const firstClip = post.clips[0];
-  const hashtags = Array.from(new Set(post.clips.flatMap((clip) => extractHashtags(clip.hashtags))));
+  const hashtags = resolvePostHashtags(post);
   const title = clampText(post.title || firstClip?.title || "Sermon clip", FACEBOOK_MAX_TITLE_LENGTH);
-  const caption = post.caption || firstClip?.caption || "";
-  const description = [
-    caption || title,
+  const savedCaption = post.caption.trim();
+  const description = savedCaption || [
+    firstClip?.caption || title,
     hashtags.length > 0 ? hashtags.join(" ") : "",
     firstClip?.sermon.churchName ? `From ${firstClip.sermon.churchName}` : "",
   ].filter(Boolean).join("\n\n");
@@ -525,25 +590,30 @@ export async function uploadYouTubeShort(
     body: createReadStream(videoPath),
     duplex: "half",
   } as unknown as RequestInit & { duplex: "half" };
-  const uploadResponse = await fetchImpl(uploadUrl, uploadRequest);
+  let uploadResponse: Response;
+  try {
+    uploadResponse = await fetchImpl(uploadUrl, uploadRequest);
+  } catch (error) {
+    throw new AmbiguousPlatformPublishError(
+      "YouTube did not return a final upload response. Check YouTube Studio before retrying this post.",
+      { cause: error },
+    );
+  }
   const data = await uploadResponse.json().catch(() => null);
 
-  if (!uploadResponse.ok || typeof data?.id !== "string") {
+  if (!uploadResponse.ok) {
+    if (isAmbiguousUploadResponse(uploadResponse.status)) {
+      throw new AmbiguousPlatformPublishError(
+        `YouTube returned ${uploadResponse.status} after the upload. Check YouTube Studio before retrying this post.`,
+      );
+    }
     throw new Error(data?.error?.message ?? "YouTube upload failed.");
   }
+  if (typeof data?.id !== "string") {
+    throw new AmbiguousPlatformPublishError("YouTube accepted the upload but did not return a video id. Check YouTube Studio before retrying this post.");
+  }
 
-  const publishedUrl = `https://www.youtube.com/watch?v=${data.id}`;
-  const privateOnly = !apiVerified && requestedPrivacy !== "private";
-
-  return {
-    status: privateOnly ? "PRIVATE_ONLY_UNVERIFIED" : "POSTED",
-    externalPostId: data.id,
-    publishedUrl,
-    finalPrivacyStatus: privacyStatus,
-    publishError: privateOnly
-      ? "Uploaded privately because YOUTUBE_API_VERIFIED is not true. Complete Google API verification before public API publishing."
-      : undefined,
-  };
+  return buildYouTubeUploadResult({ videoId: data.id, requestedPrivacy, apiVerified });
 }
 
 export function buildTikTokInitBody(post: AutomationPost, videoSize: number): {
@@ -752,22 +822,40 @@ export async function uploadFacebookVideo(
   formData.set("published", text.published ? "true" : "false");
   formData.set("source", new Blob([videoBuffer], { type: "video/mp4" }), `${post.id}.mp4`);
 
-  const response = await fetchImpl(`https://graph.facebook.com/${graphVersion}/${pageId}/videos`, {
-    method: "POST",
-    body: formData,
-  });
+  let response: Response;
+  try {
+    response = await fetchImpl(`https://graph.facebook.com/${graphVersion}/${pageId}/videos`, {
+      method: "POST",
+      body: formData,
+    });
+  } catch (error) {
+    throw new AmbiguousPlatformPublishError(
+      "Facebook did not return a final upload response. Check the Page video library before retrying this post.",
+      { cause: error },
+    );
+  }
   const data = await response.json().catch(() => null);
 
-  if (!response.ok || typeof data?.id !== "string") {
+  if (!response.ok) {
+    if (isAmbiguousUploadResponse(response.status)) {
+      throw new AmbiguousPlatformPublishError(
+        `Facebook returned ${response.status} after the upload. Check the Page video library before retrying this post.`,
+      );
+    }
     throw new Error(data?.error?.message ?? "Facebook video upload failed.");
+  }
+  if (typeof data?.id !== "string") {
+    throw new AmbiguousPlatformPublishError("Facebook accepted the upload but did not return a video id. Check the Page video library before retrying this post.");
   }
 
   return {
-    status: "POSTED",
+    status: "PRIVATE_ONLY_UNVERIFIED",
     externalPostId: data.id,
     publishedUrl: `https://www.facebook.com/${data.id}`,
     finalPrivacyStatus: text.published ? "published" : "unpublished",
-    publishError: text.published ? undefined : "Uploaded to the Facebook Page as unpublished. Set FACEBOOK_DEFAULT_PUBLISHED=true to publish automatically.",
+    publishError: text.published
+      ? "Facebook accepted the video with publishing requested, but public availability has not been confirmed. Check the Page before marking it posted."
+      : "Uploaded to the Facebook Page as unpublished. Set FACEBOOK_DEFAULT_PUBLISHED=true to request immediate publishing.",
   };
 }
 

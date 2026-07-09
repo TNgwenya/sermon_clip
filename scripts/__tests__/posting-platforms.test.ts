@@ -5,13 +5,16 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  AmbiguousPlatformPublishError,
   buildDeterministicRequestId,
   buildFacebookText,
   buildTikTokInitBody,
   buildTikTokTitle,
   buildZernioPostRequest,
   buildYouTubeText,
+  buildYouTubeUploadResult,
   extractHashtags,
+  extractHashtagsFromText,
   selectYouTubeRefreshTokenSources,
   uploadPlatformPost,
   type AutomationPost,
@@ -22,7 +25,7 @@ const basePost: AutomationPost = {
   socialAccountId: null,
   platform: "TikTok",
   title: "Sunday Sermon Clip",
-  caption: "God is near when life feels loud.",
+  caption: "God is near when life feels loud.\n\n#Faith #Church",
   scheduledFor: new Date("2026-06-27T16:00:00.000Z").toISOString(),
   idempotencyKey: "post-1-tiktok",
   clips: [
@@ -48,6 +51,7 @@ afterEach(() => {
 describe("posting platform helpers", () => {
   it("normalizes hashtags", () => {
     expect(extractHashtags(["Faith", "#Church", "", 42])).toEqual(["#Faith", "#Church"]);
+    expect(extractHashtagsFromText("Keep going. #Faith #Hope #Faith")).toEqual(["#Faith", "#Hope"]);
   });
 
   it("builds YouTube title, description, and tags", () => {
@@ -56,8 +60,25 @@ describe("posting platform helpers", () => {
     expect(text.title).toBe("Sunday Sermon Clip");
     expect(text.description).toContain("God is near when life feels loud.");
     expect(text.description).toContain("#Faith #Church");
-    expect(text.description).toContain("From Grace Church");
+    expect(text.description).toBe(basePost.caption);
     expect(text.tags).toEqual(["Shorts", "Faith", "Church"]);
+  });
+
+  it("keeps private YouTube uploads in verification instead of calling them posted", () => {
+    expect(buildYouTubeUploadResult({
+      videoId: "youtube-1",
+      requestedPrivacy: "private",
+      apiVerified: true,
+    })).toMatchObject({
+      status: "PRIVATE_ONLY_UNVERIFIED",
+      externalPostId: "youtube-1",
+      finalPrivacyStatus: "private",
+    });
+    expect(buildYouTubeUploadResult({
+      videoId: "youtube-2",
+      requestedPrivacy: "public",
+      apiVerified: true,
+    }).status).toBe("POSTED");
   });
 
   it("prefers stored YouTube OAuth tokens before stale env fallback tokens", () => {
@@ -84,9 +105,17 @@ describe("posting platform helpers", () => {
   it("builds TikTok captions with hashtags inside the platform limit", () => {
     const title = buildTikTokTitle(basePost);
 
-    expect(title).toContain("God is near when life feels loud.");
-    expect(title).toContain("#Faith #Church");
+    expect(title).toBe(basePost.caption);
     expect(title.length).toBeLessThanOrEqual(2200);
+  });
+
+  it("publishes the saved platform caption without regenerating copy from clip metadata", () => {
+    const editedCaption = "A media-team edit with a different emphasis.\n\n#SundayWord";
+    const editedPost = { ...basePost, caption: editedCaption };
+
+    expect(buildTikTokTitle(editedPost)).toBe(editedCaption);
+    expect(buildYouTubeText({ ...editedPost, platform: "YouTube Shorts" }).description).toBe(editedCaption);
+    expect(buildFacebookText({ ...editedPost, platform: "Facebook" }).description).toBe(editedCaption);
   });
 
   it("builds TikTok direct-upload metadata with chunk counts", () => {
@@ -209,7 +238,7 @@ describe("posting platform helpers", () => {
 
     expect(text).toEqual({
       title: "Sunday Sermon Clip",
-      description: "God is near when life feels loud.\n\n#Faith #Church\n\nFrom Grace Church",
+      description: basePost.caption,
       published: false,
     });
   });
@@ -246,12 +275,56 @@ describe("posting platform helpers", () => {
       expect(body.get("published")).toBe("true");
       expect(body.get("description")).toContain("#Faith #Church");
       expect(result).toEqual({
-        status: "POSTED",
+        status: "PRIVATE_ONLY_UNVERIFIED",
         externalPostId: "fb-video-1",
         publishedUrl: "https://www.facebook.com/fb-video-1",
         finalPrivacyStatus: "published",
-        publishError: undefined,
+        publishError: "Facebook accepted the video with publishing requested, but public availability has not been confirmed. Check the Page before marking it posted.",
       });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps unpublished Facebook uploads in verification", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "facebook-upload-"));
+    const videoPath = join(tempDir, "clip.mp4");
+    await writeFile(videoPath, Buffer.from("video"));
+    vi.stubEnv("FACEBOOK_PAGE_ID", "page-123");
+    vi.stubEnv("FACEBOOK_PAGE_ACCESS_TOKEN", "page-token");
+    vi.stubEnv("FACEBOOK_DEFAULT_PUBLISHED", "");
+    const fetchImpl: typeof fetch = async (input) => String(input).includes("/me/accounts")
+      ? Response.json({ data: [] })
+      : Response.json({ id: "fb-private-1" });
+
+    try {
+      const result = await uploadPlatformPost({ ...basePost, platform: "Facebook" }, videoPath, 5, fetchImpl);
+      expect(result).toMatchObject({
+        status: "PRIVATE_ONLY_UNVERIFIED",
+        externalPostId: "fb-private-1",
+        finalPrivacyStatus: "unpublished",
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a lost Facebook upload response as ambiguous", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "facebook-upload-"));
+    const videoPath = join(tempDir, "clip.mp4");
+    await writeFile(videoPath, Buffer.from("video"));
+    vi.stubEnv("FACEBOOK_PAGE_ID", "page-123");
+    vi.stubEnv("FACEBOOK_PAGE_ACCESS_TOKEN", "page-token");
+    const fetchImpl: typeof fetch = async (input) => {
+      if (String(input).includes("/me/accounts")) {
+        return Response.json({ data: [] });
+      }
+      throw new TypeError("connection closed");
+    };
+
+    try {
+      await expect(uploadPlatformPost({ ...basePost, platform: "Facebook" }, videoPath, 5, fetchImpl))
+        .rejects.toBeInstanceOf(AmbiguousPlatformPublishError);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -333,6 +406,72 @@ describe("posting platform helpers", () => {
     });
   });
 
+  it("keeps accepted Zernio posts in verification until publication is confirmed", async () => {
+    vi.stubEnv("ZERNIO_API_KEY", "zernio-key");
+    const fetchImpl: typeof fetch = async () => Response.json({
+      post: {
+        _id: "zernio-post-processing",
+        status: "processing",
+        platforms: [{ platform: "tiktok", status: "processing" }],
+      },
+    }, { status: 201 });
+
+    const result = await uploadPlatformPost({
+      ...basePost,
+      socialAccountExternalProvider: "zernio",
+      socialAccountExternalPlatform: "tiktok",
+      socialAccountExternalAccountId: "zernio-tiktok-1",
+      mediaPublicUrl: "https://media.example.com/clip.mp4",
+    }, "/tmp/clip.mp4", 25, fetchImpl);
+
+    expect(result).toMatchObject({
+      status: "PRIVATE_ONLY_UNVERIFIED",
+      externalPostId: "zernio-post-processing",
+      finalPrivacyStatus: "processing",
+    });
+  });
+
+  it("treats a lost Zernio create response as ambiguous", async () => {
+    vi.stubEnv("ZERNIO_API_KEY", "zernio-key");
+    const fetchImpl: typeof fetch = async () => {
+      throw new TypeError("connection closed");
+    };
+
+    await expect(uploadPlatformPost({
+      ...basePost,
+      socialAccountExternalProvider: "zernio",
+      socialAccountExternalPlatform: "tiktok",
+      socialAccountExternalAccountId: "zernio-tiktok-1",
+      mediaPublicUrl: "https://media.example.com/clip.mp4",
+    }, "/tmp/clip.mp4", 25, fetchImpl)).rejects.toBeInstanceOf(AmbiguousPlatformPublishError);
+  });
+
+  it("treats retryable Zernio server responses as ambiguous", async () => {
+    vi.stubEnv("ZERNIO_API_KEY", "zernio-key");
+    const fetchImpl: typeof fetch = async () => Response.json({ error: "Publisher unavailable" }, { status: 503 });
+
+    await expect(uploadPlatformPost({
+      ...basePost,
+      socialAccountExternalProvider: "zernio",
+      socialAccountExternalPlatform: "tiktok",
+      socialAccountExternalAccountId: "zernio-tiktok-1",
+      mediaPublicUrl: "https://media.example.com/clip.mp4",
+    }, "/tmp/clip.mp4", 25, fetchImpl)).rejects.toBeInstanceOf(AmbiguousPlatformPublishError);
+  });
+
+  it("treats a successful Zernio response without a post record as ambiguous", async () => {
+    vi.stubEnv("ZERNIO_API_KEY", "zernio-key");
+    const fetchImpl: typeof fetch = async () => Response.json({}, { status: 201 });
+
+    await expect(uploadPlatformPost({
+      ...basePost,
+      socialAccountExternalProvider: "zernio",
+      socialAccountExternalPlatform: "tiktok",
+      socialAccountExternalAccountId: "zernio-tiktok-1",
+      mediaPublicUrl: "https://media.example.com/clip.mp4",
+    }, "/tmp/clip.mp4", 25, fetchImpl)).rejects.toBeInstanceOf(AmbiguousPlatformPublishError);
+  });
+
   it("resolves Zernio duplicate responses when the existing post is already published", async () => {
     vi.stubEnv("ZERNIO_API_KEY", "zernio-key");
     const fetchImpl: typeof fetch = async (input) => {
@@ -373,6 +512,40 @@ describe("posting platform helpers", () => {
       externalPostId: "existing-post-1",
       publishedUrl: "https://www.instagram.com/reel/1/",
       finalPrivacyStatus: "published",
+    });
+  });
+
+  it("does not retry a Zernio duplicate that is still processing", async () => {
+    vi.stubEnv("ZERNIO_API_KEY", "zernio-key");
+    const fetchImpl: typeof fetch = async (input) => {
+      if (String(input).endsWith("/v1/posts")) {
+        return Response.json({
+          error: "Duplicate request",
+          details: { existingPostId: "existing-processing-1" },
+        }, { status: 409 });
+      }
+
+      return Response.json({
+        post: {
+          _id: "existing-processing-1",
+          status: "processing",
+          platforms: [{ platform: "tiktok", status: "processing" }],
+        },
+      });
+    };
+
+    const result = await uploadPlatformPost({
+      ...basePost,
+      socialAccountExternalProvider: "zernio",
+      socialAccountExternalPlatform: "tiktok",
+      socialAccountExternalAccountId: "zernio-tiktok-1",
+      mediaPublicUrl: "https://media.example.com/clip.mp4",
+    }, "/tmp/clip.mp4", 25, fetchImpl);
+
+    expect(result).toMatchObject({
+      status: "PRIVATE_ONLY_UNVERIFIED",
+      externalPostId: "existing-processing-1",
+      finalPrivacyStatus: "processing",
     });
   });
 });

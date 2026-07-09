@@ -13,6 +13,7 @@ import {
   type PostingPlatform,
 } from "@/lib/postingDrafts";
 import { normalizeScheduleIntervalMinutes } from "@/lib/postingSchedule";
+import { runPublishingPreflight } from "@/lib/publishingPreflightServer";
 import { resolveReadyMedia } from "@/lib/readyMedia";
 
 export async function GET(): Promise<NextResponse> {
@@ -35,6 +36,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const note = typeof body?.note === "string" ? body.note.trim() : "";
   const socialAccountIdsByPlatform = normalizeSocialAccountIdsByPlatform(body?.socialAccountIdsByPlatform, platforms);
   const clipCopyById = normalizeClipCopyById(body?.clipCopyById, clipIds);
+  const platformCopyByClipId = normalizePlatformCopyByClipId(body?.platformCopyByClipId, clipIds, platforms);
 
   if (clipIds.length === 0) {
     return NextResponse.json({ error: "Select at least one finished clip to schedule." }, { status: 400 });
@@ -107,13 +109,14 @@ export async function POST(request: Request): Promise<NextResponse> {
           status: "CONNECTED",
           externalProvider: "zernio",
           externalAccountId: { not: null },
+          externalPlatform: { in: zernioPlatforms.map((platform) => platform.toLowerCase()) },
         },
-        select: { id: true, platform: true },
+        select: { id: true, platform: true, externalPlatform: true },
       });
-      const connectedPlatforms = new Set(zernioAccounts.map((account) => account.platform));
+      const connectedPlatforms = new Set(zernioAccounts.map((account) => `${account.platform}:${account.externalPlatform?.toLowerCase()}`));
       const missingPlatforms = zernioPlatforms.filter((platform) => {
         const dbPlatform = platform === "TikTok" ? "TIKTOK" : "INSTAGRAM";
-        return !connectedPlatforms.has(dbPlatform);
+        return !connectedPlatforms.has(`${dbPlatform}:${platform.toLowerCase()}`);
       });
 
       if (missingPlatforms.length > 0) {
@@ -122,11 +125,11 @@ export async function POST(request: Request): Promise<NextResponse> {
         }, { status: 409 });
       }
 
-      const zernioAccountKeys = new Set(zernioAccounts.map((account) => `${account.platform}:${account.id}`));
+      const zernioAccountKeys = new Set(zernioAccounts.map((account) => `${account.platform}:${account.externalPlatform?.toLowerCase()}:${account.id}`));
       const invalidSelectedPlatforms = zernioPlatforms.filter((platform) => {
         const dbPlatform = platform === "TikTok" ? "TIKTOK" : "INSTAGRAM";
         return (socialAccountIdsByPlatform[platform] ?? []).some((accountId) => (
-          !zernioAccountKeys.has(`${dbPlatform}:${accountId}`)
+          !zernioAccountKeys.has(`${dbPlatform}:${platform.toLowerCase()}:${accountId}`)
         ));
       });
 
@@ -148,6 +151,21 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
   }
 
+  const authoritativePreflight = await runPublishingPreflight({
+    clipIds,
+    platforms,
+    automationMode,
+    selectedAccountIdsByPlatform: socialAccountIdsByPlatform,
+    controlPanelMode,
+  });
+  if (!authoritativePreflight.canSchedule) {
+    const firstBlocker = authoritativePreflight.checks.find((check) => check.status === "BLOCKED");
+    return NextResponse.json({
+      error: firstBlocker?.summary ?? "Publishing checks found an item to resolve before scheduling.",
+      preflight: authoritativePreflight,
+    }, { status: 409 });
+  }
+
   let draft;
   try {
     draft = await createPostingDraft({
@@ -163,6 +181,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       title,
       note,
       clipCopyById,
+      platformCopyByClipId,
     });
   } catch (error) {
     if (error instanceof PostingDraftValidationError) {
@@ -173,6 +192,53 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   return NextResponse.json({ draft }, { status: 201 });
+}
+
+function normalizePlatformCopyByClipId(
+  value: unknown,
+  clipIds: string[],
+  platforms: PostingPlatform[],
+): Record<string, Partial<Record<PostingPlatform, { title?: string; caption?: string; note?: string }>>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const allowedClipIds = new Set(clipIds);
+  const allowedPlatforms = new Set(platforms);
+  const result: Record<string, Partial<Record<PostingPlatform, { title?: string; caption?: string; note?: string }>>> = {};
+
+  Object.entries(value as Record<string, unknown>).forEach(([clipId, platformCopies]) => {
+    if (!allowedClipIds.has(clipId) || !platformCopies || typeof platformCopies !== "object" || Array.isArray(platformCopies)) {
+      return;
+    }
+
+    const normalized: Partial<Record<PostingPlatform, { title?: string; caption?: string; note?: string }>> = {};
+    Object.entries(platformCopies as Record<string, unknown>).forEach(([platform, copy]) => {
+      if (!allowedPlatforms.has(platform as PostingPlatform) || !copy || typeof copy !== "object" || Array.isArray(copy)) {
+        return;
+      }
+
+      const record = copy as Record<string, unknown>;
+      const titleLimit = platform === "Facebook" ? 255 : platform === "YouTube Shorts" ? 100 : 2200;
+      const captionLimit = platform === "Facebook" ? 63_206 : platform === "YouTube Shorts" ? 5000 : 2200;
+      const title = typeof record.title === "string" ? record.title.trim().slice(0, titleLimit) : "";
+      const caption = typeof record.caption === "string" ? record.caption.trim().slice(0, captionLimit) : "";
+      const note = typeof record.note === "string" ? record.note.trim().slice(0, 500) : "";
+      if (title || caption || note) {
+        normalized[platform as PostingPlatform] = {
+          ...(title ? { title } : {}),
+          ...(caption ? { caption } : {}),
+          ...(note ? { note } : {}),
+        };
+      }
+    });
+
+    if (Object.keys(normalized).length > 0) {
+      result[clipId] = normalized;
+    }
+  });
+
+  return result;
 }
 
 function normalizeClipCopyById(

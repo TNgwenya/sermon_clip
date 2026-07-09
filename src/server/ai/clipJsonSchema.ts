@@ -195,6 +195,9 @@ export const rawClipJsonCandidateSchema = z
         shortCaption: z.string().trim().min(1),
         platformCaption: z.string().trim().min(1),
         optionalHashtags: z.array(z.string().trim().min(1)).optional(),
+        titleOptions: z.array(z.string().trim().min(1)).min(2).max(3).optional(),
+        hookOptions: z.array(z.string().trim().min(1)).min(2).max(3).optional(),
+        ctaOptions: z.array(z.string().trim().min(1)).max(3).optional(),
         captionQualityScore: z.number().min(0).max(10),
         captionReason: z.string().trim().min(1),
         captionWarnings: z.array(

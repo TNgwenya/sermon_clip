@@ -3,7 +3,12 @@
 import { type CSSProperties, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmptyState, StatusBadge } from "@/components/ui";
-import { BRANDING_PRESET_LABELS } from "@/lib/clipBranding";
+import {
+  BRANDING_PRESET_LABELS,
+  DEFAULT_INTRO_DURATION_SECONDS,
+  DEFAULT_OUTRO_DURATION_SECONDS,
+  normalizeBrandingDurationSeconds,
+} from "@/lib/clipBranding";
 import { resolveCaptionStylePreset } from "@/lib/captionStylePresets";
 import { resolveFramingDisplayLabel } from "@/lib/clipExportSettings";
 import {
@@ -65,6 +70,63 @@ type OverlayDragState = {
   frameHeight: number;
 };
 
+type ManualCropPreviewFrame = {
+  centerX: number;
+  centerY: number;
+  zoom: number;
+};
+
+function interpolateNumber(start: number, end: number, progress: number): number {
+  return start + (end - start) * progress;
+}
+
+function resolveManualCropPreviewFrame(
+  keyframes: Array<{ timeSeconds: number; centerX: number; centerY?: number; zoom?: number }>,
+  seconds: number,
+): ManualCropPreviewFrame | null {
+  if (keyframes.length === 0) {
+    return null;
+  }
+
+  const first = keyframes[0];
+  const last = keyframes.at(-1);
+  if (!first || !last) {
+    return null;
+  }
+
+  if (seconds <= first.timeSeconds || keyframes.length === 1) {
+    return {
+      centerX: first.centerX,
+      centerY: first.centerY ?? 0.5,
+      zoom: first.zoom ?? 1,
+    };
+  }
+
+  if (seconds >= last.timeSeconds) {
+    return {
+      centerX: last.centerX,
+      centerY: last.centerY ?? 0.5,
+      zoom: last.zoom ?? 1,
+    };
+  }
+
+  const nextIndex = keyframes.findIndex((keyframe) => keyframe.timeSeconds >= seconds);
+  const next = keyframes[nextIndex];
+  const previous = keyframes[Math.max(0, nextIndex - 1)];
+  if (!previous || !next) {
+    return null;
+  }
+
+  const spanSeconds = Math.max(0.001, next.timeSeconds - previous.timeSeconds);
+  const progress = Math.max(0, Math.min(1, (seconds - previous.timeSeconds) / spanSeconds));
+
+  return {
+    centerX: interpolateNumber(previous.centerX, next.centerX, progress),
+    centerY: interpolateNumber(previous.centerY ?? 0.5, next.centerY ?? 0.5, progress),
+    zoom: interpolateNumber(previous.zoom ?? 1, next.zoom ?? 1, progress),
+  };
+}
+
 function dispatchOverlayPosition(detail: ClipStudioOverlayPositionDetail) {
   window.dispatchEvent(new CustomEvent(CLIP_STUDIO_OVERLAY_POSITION_EVENT, { detail }));
 }
@@ -108,7 +170,8 @@ export function ClipStudioLivePreview({
   const captionsOverrideBranding = editPreview.applyCaptionsToClip && editPreview.captionCues.length > 0;
   const showWatermark = brandingEnabled && (brandingConfig.watermarkEnabled || brandingConfig.preset === "MINIMAL_WATERMARK");
   const showLowerThird =
-    brandingEnabled && brandingConfig.lowerThirdEnabled && brandingConfig.preset !== "MINIMAL_WATERMARK" && !captionsOverrideBranding;
+    brandingEnabled && brandingConfig.lowerThirdEnabled && brandingConfig.preset !== "MINIMAL_WATERMARK";
+  const hasCaptionBrandCollision = showLowerThird && captionsOverrideBranding;
   const captionStyle = resolveCaptionStylePreset(editPreview.captionStylePresetId);
   const activePreviewSrc = sourcePreviewSrc ?? previewSrc;
   const canPreview = hasPreview || Boolean(sourcePreviewSrc);
@@ -124,6 +187,27 @@ export function ClipStudioLivePreview({
   }, [activePreviewSrc, retryNonce]);
   const previewMediaReady = Boolean(playbackSrc && previewReadySrc === playbackSrc && !previewError);
   const draftDurationSeconds = editPreview.durationSeconds;
+  const introDurationSeconds = normalizeBrandingDurationSeconds(
+    brandingConfig.introDurationSeconds,
+    DEFAULT_INTRO_DURATION_SECONDS,
+  );
+  const outroDurationSeconds = normalizeBrandingDurationSeconds(
+    brandingConfig.outroDurationSeconds,
+    DEFAULT_OUTRO_DURATION_SECONDS,
+  );
+  const effectivePreviewDuration = draftDurationSeconds ?? previewDurationSeconds;
+  const showTimedOutro = Boolean(
+    brandingEnabled &&
+    brandingConfig.outroEnabled &&
+    effectivePreviewDuration !== null &&
+    previewSeconds >= Math.max(0, effectivePreviewDuration - outroDurationSeconds),
+  );
+  const showTimedIntro = Boolean(
+    brandingEnabled &&
+    brandingConfig.introEnabled &&
+    previewSeconds < introDurationSeconds &&
+    !showTimedOutro,
+  );
   const draftStartSeconds = hasSourcePreview ? editPreview.startSeconds : 0;
   const draftEndSeconds = hasSourcePreview ? editPreview.endSeconds : draftDurationSeconds;
   const isDraftTrimPreview = Boolean(activePreviewSrc && draftDurationSeconds !== null);
@@ -229,7 +313,10 @@ export function ClipStudioLivePreview({
   const captionAppearanceStyle = {
     "--caption-offset-y": `${editPreview.captionAppearance.verticalOffset}px`,
   } as CSSProperties;
-  const manualCropPreview = exportSettings.manualCropKeyframes[0] ?? null;
+  const manualCropPreview = useMemo(
+    () => resolveManualCropPreviewFrame(exportSettings.manualCropKeyframes, sourcePreviewSeconds),
+    [exportSettings.manualCropKeyframes, sourcePreviewSeconds],
+  );
   const hasManualCropPreview = Boolean(manualCropPreview);
   const activeCaptionWordIndex = useMemo(() => {
     return resolveActiveCaptionWordIndex({
@@ -242,9 +329,9 @@ export function ClipStudioLivePreview({
     "--clip-brand-color": brandingConfig.themeColor ?? "#75d9b8",
     ...(manualCropPreview
       ? {
-          "--clip-manual-x": `${Math.round(manualCropPreview.centerX * 100)}%`,
-          "--clip-manual-y": `${Math.round((manualCropPreview.centerY ?? 0.5) * 100)}%`,
-          "--clip-manual-zoom": String(manualCropPreview.zoom ?? 1),
+          "--clip-manual-x": `${(manualCropPreview.centerX * 100).toFixed(2)}%`,
+          "--clip-manual-y": `${(manualCropPreview.centerY * 100).toFixed(2)}%`,
+          "--clip-manual-zoom": manualCropPreview.zoom.toFixed(3),
         }
       : {}),
   } as CSSProperties;
@@ -495,6 +582,25 @@ export function ClipStudioLivePreview({
   }, [startPreviewPlayback, updatePreviewSeconds]);
 
   useEffect(() => {
+    if (!isPreviewPlaying) {
+      return undefined;
+    }
+
+    let animationFrame = 0;
+    let lastSyncAt = 0;
+    const syncPlayingPreview = (timestamp: number) => {
+      if (timestamp - lastSyncAt >= 80) {
+        lastSyncAt = timestamp;
+        updatePreviewSeconds();
+      }
+      animationFrame = window.requestAnimationFrame(syncPlayingPreview);
+    };
+
+    animationFrame = window.requestAnimationFrame(syncPlayingPreview);
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [isPreviewPlaying, updatePreviewSeconds]);
+
+  useEffect(() => {
     if (!playbackRequest) {
       return;
     }
@@ -512,7 +618,7 @@ export function ClipStudioLivePreview({
   }, [previewDurationSeconds, seekPreviewTo]);
 
   return (
-    <section className="card clip-studio-preview-card stack-sm">
+    <section id="clip-studio-preview" className="card clip-studio-preview-card stack-sm" tabIndex={-1}>
       <div className="section-heading-row">
         <div className="stack-sm">
           <p className="kicker">Preview</p>
@@ -618,11 +724,13 @@ export function ClipStudioLivePreview({
             )}
 
             {previewMediaReady && showWatermark ? (
-              <div className="clip-studio-live-watermark">{churchName ? churchName.slice(0, 2).toUpperCase() : "SC"}</div>
+              <div className="clip-studio-live-watermark">{churchName || "Church"}</div>
             ) : null}
 
-            {previewMediaReady && brandingEnabled && brandingConfig.introEnabled ? (
-              <div className="clip-studio-live-brand-slate clip-studio-live-brand-slate-intro">Intro</div>
+            {previewMediaReady && showTimedIntro ? (
+              <div className="clip-studio-live-brand-slate clip-studio-live-brand-slate-intro">
+                {churchName || sermonTitle || "Sermon Clip"}
+              </div>
             ) : null}
 
             {previewMediaReady && showLowerThird ? (
@@ -635,6 +743,12 @@ export function ClipStudioLivePreview({
                       ? churchName || "Church"
                       : BRANDING_PRESET_LABELS[brandingConfig.preset]}
                 </span>
+              </div>
+            ) : null}
+
+            {previewMediaReady && hasCaptionBrandCollision ? (
+              <div className="clip-studio-live-collision-warning" role="status">
+                Captions and the lower third share this area. Move captions or turn off the lower third before preparing.
               </div>
             ) : null}
 
@@ -694,8 +808,11 @@ export function ClipStudioLivePreview({
               </div>
             ) : null}
 
-            {previewMediaReady && brandingEnabled && brandingConfig.outroEnabled ? (
-              <div className="clip-studio-live-brand-slate clip-studio-live-brand-slate-outro">Outro</div>
+            {previewMediaReady && showTimedOutro ? (
+              <div className="clip-studio-live-brand-slate clip-studio-live-brand-slate-outro">
+                <strong>{churchName || "Keep the message going"}</strong>
+                <span>Reflect · Share · Invite</span>
+              </div>
             ) : null}
           </div>
 
@@ -741,8 +858,25 @@ export function ClipStudioLivePreview({
               ) : null}
               {speechCleanupPreviewPlan.enabled ? <span>Dead Air Removed</span> : null}
               {editPreview.brollLayer.enabled && editPreview.brollLayer.cards.length > 0 ? <span>B-roll On</span> : null}
+              {exportSettings.manualCropKeyframes.length > 1 ? (
+                <span>{exportSettings.manualCropKeyframes.length}-point frame motion</span>
+              ) : null}
               <span>{framingDisplayLabel}</span>
             </div>
+            {exportSettings.manualCropKeyframes.length > 1 ? (
+              <p className="clip-studio-preview-truth-note">
+                Crop motion follows the saved framing points as this preview plays.
+              </p>
+            ) : exportSettings.framingMode === "SMART_CROP" ? (
+              <p className="clip-studio-preview-truth-note">
+                Automatic speaker movement is applied to the prepared video; this preview shows the chosen frame style.
+              </p>
+            ) : null}
+            {brandingEnabled && (brandingConfig.introEnabled || brandingConfig.outroEnabled) ? (
+              <p className="clip-studio-preview-truth-note">
+                Timed brand cards use the same opening and closing windows in preview and preparation.
+              </p>
+            ) : null}
           </div>
         </div>
       </div>

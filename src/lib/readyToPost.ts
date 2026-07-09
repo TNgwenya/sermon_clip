@@ -1,3 +1,10 @@
+import {
+  buildCanonicalPlatformPayloads,
+  listCanonicalPlatformPayloads,
+  normalizePublishingHashtags,
+  type CanonicalPlatformPayload,
+} from "@/lib/publishingPayload";
+
 export type PlatformCaptionVariant = {
   platform: "TikTok" | "Instagram" | "YouTube Shorts" | "Facebook";
   label: string;
@@ -27,6 +34,7 @@ export type ReadyToPostPackage = {
   sizeLabel: string | null;
   variants: PlatformCaptionVariant[];
   handoffs: PlatformUploadHandoff[];
+  platformPayloads: CanonicalPlatformPayload[];
 };
 
 export type ReadyQueueStatus = {
@@ -47,17 +55,7 @@ const PLATFORM_UPLOAD_URLS: Record<PostingPlatform, string> = {
 };
 
 export function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const normalized = value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0)
-    .map((item) => (item.startsWith("#") ? item : `#${item.replace(/^#+/, "")}`));
-
-  return Array.from(new Set(normalized));
+  return normalizePublishingHashtags(value);
 }
 
 export function sanitizePastorFacingQualityText(value: string | null | undefined): string | null {
@@ -150,66 +148,44 @@ export function buildPlatformCaptionVariants(input: {
   title: string;
   hook: string;
   caption: string;
+  shortCaption?: string | null;
+  platformCaption?: string | null;
   hashtags: string[];
   intendedAudience?: string | null;
 }): PlatformCaptionVariant[] {
-  const hashtags = input.hashtags.join(" ");
-  const baseCaption = `${input.caption}${hashtags ? `\n\n${hashtags}` : ""}`;
-  const audience = input.intendedAudience ? ` For ${input.intendedAudience.toLowerCase()}.` : "";
-  const hook = input.hook.trim() || input.title;
-
-  return [
-    {
-      platform: "TikTok",
-      label: "TikTok caption",
-      text: `${hook}\n\n${baseCaption}`,
-    },
-    {
-      platform: "Instagram",
-      label: "Instagram caption",
-      text: `${baseCaption}${audience}`,
-    },
-    {
-      platform: "YouTube Shorts",
-      label: "YouTube Shorts title",
-      text: input.title.length > 80 ? `${input.title.slice(0, 77)}...` : input.title,
-    },
-    {
-      platform: "Facebook",
-      label: "Facebook caption",
-      text: `${input.caption}\n\nWatch and share with someone who needs encouragement today.${hashtags ? `\n\n${hashtags}` : ""}`,
-    },
-  ];
-}
-
-function buildBaseCaption(input: {
-  caption: string;
-  hashtags: string[];
-}): string {
-  const hashtags = input.hashtags.join(" ");
-  return `${input.caption}${hashtags ? `\n\n${hashtags}` : ""}`;
+  return listCanonicalPlatformPayloads({
+    ...input,
+    hashtags: input.hashtags,
+  }).map((payload) => ({
+    platform: payload.platform,
+    label: `${payload.platform} ${payload.primaryCopyLabel.toLowerCase()}`,
+    text: payload.primaryCopyText,
+  }));
 }
 
 export function buildPlatformUploadHandoffs(input: {
   title: string;
   hook: string;
   caption: string;
+  shortCaption?: string | null;
+  platformCaption?: string | null;
   hashtags: string[];
   intendedAudience?: string | null;
 }): PlatformUploadHandoff[] {
-  const variants = buildPlatformCaptionVariants(input);
-  const baseCaption = buildBaseCaption(input);
+  return buildPlatformUploadHandoffsFromPayloads(Object.values(buildCanonicalPlatformPayloads(input)));
+}
 
-  return variants.map((variant) => {
-    const isYouTube = variant.platform === "YouTube Shorts";
-    const titleText = isYouTube ? variant.text : input.title;
-    const captionText = isYouTube ? baseCaption : variant.text;
-    const primaryCopyLabel = isYouTube ? "Copy title" : "Copy caption";
-    const primaryCopyText = isYouTube ? titleText : captionText;
+function buildPlatformUploadHandoffsFromPayloads(payloads: CanonicalPlatformPayload[]): PlatformUploadHandoff[] {
+  return payloads.map((payload) => {
+    const isYouTube = payload.platform === "YouTube Shorts";
+    const titleText = payload.title;
+    const captionText = payload.caption;
+    const primaryCopyLabel = `Copy ${payload.primaryCopyLabel.toLowerCase()}`;
+    const primaryCopyText = payload.primaryCopyText;
     const checklistText = [
-      `${variant.platform} upload handoff`,
+      `${payload.platform} upload handoff`,
       "",
-      `Upload URL: ${PLATFORM_UPLOAD_URLS[variant.platform]}`,
+      `Upload URL: ${PLATFORM_UPLOAD_URLS[payload.platform]}`,
       `Video: download the prepared clip from this package.`,
       "",
       `Title: ${titleText}`,
@@ -219,7 +195,7 @@ export function buildPlatformUploadHandoffs(input: {
       "",
       "Checklist:",
       "1. Download the prepared video file.",
-      `2. Open ${variant.platform}.`,
+      `2. Open ${payload.platform}.`,
       `3. Upload the video.`,
       `4. Paste the ${isYouTube ? "title and caption" : "caption"}.`,
       "5. Confirm thumbnail, cover frame, crop, captions, and audio.",
@@ -227,8 +203,8 @@ export function buildPlatformUploadHandoffs(input: {
     ].join("\n");
 
     return {
-      platform: variant.platform,
-      uploadUrl: PLATFORM_UPLOAD_URLS[variant.platform],
+      platform: payload.platform,
+      uploadUrl: PLATFORM_UPLOAD_URLS[payload.platform],
       titleText,
       captionText,
       primaryCopyLabel,
@@ -261,6 +237,8 @@ export function buildReadyToPostPackage(input: {
   title: string;
   hook: string;
   caption: string;
+  shortCaption?: string | null;
+  platformCaption?: string | null;
   hashtags: unknown;
   estimatedBytes?: number | null;
   smartClipCategory?: string | null;
@@ -272,20 +250,21 @@ export function buildReadyToPostPackage(input: {
     input.smartClipCategory?.trim(),
     input.intendedAudience?.trim(),
   ].filter((item): item is string => Boolean(item));
-  const variants = buildPlatformCaptionVariants({
+  const platformPayloads = listCanonicalPlatformPayloads({
     title: input.title,
     hook: input.hook,
     caption: input.caption,
+    shortCaption: input.shortCaption,
+    platformCaption: input.platformCaption,
     hashtags,
     intendedAudience: input.intendedAudience,
   });
-  const handoffs = buildPlatformUploadHandoffs({
-    title: input.title,
-    hook: input.hook,
-    caption: input.caption,
-    hashtags,
-    intendedAudience: input.intendedAudience,
-  });
+  const variants = platformPayloads.map((payload) => ({
+    platform: payload.platform,
+    label: `${payload.platform} ${payload.primaryCopyLabel.toLowerCase()}`,
+    text: payload.primaryCopyText,
+  }));
+  const handoffs = buildPlatformUploadHandoffsFromPayloads(platformPayloads);
   const captionFileCount = variants.length + 1;
 
   return {
@@ -299,5 +278,6 @@ export function buildReadyToPostPackage(input: {
     sizeLabel: formatPackageSize(input.estimatedBytes),
     variants,
     handoffs,
+    platformPayloads,
   };
 }

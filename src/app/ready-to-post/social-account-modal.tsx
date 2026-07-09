@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { createPortal } from "react-dom";
 
 import type { PostingPlatform } from "@/lib/postingDrafts";
 import type { SocialAccount } from "@/lib/socialAccounts";
@@ -22,7 +23,7 @@ export function SocialAccountModal({ open, onClose, onCreated, onSynced }: Socia
   const [pending, setPending] = useState(false);
   const [syncPending, setSyncPending] = useState(false);
 
-  if (!open) {
+  if (!open || typeof document === "undefined") {
     return null;
   }
 
@@ -76,7 +77,7 @@ export function SocialAccountModal({ open, onClose, onCreated, onSynced }: Socia
     }
   }
 
-  return (
+  return createPortal(
     <div className="feature-modal-backdrop" role="presentation" onClick={onClose}>
       <section
         className="feature-modal social-account-modal"
@@ -139,6 +140,7 @@ export function SocialAccountModal({ open, onClose, onCreated, onSynced }: Socia
           </button>
         </div>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -1,11 +1,13 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 
-type ActionLink = {
+export type ActionLink = {
   label: string;
   href: string;
   variant?: "primary" | "secondary" | "tertiary";
 };
-import type { ReactNode } from "react";
+
+export type UiTone = "neutral" | "success" | "warning" | "danger" | "info" | "accent";
 
 type PageHeaderProps = {
   eyebrow?: string;
@@ -13,11 +15,12 @@ type PageHeaderProps = {
   description?: string;
   actions?: ActionLink[];
   meta?: ReactNode;
+  className?: string;
 };
 
-export function PageHeader({ eyebrow, title, description, actions, meta }: PageHeaderProps) {
+export function PageHeader({ eyebrow, title, description, actions, meta, className }: PageHeaderProps) {
   return (
-    <header className="page-header card stack-md">
+    <header className={`page-header card stack-md${className ? ` ${className}` : ""}`}>
       <div className="stack-sm">
         {eyebrow ? <p className="kicker">{eyebrow}</p> : null}
         <div className="page-header-title-row">
@@ -77,15 +80,20 @@ export function StatCard({ label, value, detail, tone = "neutral" }: StatCardPro
 }
 
 type EmptyStateProps = {
+  eyebrow?: string;
   title: string;
   description: string;
   action?: ActionLink;
+  className?: string;
+  icon?: ReactNode;
 };
 
-export function EmptyState({ title, description, action }: EmptyStateProps) {
+export function EmptyState({ eyebrow, title, description, action, className, icon }: EmptyStateProps) {
   return (
-    <div className="empty-state">
+    <div className={`empty-state${className ? ` ${className}` : ""}`}>
+      {icon ? <span className="empty-state-icon" aria-hidden="true">{icon}</span> : null}
       <div className="empty-state-copy stack-sm">
+        {eyebrow ? <p className="kicker">{eyebrow}</p> : null}
         <p className="empty-state-title">{title}</p>
         <p className="muted">{description}</p>
       </div>
@@ -100,11 +108,12 @@ export function EmptyState({ title, description, action }: EmptyStateProps) {
 
 type StatusBadgeProps = {
   children: React.ReactNode;
-  tone?: "neutral" | "success" | "warning" | "danger" | "info" | "accent";
+  tone?: UiTone;
+  className?: string;
 };
 
-export function StatusBadge({ children, tone = "neutral" }: StatusBadgeProps) {
-  return <span className={`pill tone-${tone}`}>{children}</span>;
+export function StatusBadge({ children, tone = "neutral", className }: StatusBadgeProps) {
+  return <span className={`pill tone-${tone}${className ? ` ${className}` : ""}`}>{children}</span>;
 }
 
 type ConfidenceBadgeProps = {
@@ -125,16 +134,17 @@ export function ConfidenceBadge({ score }: ConfidenceBadgeProps) {
 
 type ChipProps = {
   children: React.ReactNode;
-  tone?: "neutral" | "success" | "warning" | "danger" | "info" | "accent";
+  tone?: UiTone;
   size?: "sm" | "md";
+  className?: string;
 };
 
-export function Chip({ children, tone = "neutral", size = "md" }: ChipProps) {
-  return <span className={`chip tone-${tone} chip-${size}`}>{children}</span>;
+export function Chip({ children, tone = "neutral", size = "md", className }: ChipProps) {
+  return <span className={`chip tone-${tone} chip-${size}${className ? ` ${className}` : ""}`}>{children}</span>;
 }
 
-export function ActionBar({ children }: { children: React.ReactNode }) {
-  return <div className="action-bar">{children}</div>;
+export function ActionBar({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={`action-bar${className ? ` ${className}` : ""}`}>{children}</div>;
 }
 
 export function FilterPanel({ children }: { children: React.ReactNode }) {
@@ -143,4 +153,46 @@ export function FilterPanel({ children }: { children: React.ReactNode }) {
 
 export function DataListItem({ children }: { children: ReactNode }) {
   return <li className="data-list-item">{children}</li>;
+}
+
+type NoticeProps = {
+  children: ReactNode;
+  title?: string;
+  tone?: Exclude<UiTone, "accent">;
+  className?: string;
+  live?: boolean;
+};
+
+export function Notice({ children, title, tone = "neutral", className, live = false }: NoticeProps) {
+  return (
+    <div
+      className={`notice tone-${tone}${className ? ` ${className}` : ""}`}
+      role={tone === "danger" ? "alert" : live ? "status" : undefined}
+      aria-live={live && tone !== "danger" ? "polite" : undefined}
+    >
+      {title ? <strong>{title}</strong> : null}
+      <div>{children}</div>
+    </div>
+  );
+}
+
+export type WorkflowStepState = "complete" | "current" | "upcoming" | "attention";
+
+type WorkflowProgressProps = {
+  steps: Array<{ label: string; state: WorkflowStepState }>;
+  label?: string;
+  className?: string;
+};
+
+export function WorkflowProgress({ steps, label = "Sermon clip workflow", className }: WorkflowProgressProps) {
+  return (
+    <ol className={`workflow-progress${className ? ` ${className}` : ""}`} aria-label={label}>
+      {steps.map((step, index) => (
+        <li className={`workflow-progress-step is-${step.state}`} key={`${step.label}-${index}`} aria-current={step.state === "current" ? "step" : undefined}>
+          <span className="workflow-progress-marker" aria-hidden="true">{step.state === "complete" ? "✓" : index + 1}</span>
+          <span>{step.label}</span>
+        </li>
+      ))}
+    </ol>
+  );
 }

@@ -1,0 +1,169 @@
+.card {
+  overflow: hidden;
+}
+
+.introRow,
+.actionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.option {
+  position: relative;
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.option:hover {
+  border-color: rgba(117, 217, 184, 0.42);
+  background: rgba(117, 217, 184, 0.045);
+  transform: translateY(-1px);
+}
+
+.option:focus-within {
+  outline: 2px solid #75d9b8;
+  outline-offset: 2px;
+}
+
+.selected {
+  border-color: rgba(117, 217, 184, 0.72);
+  background: rgba(117, 217, 184, 0.08);
+}
+
+.radio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.imageWrap {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+  aspect-ratio: 9 / 16;
+  border-radius: 0.7rem;
+  background: #111317;
+  place-items: center;
+}
+
+.image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.previewFallback {
+  max-width: 8rem;
+  padding: 0.75rem;
+  color: #a6aab4;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.check {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 999px;
+  color: #08241c;
+  background: #75d9b8;
+  box-shadow: 0 0.35rem 1rem rgba(0, 0, 0, 0.3);
+  font-weight: 800;
+  place-items: center;
+}
+
+.optionCopy {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.2rem 0.5rem;
+  min-width: 0;
+}
+
+.optionCopy > span,
+.optionCopy > small {
+  color: #9ca2ae;
+}
+
+.optionCopy > span {
+  font-variant-numeric: tabular-nums;
+}
+
+.optionCopy > small {
+  grid-column: 1 / -1;
+  line-height: 1.35;
+}
+
+.feedback {
+  min-height: 1.4rem;
+  color: #b8c1ca;
+  font-size: 0.86rem;
+}
+
+.error {
+  color: #f5aaa5;
+}
+
+@media (max-width: 860px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .introRow,
+  .actionRow {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .grid {
+    gap: 0.55rem;
+  }
+
+  .option {
+    padding: 0.4rem;
+    border-radius: 0.8rem;
+  }
+
+  .actionRow button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .option {
+    transition: none;
+  }
+}
+

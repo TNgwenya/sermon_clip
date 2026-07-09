@@ -3,8 +3,13 @@ import { readFile } from "node:fs/promises";
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
-import { ensureClipThumbnail } from "@/server/agents/clipThumbnailService";
+import {
+  ensureClipThumbnail,
+  generateClipThumbnailPreview,
+} from "@/server/agents/clipThumbnailService";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+
+export const runtime = "nodejs";
 
 function fallbackPoster(title: string): NextResponse {
   const safeTitle = title
@@ -55,7 +60,24 @@ export async function GET(
       overlayVideoPath: true,
       exportedFilePath: true,
       captionedVideoPath: true,
+      renderFreshness: true,
+      overlayFreshness: true,
+      captionBurnFreshness: true,
+      exportFreshness: true,
+      renderedAt: true,
+      overlayRenderedAt: true,
+      captionBurnedAt: true,
+      exportedAt: true,
+      renderAssetVersion: true,
+      overlayAssetVersion: true,
+      captionBurnAssetVersion: true,
+      exportAssetVersion: true,
+      startTimeSeconds: true,
+      endTimeSeconds: true,
+      durationSeconds: true,
+      captionData: true,
       thumbnailPath: true,
+      thumbnailError: true,
     },
   });
 
@@ -67,6 +89,35 @@ export async function GET(
     return fallbackPoster(clip.title);
   }
 
+  const requestedTime = new URL(request.url).searchParams.get("at");
+  if (requestedTime !== null) {
+    const timeSeconds = Number(requestedTime);
+    if (!Number.isFinite(timeSeconds) || timeSeconds < 0) {
+      return NextResponse.json(
+        { error: "Cover frame time must be a positive number of seconds." },
+        { status: 400, headers: { "Cache-Control": "private, no-store" } },
+      );
+    }
+
+    try {
+      const preview = await generateClipThumbnailPreview(clip, { timeSeconds });
+      if (!preview) {
+        return fallbackPoster(clip.title);
+      }
+
+      return new NextResponse(new Uint8Array(preview.image), {
+        status: 200,
+        headers: {
+          "Content-Type": preview.contentType,
+          "Content-Disposition": `inline; filename="${clip.id}-cover-${Math.round(preview.timeSeconds * 1000)}.jpg"`,
+          "Cache-Control": "private, max-age=300",
+        },
+      });
+    } catch {
+      return fallbackPoster(clip.title);
+    }
+  }
+
   const thumbnail = await ensureClipThumbnail(clip, { includeImage: true });
   if (thumbnail.webpPath && request.headers.get("accept")?.includes("image/webp")) {
     const webpImage = await readFile(/* turbopackIgnore: true */ thumbnail.webpPath);
@@ -75,7 +126,7 @@ export async function GET(
       headers: {
         "Content-Type": "image/webp",
         "Content-Disposition": `inline; filename="${clip.id}.webp"`,
-        "Cache-Control": "public, max-age=3600",
+        "Cache-Control": "private, max-age=3600",
       },
     });
   }
@@ -86,7 +137,7 @@ export async function GET(
       headers: {
         "Content-Type": "image/jpeg",
         "Content-Disposition": `inline; filename="${clip.id}.jpg"`,
-        "Cache-Control": "public, max-age=3600",
+        "Cache-Control": "private, max-age=3600",
       },
     });
   }

@@ -46,11 +46,27 @@ export type ScheduledPost = {
   createdAt: string;
 };
 
-export type ManualPublishingStatus = "READY_FOR_MEDIA_TEAM" | "POSTED" | "FAILED" | "SKIPPED";
-export type ScheduledPostAction = "POST_NOW";
+export type ManualPublishingStatus = "POSTED" | "SKIPPED";
+export type RestorablePublishingStatus = "PLANNED" | "READY_FOR_MEDIA_TEAM" | "FAILED" | "PRIVATE_ONLY_UNVERIFIED" | "SKIPPED";
+export type ScheduledPostAction = "POST_NOW" | "RESTORE_PREVIOUS";
 
-const MANUAL_PUBLISHING_STATUSES: ManualPublishingStatus[] = ["READY_FOR_MEDIA_TEAM", "POSTED", "FAILED", "SKIPPED"];
-const SCHEDULED_POST_ACTIONS: ScheduledPostAction[] = ["POST_NOW"];
+export class ScheduledPostMutationConflictError extends Error {
+  constructor() {
+    super("This post is already being sent to the platform. Wait for publishing to finish, then refresh its status.");
+    this.name = "ScheduledPostMutationConflictError";
+  }
+}
+
+const MANUAL_PUBLISHING_STATUSES: ManualPublishingStatus[] = ["POSTED", "SKIPPED"];
+const RESTORABLE_PUBLISHING_STATUSES: RestorablePublishingStatus[] = [
+  "PLANNED",
+  "READY_FOR_MEDIA_TEAM",
+  "FAILED",
+  "PRIVATE_ONLY_UNVERIFIED",
+  "SKIPPED",
+];
+const SCHEDULED_POST_ACTIONS: ScheduledPostAction[] = ["POST_NOW", "RESTORE_PREVIOUS"];
+const STALE_POSTING_CLAIM_MS = 15 * 60_000;
 const POSTING_PLATFORM_CREDENTIAL_PROVIDER: Partial<Record<PrismaPostingPlatform, SocialConnectorProvider>> = {
   FACEBOOK: "META_FACEBOOK",
   INSTAGRAM: "META_INSTAGRAM",
@@ -184,6 +200,7 @@ function toScheduledPost(input: {
 }
 
 export async function listScheduledPosts(): Promise<ScheduledPost[]> {
+  await recoverStaleScheduledPostClaims();
   const posts = await prisma.scheduledPost.findMany({
     include: {
       socialAccount: {
@@ -202,6 +219,24 @@ export async function listScheduledPosts(): Promise<ScheduledPost[]> {
   return posts.map(toScheduledPost);
 }
 
+export async function recoverStaleScheduledPostClaims(now = new Date()): Promise<number> {
+  const recovered = await prisma.scheduledPost.updateMany({
+    where: {
+      status: "POSTING",
+      claimedAt: { lt: new Date(now.getTime() - STALE_POSTING_CLAIM_MS) },
+    },
+    data: {
+      status: "PRIVATE_ONLY_UNVERIFIED",
+      workerStatus: "FAILED",
+      claimedAt: null,
+      workerId: null,
+      publishError: "Publishing confirmation was interrupted. Check the platform before retrying this post.",
+    },
+  });
+
+  return recovered.count;
+}
+
 export function normalizeManualPublishingStatus(value: unknown): ManualPublishingStatus | null {
   return typeof value === "string" && MANUAL_PUBLISHING_STATUSES.includes(value as ManualPublishingStatus)
     ? value as ManualPublishingStatus
@@ -214,22 +249,82 @@ export function normalizeScheduledPostAction(value: unknown): ScheduledPostActio
     : null;
 }
 
+export function normalizeRestorablePublishingStatus(value: unknown): RestorablePublishingStatus | null {
+  return typeof value === "string" && RESTORABLE_PUBLISHING_STATUSES.includes(value as RestorablePublishingStatus)
+    ? value as RestorablePublishingStatus
+    : null;
+}
+
+function workerStatusForEditableStatus(status: ManualPublishingStatus | RestorablePublishingStatus): PrismaScheduledPostWorkerStatus {
+  if (status === "FAILED") return "FAILED";
+  if (status === "READY_FOR_MEDIA_TEAM" || status === "PLANNED") return "IDLE";
+  return "SUCCEEDED";
+}
+
+export function isScheduledPostMutationLocked(input: {
+  status: PrismaScheduledPostStatus;
+  claimedAt: Date | null;
+  workerStatus: PrismaScheduledPostWorkerStatus;
+}): boolean {
+  return input.status === "POSTING"
+    || Boolean(input.claimedAt)
+    || input.workerStatus === "CLAIMED"
+    || input.workerStatus === "POSTING";
+}
+
+export function isScheduledPostReschedulable(input: {
+  status: PrismaScheduledPostStatus;
+  externalPostId: string | null;
+  publishedUrl: string | null;
+  finalPrivacyStatus: string | null;
+}): boolean {
+  return (input.status === "PLANNED" || input.status === "READY_FOR_MEDIA_TEAM" || input.status === "FAILED")
+    && !input.externalPostId
+    && !input.publishedUrl
+    && !input.finalPrivacyStatus;
+}
+
+async function mutationAppliedOrThrowConflict(id: string, count: number): Promise<boolean> {
+  if (count > 0) {
+    return true;
+  }
+
+  const existing = await prisma.scheduledPost.findUnique({
+    where: { id },
+    select: { status: true, claimedAt: true, workerStatus: true },
+  });
+  if (existing && isScheduledPostMutationLocked(existing)) {
+    throw new ScheduledPostMutationConflictError();
+  }
+
+  return false;
+}
+
 export async function updateScheduledPostStatus(input: {
   id: string;
   status: ManualPublishingStatus;
 }): Promise<ScheduledPost | null> {
-  const existing = await prisma.scheduledPost.findUnique({
-    where: { id: input.id },
-    select: { id: true, automationMode: true },
+  const updateResult = await prisma.scheduledPost.updateMany({
+    where: {
+      id: input.id,
+      status: input.status === "SKIPPED"
+        ? { notIn: ["POSTING", "POSTED"] }
+        : { not: "POSTING" },
+      claimedAt: null,
+      workerStatus: { notIn: ["CLAIMED", "POSTING"] },
+    },
+    data: {
+      status: input.status,
+      workerStatus: workerStatusForEditableStatus(input.status),
+      claimedAt: null,
+    },
   });
-
-  if (!existing) {
+  if (!(await mutationAppliedOrThrowConflict(input.id, updateResult.count))) {
     return null;
   }
 
-  const post = await prisma.scheduledPost.update({
+  const post = await prisma.scheduledPost.findUnique({
     where: { id: input.id },
-    data: { status: input.status },
     include: {
       socialAccount: {
         select: {
@@ -242,7 +337,54 @@ export async function updateScheduledPostStatus(input: {
     },
   });
 
-  return toScheduledPost(post);
+  return post ? toScheduledPost(post) : null;
+}
+
+export async function restoreScheduledPostStatus(input: {
+  id: string;
+  status: RestorablePublishingStatus;
+  expectedCurrentStatus: "POSTED" | "SKIPPED";
+}): Promise<ScheduledPost | null> {
+  const updateResult = await prisma.scheduledPost.updateMany({
+    where: {
+      id: input.id,
+      status: input.expectedCurrentStatus,
+      attemptCount: 0,
+      claimedAt: null,
+      workerStatus: { notIn: ["CLAIMED", "POSTING"] },
+      externalPostId: null,
+      publishedUrl: null,
+      finalPrivacyStatus: null,
+      ...(input.status === "PLANNED" ? { automationMode: "AUTOMATIC" as const } : {}),
+    },
+    data: {
+      status: input.status,
+      workerStatus: workerStatusForEditableStatus(input.status),
+      claimedAt: null,
+      ...(input.status === "PLANNED" || input.status === "READY_FOR_MEDIA_TEAM"
+        ? { workerId: null, publishError: null }
+        : {}),
+    },
+  });
+  if (updateResult.count === 0) {
+    return null;
+  }
+
+  const post = await prisma.scheduledPost.findUnique({
+    where: { id: input.id },
+    include: {
+      socialAccount: {
+        select: {
+          label: true,
+          externalProvider: true,
+          externalAccountId: true,
+          externalPlatform: true,
+        },
+      },
+    },
+  });
+
+  return post ? toScheduledPost(post) : null;
 }
 
 export async function updateScheduledPostSchedule(input: {
@@ -259,8 +401,16 @@ export async function updateScheduledPostSchedule(input: {
     return null;
   }
 
-  const post = await prisma.scheduledPost.update({
-    where: { id: input.id },
+  const updateResult = await prisma.scheduledPost.updateMany({
+    where: {
+      id: input.id,
+      status: { in: ["PLANNED", "READY_FOR_MEDIA_TEAM", "FAILED"] },
+      claimedAt: null,
+      workerStatus: { notIn: ["CLAIMED", "POSTING"] },
+      externalPostId: null,
+      publishedUrl: null,
+      finalPrivacyStatus: null,
+    },
     data: {
       scheduledFor: input.scheduledFor,
       postingSlot: new Intl.DateTimeFormat("en", {
@@ -279,6 +429,13 @@ export async function updateScheduledPostSchedule(input: {
         ? { status: "PLANNED" as const }
         : {}),
     },
+  });
+  if (!(await mutationAppliedOrThrowConflict(input.id, updateResult.count))) {
+    return null;
+  }
+
+  const post = await prisma.scheduledPost.findUnique({
+    where: { id: input.id },
     include: {
       socialAccount: {
         select: {
@@ -291,18 +448,26 @@ export async function updateScheduledPostSchedule(input: {
     },
   });
 
-  return toScheduledPost(post);
+  return post ? toScheduledPost(post) : null;
 }
 
 export async function deleteScheduledPost(input: {
   id: string;
 }): Promise<boolean> {
-  const deleted = await prisma.scheduledPost.delete({
-    where: { id: input.id },
-    select: { id: true },
-  }).catch(() => null);
+  const deleted = await prisma.scheduledPost.deleteMany({
+    where: {
+      id: input.id,
+      status: { in: ["PLANNED", "READY_FOR_MEDIA_TEAM", "FAILED", "SKIPPED"] },
+      attemptCount: 0,
+      claimedAt: null,
+      workerStatus: { notIn: ["CLAIMED", "POSTING"] },
+      externalPostId: null,
+      publishedUrl: null,
+      finalPrivacyStatus: null,
+    },
+  });
 
-  return Boolean(deleted);
+  return mutationAppliedOrThrowConflict(input.id, deleted.count);
 }
 
 export async function postScheduledPostNow(input: {
@@ -316,6 +481,11 @@ export async function postScheduledPostNow(input: {
       id: input.id,
       automationMode: "AUTOMATIC",
       status: { in: ["PLANNED", "FAILED"] },
+      externalPostId: null,
+      publishedUrl: null,
+      finalPrivacyStatus: null,
+      claimedAt: null,
+      workerStatus: { notIn: ["CLAIMED", "POSTING"] },
     },
     data: {
       status: "PLANNED",
@@ -374,6 +544,8 @@ export async function listUpcomingAutomationPosts(input: {
   const now = input.now ?? new Date();
   const windowMinutes = input.windowMinutes ?? 60 * 24 * 7;
   const windowEnd = new Date(now.getTime() + windowMinutes * 60_000);
+
+  await recoverStaleScheduledPostClaims(now);
 
   const posts = await prisma.scheduledPost.findMany({
     where: {
@@ -498,12 +670,63 @@ export async function claimScheduledPost(input: {
   return post ? toScheduledPost(post) : null;
 }
 
+export async function renewScheduledPostClaim(input: {
+  id: string;
+  workerId: string;
+  now?: Date;
+}): Promise<boolean> {
+  const renewed = await prisma.scheduledPost.updateMany({
+    where: {
+      id: input.id,
+      status: "POSTING",
+      workerId: input.workerId,
+      claimedAt: { not: null },
+    },
+    data: {
+      workerStatus: "POSTING",
+      claimedAt: input.now ?? new Date(),
+    },
+  });
+
+  return renewed.count > 0;
+}
+
 export type CompleteScheduledPostStatus = "POSTED" | "FAILED" | "PRIVATE_ONLY_UNVERIFIED" | "SKIPPED";
 
 export function normalizeCompleteScheduledPostStatus(value: unknown): CompleteScheduledPostStatus | null {
   return value === "POSTED" || value === "FAILED" || value === "PRIVATE_ONLY_UNVERIFIED" || value === "SKIPPED"
     ? value
     : null;
+}
+
+export function normalizeWorkerCompletionReceipt(input: {
+  status: CompleteScheduledPostStatus;
+  externalPostId?: string | null;
+  publishedUrl?: string | null;
+  publishError?: string | null;
+  finalPrivacyStatus?: string | null;
+}): { status: CompleteScheduledPostStatus; publishError: string | null } {
+  const finalState = input.finalPrivacyStatus?.trim().toLowerCase() ?? "";
+  const unverifiedFinalStates = new Set([
+    "accepted",
+    "pending",
+    "processing",
+    "private",
+    "scheduled",
+    "self_only",
+    "unknown",
+    "unpublished",
+  ]);
+  const hasPublicationEvidence = Boolean(input.externalPostId?.trim() || input.publishedUrl?.trim());
+  const shouldRequireVerification = input.status === "POSTED"
+    && (!hasPublicationEvidence || unverifiedFinalStates.has(finalState));
+
+  return {
+    status: shouldRequireVerification ? "PRIVATE_ONLY_UNVERIFIED" : input.status,
+    publishError: shouldRequireVerification
+      ? input.publishError?.trim() || "The platform received this upload, but public availability was not confirmed. Check the platform before retrying it."
+      : input.publishError?.trim() || null,
+  };
 }
 
 export async function completeScheduledPost(input: {
@@ -518,21 +741,55 @@ export async function completeScheduledPost(input: {
   mediaPublicUrl?: string | null;
   mediaUploadedAt?: Date | null;
 }): Promise<ScheduledPost | null> {
-  const post = await prisma.scheduledPost.update({
-    where: { id: input.id },
+  const completion = normalizeWorkerCompletionReceipt(input);
+  const updateResult = await prisma.scheduledPost.updateMany({
+    where: {
+      id: input.id,
+      status: "POSTING",
+      claimedAt: { not: null },
+      workerId: input.workerId,
+    },
     data: {
-      status: input.status,
-      workerStatus: input.status === "FAILED" ? "FAILED" : "SUCCEEDED",
+      status: completion.status,
+      workerStatus: completion.status === "FAILED" ? "FAILED" : "SUCCEEDED",
       workerId: input.workerId,
       claimedAt: null,
       externalPostId: input.externalPostId || null,
       publishedUrl: input.publishedUrl || null,
-      publishError: input.publishError || null,
+      publishError: completion.publishError,
       finalPrivacyStatus: input.finalPrivacyStatus || null,
       mediaObjectKey: input.mediaObjectKey || undefined,
       mediaPublicUrl: input.mediaPublicUrl || undefined,
       mediaUploadedAt: input.mediaUploadedAt || undefined,
     },
+  });
+  if (updateResult.count === 0) {
+    const alreadyCompleted = await prisma.scheduledPost.findUnique({
+      where: { id: input.id },
+      include: {
+        socialAccount: {
+          select: {
+            label: true,
+            externalProvider: true,
+            externalAccountId: true,
+            externalPlatform: true,
+          },
+        },
+      },
+    });
+    if (
+      alreadyCompleted
+      && alreadyCompleted.status === completion.status
+      && alreadyCompleted.workerId === input.workerId
+      && (input.externalPostId == null || alreadyCompleted.externalPostId === input.externalPostId)
+    ) {
+      return toScheduledPost(alreadyCompleted);
+    }
+    return null;
+  }
+
+  const post = await prisma.scheduledPost.findUnique({
+    where: { id: input.id },
     include: {
       socialAccount: {
         select: {
@@ -545,11 +802,11 @@ export async function completeScheduledPost(input: {
     },
   }).catch(() => null);
 
-  if (post && input.status === "FAILED") {
+  if (post && completion.status === "FAILED") {
     await markScheduledPostSocialAccountNeedsReview({
       socialAccountId: post.socialAccountId,
       platform: post.platform,
-      publishError: input.publishError,
+      publishError: completion.publishError,
     });
   }
 
@@ -559,4 +816,5 @@ export async function completeScheduledPost(input: {
 export const __scheduledPostsTestUtils = {
   isSocialAuthFailure,
   ACTIVE_AUTOMATION_STATUSES,
+  STALE_POSTING_CLAIM_MS,
 };

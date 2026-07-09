@@ -466,6 +466,23 @@ describe("B-roll overlay cards", () => {
     expect(filter).toContain("[3:v]format=rgba");
   });
 
+  it("limits intro and outro brand cards to their renderer-backed time windows", () => {
+    const filter = buildOverlayFilterComplex({
+      hasBrandingOverlay: true,
+      timedBrandingLayers: [
+        { inputIndex: 2, startSeconds: 0, endSeconds: 2.5 },
+        { inputIndex: 3, startSeconds: 57, endSeconds: 60 },
+      ],
+      brollOverlaySpecs: [],
+      brollOverlayInputStartIndex: null,
+      hookOverlaySpec: null,
+      hookOverlayInputIndex: null,
+    });
+
+    expect(filter).toContain("[2:v]overlay=0:0:enable='between(t,0.000,2.500)'");
+    expect(filter).toContain("[3:v]overlay=0:0:enable='between(t,57.000,60.000)'");
+  });
+
   it("renders an SVG card with escaped text", () => {
     const [spec] = extractBrollOverlaySpecs({
       brollLayer: {

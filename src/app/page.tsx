@@ -302,95 +302,102 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
         : "Paste a sermon link or upload a service video to begin.";
 
   return (
-    <main className="media-workspace home-workspace stack-lg">
-      <header className="workspace-topbar home-hero">
+    <main id="main-content" className="media-workspace home-workspace premium-dashboard stack-lg">
+      <header className="home-hero premium-home-hero">
         <div className="stack-sm">
-          <p className="kicker">Sermon Clip</p>
-          <h1>Sermon command center.</h1>
+          <p className="kicker">Sermon content studio</p>
+          <h1>Your message.<br />Ready to move.</h1>
+          <p className="muted">
+            Find the ministry moments worth sharing, shape them with care, and prepare every clip for the week ahead.
+          </p>
         </div>
-        <div className="topbar-actions">
-          <Link href="/sermons/new" className="button primary">Create clips</Link>
-          <Link href="/ready-to-post" className="button secondary">Ready to post</Link>
-        </div>
+        <Link href="/sermons/new" className="button primary home-create-action">Create from a sermon</Link>
       </header>
 
-      <section className="home-command-grid" aria-label="Workspace command center">
-        <article className={`home-priority-card priority-${priorityState}`}>
-          <div className="stack-sm">
-            <p className="kicker">
-              {priorityState === "attention"
-                ? "Needs attention"
-                : priorityState === "ready"
-                  ? "Ready to post"
-                  : priorityState === "resume"
-                    ? "Resume"
-                    : "Start here"}
-            </p>
+      <nav className="workflow-spine" aria-label="Sermon Clip workflow">
+        <span className="is-current"><strong>01</strong> Add sermon</span>
+        <span><strong>02</strong> Analyze</span>
+        <span><strong>03</strong> Review clips</span>
+        <span><strong>04</strong> Edit &amp; brand</span>
+        <span><strong>05</strong> Prepare &amp; post</span>
+      </nav>
+
+      <section className="home-command-grid premium-command-grid" aria-label="Your next step">
+        <article className={`home-priority-card premium-priority-card priority-${priorityState}`}>
+          <div className="stack-md">
+            <div className="priority-heading-row">
+              <p className="kicker">
+                {priorityState === "attention"
+                  ? "Needs your attention"
+                  : priorityState === "ready"
+                    ? "Ready when you are"
+                    : priorityState === "resume"
+                      ? "Continue your work"
+                      : "Begin here"}
+              </p>
+              <span className="priority-context">Next best action</span>
+            </div>
             <h2>{priorityTitle}</h2>
-            <p className="muted">{priorityDetail}</p>
+            <p className="muted priority-detail">{priorityDetail}</p>
           </div>
           <div className="home-priority-footer">
-            <div className="home-priority-metrics">
+            <Link href={priorityActionHref} className="button primary">{priorityActionLabel}</Link>
+            <div className="home-priority-metrics" aria-label="Workspace signals">
               <span>
                 <strong>{needsAttentionCount}</strong>
                 <small>need attention</small>
               </span>
               <span>
                 <strong>{processingCount}</strong>
-                <small>processing</small>
+                <small>in progress</small>
               </span>
               <span>
                 <strong>{exportedCount || metrics.clipsExported}</strong>
-                <small>downloads</small>
+                <small>prepared</small>
               </span>
             </div>
-            <Link href={priorityActionHref} className="button primary">{priorityActionLabel}</Link>
           </div>
         </article>
 
-        <form action="/sermons/new" method="get" className="home-quick-start stack-md">
+        <form action="/sermons/new" method="get" className="home-quick-start premium-quick-start stack-md">
           <div className="stack-sm">
-            <p className="kicker">Quick start</p>
-            <h2>Paste a sermon video link</h2>
+            <p className="kicker">Fast import</p>
+            <h2>Bring in Sunday’s sermon.</h2>
+            <p className="muted">Paste a public video link, or upload the recording from your team.</p>
           </div>
-          <div className="link-input-shell">
-            <span className="input-icon">Link</span>
-            <input name="youtubeUrl" type="url" placeholder="Paste sermon video link" />
-          </div>
+          <label className="link-input-shell premium-link-input" htmlFor="dashboard-sermon-url">
+            <span className="input-icon" aria-hidden="true">URL</span>
+            <input id="dashboard-sermon-url" name="youtubeUrl" type="url" placeholder="Paste a YouTube or sermon link" />
+          </label>
           <div className="upload-command-actions">
-            <button className="button primary command-cta" type="submit">Get sermon clips</button>
-            <Link href="/sermons/new" className="button tertiary">Upload video</Link>
+            <button className="button primary command-cta" type="submit">Continue with link</button>
+            <Link href="/sermons/new" className="button tertiary">Upload a video</Link>
           </div>
+          <p className="small muted quick-start-assurance">You will review the sermon details before analysis begins.</p>
         </form>
       </section>
 
-      <section className="dashboard-command-strip home-signal-strip" aria-label="Workspace summary">
-        <StatCard label="Sermons" value={sermons.length} detail="In workspace" />
-        <StatCard label="Suggested clips" value={metrics.clipsGenerated} detail="Found moments" tone="accent" />
-        <StatCard label="Post-ready" value={postReadyCount} detail="Passed checks" tone="success" />
-        <StatCard label="Prepared files" value={exportedCount || metrics.clipsExported} detail="Downloads" tone="success" />
-      </section>
-
       {processingCount > 0 ? (
-      <section className="home-queue-band">
-        <SectionCard title="Background work">
-          <div className={processingCount > 0 ? "live-refresh-panel is-live" : "live-refresh-panel is-paused"}>
-            <div>
-              <p className="kicker">{processingCount > 0 ? "Working now" : "Quiet queue"}</p>
-              <strong>{processingCount > 0 ? `${processingCount} item(s) in progress` : "No active processing"}</strong>
-            </div>
-            <Link href="/sermons" className="button secondary">View sermons</Link>
+        <section className="home-processing-note" aria-live="polite">
+          <span className="processing-pulse" aria-hidden="true" />
+          <div>
+            <strong>{processingCount} {processingCount === 1 ? "sermon is" : "sermons are"} being prepared</strong>
+            <p className="muted small">You can leave this page. Sermon Clip will keep working.</p>
           </div>
-        </SectionCard>
-      </section>
+          <Link href="/sermons" className="button tertiary">See progress</Link>
+        </section>
       ) : null}
 
-      <SectionCard title="Top clips to review">
+      <SectionCard
+        title="Moments worth sharing"
+        description="Your strongest recent clips, ranked to help your team review with confidence."
+        className="home-featured-clips"
+      >
         {topClips.length === 0 ? (
           <EmptyState
-            title="No ranked clips yet"
-            description="Create or process a sermon to see ranked clip cards here."
-            action={{ label: "Create clips", href: "/sermons/new", variant: "primary" }}
+            title="Your strongest moments will appear here"
+            description="Add a sermon and Sermon Clip will surface the moments most likely to stand on their own."
+            action={{ label: "Add your first sermon", href: "/sermons/new", variant: "primary" }}
           />
         ) : (
           <div className="dashboard-clip-grid">
@@ -421,11 +428,23 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
         )}
       </SectionCard>
 
-      <SectionCard title="Recent sermons">
+      <section className="home-signal-strip premium-signal-strip" aria-label="Studio overview">
+        <StatCard label="Sermons" value={sermons.length} detail="In your studio" />
+        <StatCard label="Moments found" value={metrics.clipsGenerated} detail="Suggested by Sermon Clip" tone="accent" />
+        <StatCard label="Post-ready" value={postReadyCount} detail="Passed review" tone="success" />
+        <StatCard label="Prepared" value={exportedCount || metrics.clipsExported} detail="Ready to download" tone="success" />
+      </section>
+
+      <SectionCard
+        title="Sermon library"
+        description="Return to recent messages, continue review, or prepare the next post."
+        className="home-sermon-library"
+      >
         {sermons.length === 0 ? (
           <EmptyState
-            title="No sermons found"
-            description="Once you create clips, your sermons will appear here."
+            title="Your sermon library is ready"
+            description="Add a sermon to begin building a reusable library of messages and clips."
+            action={{ label: "Add a sermon", href: "/sermons/new", variant: "primary" }}
           />
         ) : (
           <div className="dashboard-project-grid">

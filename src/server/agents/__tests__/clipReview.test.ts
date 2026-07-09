@@ -129,7 +129,7 @@ describe("clip review helpers", () => {
 
     expect(qualityView.rankLabel).toBe("Post pick #3");
     expect(qualityView.scoreLabel).toBe("7.5");
-    expect(qualityView.scoreSourceLabel).toBe("Legacy score");
+    expect(qualityView.scoreSourceLabel).toBe("Earlier estimate");
     expect(qualityView.actionLabel).toBe("Ready to review");
     expect(qualityView.hasQualityReview).toBe(false);
     expect(qualityView.reason).toContain("older clip");

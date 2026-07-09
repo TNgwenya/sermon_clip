@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
@@ -11,87 +12,84 @@ import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/c
 
 type ClipStudioPrepareButtonProps = {
   clipId: string;
+  clipStatus: "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
   hasPreparedMedia: boolean;
   serverNeedsUpdate: boolean;
 };
 
-function buildCompositionKey(value: unknown): string {
-  return JSON.stringify(value);
-}
-
-const PREPARE_STAGES = [
-  {
-    label: "Saving edits",
-    detail: "Locking in the current timing, captions, framing, and branding.",
-  },
-  {
-    label: "Rendering video",
-    detail: "Building the final clip from the selected sermon section.",
-  },
-  {
-    label: "Adding captions",
-    detail: "Preparing the on-video captions and styling.",
-  },
-  {
-    label: "Packaging download",
-    detail: "Creating the posting-ready video file.",
-  },
-] as const;
-
 export function ClipStudioPrepareButton({
   clipId,
+  clipStatus,
   hasPreparedMedia,
   serverNeedsUpdate,
 }: ClipStudioPrepareButtonProps) {
   const router = useRouter();
-  const { editPreview, exportSettings, brandingConfig } = useClipStudioPreview();
+  const {
+    editPreview,
+    exportSettings,
+    brandingConfig,
+    isDraftDirty,
+    markDraftSaved,
+  } = useClipStudioPreview();
   const [isPending, startTransition] = useTransition();
   const [result, setResult] = useState<PrepareClipStudioForPostingState | null>(null);
-  const [activeStageIndex, setActiveStageIndex] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-
-  const compositionSnapshot = useMemo(
-    () => ({
-      editPreview,
-      exportSettings,
-      brandingConfig,
-    }),
-    [brandingConfig, editPreview, exportSettings],
-  );
-  const compositionKey = useMemo(() => buildCompositionKey(compositionSnapshot), [compositionSnapshot]);
-  const [baselineCompositionKey, setBaselineCompositionKey] = useState(() => compositionKey);
-
-  const locallyChanged = baselineCompositionKey !== compositionKey;
-  const finalNeedsUpdate = hasPreparedMedia && (serverNeedsUpdate || locallyChanged);
-  const stateLabel = hasPreparedMedia
-    ? finalNeedsUpdate
-      ? "Final video needs updating"
-      : "Final video ready"
-    : "Ready to prepare";
   const canPrepare = editPreview.isTimingValid && editPreview.startSeconds !== null && editPreview.endSeconds !== null;
-  const activeStage = PREPARE_STAGES[activeStageIndex] ?? PREPARE_STAGES[0];
+  const finalNeedsUpdate = hasPreparedMedia && (serverNeedsUpdate || isDraftDirty);
+  const stateLabel = !canPrepare
+    ? "Timing needs attention"
+    : isDraftDirty
+      ? "Unsaved draft"
+      : hasPreparedMedia
+        ? serverNeedsUpdate
+          ? "Final video needs updating"
+          : "Final video ready"
+        : "Ready to prepare";
+  const stateToneClass = !canPrepare || isDraftDirty || serverNeedsUpdate
+    ? "tone-warning"
+    : hasPreparedMedia
+      ? "tone-success"
+      : "tone-info";
+  const actionLabel = hasPreparedMedia
+    ? finalNeedsUpdate
+      ? "Update final video"
+      : "Rebuild final video"
+    : clipStatus === "SUGGESTED" || clipStatus === "REJECTED"
+      ? "Approve & prepare final video"
+      : "Prepare final video";
+  const finalIsReady = hasPreparedMedia && !serverNeedsUpdate && !isDraftDirty;
+  const preparationChecklist = useMemo(
+    () => [
+      `${exportSettings.selectedFormats.length} video format${exportSettings.selectedFormats.length === 1 ? "" : "s"}`,
+      editPreview.applyCaptionsToClip ? "On-video captions" : "Video without captions",
+      exportSettings.manualCropKeyframes.length > 0 ? "Custom framing" : "Selected framing",
+      brandingConfig.enabled && brandingConfig.preset !== "NO_BRANDING" ? "Church branding" : "Clean video",
+    ],
+    [
+      brandingConfig.enabled,
+      brandingConfig.preset,
+      editPreview.applyCaptionsToClip,
+      exportSettings.manualCropKeyframes.length,
+      exportSettings.selectedFormats.length,
+    ],
+  );
 
   useEffect(() => {
     if (!isPending) {
       return undefined;
     }
 
-    const stageTimer = window.setInterval(() => {
-      setActiveStageIndex((current) => Math.min(current + 1, PREPARE_STAGES.length - 1));
-    }, 3200);
     const elapsedTimer = window.setInterval(() => {
       setElapsedSeconds((current) => current + 1);
     }, 1000);
 
     return () => {
-      window.clearInterval(stageTimer);
       window.clearInterval(elapsedTimer);
     };
   }, [isPending]);
 
   function prepareForPosting() {
     setResult(null);
-    setActiveStageIndex(0);
     setElapsedSeconds(0);
 
     if (!canPrepare) {
@@ -109,6 +107,8 @@ export function ClipStudioPrepareButton({
         editPreview: {
           startSeconds: editPreview.startSeconds,
           endSeconds: editPreview.endSeconds,
+          title: editPreview.title,
+          editorialHook: editPreview.editorialHook,
           mainCaption: editPreview.mainCaption,
           shortCaption: editPreview.shortCaption,
           platformCaption: editPreview.platformCaption,
@@ -137,7 +137,7 @@ export function ClipStudioPrepareButton({
 
       setResult(nextResult);
       if (nextResult.success) {
-        setBaselineCompositionKey(compositionKey);
+        markDraftSaved();
         router.refresh();
       }
     });
@@ -146,25 +146,41 @@ export function ClipStudioPrepareButton({
   return (
     <div className="clip-studio-prepare-control">
       <div className="clip-studio-prepare-state" aria-live="polite">
-        <span className={finalNeedsUpdate ? "status-pill tone-warning" : "status-pill tone-success"}>
+        <span className={`status-pill ${stateToneClass}`}>
           {stateLabel}
         </span>
       </div>
-      <button
-        type="button"
-        className={`button primary clip-studio-prepare-button${isPending ? " is-preparing" : ""}`}
-        onClick={prepareForPosting}
-        disabled={isPending || !canPrepare}
-        aria-busy={isPending}
-      >
-        <span className="clip-studio-prepare-button-content">
-          <span
-            className={isPending ? "clip-studio-prepare-spinner" : "clip-studio-prepare-idle-mark"}
-            aria-hidden="true"
-          />
-          <span>{isPending ? "Preparing final video" : "Prepare for Posting"}</span>
-        </span>
-      </button>
+      {finalIsReady && !isPending ? (
+        <div className="clip-studio-ready-actions">
+          <Link className="button primary" href={`/ready-to-post?clipId=${clipId}`}>
+            Continue to Publishing Desk
+          </Link>
+          <button
+            type="button"
+            className="button tertiary"
+            onClick={prepareForPosting}
+            disabled={!canPrepare}
+          >
+            Rebuild video
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className={`button primary clip-studio-prepare-button${isPending ? " is-preparing" : ""}`}
+          onClick={prepareForPosting}
+          disabled={isPending || !canPrepare}
+          aria-busy={isPending}
+        >
+          <span className="clip-studio-prepare-button-content">
+            <span
+              className={isPending ? "clip-studio-prepare-spinner" : "clip-studio-prepare-idle-mark"}
+              aria-hidden="true"
+            />
+            <span>{isPending ? "Preparing final video" : actionLabel}</span>
+          </span>
+        </button>
+      )}
       {isPending ? (
         <div className="clip-studio-prepare-loader" role="status" aria-live="polite">
           <div className="clip-studio-prepare-loader-head">
@@ -172,21 +188,18 @@ export function ClipStudioPrepareButton({
               <span />
             </span>
             <div>
-              <strong>{activeStage.label}</strong>
-              <p>{activeStage.detail}</p>
+              <strong>Preparing your final video</strong>
+              <p>Saving this draft and building the selected output. This can take a few minutes.</p>
             </div>
-            <time>{elapsedSeconds}s</time>
+            <time aria-label={`${elapsedSeconds} seconds elapsed`}>{elapsedSeconds}s</time>
           </div>
           <div className="clip-studio-prepare-track" aria-hidden="true">
             <span />
           </div>
-          <div className="clip-studio-prepare-progress" aria-label="Preparation stages">
-            {PREPARE_STAGES.map((stage, index) => (
-              <span
-                key={stage.label}
-                className={index <= activeStageIndex ? "is-active" : ""}
-              >
-                {stage.label}
+          <div className="clip-studio-prepare-progress" aria-label="What will be prepared">
+            {preparationChecklist.map((item) => (
+              <span key={item} className="is-active">
+                {item}
               </span>
             ))}
           </div>

@@ -5,7 +5,20 @@ import path from "node:path";
 import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import { listBestPreviewCandidates, type ClipPreviewPaths } from "@/lib/clipPreview";
+import {
+  buildCoverFrameSource,
+  buildNeutralCoverFrameCandidates,
+  clampCoverFrameTime,
+  isClipCoverFrameSelectionStale,
+  parseClipCoverFrameSelection,
+  type ClipCoverFrameSelection,
+  type ClipCoverFrameSource,
+  type ClipCoverFrameSourceVariant,
+} from "@/lib/clipCoverFrame";
+import {
+  resolveBestPreviewCandidate,
+  type ClipPreviewPaths,
+} from "@/lib/clipPreview";
 import {
   getClipThumbnailPath,
   getClipThumbnailWebpPath,
@@ -16,6 +29,23 @@ export type ClipThumbnailSource = ClipPreviewPaths & {
   sermonId: string;
   title?: string | null;
   thumbnailPath?: string | null;
+  thumbnailError?: string | null;
+  captionData?: unknown;
+  startTimeSeconds?: number | null;
+  endTimeSeconds?: number | null;
+  durationSeconds?: number | null;
+  exportedAt?: Date | string | null;
+  captionBurnedAt?: Date | string | null;
+  overlayRenderedAt?: Date | string | null;
+  exportAssetVersion?: number | null;
+  captionBurnAssetVersion?: number | null;
+  overlayAssetVersion?: number | null;
+  renderAssetVersion?: number | null;
+};
+
+export type ResolvedClipThumbnailSource = {
+  videoPath: string;
+  source: ClipCoverFrameSource;
 };
 
 export type ClipThumbnailResult = {
@@ -26,6 +56,17 @@ export type ClipThumbnailResult = {
   image?: Buffer;
   fallbackTitle?: string;
   error?: string;
+  timeSeconds?: number;
+  source?: ClipCoverFrameSource;
+  savedSelection?: ClipCoverFrameSelection | null;
+  selectionStale?: boolean;
+};
+
+export type ClipThumbnailPreviewResult = {
+  image: Buffer;
+  contentType: "image/jpeg";
+  timeSeconds: number;
+  source: ClipCoverFrameSource;
 };
 
 export type ClipThumbnailReadiness = {
@@ -60,18 +101,76 @@ export function getDefaultThumbnailWebpPath(clip: Pick<ClipThumbnailSource, "id"
   return getClipThumbnailWebpPath(clip.sermonId, clip.id);
 }
 
-async function findBestVideoPath(clip: ClipPreviewPaths): Promise<string | null> {
-  const candidates = await Promise.all(
-    listBestPreviewCandidates(clip).map(async (candidate) => {
-      if (!candidate) {
-        return null;
-      }
+function assetVersionForVariant(clip: ClipThumbnailSource, variant: ClipCoverFrameSourceVariant): number {
+  if (variant === "exported") return clip.exportAssetVersion ?? 0;
+  if (variant === "overlay") return clip.overlayAssetVersion ?? 0;
+  if (variant === "captioned") return clip.captionBurnAssetVersion ?? 0;
+  return clip.renderAssetVersion ?? 0;
+}
 
-      return (await fileExists(candidate)) ? candidate : null;
-    }),
-  );
+function sourceUpdatedAtForVariant(
+  clip: ClipThumbnailSource,
+  variant: ClipCoverFrameSourceVariant,
+): Date | string | null | undefined {
+  if (variant === "exported") return clip.exportedAt;
+  if (variant === "overlay") return clip.overlayRenderedAt;
+  if (variant === "captioned") return clip.captionBurnedAt;
+  return clip.renderedAt;
+}
 
-  return candidates.find((candidate): candidate is string => Boolean(candidate)) ?? null;
+export async function resolveClipThumbnailSource(
+  clip: ClipThumbnailSource,
+): Promise<ResolvedClipThumbnailSource | null> {
+  const remaining: ClipPreviewPaths = { ...clip };
+
+  while (true) {
+    const candidate = resolveBestPreviewCandidate(remaining);
+    if (!candidate) {
+      return null;
+    }
+
+    if (await fileExists(candidate.path)) {
+      return {
+        videoPath: candidate.path,
+        source: buildCoverFrameSource({
+          variant: candidate.variant,
+          assetVersion: assetVersionForVariant(clip, candidate.variant),
+          sourceUpdatedAt: sourceUpdatedAtForVariant(clip, candidate.variant),
+        }),
+      };
+    }
+
+    if (candidate.variant === "exported") remaining.exportedFilePath = null;
+    if (candidate.variant === "overlay") remaining.overlayVideoPath = null;
+    if (candidate.variant === "captioned") remaining.captionedVideoPath = null;
+    if (candidate.variant === "rendered") remaining.renderedFilePath = null;
+  }
+}
+
+function shortFingerprint(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function getVersionedClipThumbnailPaths(input: {
+  clip: Pick<ClipThumbnailSource, "id" | "sermonId">;
+  source: ClipCoverFrameSource;
+  timeSeconds: number;
+}): { thumbnailPath: string; webpPath: string } {
+  const defaultPath = getClipThumbnailPath(input.clip.sermonId, input.clip.id);
+  const parsedPath = path.parse(defaultPath);
+  const timeMilliseconds = Math.max(0, Math.round(input.timeSeconds * 1000));
+  const sourceKey = `${input.source.variant}-v${input.source.assetVersion}-${shortFingerprint(input.source.fingerprint)}`;
+  const fileStem = `${parsedPath.name}.cover-${sourceKey}-${timeMilliseconds}`;
+
+  return {
+    thumbnailPath: path.join(parsedPath.dir, `${fileStem}.jpg`),
+    webpPath: path.join(parsedPath.dir, `${fileStem}.webp`),
+  };
 }
 
 async function generateThumbnailFile(input: {
@@ -79,6 +178,7 @@ async function generateThumbnailFile(input: {
   outputPath: string;
   ffmpegPath?: string;
   format: "jpg" | "webp";
+  timeSeconds: number;
 }): Promise<void> {
   await mkdir(/* turbopackIgnore: true */ path.dirname(input.outputPath), { recursive: true });
   const codecArgs = input.format === "webp"
@@ -91,7 +191,7 @@ async function generateThumbnailFile(input: {
       [
         "-y",
         "-ss",
-        "00:00:01",
+        input.timeSeconds.toFixed(3),
         "-i",
         input.videoPath,
         "-frames:v",
@@ -127,6 +227,94 @@ async function generateThumbnailFile(input: {
   });
 }
 
+async function generateThumbnailImage(input: {
+  videoPath: string;
+  ffmpegPath?: string;
+  timeSeconds: number;
+}): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const child = spawn(
+      input.ffmpegPath?.trim() || process.env.FFMPEG_PATH?.trim() || "ffmpeg",
+      [
+        "-ss",
+        input.timeSeconds.toFixed(3),
+        "-i",
+        input.videoPath,
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=720:-1:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "mjpeg",
+        "pipe:1",
+      ],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+      },
+    );
+
+    const stdoutChunks: Buffer[] = [];
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const image = Buffer.concat(stdoutChunks);
+      if (code === 0 && image.length > 0) {
+        resolve(image);
+        return;
+      }
+      reject(new Error(stderr.trim() || `ffmpeg exited with ${code ?? "unknown"}`));
+    });
+  });
+}
+
+function resolveClipDuration(clip: ClipThumbnailSource): number {
+  if (typeof clip.durationSeconds === "number" && Number.isFinite(clip.durationSeconds)) {
+    return Math.max(0, clip.durationSeconds);
+  }
+
+  if (
+    typeof clip.startTimeSeconds === "number"
+    && typeof clip.endTimeSeconds === "number"
+    && Number.isFinite(clip.startTimeSeconds)
+    && Number.isFinite(clip.endTimeSeconds)
+  ) {
+    return Math.max(0, clip.endTimeSeconds - clip.startTimeSeconds);
+  }
+
+  return 0;
+}
+
+export async function generateClipThumbnailPreview(
+  clip: ClipThumbnailSource,
+  options: { timeSeconds: number; ffmpegPath?: string },
+): Promise<ClipThumbnailPreviewResult | null> {
+  const resolvedSource = await resolveClipThumbnailSource(clip);
+  if (!resolvedSource) {
+    return null;
+  }
+
+  const timeSeconds = clampCoverFrameTime(options.timeSeconds, resolveClipDuration(clip));
+  const image = await generateThumbnailImage({
+    videoPath: resolvedSource.videoPath,
+    ffmpegPath: options.ffmpegPath,
+    timeSeconds,
+  });
+
+  return {
+    image,
+    contentType: "image/jpeg",
+    timeSeconds,
+    source: resolvedSource.source,
+  };
+}
+
 async function writeThumbnailMetadata(input: {
   clipId: string;
   thumbnailPath: string | null;
@@ -147,29 +335,55 @@ export async function ensureClipThumbnail(
   options?: {
     includeImage?: boolean;
     ffmpegPath?: string;
+    force?: boolean;
   },
 ): Promise<ClipThumbnailResult> {
-  const thumbnailPath = getStoredOrDefaultThumbnailPath(clip);
-  const webpPath = getDefaultThumbnailWebpPath(clip);
+  const resolvedSource = await resolveClipThumbnailSource(clip);
+  const savedSelection = parseClipCoverFrameSelection(clip.captionData);
 
-  if (await fileExists(thumbnailPath)) {
+  if (!resolvedSource) {
+    return {
+      status: "fallback",
+      thumbnailPath: null,
+      webpPath: null,
+      fallbackTitle: clip.title ?? "Sermon Clip",
+      error: "No prepared video file is available for a poster yet.",
+      savedSelection,
+    };
+  }
+
+  const durationSeconds = resolveClipDuration(clip);
+  const defaultTime = buildNeutralCoverFrameCandidates(durationSeconds)[0]?.timeSeconds ?? 0;
+  const timeSeconds = clampCoverFrameTime(savedSelection?.timeSeconds ?? defaultTime, durationSeconds);
+  const selectionStale = isClipCoverFrameSelectionStale(
+    savedSelection,
+    resolvedSource.source,
+    durationSeconds,
+  );
+  const { thumbnailPath, webpPath } = getVersionedClipThumbnailPaths({
+    clip,
+    source: resolvedSource.source,
+    timeSeconds,
+  });
+
+  if (!options?.force && await fileExists(thumbnailPath)) {
     if (!(await fileExists(webpPath))) {
-      const bestVideoPath = await findBestVideoPath(clip);
-      if (bestVideoPath) {
-        await generateThumbnailFile({
-          videoPath: bestVideoPath,
-          outputPath: webpPath,
-          ffmpegPath: options?.ffmpegPath,
-          format: "webp",
-        }).catch(() => undefined);
-      }
+      await generateThumbnailFile({
+        videoPath: resolvedSource.videoPath,
+        outputPath: webpPath,
+        ffmpegPath: options?.ffmpegPath,
+        format: "webp",
+        timeSeconds,
+      }).catch(() => undefined);
     }
 
-    await writeThumbnailMetadata({
-      clipId: clip.id,
-      thumbnailPath,
-      error: null,
-    });
+    if (clip.thumbnailPath !== thumbnailPath || clip.thumbnailError) {
+      await writeThumbnailMetadata({
+        clipId: clip.id,
+        thumbnailPath,
+        error: null,
+      });
+    }
 
     return {
       status: "existing",
@@ -177,32 +391,27 @@ export async function ensureClipThumbnail(
       webpPath: (await fileExists(webpPath)) ? webpPath : null,
       contentType: "image/jpeg",
       image: options?.includeImage ? await readFile(/* turbopackIgnore: true */ thumbnailPath) : undefined,
-    };
-  }
-
-  const bestVideoPath = await findBestVideoPath(clip);
-  if (!bestVideoPath) {
-    return {
-      status: "fallback",
-      thumbnailPath: null,
-      webpPath: null,
-      fallbackTitle: clip.title ?? "Sermon Clip",
-      error: "No prepared video file is available for a poster yet.",
+      timeSeconds,
+      source: resolvedSource.source,
+      savedSelection,
+      selectionStale,
     };
   }
 
   try {
     await generateThumbnailFile({
-      videoPath: bestVideoPath,
+      videoPath: resolvedSource.videoPath,
       outputPath: thumbnailPath,
       ffmpegPath: options?.ffmpegPath,
       format: "jpg",
+      timeSeconds,
     });
     await generateThumbnailFile({
-      videoPath: bestVideoPath,
+      videoPath: resolvedSource.videoPath,
       outputPath: webpPath,
       ffmpegPath: options?.ffmpegPath,
       format: "webp",
+      timeSeconds,
     }).catch(() => undefined);
     await writeThumbnailMetadata({
       clipId: clip.id,
@@ -216,6 +425,10 @@ export async function ensureClipThumbnail(
       webpPath: (await fileExists(webpPath)) ? webpPath : null,
       contentType: "image/jpeg",
       image: options?.includeImage ? await readFile(/* turbopackIgnore: true */ thumbnailPath) : undefined,
+      timeSeconds,
+      source: resolvedSource.source,
+      savedSelection,
+      selectionStale,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not prepare clip poster.";
@@ -231,6 +444,10 @@ export async function ensureClipThumbnail(
       webpPath: null,
       fallbackTitle: clip.title ?? "Sermon Clip",
       error: message,
+      timeSeconds,
+      source: resolvedSource.source,
+      savedSelection,
+      selectionStale,
     };
   }
 }
@@ -271,12 +488,18 @@ export async function getClipThumbnailReadiness(): Promise<ClipThumbnailReadines
       select: {
         id: true,
         sermonId: true,
+        thumbnailPath: true,
       },
       take: 500,
     }),
   ]);
   const optimizedPosterChecks = await Promise.all(
-    clipsWithPosters.map((clip) => fileExists(getDefaultThumbnailWebpPath(clip))),
+    clipsWithPosters.map((clip) => {
+      const thumbnailPath = clip.thumbnailPath?.trim();
+      if (!thumbnailPath) return false;
+      const parsed = path.parse(thumbnailPath);
+      return fileExists(path.join(parsed.dir, `${parsed.name}.webp`));
+    }),
   );
   const optimizedPosterCount = optimizedPosterChecks.filter(Boolean).length;
 
@@ -315,7 +538,24 @@ export async function backfillClipThumbnails(options?: {
       overlayVideoPath: true,
       captionedVideoPath: true,
       exportedFilePath: true,
+      renderFreshness: true,
+      overlayFreshness: true,
+      captionBurnFreshness: true,
+      exportFreshness: true,
+      renderedAt: true,
+      overlayRenderedAt: true,
+      captionBurnedAt: true,
+      exportedAt: true,
+      renderAssetVersion: true,
+      overlayAssetVersion: true,
+      captionBurnAssetVersion: true,
+      exportAssetVersion: true,
+      startTimeSeconds: true,
+      endTimeSeconds: true,
+      durationSeconds: true,
+      captionData: true,
       thumbnailPath: true,
+      thumbnailError: true,
     },
     orderBy: { updatedAt: "desc" },
     take: limit,

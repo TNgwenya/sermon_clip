@@ -131,6 +131,44 @@ describe("posting drafts", () => {
     ]);
   });
 
+  it("stores the selected platform's canonical copy on each scheduled-post row", async () => {
+    setupTransaction();
+    txMock.postingDraft.create.mockResolvedValue({
+      id: "draft-1",
+      clipIdsJson: ["clip-1"],
+      platformsJson: ["Instagram", "YouTube Shorts"],
+      postingSlot: "Wed, Jul 1, 10:00 AM",
+      note: null,
+      status: "READY_FOR_MEDIA_TEAM",
+      createdAt,
+    });
+    txMock.socialAccount.findMany.mockResolvedValue([]);
+
+    await createPostingDraft({
+      clipIds: ["clip-1"],
+      platforms: ["Instagram", "YouTube Shorts"],
+      postingSlot: "Platform plan",
+      automationMode: "MANUAL",
+      platformCopyByClipId: {
+        "clip-1": {
+          Instagram: { title: "Instagram title", caption: "Instagram caption\n\n#Faith" },
+          "YouTube Shorts": { title: "YouTube title", caption: "YouTube description\n\n#Shorts" },
+        },
+      },
+    });
+
+    const data = txMock.scheduledPost.createMany.mock.calls[0]?.[0]?.data;
+    expect(data).toHaveLength(2);
+    expect(data.map((post: { platform: string; title: string; caption: string }) => ({
+      platform: post.platform,
+      title: post.title,
+      caption: post.caption,
+    }))).toEqual([
+      { platform: "INSTAGRAM", title: "Instagram title", caption: "Instagram caption\n\n#Faith" },
+      { platform: "YOUTUBE_SHORTS", title: "YouTube title", caption: "YouTube description\n\n#Shorts" },
+    ]);
+  });
+
   it("rejects selected accounts that are unavailable for the platform", async () => {
     setupTransaction();
 

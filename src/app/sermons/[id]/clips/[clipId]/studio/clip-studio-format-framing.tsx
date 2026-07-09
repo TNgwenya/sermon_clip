@@ -112,7 +112,6 @@ export function ClipStudioFormatFraming({
   clipDurationSeconds,
   initialSettings,
   videoSubjectTracks,
-  manualCropUpdatedAt,
   smartCropDebugGeneratedAt,
   smartCropDebugError,
   hasSmartCropDebugSnapshot,
@@ -189,22 +188,28 @@ export function ClipStudioFormatFraming({
     setSelectedFormats((current) => Array.from(new Set([mapped, ...current])));
   }
 
+  function onPrimaryFormatChange(nextFormat: ClipExportFormat) {
+    setPrimaryFormat(nextFormat);
+    setSelectedFormats((current) => (
+      current.includes(nextFormat) ? current : [nextFormat, ...current]
+    ));
+  }
+
   function toggleFormatSelection(format: ClipExportFormat) {
-    setSelectedFormats((current) => {
-      if (current.includes(format)) {
-        if (current.length === 1) {
-          return current;
-        }
+    if (!selectedFormats.includes(format)) {
+      setSelectedFormats([...selectedFormats, format]);
+      return;
+    }
 
-        const next = current.filter((item) => item !== format);
-        if (!next.includes(primaryFormat)) {
-          setPrimaryFormat(next[0] ?? format);
-        }
-        return next;
-      }
+    if (selectedFormats.length === 1) {
+      return;
+    }
 
-      return [...current, format];
-    });
+    const nextFormats = selectedFormats.filter((item) => item !== format);
+    setSelectedFormats(nextFormats);
+    if (primaryFormat === format) {
+      setPrimaryFormat(nextFormats[0] ?? format);
+    }
   }
 
   function applyFraming(personality: FramingPersonality, mode: ExportSettings["framingMode"]) {
@@ -249,20 +254,19 @@ export function ClipStudioFormatFraming({
     setCropMessage("Framing adjusted in preview. Prepare for Posting saves it.");
   }
 
-  function saveManualKeyframes(input: { centerX?: number; centerY?: number; zoom?: number }) {
+  function adjustManualKeyframes(input: { centerX?: number; centerY?: number; zoom?: number }) {
     const durationSeconds = Math.max(0, clipDurationSeconds ?? 0);
-    const keyframe = {
-      timeSeconds: 0,
-      centerX: input.centerX ?? 0.5,
-      centerY: input.centerY ?? 0.5,
-      zoom: input.zoom ?? 1,
-    };
+    const baseKeyframes = manualCropPreviewKeyframes.length > 0
+      ? manualCropPreviewKeyframes
+      : buildPresetManualCropKeyframes({ direction: "center", durationSeconds });
+    const keyframes = baseKeyframes.map((keyframe) => ({
+      ...keyframe,
+      centerX: input.centerX ?? keyframe.centerX,
+      centerY: input.centerY ?? keyframe.centerY ?? 0.5,
+      zoom: input.zoom ?? keyframe.zoom ?? 1,
+    }));
 
-    previewManualCrop({
-      keyframes: durationSeconds > 0
-        ? [keyframe, { ...keyframe, timeSeconds: durationSeconds }]
-        : [keyframe],
-    });
+    previewManualCrop({ keyframes });
   }
 
   function resetManualCrop() {
@@ -293,8 +297,8 @@ export function ClipStudioFormatFraming({
     <SectionCard title="Framing" description="Choose the platform, shape, and speaker crop for the current preview.">
       <div className="stack-md">
         <div className="clip-studio-effect-note">
-          <StatusBadge tone="success">Preview updated</StatusBadge>
-          <p>Format and framing changes apply to the preview now. Prepare for Posting renders this exact setup.</p>
+          <StatusBadge tone="accent">Working preview</StatusBadge>
+          <p>Format and framing changes update this preview. Automated speaker movement and multi-point crops are finalized during preparation.</p>
         </div>
 
         <label className="stack-sm">
@@ -317,7 +321,7 @@ export function ClipStudioFormatFraming({
             onChange={(event) => {
               const value = event.target.value;
               if (isValidExportFormat(value)) {
-                setPrimaryFormat(value);
+                onPrimaryFormatChange(value);
               }
             }}
             disabled={isPending}
@@ -382,7 +386,7 @@ export function ClipStudioFormatFraming({
               <h3 id="manual-adjust-heading">Fine tune crop</h3>
             </div>
             <StatusBadge tone={manualCropCount > 0 ? "accent" : "neutral"}>
-              {manualCropCount > 0 ? `${manualCropCount} saved` : "Automatic"}
+              {manualCropCount > 0 ? "Custom preview" : "Automatic"}
             </StatusBadge>
           </div>
           <div className="framing-control-grid compact">
@@ -408,24 +412,24 @@ export function ClipStudioFormatFraming({
             </button>
           </div>
           <div className="framing-nudge-row">
-            <button type="button" className="button secondary" onClick={() => saveManualKeyframes({ centerY: 0.42, zoom: 1.08 })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => adjustManualKeyframes({ centerY: 0.42 })} disabled={isPending}>
               Nudge up
             </button>
-            <button type="button" className="button secondary" onClick={() => saveManualKeyframes({ centerY: 0.58, zoom: 1.08 })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => adjustManualKeyframes({ centerY: 0.58 })} disabled={isPending}>
               Nudge down
             </button>
-            <button type="button" className="button secondary" onClick={() => saveManualKeyframes({ zoom: 1.18 })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => adjustManualKeyframes({ zoom: 1.18 })} disabled={isPending}>
               Zoom in
             </button>
           </div>
           <div className="framing-nudge-row compact-two">
-            <button type="button" className="button secondary" onClick={() => saveManualKeyframes({ zoom: 1 })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => adjustManualKeyframes({ zoom: 1 })} disabled={isPending}>
               Zoom out
             </button>
           </div>
           <p className="muted small">
             {manualCropCount > 0
-              ? `Framing adjusted${manualCropUpdatedAt ? ` ${new Date(manualCropUpdatedAt).toLocaleString()}` : ""}. Prepare for Posting saves it.`
+              ? "Custom framing is active in this preview. Prepare for Posting saves it to the final video."
               : "Manual adjust previews a crop correction for the final render."}
           </p>
           {cropMessage ? (

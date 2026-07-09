@@ -52,14 +52,25 @@ type ClipReviewItem = {
   postReadyBlockers: string[];
   recommendedNextAction: string | null;
   overallPostScore: number | null;
+  hookStrengthScore: number | null;
+  hookScore: number | null;
   standaloneClarityScore: number | null;
+  emotionalImpactScore: number | null;
+  ministryValueScore: number | null;
+  sermonValueScore: number | null;
+  shareabilityScore: number | null;
+  socialShareabilityScore: number | null;
+  arcCompletenessScore: number | null;
   contextSafetyScore: number | null;
   visualReadinessScore: number | null;
+  bestPlatform: string | null;
   qualitySummary: string | null;
   pastorFriendlyReason: string | null;
   recommendedAction: ReviewRecommendedAction | null;
   qualityClipCategory: ReviewQualityCategory | null;
   qualityWarnings: string[];
+  qualityReviewedAt: string | null;
+  qualityReviewSource: "AI" | "FALLBACK" | null;
   reasonSelected: string;
   suggestedHook: string | null;
   suggestedCaption: string | null;
@@ -159,6 +170,23 @@ function isDeterministicFallbackClip(clip: Pick<ClipReviewItem, "qualityWarnings
   );
 }
 
+function toPastorFriendlyInsight(value: string): string {
+  const cleaned = value
+    .replace(/\s*Boundary (?:adjusted|kept)[^.]*\.?/gi, "")
+    .replace(/\s*AI timing[^.]*\.?/gi, "")
+    .replace(/\b\d+(?:\.\d+)?-\d+(?:\.\d+)?s\b/g, "")
+    .replace(/\s+to\s*\.\s*$/i, ".")
+    .replace(/\.{2,}$/g, ".")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  return cleaned || "This moment carries a clear, self-contained message for a short clip.";
+}
+
+function toPastorFriendlyCategory(value: string): string {
+  return value.replace(/^Best\s+/i, "").replace(/\s+Clip$/i, "");
+}
+
 export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvailable }: ReviewExperienceProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -169,6 +197,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [showFullFeed, setShowFullFeed] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
+  const [failedPreviewClipIds, setFailedPreviewClipIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [messageSuccess, setMessageSuccess] = useState(true);
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() => {
@@ -188,6 +217,17 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
   );
 
   const summary = useMemo(() => summarizeReview(normalizedClips), [normalizedClips]);
+  const decidedCount = summary.approved + summary.rejected;
+  const decisionProgress = summary.total > 0 ? Math.round((decidedCount / summary.total) * 100) : 0;
+  const reviewIsComplete = summary.total > 0 && summary.pending === 0;
+  const strongestApprovedClip = useMemo(
+    () => sortClips(normalizedClips.filter((clip) => clip.status === "APPROVED"), "HIGHEST_SCORE")[0] ?? null,
+    [normalizedClips],
+  );
+  const hasPostReadyClip = useMemo(
+    () => normalizedClips.some((clip) => clip.status === "EXPORTED" || clip.exportStatus === "COMPLETED"),
+    [normalizedClips],
+  );
   const fallbackClipCount = useMemo(
     () => normalizedClips.filter((clip) => clip.status !== "REJECTED" && isDeterministicFallbackClip(clip)).length,
     [normalizedClips],
@@ -281,6 +321,13 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
   }
 
   function curateReviewFeed() {
+    const confirmed = window.confirm(
+      `Refine ${summary.pending} undecided moment${summary.pending === 1 ? "" : "s"}? Weaker suggestions may move to Not using, and you can restore them later.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
     startTransition(async () => {
       const result = await curateSermonAiSuggestionsAction({ sermonId });
       setStatusMessage(result.success, result.message);
@@ -330,18 +377,22 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
   }
 
   return (
-    <main className="container review-feed-shell stack-md">
-      <header className="review-feed-topbar card stack-sm">
+    <main className="container review-feed-shell premium-review-shell stack-md">
+      <header className="review-feed-topbar premium-review-header card stack-sm">
         <div className="review-feed-topbar-row">
           <div>
-            <p className="kicker">Pastor review feed</p>
+            <p className="kicker">Review clips</p>
             <h1>{sermonTitle}</h1>
-            <p className="muted">Approve clips and move them to posting.</p>
+            <p className="muted premium-review-intro">
+              Watch each moment, confirm the message stands on its own, then approve it or refine it in Studio.
+            </p>
           </div>
           <div className="review-feed-topbar-actions">
-            <Link href={`/ready-to-post?sermonId=${sermonId}`} className="button primary">
-              Ready to post
-            </Link>
+            {hasPostReadyClip ? (
+              <Link href={`/ready-to-post?sermonId=${sermonId}`} className="button secondary">
+                Publishing desk
+              </Link>
+            ) : null}
             <details className="review-topbar-more">
               <summary>Review tools</summary>
               <div className="review-topbar-more-menu">
@@ -367,26 +418,90 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                   disabled={isPending}
                   onClick={curateReviewFeed}
                 >
-                  Curate feed
+                  Refine suggestions
                 </button>
               </div>
             </details>
           </div>
         </div>
 
-        <div className="review-feed-summary-row" role="list" aria-label="Review summary">
-          <span className="review-feed-chip" role="listitem">{summary.total} Total</span>
-          <span className="review-feed-chip review-feed-chip-approved" role="listitem">{summary.approved} Approved</span>
-          <span className="review-feed-chip review-feed-chip-pending" role="listitem">{summary.pending} Pending</span>
-          <span className="review-feed-chip review-feed-chip-rejected" role="listitem">{summary.rejected} Rejected</span>
-          <span className="review-feed-chip" role="listitem">{summary.rendered} Preview ready</span>
-          {fallbackClipCount > 0 ? (
-            <span className="review-feed-chip" role="listitem">{fallbackClipCount} AI quota fallback</span>
-          ) : null}
+        <ol className="premium-review-journey" aria-label="Sermon clip workflow">
+          <li className="is-complete"><span>1</span><strong>Analyze</strong></li>
+          <li className="is-current" aria-current="step"><span>2</span><strong>Review moments</strong></li>
+          <li><span>3</span><strong>Edit &amp; brand</strong></li>
+          <li><span>4</span><strong>Prepare post</strong></li>
+        </ol>
+
+        <div className="premium-review-progress">
+          <div className="premium-review-progress-copy">
+            <strong>{summary.pending > 0 ? `${summary.pending} moment${summary.pending === 1 ? "" : "s"} awaiting a decision` : "Review complete"}</strong>
+            <span>{decidedCount} of {summary.total} reviewed</span>
+          </div>
+          <div
+            className="premium-review-progress-track"
+            role="progressbar"
+            aria-label="Clip review progress"
+            aria-valuemin={0}
+            aria-valuemax={Math.max(summary.total, 1)}
+            aria-valuenow={decidedCount}
+          >
+            <span style={{ width: `${decisionProgress}%` }} />
+          </div>
+          <details className="premium-review-overview">
+            <summary>Queue details</summary>
+            <dl>
+              <div><dt>Total moments</dt><dd>{summary.total}</dd></div>
+              <div><dt>Approved</dt><dd>{summary.approved}</dd></div>
+              <div><dt>Waiting</dt><dd>{summary.pending}</dd></div>
+              <div><dt>Not using</dt><dd>{summary.rejected}</dd></div>
+              <div><dt>Preview ready</dt><dd>{summary.rendered}</dd></div>
+              {fallbackClipCount > 0 ? <div><dt>Fallback suggestions</dt><dd>{fallbackClipCount}</dd></div> : null}
+            </dl>
+          </details>
         </div>
       </header>
 
-      <section className="card review-feed-toolbar stack-sm">
+      {reviewIsComplete ? (
+        <section className="premium-review-complete" aria-labelledby="review-complete-title">
+          <div className="stack-sm">
+            <p className="kicker">Review complete</p>
+            <h2 id="review-complete-title">
+              {strongestApprovedClip
+                ? "Your approved moments are ready for Clip Studio."
+                : hasPostReadyClip
+                  ? "Your reviewed clips are ready at the publishing desk."
+                  : "You have reviewed every suggested moment."}
+            </h2>
+            <p className="muted">
+              {strongestApprovedClip
+                ? "Start with the strongest approved clip, then shape its captions, framing, and church branding."
+                : hasPostReadyClip
+                  ? "Open the publishing desk to prepare platform copy, download the finished files, or schedule the next post."
+                  : "No clips are approved right now. You can return to the sermon to find more moments or reconsider one from this queue."}
+            </p>
+          </div>
+          <div className="premium-review-complete-actions">
+            {strongestApprovedClip ? (
+              <Link href={`/sermons/${sermonId}/clips/${strongestApprovedClip.id}/studio`} className="button primary">
+                Continue to Clip Studio
+              </Link>
+            ) : hasPostReadyClip ? (
+              <Link href={`/ready-to-post?sermonId=${sermonId}`} className="button primary">
+                Open publishing desk
+              </Link>
+            ) : (
+              <Link href={`/sermons/${sermonId}`} className="button primary">
+                Find more moments
+              </Link>
+            )}
+            {strongestApprovedClip || hasPostReadyClip ? (
+              <Link href={`/sermons/${sermonId}`} className="button tertiary">Back to sermon</Link>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="card review-feed-toolbar premium-review-toolbar stack-sm">
         <div className="review-feed-toolbar-row">
           <details
             className="review-filter-disclosure"
@@ -502,14 +617,29 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
       ) : null}
 
       {isPending ? (
-        <p className="status-help">Saving changes or running workflow actions. Please wait...</p>
+        <p className="status-help">Saving your changes. This view will update when they are ready.</p>
       ) : null}
 
       <section className={viewMode === "GRID" ? "review-feed-grid" : "review-feed-list"}>
         {visibleClips.length === 0 ? (
-          <article className="card">
-            <p className="muted">No clips match the selected filter.</p>
-            <p className="status-help">Try switching to All Clips, or run Generate Clip Suggestions from sermon detail.</p>
+          <article className="card premium-review-empty">
+            <p className="kicker">Nothing to review here</p>
+            <h2>No moments match these filters</h2>
+            <p className="muted">Clear the filters to return to the full review, or open the sermon if you need to find more moments.</p>
+            <div className="actions-row">
+              <button
+                type="button"
+                className="button primary"
+                onClick={() => {
+                  setFilter("ALL");
+                  setCategoryFilter("ALL");
+                  setSort("HIGHEST_SCORE");
+                }}
+              >
+                Show all moments
+              </button>
+              <Link href={`/sermons/${sermonId}`} className="button tertiary">Open sermon</Link>
+            </div>
           </article>
         ) : (
           <>
@@ -518,25 +648,35 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             const warnings = buildClipWarnings(clip).filter((warning) => !warning.toLowerCase().includes("invalid option"));
             const qualityView = buildClipQualityView(clip, index);
             const qualitySignals = [
-              { key: "message", dimension: "Message", ...qualityView.messageClarity },
+              { key: "opening", dimension: "Opening", ...qualityView.openingStrength },
+              { key: "message", dimension: "Clarity", ...qualityView.messageClarity },
+              { key: "ministry", dimension: "Ministry impact", ...qualityView.ministryImpact },
+              { key: "resonance", dimension: "Resonance", ...qualityView.emotionalResonance },
               { key: "context", dimension: "Context", ...qualityView.contextSafety },
-              { key: "video", dimension: "Video", ...qualityView.visualReadiness },
-            ].filter((signal) => signal.scoreLabel !== "-");
-            const clipCategory = getQualityCategoryLabel(clip.qualityClipCategory ?? clip.smartClipCategory);
-            const actionLabel = clip.status === "REJECTED" ? "Rejected clip" : qualityView.actionLabel;
-            const actionTone = clip.status === "REJECTED" ? "weak" : qualityView.actionTone;
-            const readinessLabel =
+              { key: "complete", dimension: "Completeness", ...qualityView.completeness },
+              { key: "social", dimension: "Social fit", ...qualityView.socialFit },
+            ];
+            const clipCategory = toPastorFriendlyCategory(
+              getQualityCategoryLabel(clip.qualityClipCategory ?? clip.smartClipCategory),
+            );
+            const actionLabel = qualityView.actionLabel;
+            const actionTone = qualityView.actionTone;
+            const workflowLabel =
               clip.status === "EXPORTED" || clip.exportStatus === "COMPLETED"
-                ? "Ready to post"
+                ? "Final video prepared"
                 : clip.status === "APPROVED"
-                  ? "Approved for prep"
-                  : actionLabel;
-            const insight =
+                  ? "Approved"
+                  : clip.status === "REJECTED"
+                    ? "Not using"
+                    : "Awaiting decision";
+            const insight = toPastorFriendlyInsight(
+              clip.reasonSelected ??
               clip.pastorFriendlyReason ??
               clip.qualitySummary ??
               clip.recommendationReason ??
-              "Clip is ready for a quick pastor review.";
-            const canApprove = clip.status !== "EXPORTED";
+              "This moment is ready for a quick pastor review.",
+            );
+            const canApprove = clip.status !== "EXPORTED" && clip.transcriptSafetyStatus !== "REVIEW_REQUIRED";
             const canReject = clip.status !== "EXPORTED";
             const canSetPending = clip.status !== "EXPORTED";
             const canRender =
@@ -568,7 +708,8 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             const isFallbackClip = isDeterministicFallbackClip(clip);
             const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
             const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
-            const canPreviewVideo = clip.canPreviewVideo;
+            const previewRequestFailed = failedPreviewClipIds.includes(clip.id);
+            const canPreviewVideo = clip.canPreviewVideo && !previewRequestFailed;
             const isApprovedState = clip.status === "APPROVED" || clip.status === "EXPORTED";
             const isPostReady = clip.status === "EXPORTED" || clip.exportStatus === "COMPLETED";
             const visibleSignal =
@@ -579,11 +720,12 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             return (
               <article
                 key={clip.id}
-                className={`card review-feed-card review-feed-card-${clip.status.toLowerCase()} quality-tone-${actionTone}`}
+                id={`clip-${clip.id}`}
+                className={`card review-feed-card premium-review-card review-feed-card-${clip.status.toLowerCase()} quality-tone-${actionTone}`}
               >
                 <div className="review-feed-card-layout">
                   <div className="review-feed-video-column stack-sm">
-                    <label className="review-checkbox-row">
+                    <label className="review-checkbox-row premium-review-select">
                       <input
                         type="checkbox"
                         checked={selected.includes(clip.id)}
@@ -594,94 +736,142 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                     </label>
 
                     <div className="review-feed-video-frame">
-                      <span className="review-feed-score-pill">{qualityView.scoreLabel}</span>
+                      <span className="review-feed-score-pill" aria-label={`Clip potential ${qualityView.scoreLabel} out of 10`}>
+                        {qualityView.scoreLabel}/10
+                      </span>
                       <span className="review-feed-duration-pill">{toDurationLabel(clip.durationSeconds)}</span>
                       {canPreviewVideo ? (
                         <video
                           className="review-video"
                           controls
                           playsInline
-                          preload="metadata"
+                          preload="none"
+                          aria-label={`Preview ${clip.title}`}
+                          poster={`/api/clips/${clip.id}/thumbnail`}
                           src={`/api/clips/${clip.id}/preview?variant=best`}
+                          onError={() => {
+                            setFailedPreviewClipIds((current) =>
+                              current.includes(clip.id) ? current : [...current, clip.id],
+                            );
+                          }}
                         />
                       ) : (
-                        <div className="review-video empty-video-state">
-                          <span>{localMediaAvailable ? "Preview media not ready yet" : "Preview on Mac app"}</span>
+                        <div className="review-video empty-video-state" role="status">
+                          <span>
+                            {previewRequestFailed
+                              ? "This preview could not be opened. Your clip is still safe."
+                              : localMediaAvailable
+                                ? "Preview media not ready yet"
+                                : "Preview on Mac app"}
+                          </span>
+                          {previewRequestFailed ? (
+                            <button
+                              type="button"
+                              className="button secondary"
+                              onClick={() => {
+                                setFailedPreviewClipIds((current) => current.filter((id) => id !== clip.id));
+                              }}
+                            >
+                              Try preview again
+                            </button>
+                          ) : null}
                         </div>
                       )}
                     </div>
                   </div>
 
                   <div className="review-feed-content-column stack-sm">
-                    <h3>{clip.title}</h3>
-                    <div className="clip-badge-row">
-                      <span className={`status-pill status-${clip.status.toLowerCase()}`}>
-                        {toClipStatusLabel(clip.status)}
+                    <div className="premium-review-card-heading">
+                      <p className="kicker">{clipCategory} · {toDurationLabel(clip.durationSeconds)}</p>
+                      <h3>{clip.title}</h3>
+                      {draft.hook.trim() ? <p className="premium-review-hook">&ldquo;{draft.hook}&rdquo;</p> : null}
+                    </div>
+                    <div className="clip-badge-row premium-review-primary-status">
+                      <span className={`status-pill review-workflow-status status-${clip.status.toLowerCase()}`}>
+                        {workflowLabel}
                       </span>
-                      <span className={`status-pill quality-action-${actionTone}`}>
-                        {readinessLabel}
+                      <span className={`status-pill review-quality-status quality-action-${actionTone}`}>
+                        Quality · {actionLabel}
                       </span>
+                      {qualityView.freshness.state !== "current" ? (
+                        <span className="status-pill quality-needs-editing">{qualityView.freshness.label}</span>
+                      ) : null}
                       {transcriptReviewRequired ? <span className="status-pill quality-needs-editing">Transcript review needed</span> : null}
-                      {transcriptReviewed ? <span className="status-pill quality-good-needs-review">Transcript reviewed</span> : null}
-                      <span className={`status-pill risk-${clip.riskLevel.toLowerCase()}`}>{visibleSignal}</span>
+                      {clip.riskLevel !== "LOW" || clip.contextWarning ? (
+                        <span className={`status-pill risk-${clip.riskLevel.toLowerCase()}`}>{visibleSignal}</span>
+                      ) : null}
                     </div>
 
-                    <div
-                      className="review-feed-quality-strip review-feed-quality-strip-compact"
-                      aria-label={`Quality signals for ${clip.title}`}
-                    >
-                      <div className={`review-feed-quality-score quality-action-${actionTone}`}>
-                        <span>{qualityView.scoreSourceLabel}</span>
-                        <strong>{qualityView.scoreLabel}</strong>
-                      </div>
+                    <div className="premium-review-rationale">
+                      <span>Why this moment</span>
+                      <p>{insight}</p>
                     </div>
+
+                    {transcriptReviewRequired ? (
+                      <div className="warning-banner stack-sm premium-review-safety-gate">
+                        <strong>Check the wording before approval</strong>
+                        <p>
+                          Read the transcript excerpt and confirm that local-language words and ministry context are accurate.
+                        </p>
+                        <button
+                          type="button"
+                          className="button secondary"
+                          disabled={isPending}
+                          onClick={() => applySingleAction(() => markClipTranscriptReviewedAction(clip.id))}
+                        >
+                          I checked the transcript
+                        </button>
+                      </div>
+                    ) : null}
 
                     <details className="review-feed-card-details">
-                      <summary>Details</summary>
+                      <summary>Message &amp; quality details</summary>
                       <div className="stack-sm">
-                        <p className="review-feed-insight">{insight}</p>
                         <p className="review-feed-transcript">&quot;{clip.transcriptText}&quot;</p>
+                        <div
+                          className="review-feed-quality-strip review-feed-quality-strip-compact"
+                          aria-label={`Quality signals for ${clip.title}`}
+                        >
+                          <div className={`review-feed-quality-score quality-action-${actionTone}`}>
+                            <span>{qualityView.scoreSourceLabel}</span>
+                            <strong>{qualityView.scoreLabel}</strong>
+                          </div>
+                        </div>
+                        <div className="premium-review-rationale">
+                          <span>{qualityView.freshness.label}</span>
+                          <p>{qualityView.freshness.detail}</p>
+                        </div>
                         <div className="review-feed-meta-row small muted">
                           <span>{clipCategory}</span>
                           <span>{toDurationLabel(clip.durationSeconds)} duration</span>
                           <span>{clip.intendedAudience ?? "General audience"}</span>
                           <span>{toFriendlyStatus(clip.exportStatus)}</span>
-                          {isFallbackClip ? <span>AI quota fallback</span> : null}
+                          <span>{toClipStatusLabel(clip.status)}</span>
+                          {transcriptReviewed ? <span>Transcript reviewed</span> : null}
+                          {isFallbackClip ? <span>Fallback suggestion</span> : null}
                         </div>
 
                         {isFallbackClip ? (
                           <p className="status-help small">
-                            AI selection was unavailable, so this clip came from deterministic sermon-window ranking. Review the moment and boundaries before approving.
+                            Automatic ranking used the sermon transcript when the full AI review was unavailable. Check the message and boundaries before approving.
                           </p>
                         ) : null}
 
-                        {transcriptReviewRequired ? (
-                          <div className="warning-banner stack-sm">
-                            <p>
-                              Review the local-language words before captions, export, or posting. This protects good Zulu, Sotho, Xhosa, or Tswana moments from being lost while keeping wrong captions out of final videos.
-                            </p>
-                            <button
-                              type="button"
-                              className="button secondary"
-                              disabled={isPending}
-                              onClick={() => applySingleAction(() => markClipTranscriptReviewedAction(clip.id))}
-                            >
-                              I reviewed the transcript
-                            </button>
-                          </div>
-                        ) : null}
+                        <div className="review-feed-signal-list">
+                          {qualitySignals.map((signal) => (
+                            <span key={signal.key} className={`review-feed-signal quality-metric-${signal.tone}`}>
+                              <small>{signal.dimension}</small>
+                              <strong>{signal.label}</strong>
+                              <em>{signal.scoreLabel === "-" ? "Not assessed" : `${signal.scoreLabel}/10`}</em>
+                            </span>
+                          ))}
+                        </div>
 
-                        {qualitySignals.length > 0 ? (
-                          <div className="review-feed-signal-list">
-                            {qualitySignals.map((signal) => (
-                              <span key={signal.key} className={`review-feed-signal quality-metric-${signal.tone}`}>
-                                <small>{signal.dimension}</small>
-                                <strong>{signal.label}</strong>
-                                <em>{`${signal.scoreLabel}/10`}</em>
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
+                        <div className="premium-review-rationale">
+                          <span>{qualityView.platformFit.assessed ? `Best channel · ${qualityView.platformFit.label}` : "Channel fit not assessed"}</span>
+                          <p>{qualityView.platformFit.reason}</p>
+                        </div>
+                        <p className="status-help small"><strong>Recommended next check:</strong> {qualityView.nextStep}</p>
 
                         {clip.postReadyBlockers.length > 0 ? (
                           <p className="status-help small">
@@ -704,6 +894,8 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                     <div className="review-feed-action-stack">
                       {isApprovedState ? (
                         <span className="review-approved-status status-pill status-approved">Approved</span>
+                      ) : clip.status === "REJECTED" ? (
+                        <span className="review-approved-status status-pill status-rejected">Not using</span>
                       ) : (
                         <button
                           type="button"
@@ -711,42 +903,68 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                           disabled={isPending || !canApprove}
                           onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "APPROVED"))}
                         >
-                          Approve
+                          Use this moment
                         </button>
                       )}
                       {isApprovedState && isPostReady ? (
                         <Link href={`/ready-to-post?sermonId=${sermonId}`} className="button primary review-action-primary">
-                          Open post queue
+                          Prepare post
                         </Link>
                       ) : (
                         <Link
                           href={`/sermons/${sermonId}/clips/${clip.id}/studio`}
-                          className={isApprovedState ? "button primary review-action-primary" : "button accent review-action-edit"}
+                          className={isApprovedState ? "button primary review-action-primary" : "button secondary review-action-edit"}
                         >
-                          Edit clip
+                          {isApprovedState ? "Finish in Studio" : "Edit in Studio"}
                         </Link>
                       )}
-                    </div>
-
-                    <details className="review-card-more-actions">
-                      <summary>More</summary>
-                      <div className="review-feed-action-stack review-feed-action-stack-secondary">
+                      {clip.status === "SUGGESTED" ? (
                         <button
                           type="button"
-                          className="button secondary review-action-secondary"
+                          className="button tertiary review-action-decline"
                           disabled={isPending || !canReject}
                           onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "REJECTED"))}
                         >
-                          Reject
+                          Not this clip
                         </button>
-                        <button
-                          type="button"
-                          className="button tertiary review-action-secondary"
-                          disabled={isPending || !canSetPending}
-                          onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "SUGGESTED"))}
-                        >
-                          Needs review
-                        </button>
+                      ) : null}
+                    </div>
+
+                    <p className="premium-review-action-note">
+                      {clip.status === "REJECTED"
+                        ? "This moment is out of the active queue. You can move it back to review from More actions."
+                        : transcriptReviewRequired
+                          ? "Check the transcript wording before approving this moment."
+                        : isApprovedState
+                          ? isPostReady
+                            ? "The final video is ready for its posting plan."
+                            : "Fine-tune captions, framing, and church branding."
+                          : "Approve this moment, or open Studio to make it your own."}
+                    </p>
+
+                    <details className="review-card-more-actions">
+                      <summary>More actions</summary>
+                      <div className="review-feed-action-stack review-feed-action-stack-secondary">
+                        {clip.status === "APPROVED" ? (
+                          <button
+                            type="button"
+                            className="button secondary review-action-secondary"
+                            disabled={isPending || !canReject}
+                            onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "REJECTED"))}
+                          >
+                            Move to not using
+                          </button>
+                        ) : null}
+                        {clip.status !== "SUGGESTED" && clip.status !== "EXPORTED" ? (
+                          <button
+                            type="button"
+                            className="button tertiary review-action-secondary"
+                            disabled={isPending || !canSetPending}
+                            onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "SUGGESTED"))}
+                          >
+                            Move back to review
+                          </button>
+                        ) : null}
                         {clip.exportStatus === "COMPLETED" || clip.status === "EXPORTED" ? (
                           <Link href={`/ready-to-post?sermonId=${sermonId}`} className="button secondary review-action-secondary">
                             Open post queue
@@ -763,7 +981,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                 </div>
 
                 <details className="review-feed-details stack-sm">
-                  <summary>Text and production tools</summary>
+                  <summary>Advanced text &amp; production tools</summary>
 
                   <div className="review-edit-grid">
                     <label className="stack-sm">
@@ -775,20 +993,40 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       />
                     </label>
                     <label className="stack-sm">
-                      Hook
+                      Post opener
                       <input
                         value={draft.hook}
                         disabled={isPending}
                         onChange={(event) => updateDraft(clip.id, { hook: event.target.value })}
                       />
+                      {clip.suggestedHook?.trim() && clip.suggestedHook.trim() !== draft.hook.trim() ? (
+                        <button
+                          type="button"
+                          className="button tertiary"
+                          onClick={() => updateDraft(clip.id, { hook: clip.suggestedHook?.trim() ?? draft.hook })}
+                          disabled={isPending}
+                        >
+                          Compare: {clip.suggestedHook}
+                        </button>
+                      ) : null}
                     </label>
                     <label className="stack-sm">
-                      Caption Text
+                      Post caption
                       <textarea
                         value={draft.caption}
                         disabled={isPending}
                         onChange={(event) => updateDraft(clip.id, { caption: event.target.value })}
                       />
+                      {clip.suggestedCaption?.trim() && clip.suggestedCaption.trim() !== draft.caption.trim() ? (
+                        <button
+                          type="button"
+                          className="button tertiary"
+                          onClick={() => updateDraft(clip.id, { caption: clip.suggestedCaption?.trim() ?? draft.caption })}
+                          disabled={isPending}
+                        >
+                          Use suggested caption
+                        </button>
+                      ) : null}
                     </label>
                     <label className="stack-sm">
                       Hashtags

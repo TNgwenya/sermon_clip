@@ -10,41 +10,58 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
   const params = await searchParams;
 
   return (
-    <main className="upload-page-shell stack-lg">
-      <header className="upload-hero stack-sm">
-        <Link href="/" className="text-link">Back to dashboard</Link>
-        <p className="kicker">Long sermon to clips</p>
-        <h1>Start with one sermon. Leave with polished clips.</h1>
+    <main id="main-content" className="upload-page-shell premium-intake-page stack-lg">
+      <header className="upload-hero premium-intake-hero">
+        <div className="stack-sm">
+          <Link href="/" className="text-link">Back to your studio</Link>
+          <p className="kicker">Add a sermon</p>
+          <h1>Create clips from one message.</h1>
+          <p className="muted">
+            Bring in the recording. Sermon Clip will find complete, meaningful moments for your team to review.
+          </p>
+        </div>
+        <span className="intake-step-label">Step 1 of 5</span>
       </header>
 
-      <NewSermonForm initialYoutubeUrl={params.youtubeUrl ?? ""} />
+      <nav className="workflow-spine intake-workflow-spine" aria-label="Sermon Clip workflow">
+        <span className="is-current"><strong>01</strong> Add sermon</span>
+        <span><strong>02</strong> Analyze</span>
+        <span><strong>03</strong> Review clips</span>
+        <span><strong>04</strong> Edit &amp; brand</span>
+        <span><strong>05</strong> Prepare &amp; post</span>
+      </nav>
 
-      <section className="card workflow-card stack-sm">
-        <h2>What happens next</h2>
-        <div className="workflow-strip">
-          <div className="workflow-step done">Add sermon</div>
-          <div className="workflow-step pending">Find best moments</div>
-          <div className="workflow-step pending">Approve clips</div>
-          <div className="workflow-step pending">Prepare clips</div>
-          <div className="workflow-step pending">Download and post</div>
-        </div>
-      </section>
+      <div className="premium-intake-layout">
+        <NewSermonForm initialYoutubeUrl={params.youtubeUrl ?? ""} />
 
-      <section className="upload-preview-band">
-        <div className="sermon-before-frame">
-          <span className="small muted">Source sermon</span>
-          <div className="wide-video-placeholder" />
-        </div>
-        <div className="flow-arrow">to</div>
-        <div className="shorts-stack-preview" aria-label="Generated clip preview">
-          <div className="shorts-card-preview">
-            <span>Prayer moment</span>
+        <aside className="upload-outcome-panel" aria-label="What Sermon Clip will prepare">
+          <div className="stack-sm">
+            <p className="kicker">What you will get</p>
+            <h2>A thoughtful first cut, ready for human review.</h2>
+            <p className="muted">
+              Sermon Clip keeps the message intact while helping your team move faster.
+            </p>
           </div>
-          <div className="shorts-card-preview second">
-            <span>Quote clip</span>
+
+          <div className="outcome-media-composition" aria-hidden="true">
+            <div className="outcome-source-frame">
+              <span>Full sermon</span>
+              <strong>48:20</strong>
+            </div>
+            <span className="outcome-bridge">becomes</span>
+            <div className="outcome-clip-stack">
+              <div><span>Strong opening</span><strong>0:42</strong></div>
+              <div><span>Teaching moment</span><strong>0:58</strong></div>
+            </div>
           </div>
-        </div>
-      </section>
+
+          <ol className="outcome-assurance-list">
+            <li><strong>Meaningful moments</strong><span>Suggestions are chosen for clarity, context, and ministry value.</span></li>
+            <li><strong>Your approval stays central</strong><span>Nothing moves to posting until your team reviews it.</span></li>
+            <li><strong>Ready for every channel</strong><span>Edit captions, framing, branding, and post copy in one workflow.</span></li>
+          </ol>
+        </aside>
+      </div>
     </main>
   );
 }

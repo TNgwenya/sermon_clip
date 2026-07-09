@@ -14,6 +14,9 @@ import { ClipAssetRecoveryButton } from "@/components/clip-asset-recovery-button
 import { buildClipAssetRecoveryPlan } from "@/lib/clipAssetRecovery";
 import { isFreshRemotePreview } from "@/lib/clipPreview";
 import { resolveReadyMedia } from "@/lib/readyMedia";
+import { getPublishingServiceHealth } from "@/lib/publishingServiceHealth";
+import { parseClipCoverFrameSelection } from "@/lib/clipCoverFrame";
+import { extractCaptionPackage } from "@/lib/clipStudio";
 
 export const dynamic = "force-dynamic";
 
@@ -117,6 +120,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
     packageHistory,
     socialAccounts,
     scheduledPosts,
+    publishingServiceHealth,
     preparingClipCount,
     approvedWaitingClipCount,
     failedPreparationClipCount,
@@ -132,6 +136,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         title: true,
         hook: true,
         caption: true,
+        captionData: true,
         hashtags: true,
         score: true,
         finalQualityScore: true,
@@ -175,6 +180,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
     listPostingPackageHistory(),
     listSocialAccounts(),
     listScheduledPosts(),
+    getPublishingServiceHealth(),
     prisma.clipCandidate.count({
       where: preparingWhere,
     }),
@@ -242,11 +248,21 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
   const clips = await Promise.all(
     clipRecords.map(async (clip) => {
       const media = await resolveReadyMedia(clip, { trustMetadata: controlPanelMode });
+      const coverFrameSelection = parseClipCoverFrameSelection(clip.captionData);
+      const postCopy = extractCaptionPackage(
+        clip.captionData,
+        clip.caption,
+        normalizeStringArray(clip.hashtags),
+      );
       return {
         id: clip.id,
         title: clip.title,
         hook: clip.hook,
-        caption: clip.caption,
+        caption: postCopy.primaryCaption ?? clip.caption,
+        shortCaption: postCopy.shortCaption,
+        platformCaption: postCopy.platformCaption,
+        coverFrameSelected: Boolean(coverFrameSelection),
+        coverFrameTimeSeconds: coverFrameSelection?.timeSeconds ?? null,
         hashtags: clip.hashtags,
         score: clip.score,
         finalQualityScore: clip.finalQualityScore,
@@ -308,17 +324,17 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
   const downloadAllHref = buildReadyDownloadHref(clips.filter((clip) => clip.mediaReady).map((clip) => clip.id));
 
   return (
-    <main className="ready-page-shell stack-lg">
-      <header className="ready-publishing-header">
+    <main className="ready-page-shell premium-ready-page stack-lg">
+      <header className="ready-publishing-header premium-ready-header">
         <div className="ready-title-block">
           <p className="kicker">Ready to post</p>
-          <h1>Ready to Post</h1>
+          <h1>Prepare your next post</h1>
           <p className="muted">
             {scopedClipTitle
-              ? `Review ${scopedClipTitle}${scopedSermonTitle ? ` from ${scopedSermonTitle}` : ""}, copy the caption, and choose the next posting step.`
+              ? `Review ${scopedClipTitle}${scopedSermonTitle ? ` from ${scopedSermonTitle}` : ""}, prepare the platform copy, then download or schedule it.`
             : scopedSermonTitle
-              ? `Review finished clips from ${scopedSermonTitle}, then download, copy captions, or schedule the best next post.`
-              : "Download, schedule, and hand off approved clips."}
+              ? `Choose a finished clip from ${scopedSermonTitle}, check the final video and caption, then send it to the right channel.`
+              : "Choose a finished sermon clip, prepare its post, then download or schedule it."}
           </p>
           {scopedClipTitle || scopedSermonTitle ? (
             <div className="ready-scope-pill">
@@ -328,6 +344,9 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           ) : null}
           <div className="ready-quick-stats" aria-label="Prepared clip summary">
             <span className="ready-stat-ready"><strong>{downloadableClipCount}</strong> ready</span>
+            {preparingClipCount > 0 ? (
+              <span><strong>{preparingClipCount}</strong> preparing</span>
+            ) : null}
             {blockedReadyClipCount > 0 ? (
               <span className="ready-stat-repair"><strong>{blockedReadyClipCount}</strong> needs repair</span>
             ) : null}
@@ -338,9 +357,9 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           </div>
         </div>
         <nav className="ready-publishing-nav" aria-label="Ready to post actions">
-          {scopeIsActive ? <Link href="/ready-to-post" className="button secondary">All ready clips</Link> : null}
+          {scopeIsActive ? <Link href="/ready-to-post" className="button tertiary">All ready clips</Link> : null}
           {!controlPanelMode && downloadableClipCount > 0 ? (
-            <a href={downloadAllHref} className="button primary">
+            <a href={downloadAllHref} className="button secondary">
               {blockedReadyClipCount > 0 ? "Download ready clips" : "Download all"}
             </a>
           ) : null}
@@ -350,13 +369,34 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
             </Link>
           ) : null}
         </nav>
+
+        <ol className="premium-ready-steps" aria-label="Ready-to-post workflow">
+          <li className={clipId ? "is-complete" : "is-current"}>
+            <span>1</span>
+            <div><strong>Choose a clip</strong><small>Start with the message you want to share.</small></div>
+          </li>
+          <li className={clipId ? "is-current" : ""}>
+            <span>2</span>
+            <div><strong>Prepare the post</strong><small>Check the final video and platform copy.</small></div>
+          </li>
+          <li>
+            <span>3</span>
+            <div><strong>Download or schedule</strong><small>Hand it off or place it on the calendar.</small></div>
+          </li>
+        </ol>
+
+        <nav className="premium-ready-view-nav" aria-label="Publishing desk sections">
+          <a href="#ready-clips">Ready clips</a>
+          <a href="#posting-calendar">Calendar</a>
+          <a href="#publishing-support">Publishing history</a>
+        </nav>
       </header>
 
       <div className="ready-publishing-workspace">
         {approvedWaitingClipCount > 0 ? (
-          <section className="ready-prep-command" aria-label="Approved clips waiting for preparation">
+          <section className="ready-prep-command premium-ready-prep" aria-label="Approved clips waiting for preparation">
             <div className="ready-prep-copy">
-              <p className="kicker">{failedPreparationClipCount > 0 ? "Needs recovery" : "Needs preparation"}</p>
+              <p className="kicker">{failedPreparationClipCount > 0 ? "Needs recovery" : "Stage 2 · Prepare post"}</p>
               <h2>
                 {failedPreparationClipCount > 0
                   ? `${failedPreparationClipCount} clip${failedPreparationClipCount === 1 ? "" : "s"} ${failedPreparationClipCount === 1 ? "needs" : "need"} attention`
@@ -417,20 +457,26 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
                     ) : (
                       <p className="muted small">{clip.caption || "Caption will be packaged during preparation."}</p>
                     )}
-                    <div className="clip-badge-row">
+                    <div className="premium-ready-prep-state">
                       <span className="status-pill status-approved">Approved</span>
-                      <span className={`status-pill ${clip.renderStatus === "FAILED" ? "quality-reject" : ""}`}>
-                        Video {clip.renderStatus === "FAILED" ? "needs attention" : "readying"}
-                      </span>
-                      <span className={`status-pill ${clip.exportStatus === "FAILED" ? "quality-reject" : ""}`}>
-                        Download {clip.exportStatus === "FAILED" ? "needs attention" : "pending"}
-                      </span>
-                      <span className={`status-pill ${clip.captionStatus === "FAILED" ? "quality-reject" : ""}`}>
-                        Captions {clip.captionStatus === "FAILED" ? "need attention" : "readying"}
-                      </span>
+                      {recoveryPlan.hasRecoverableIssue ? <span className="status-pill quality-reject">Needs attention</span> : null}
                     </div>
-                    <Link href={`/sermons/${clip.sermon.id}/clips/${clip.id}/studio`} className="text-link">
-                      Open Studio
+                    <details className="premium-ready-prep-details">
+                      <summary>Preparation details</summary>
+                      <div className="clip-badge-row">
+                        <span className={`status-pill ${clip.renderStatus === "FAILED" ? "quality-reject" : ""}`}>
+                          Video {clip.renderStatus === "FAILED" ? "needs attention" : "readying"}
+                        </span>
+                        <span className={`status-pill ${clip.exportStatus === "FAILED" ? "quality-reject" : ""}`}>
+                          Download {clip.exportStatus === "FAILED" ? "needs attention" : "pending"}
+                        </span>
+                        <span className={`status-pill ${clip.captionStatus === "FAILED" ? "quality-reject" : ""}`}>
+                          Captions {clip.captionStatus === "FAILED" ? "need attention" : "readying"}
+                        </span>
+                      </div>
+                    </details>
+                    <Link href={`/sermons/${clip.sermon.id}/clips/${clip.id}/studio`} className="button tertiary">
+                      Open in Studio
                     </Link>
                   </article>
                 );
@@ -438,6 +484,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
             </div>
           </section>
         ) : null}
+        <ReadyQueueLiveRefresh status={queueStatus} />
         <ReadyQueueExperience
           clips={clips}
           clipScopeIds={scopeIsActive ? scopeClipIds : null}
@@ -446,9 +493,9 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           packageHistory={visiblePackageHistory}
           initialSocialAccounts={socialAccounts}
           initialScheduledPosts={visibleScheduledPosts}
+          initialPublishingServiceHealth={publishingServiceHealth}
           controlPanelMode={controlPanelMode}
         />
-        <ReadyQueueLiveRefresh status={queueStatus} />
       </div>
     </main>
   );

@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { ZodError } from "zod";
 
 import { prisma } from "@/lib/prisma";
@@ -54,6 +55,7 @@ import {
   decideClipTranscriptSafety,
   mergeTranscriptSafetyBlocker,
 } from "@/server/agents/localLanguageTranscriptSafety";
+import { detectClipArc } from "@/server/agents/clipArcDetection";
 
 export type ClipWindow = {
   windowId: string;
@@ -1514,6 +1516,133 @@ function assessCandidateLandingEvidence(input: {
   };
 }
 
+type GeneratedClipEvidence = {
+  rawAiCandidate: Prisma.InputJsonValue;
+  qualityDebugSnapshot: Prisma.InputJsonValue;
+  captionData?: Prisma.InputJsonValue;
+  hookStrengthScore?: number;
+  standaloneClarityScore?: number;
+  emotionalImpactScore?: number;
+  ministryValueScore?: number;
+  shareabilityScore?: number;
+  bestPlatform?: string;
+  arcCompletenessScore: number;
+  clipArcType: ReturnType<typeof detectClipArc>["clipArcType"];
+  arcSummary: string;
+  setupStartTime: number | null;
+  mainPointTime: number | null;
+  payoffTime: number | null;
+  applicationTime: number | null;
+  whyThisClipFeelsComplete: string;
+  whatContextMightBeMissing: string | null;
+};
+
+function toInputJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
+
+function resolveCandidateGenerationSource(
+  candidate: ClipJsonCandidateWithRuntimeMetadata,
+): "AI_MODEL" | "DETERMINISTIC_TRANSCRIPT" | "TRANSCRIPT_RESCUE" {
+  if (candidate.canonicalizationWarnings?.includes("LOW_TRANSCRIPT_TIMED_FALLBACK")) {
+    return "TRANSCRIPT_RESCUE";
+  }
+
+  if (!candidate.responseFormat || /(?:deterministic|coverage) top-up/i.test(candidate.reasonSelected)) {
+    return "DETERMINISTIC_TRANSCRIPT";
+  }
+
+  return "AI_MODEL";
+}
+
+/**
+ * Builds the durable content evidence saved with every generated suggestion.
+ * Curation deliberately relies on this snapshot instead of treating an AI
+ * score as proof that the excerpt came from the selected sermon range.
+ */
+function buildGeneratedClipEvidence(
+  candidate: ClipJsonCandidateWithRuntimeMetadata,
+  segments: TranscriptSegmentRecord[],
+): GeneratedClipEvidence {
+  const transcriptGrounding = assessCandidateTranscriptGrounding({
+    candidateTranscriptText: candidate.transcriptText,
+    startTimeSeconds: candidate.startTimeSeconds,
+    endTimeSeconds: candidate.endTimeSeconds,
+    segments,
+  });
+  const landingEvidence = assessCandidateLandingEvidence({
+    candidate,
+    startTimeSeconds: candidate.startTimeSeconds,
+    endTimeSeconds: candidate.endTimeSeconds,
+    segments,
+  });
+  const arc = detectClipArc(candidate, segments.filter((segment) => (
+    segment.endTimeSeconds > candidate.startTimeSeconds &&
+    segment.startTimeSeconds < candidate.endTimeSeconds
+  )));
+  const inSelectedRange = (value: number | null): number | null => (
+    typeof value === "number" &&
+    value >= candidate.startTimeSeconds &&
+    value <= candidate.endTimeSeconds
+      ? value
+      : null
+  );
+  const source = resolveCandidateGenerationSource(candidate);
+  const hasContentPackage = Boolean(
+    candidate.captionPackage || candidate.socialPotential || candidate.selectionReasoning,
+  );
+  const captionData = hasContentPackage
+    ? toInputJson({
+        schemaVersion: 1,
+        ...(candidate.captionPackage ? { captionPackage: candidate.captionPackage } : {}),
+        contentIntelligence: {
+          schemaVersion: 1,
+          source,
+          socialPotential: candidate.socialPotential ?? null,
+          selectionReasoning: candidate.selectionReasoning ?? null,
+        },
+      })
+    : undefined;
+
+  return {
+    rawAiCandidate: toInputJson(candidate),
+    qualityDebugSnapshot: toInputJson({
+      schemaVersion: 1,
+      provenance: {
+        source,
+        responseFormat: candidate.responseFormat ?? null,
+        canonicalizationWarnings: candidate.canonicalizationWarnings ?? [],
+      },
+      transcriptGrounding,
+      landingEvidence,
+      arcEvidence: {
+        clipArcType: arc.clipArcType,
+        arcCompletenessScore: arc.arcCompletenessScore,
+        whyThisClipFeelsComplete: arc.whyThisClipFeelsComplete,
+        whatContextMightBeMissing: arc.whatContextMightBeMissing,
+      },
+    }),
+    captionData,
+    hookStrengthScore: candidate.socialPotential?.hookStrength,
+    standaloneClarityScore:
+      candidate.socialPotential?.standaloneUsefulnessScore ?? candidate.socialPotential?.clarityScore,
+    emotionalImpactScore: candidate.socialPotential?.emotionalImpactScore,
+    ministryValueScore: candidate.socialPotential?.ministryValueScore,
+    shareabilityScore:
+      candidate.socialPotential?.shareabilityScore ?? candidate.socialPotential?.socialMediaPotentialScore,
+    bestPlatform: candidate.socialPotential?.recommendedPlatforms[0],
+    arcCompletenessScore: arc.arcCompletenessScore,
+    clipArcType: arc.clipArcType,
+    arcSummary: arc.arcSummary,
+    setupStartTime: inSelectedRange(arc.setupStartTime),
+    mainPointTime: inSelectedRange(arc.mainPointTime),
+    payoffTime: inSelectedRange(arc.payoffTime),
+    applicationTime: inSelectedRange(arc.applicationTime),
+    whyThisClipFeelsComplete: arc.whyThisClipFeelsComplete,
+    whatContextMightBeMissing: arc.whatContextMightBeMissing,
+  };
+}
+
 function repairMissingLanding<T extends LooseClipCandidate>(
   candidate: T,
   segments: TranscriptSegmentRecord[],
@@ -2836,6 +2965,7 @@ export async function generateClipSuggestions(
             candidate,
           });
           const safetyRequiresReview = transcriptSafety.status === "REVIEW_REQUIRED";
+          const generatedEvidence = buildGeneratedClipEvidence(candidate, segments);
 
           return {
             sermonId: sermon.id,
@@ -2873,6 +3003,7 @@ export async function generateClipSuggestions(
             riskLevel: candidate.riskLevel,
             riskReasons: candidate.riskReasons,
             contextWarning: safetyRequiresReview ? true : candidate.contextWarning,
+            ...generatedEvidence,
             qualityLabel: safetyRequiresReview ? "NEEDS_EDITING" : undefined,
             postReadyStatus: safetyRequiresReview ? "NEEDS_EDITING" : undefined,
             postReadyBlockers: safetyRequiresReview ? mergeTranscriptSafetyBlocker([]) : undefined,
@@ -2997,6 +3128,7 @@ export const __clipIntelligenceTestUtils = {
   scoreMomentForWindows,
   assessCandidateTranscriptGrounding,
   assessCandidateLandingEvidence,
+  buildGeneratedClipEvidence,
   repairMissingLanding,
   repairWeakOpening,
   clampCandidateToBounds,

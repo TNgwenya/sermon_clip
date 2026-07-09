@@ -3483,12 +3483,19 @@ textarea::placeholder {
 .feature-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 200;
   display: grid;
   place-items: center;
   padding: 1.5rem;
   background: rgba(0, 0, 0, 0.76);
   backdrop-filter: blur(8px);
+}
+
+@media (max-width: 1279px) {
+  .premium-app:has(.feature-modal-backdrop) .app-rail {
+    opacity: 0;
+    pointer-events: none;
+  }
 }
 
 .feature-modal {
@@ -6801,6 +6808,30 @@ textarea::placeholder {
   gap: 0.4rem;
 }
 
+.schedule-mode-guidance {
+  display: grid;
+  gap: 0.28rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #101014;
+  padding: 0.72rem;
+}
+
+.schedule-mode-guidance > strong {
+  color: #f8fafc;
+  font-size: 0.9rem;
+}
+
+.schedule-mode-guidance.is-ready {
+  border-color: rgba(74, 222, 128, 0.34);
+  background: rgba(74, 222, 128, 0.07);
+}
+
+.schedule-mode-guidance.needs-attention {
+  border-color: rgba(251, 191, 36, 0.34);
+  background: rgba(251, 191, 36, 0.07);
+}
+
 .schedule-plan-preview {
   display: grid;
   gap: 0.45rem;
@@ -7953,7 +7984,7 @@ textarea::placeholder {
 
   .ready-mobile-action-bar {
     position: sticky;
-    bottom: 0.75rem;
+    bottom: calc(var(--mobile-nav-height, 0rem) + env(safe-area-inset-bottom) + 0.65rem);
     z-index: 12;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(6.75rem, 1fr));

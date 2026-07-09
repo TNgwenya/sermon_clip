@@ -101,7 +101,10 @@ import {
   type PlatformPreset,
 } from "@/lib/clipExportSettings";
 import {
+  DEFAULT_INTRO_DURATION_SECONDS,
+  DEFAULT_OUTRO_DURATION_SECONDS,
   isValidBrandingPreset,
+  normalizeBrandingDurationSeconds,
   resolveBrandingConfig,
   validateThemeColor,
   type BrandingPreset,
@@ -123,6 +126,11 @@ import {
   type SpeechCleanupIntensity,
 } from "@/lib/clipStudio";
 import { buildClipStudioPrepareAssetPlan } from "@/lib/clipStudioPrepare";
+import {
+  canChooseClipForProduction,
+  resolveClipStudioAssetInvalidation,
+  resolveClipStudioContentValues,
+} from "@/lib/clipContentPersistence";
 import {
   normalizeSpeechCleanupEdits,
   serializeSpeechCleanupEdits,
@@ -576,6 +584,7 @@ export type UpdateClipStudioEditsInput = {
   clipId: string;
   startTimestamp: string;
   endTimestamp: string;
+  title: string;
   mainCaption: string;
   shortCaption: string;
   platformCaption: string;
@@ -634,6 +643,8 @@ export type PrepareClipStudioForPostingInput = {
   editPreview: {
     startSeconds: number | null;
     endSeconds: number | null;
+    title: string;
+    editorialHook: string;
     mainCaption: string;
     shortCaption: string;
     platformCaption: string;
@@ -667,6 +678,8 @@ export type PrepareClipStudioForPostingInput = {
     lowerThirdEnabled: boolean;
     introEnabled: boolean;
     outroEnabled: boolean;
+    introDurationSeconds?: number;
+    outroDurationSeconds?: number;
     backgroundStyle: string;
     themeColor: string | null;
   };
@@ -2964,7 +2977,7 @@ export async function setClipReviewStatusAction(
 
   const clip = await prisma.clipCandidate.findUnique({
     where: { id: normalizedClipId },
-    select: { id: true, sermonId: true, status: true },
+    select: { id: true, sermonId: true, status: true, transcriptSafetyStatus: true },
   });
 
   if (!clip) {
@@ -2975,6 +2988,13 @@ export async function setClipReviewStatusAction(
     return {
       success: false,
       message: "Ready-to-post clips are locked. Open Clip Studio and prepare a new version if you need changes.",
+    };
+  }
+
+  if (status === "APPROVED" && !canChooseClipForProduction(clip.transcriptSafetyStatus)) {
+    return {
+      success: false,
+      message: "Review the transcript wording before choosing this moment for production.",
     };
   }
 
@@ -3052,6 +3072,7 @@ export async function updateClipReviewContentAction(
       hashtags,
       clipNotes: parsed.data.clipNotes.trim() || null,
       isManuallyEdited: true,
+      qualityReviewedAt: null,
     },
   });
 
@@ -3457,6 +3478,7 @@ export async function runClipBatchReviewAction(input: {
       id: true,
       sermonId: true,
       status: true,
+      transcriptSafetyStatus: true,
     },
   });
 
@@ -3479,6 +3501,11 @@ export async function runClipBatchReviewAction(input: {
 
         if (clip.status === "EXPORTED" && ["approve", "reject", "pending"].includes(input.action)) {
           failures.push({ clipId, reason: "Ready-to-post clips are locked. Open Clip Studio to prepare a new version." });
+          continue;
+        }
+
+        if (input.action === "approve" && !canChooseClipForProduction(clip.transcriptSafetyStatus)) {
+          failures.push({ clipId, reason: "Review the transcript wording before choosing this moment for production." });
           continue;
         }
 
@@ -3614,17 +3641,7 @@ export async function prepareApprovedClipsAction(input: {
   return runOperationWithLogging<PrepareApprovedClipsState>(
     { sermonId, operation: "prepare_approved_clips" },
     async () => {
-      const [sermon, brandingSettings] = await Promise.all([
-        prisma.sermon.findUnique({
-          where: { id: sermonId },
-          select: {
-            title: true,
-            speakerName: true,
-            churchName: true,
-          },
-        }),
-        getBrandingSettings(),
-      ]);
+      const brandingSettings = await getBrandingSettings();
       let processed = 0;
       let prepared = 0;
       let captionsAdded = 0;
@@ -3704,27 +3721,9 @@ export async function prepareApprovedClipsAction(input: {
               clipId: clip.id,
               sermonId,
               layoutStrategy: resolvedLayoutStrategy,
-              brandingOverlay: sermon
-                ? {
-                    config: {
-                      enabled: true,
-                      preset: "CLEAN_LOWER_THIRD",
-                      showChurchName: true,
-                      showSermonTitle: true,
-                      showPreacherName: true,
-                      watermarkEnabled: true,
-                      lowerThirdEnabled: true,
-                      introEnabled: false,
-                      outroEnabled: false,
-                      backgroundStyle: "NONE",
-                      themeColor: brandingSettings.primaryBrandColor,
-                    },
-                    sermonTitle: sermon.title,
-                    preacherName: sermon.speakerName,
-                    churchName: sermon.churchName,
-                    watermarkPosition: brandingSettings.watermarkPosition,
-                  }
-                : null,
+              // renderClipOverlay is the canonical visual-composition stage.
+              // Passing branding again here would duplicate lower thirds and watermarks.
+              brandingOverlay: null,
             });
           }
 
@@ -4145,6 +4144,7 @@ export async function updateClipStudioEditsAction(
       status: true,
       startTimeSeconds: true,
       endTimeSeconds: true,
+      title: true,
       hook: true,
       caption: true,
       hashtags: true,
@@ -4308,9 +4308,15 @@ export async function updateClipStudioEditsAction(
     };
   }
 
-  const mainCaption = input.applyCaptionsToClip
-    ? normalizedCaptionCues.map((cue) => cue.text).join(" ").trim()
-    : input.mainCaption.trim();
+  const contentValues = resolveClipStudioContentValues({
+    title: input.title,
+    mainCaption: input.mainCaption,
+    editorialHook: input.hook,
+    existingTitle: clip.title,
+    existingEditorialHook: clip.hook,
+  });
+  const title = contentValues.title;
+  const mainCaption = contentValues.socialCaption;
 
   const normalizedCaptionStylePresetId = normalizeClipStudioCaptionStylePresetId(input.captionStylePresetId);
   const normalizedCaptionPosition = normalizeClipStudioCaptionPosition(input.captionPosition);
@@ -4325,7 +4331,7 @@ export async function updateClipStudioEditsAction(
   };
   const normalizedSpeechCleanupEdits = normalizeSpeechCleanupEdits(input.speechCleanupEdits, timing.durationSeconds);
   const serializedSpeechCleanupEdits = serializeSpeechCleanupEdits(normalizedSpeechCleanupEdits) as Prisma.InputJsonValue | null;
-  const hookText = input.hook.trim() || normalizedHookOverlay.text;
+  const hookText = contentValues.editorialHook;
   if (normalizedHookOverlay.enabled && !normalizedHookOverlay.text) {
     return {
       success: false,
@@ -4354,21 +4360,31 @@ export async function updateClipStudioEditsAction(
     ? clip.hashtags.filter((item): item is string => typeof item === "string")
     : [];
 
-  const captionChanged =
+  const socialCopyChanged =
+    clip.title !== title ||
     clip.caption !== mainCaption ||
-    JSON.stringify(previousCues) !== JSON.stringify(normalizedCaptionCues) ||
     captionPackageRecord["shortCaption"] !== shortCaption ||
-    captionPackageRecord["platformCaption"] !== platformCaption ||
+    captionPackageRecord["platformCaption"] !== platformCaption;
+  const captionCuesChanged = JSON.stringify(previousCues) !== JSON.stringify(normalizedCaptionCues);
+  const onVideoCaptionChanged =
+    captionCuesChanged ||
     captionDataRecord["applyCaptionsToClip"] !== input.applyCaptionsToClip ||
     captionDataRecord["captionStylePresetId"] !== normalizedCaptionStylePresetId ||
     captionDataRecord["captionPosition"] !== normalizedCaptionPosition ||
     JSON.stringify(previousCaptionAppearance) !== JSON.stringify(normalizedCaptionAppearance);
   const hashtagChanged = previousHashtags.join("|") !== hashtags.join("|");
-  const hookChanged = clip.hook !== hookText || JSON.stringify(previousHookOverlay) !== JSON.stringify(normalizedHookOverlay);
+  const editorialHookChanged = clip.hook !== hookText;
+  const visualHookChanged = JSON.stringify(previousHookOverlay) !== JSON.stringify(normalizedHookOverlay);
   const brollLayerChanged = JSON.stringify(previousBrollLayer) !== JSON.stringify(normalizedBrollLayer);
   const speechCleanupChanged =
     JSON.stringify(previousSpeechCleanup) !== JSON.stringify(normalizedSpeechCleanup) ||
     JSON.stringify(previousSpeechCleanupEdits) !== JSON.stringify(normalizedSpeechCleanupEdits);
+  const assetInvalidation = resolveClipStudioAssetInvalidation({
+    boundariesChanged,
+    speechCleanupChanged,
+    onVideoCaptionChanged,
+    visualOverlayChanged: visualHookChanged || brollLayerChanged,
+  });
 
   await prisma.clipCandidate.update({
     where: { id: clip.id },
@@ -4379,6 +4395,7 @@ export async function updateClipStudioEditsAction(
       adjustedStartTimeSeconds: timing.startSeconds,
       adjustedEndTimeSeconds: timing.endSeconds,
       transcriptText: selectedTranscriptText,
+      title,
       boundaryQuality: "NEEDS_REVIEW",
       boundaryAdjustmentReason: `Clip boundaries were manually edited to ${timing.startSeconds.toFixed(2)}-${timing.endSeconds.toFixed(2)}s. Re-review recommended.`,
       caption: mainCaption,
@@ -4429,6 +4446,9 @@ export async function updateClipStudioEditsAction(
         },
       },
       isManuallyEdited: true,
+      ...((boundariesChanged || socialCopyChanged || hashtagChanged || editorialHookChanged || captionCuesChanged)
+        ? { qualityReviewedAt: null }
+        : {}),
       ...(input.applyCaptionsToClip && normalizedCaptionCues.length > 0
         ? {
             transcriptSafetyStatus: "REVIEWED" as const,
@@ -4442,7 +4462,7 @@ export async function updateClipStudioEditsAction(
     },
   });
 
-  if (boundariesChanged) {
+  if (assetInvalidation === "BOUNDARIES") {
     await appendPipelineLog(clip.sermonId, `Regeneration invalidation started for clip ${clip.id}: boundary change from Clip Studio.`);
     await invalidateAfterBoundaryOrCropChange(
       clip.id,
@@ -4463,7 +4483,7 @@ export async function updateClipStudioEditsAction(
         ? `Regeneration invalidation completed for clip ${clip.id}: render/burn/overlay/export freshness updated; captions rebuilt from selected transcript.`
         : `Regeneration invalidation completed for clip ${clip.id}: render/caption/burn/overlay/export freshness updated.`,
     );
-  } else if (speechCleanupChanged) {
+  } else if (assetInvalidation === "SPEECH_CLEANUP") {
     await appendPipelineLog(clip.sermonId, `Regeneration invalidation started for clip ${clip.id}: speech cleanup setting change from Clip Studio.`);
     await invalidateAfterBoundaryOrCropChange(
       clip.id,
@@ -4473,7 +4493,7 @@ export async function updateClipStudioEditsAction(
       clip.sermonId,
       `Regeneration invalidation completed for clip ${clip.id}: render/caption/burn/overlay/export freshness updated.`,
     );
-  } else if (captionChanged || hashtagChanged) {
+  } else if (assetInvalidation === "ON_VIDEO_CAPTIONS") {
     await appendPipelineLog(clip.sermonId, `Regeneration invalidation started for clip ${clip.id}: caption change from Clip Studio.`);
     await markManualCaptionEditPreparedForRebuild({
       clipId: clip.id,
@@ -4481,13 +4501,13 @@ export async function updateClipStudioEditsAction(
       captionsEnabled: input.applyCaptionsToClip,
       captionBurnStatus: clip.captionBurnStatus,
       exportStatus: clip.exportStatus,
-      reason: "Caption or hashtags changed from Clip Studio. Burned captions and exports require regeneration.",
+      reason: "On-video caption settings changed from Clip Studio. Burned captions and exports require regeneration.",
     });
     await appendPipelineLog(
       clip.sermonId,
       `Regeneration invalidation completed for clip ${clip.id}: manual caption settings preserved and downstream assets updated.`,
     );
-  } else if (hookChanged || brollLayerChanged) {
+  } else if (assetInvalidation === "VISUAL_OVERLAYS") {
     await appendPipelineLog(clip.sermonId, `Regeneration invalidation started for clip ${clip.id}: visual overlay change from Clip Studio.`);
     await invalidateAfterOverlaySettingChange(
       clip.id,
@@ -4496,6 +4516,11 @@ export async function updateClipStudioEditsAction(
     await appendPipelineLog(
       clip.sermonId,
       `Regeneration invalidation completed for clip ${clip.id}: overlay/export freshness updated.`,
+    );
+  } else if (socialCopyChanged || hashtagChanged || editorialHookChanged) {
+    await appendPipelineLog(
+      clip.sermonId,
+      `Post copy updated for clip ${clip.id}; prepared video assets remain current and content guidance should be rechecked.`,
     );
   }
 
@@ -4695,6 +4720,8 @@ export async function updateClipBrandingAction(input: {
   lowerThirdEnabled: boolean;
   introEnabled: boolean;
   outroEnabled: boolean;
+  introDurationSeconds?: number;
+  outroDurationSeconds?: number;
   backgroundStyle: string;
   themeColor: string | null;
 }): Promise<ClipBrandingActionState> {
@@ -4744,6 +4771,14 @@ export async function updateClipBrandingAction(input: {
     lowerThirdEnabled: input.lowerThirdEnabled,
     introEnabled: input.introEnabled,
     outroEnabled: input.outroEnabled,
+    introDurationSeconds: normalizeBrandingDurationSeconds(
+      input.introDurationSeconds,
+      DEFAULT_INTRO_DURATION_SECONDS,
+    ),
+    outroDurationSeconds: normalizeBrandingDurationSeconds(
+      input.outroDurationSeconds,
+      DEFAULT_OUTRO_DURATION_SECONDS,
+    ),
     backgroundStyle: ["NONE", "SOFT_GRADIENT", "SOLID_BRAND", "BLURRED_TINT"].includes(input.backgroundStyle)
       ? input.backgroundStyle
       : previousConfig.backgroundStyle,
@@ -4939,7 +4974,7 @@ function createQueuedRecord(input: {
   captionText: string | null;
   captionBurnStatus: "NOT_BURNED" | "BURNING" | "COMPLETED" | "FAILED" | null;
   renderVersion: string;
-  brandingSnapshot?: Record<string, string | boolean | null> | null;
+  brandingSnapshot?: Record<string, string | number | boolean | null> | null;
 }): ClipStudioExportRecord {
   const now = new Date().toISOString();
   const id = `${input.clipId}-${input.format}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -5035,13 +5070,6 @@ export async function renderClipStudioExportsAction(input: {
 
   const globalBranding = await getBrandingSettings().catch(() => null);
   const brandingConfig = resolveBrandingConfig(clip.captionData);
-  const watermarkPosition = (globalBranding?.watermarkPosition ?? "BOTTOM_RIGHT") as
-    | "TOP_LEFT"
-    | "TOP_RIGHT"
-    | "BOTTOM_LEFT"
-    | "BOTTOM_RIGHT"
-    | "CENTER";
-
   if (clip.status !== "APPROVED" && clip.status !== "EXPORTED") {
     return {
       success: false,
@@ -5141,6 +5169,8 @@ export async function renderClipStudioExportsAction(input: {
         lowerThirdEnabled: brandingConfig.lowerThirdEnabled,
         introEnabled: brandingConfig.introEnabled,
         outroEnabled: brandingConfig.outroEnabled,
+        introDurationSeconds: brandingConfig.introDurationSeconds ?? DEFAULT_INTRO_DURATION_SECONDS,
+        outroDurationSeconds: brandingConfig.outroDurationSeconds ?? DEFAULT_OUTRO_DURATION_SECONDS,
         backgroundStyle: brandingConfig.backgroundStyle,
         themeColor: brandingConfig.themeColor,
         logoAvailable,
@@ -5153,7 +5183,7 @@ export async function renderClipStudioExportsAction(input: {
     await updateClipStudioExportHistory(clip.id, workingHistory);
   }
 
-  if (preparePlan.prepareVideo || preparePlan.burnCaptions || preparePlan.skipCaptionBurn) {
+  if (preparePlan.prepareVideo || preparePlan.burnCaptions || preparePlan.skipCaptionBurn || queuedRecords.length > 0) {
     try {
       if (preparePlan.prepareVideo) {
         await renderApprovedClip(clip.id, {
@@ -5168,6 +5198,12 @@ export async function renderClipStudioExportsAction(input: {
         });
       } else if (preparePlan.skipCaptionBurn) {
         await markCaptionBurnSkippedForDisabledCaptions(clip.id, clip.sermonId);
+      }
+      if (queuedRecords.length > 0) {
+        await renderClipOverlay(clip.id, {
+          allowRerender: true,
+          force: true,
+        });
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Unknown render error.";
@@ -5255,13 +5291,9 @@ export async function renderClipStudioExportsAction(input: {
         allowReexport: true,
         force: true,
         versionTag,
-        brandingOverlay: {
-          config: brandingConfig,
-          sermonTitle: sermonTitleUsed,
-          preacherName: preacherNameUsed,
-          churchName: churchNameUsed,
-          watermarkPosition,
-        },
+        // The prepared overlay is the single source of truth for branding,
+        // timed cards, hook, and B-roll. Do not compose branding twice.
+        brandingOverlay: null,
       });
 
       const exists = await fileExists(exported.exportPath);
@@ -5384,7 +5416,8 @@ export async function prepareClipStudioForPostingAction(
     clipId,
     startTimestamp: formatSecondsForTimestampInput(startSeconds),
     endTimestamp: formatSecondsForTimestampInput(endSeconds),
-    mainCaption: input.editPreview.mainCaption || input.editPreview.onVideoCaptionText,
+    title: input.editPreview.title,
+    mainCaption: input.editPreview.mainCaption,
     shortCaption: input.editPreview.shortCaption,
     platformCaption: input.editPreview.platformCaption,
     hashtags: input.editPreview.hashtags,
@@ -5393,7 +5426,7 @@ export async function prepareClipStudioForPostingAction(
     captionStylePresetId: input.editPreview.captionStylePresetId,
     captionPosition: input.editPreview.captionPosition,
     captionAppearance: input.editPreview.captionAppearance,
-    hook: input.editPreview.hookOverlay.text,
+    hook: input.editPreview.editorialHook,
     hookOverlay: input.editPreview.hookOverlay,
     brollLayer: input.editPreview.brollLayer,
     speechCleanup: input.editPreview.speechCleanup,
@@ -5441,6 +5474,8 @@ export async function prepareClipStudioForPostingAction(
     lowerThirdEnabled: input.brandingConfig.lowerThirdEnabled,
     introEnabled: input.brandingConfig.introEnabled,
     outroEnabled: input.brandingConfig.outroEnabled,
+    introDurationSeconds: input.brandingConfig.introDurationSeconds,
+    outroDurationSeconds: input.brandingConfig.outroDurationSeconds,
     backgroundStyle: input.brandingConfig.backgroundStyle,
     themeColor: input.brandingConfig.themeColor,
   });

@@ -32,6 +32,7 @@ import { buildEditableCaptionCuesFromTranscriptSegments } from "@/lib/clipStudio
 import { ClipStudioEditor } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-editor";
 import { ClipStudioFormatFraming } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-format-framing";
 import { ClipStudioBranding } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-branding";
+import { ClipStudioCoverFrame } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-cover-frame";
 import { ClipStudioLivePreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-live-preview";
 import { ClipStudioPreviewProvider } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
 import { ClipStudioWorkbenchTabs } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-workbench-tabs";
@@ -52,8 +53,8 @@ import { buildClipAssetRecoveryPlan } from "@/lib/clipAssetRecovery";
 import { getBrandingSettings } from "@/server/branding/settings";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import { isFreshRemotePreview, resolveBestPreviewCandidate } from "@/lib/clipPreview";
-import { detectClipStudioAudioSilenceEvents } from "@/server/agents/clipStudioAudioReviewService";
 import { extractSpeechCleanupEdits } from "@/lib/speechCleanupPlan";
+import { parseClipCoverFrameSelection } from "@/lib/clipCoverFrame";
 
 type ClipStudioPageParams = {
   params: Promise<{ id: string; clipId: string }>;
@@ -131,6 +132,13 @@ function isStaleFinalExportFreshness(value: string | null | undefined): boolean 
   return value === "OUTDATED" || value === "NEEDS_REGENERATION" || value === "FAILED";
 }
 
+function formatContentPotential(score: number): string {
+  const normalized = score > 10 && score <= 100 ? score / 10 : score;
+  if (normalized >= 8) return "Strong";
+  if (normalized >= 6) return "Worth reviewing";
+  return "Needs refinement";
+}
+
 function extractFramingDecisionSummary(captionData: unknown): string | null {
   if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
     return null;
@@ -155,7 +163,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   const { id: sermonId, clipId } = await params;
   const localMediaAvailable = canRunLocalMediaProcessing();
 
-  const sermon = await prisma.sermon.findUnique({
+  const [sermon, clip] = await Promise.all([
+    prisma.sermon.findUnique({
     where: { id: sermonId },
     select: {
       id: true,
@@ -165,15 +174,10 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       language: true,
       sourceVideoPath: true,
     },
-  });
-
-  if (!sermon) {
-    notFound();
-  }
-
-  const clip = await prisma.clipCandidate.findUnique({
-    where: { id: clipId },
-    select: {
+    }),
+    prisma.clipCandidate.findUnique({
+      where: { id: clipId },
+      select: {
       id: true,
       sermonId: true,
       title: true,
@@ -265,38 +269,37 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
           boxesJson: true,
         },
       },
-    },
-  });
+      },
+    }),
+  ]);
 
-  if (!clip) {
+  if (!sermon || !clip || clip.sermonId !== sermonId) {
     notFound();
   }
 
-  if (clip.sermonId !== sermonId) {
-    notFound();
-  }
-
-  const transcriptSegments = await prisma.transcriptSegment.findMany({
-    where: {
-      sermonId,
-      startTimeSeconds: { lte: clip.endTimeSeconds + 20 },
-      endTimeSeconds: { gte: Math.max(0, clip.startTimeSeconds - 20) },
-    },
-    orderBy: { startTimeSeconds: "asc" },
-    take: 240,
-    select: {
-      id: true,
-      startTimeSeconds: true,
-      endTimeSeconds: true,
-      text: true,
-    },
-  });
-
-  const sermonDurationSegment = await prisma.transcriptSegment.findFirst({
-    where: { sermonId },
-    orderBy: { endTimeSeconds: "desc" },
-    select: { endTimeSeconds: true },
-  });
+  const [transcriptSegments, sermonDurationSegment, appBranding] = await Promise.all([
+    prisma.transcriptSegment.findMany({
+      where: {
+        sermonId,
+        startTimeSeconds: { lte: clip.endTimeSeconds + 20 },
+        endTimeSeconds: { gte: Math.max(0, clip.startTimeSeconds - 20) },
+      },
+      orderBy: { startTimeSeconds: "asc" },
+      take: 240,
+      select: {
+        id: true,
+        startTimeSeconds: true,
+        endTimeSeconds: true,
+        text: true,
+      },
+    }),
+    prisma.transcriptSegment.findFirst({
+      where: { sermonId },
+      orderBy: { endTimeSeconds: "desc" },
+      select: { endTimeSeconds: true },
+    }),
+    getBrandingSettings().catch(() => null),
+  ]);
 
   const hashtags = Array.isArray(clip.hashtags)
     ? (clip.hashtags as unknown[]).filter((h): h is string => typeof h === "string")
@@ -304,7 +307,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
 
   const captionPackage = extractCaptionPackage(clip.captionData, clip.caption, hashtags);
   const captionGuidance = extractCaptionGuidance(clip.captionData);
-  const fallbackOnVideoCaptionCues = extractOnVideoCaptionCues(clip.captionData, clip.caption, clip.durationSeconds);
+  const fallbackOnVideoCaptionCues = extractOnVideoCaptionCues(clip.captionData, clip.transcriptText, clip.durationSeconds);
   const captionStyleOverride = extractCaptionStyleOverride(clip.captionData);
   const captionPosition = extractCaptionPosition(clip.captionData);
   const captionAppearance = extractCaptionAppearanceSettings(clip.captionData);
@@ -325,11 +328,11 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     manualCropKeyframes: clip.manualCropKeyframes,
   });
   const brandingConfig = resolveBrandingConfig(clip.captionData);
-  const appBranding = await getBrandingSettings().catch(() => null);
   const logoAvailable = Boolean(appBranding?.churchLogoPath && appBranding.churchLogoPath.trim().length > 0);
   const exportHistory = resolveExportHistory(clip.captionData);
-  const exportHistoryWithFileState = await Promise.all(
-    exportHistory.map(async (record) => {
+  const latestExportHistory = exportHistory.filter((record) => record.isLatest).slice(0, 4);
+  const [exportHistoryWithFileState, currentExportFileExists] = await Promise.all([
+    Promise.all(latestExportHistory.map(async (record) => {
       const hasPath = Boolean(record.outputPath);
       if (!localMediaAvailable || !hasPath || !record.outputPath) {
         return { ...record, fileExists: false };
@@ -341,28 +344,19 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       } catch {
         return { ...record, fileExists: false };
       }
-    }),
-  );
-  const currentExportFileExists = localMediaAvailable && clip.exportedFilePath
-    ? await stat(clip.exportedFilePath)
+    })),
+    localMediaAvailable && clip.exportedFilePath
+      ? stat(clip.exportedFilePath)
         .then((fileStat) => fileStat.isFile() && fileStat.size > 0)
         .catch(() => false)
-    : false;
-  const sourceVideoExists = localMediaAvailable && sermon.sourceVideoPath
-    ? await stat(sermon.sourceVideoPath)
-        .then((fileStat) => fileStat.isFile() && fileStat.size > 0)
-        .catch(() => false)
-    : false;
-  const audioSilenceReview = sourceVideoExists && sermon.sourceVideoPath
-    ? await detectClipStudioAudioSilenceEvents({
-        sourceVideoPath: sermon.sourceVideoPath,
-        startTimeSeconds: clip.startTimeSeconds,
-        endTimeSeconds: clip.endTimeSeconds,
-        ffmpegPath: process.env.FFMPEG_PATH,
-      })
-        .then((events) => ({ events, analyzed: true }))
-        .catch(() => ({ events: [], analyzed: false }))
-    : { events: [], analyzed: false };
+      : Promise.resolve(false),
+  ]);
+  // Source media is verified by the preview and audio-review endpoints when it
+  // is actually requested. Avoid blocking Studio's first paint on disk I/O.
+  const sourceVideoPreviewAvailable = localMediaAvailable && Boolean(sermon.sourceVideoPath);
+  const audioSilenceReviewUrl = sourceVideoPreviewAvailable
+    ? `/api/clips/${clip.id}/audio-silence-review?start=${clip.startTimeSeconds}&end=${clip.endTimeSeconds}`
+    : null;
   const transcriptExcerpt = formatTranscriptExcerpt(clip.transcriptText);
   const studioTranscriptSegments = transcriptSegments.length > 0
     ? transcriptSegments
@@ -385,7 +379,9 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     startSeconds: clip.startTimeSeconds,
     endSeconds: clip.endTimeSeconds,
     durationSeconds: clip.durationSeconds,
-    mainCaption: onVideoCaptionCues.map((cue) => cue.text).join(" "),
+    title: clip.title,
+    editorialHook: clip.hook,
+    mainCaption: captionPackage.primaryCaption ?? clip.caption,
     shortCaption: captionPackage.shortCaption ?? "",
     platformCaption: captionPackage.platformCaption ?? "",
     onVideoCaptionText: onVideoCaptionCues.map((cue) => cue.text).join(" "),
@@ -398,8 +394,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     brollLayer,
     speechCleanup: speechCleanupSettings,
     speechCleanupEdits,
-    audioSilenceEvents: audioSilenceReview.events,
-    audioSilenceAnalyzed: audioSilenceReview.analyzed,
+    audioSilenceEvents: [],
+    audioSilenceAnalyzed: false,
     hashtags: captionPackage.hashtags.join(" "),
     isTimingValid: true,
   };
@@ -468,7 +464,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     || isStaleFinalExportFreshness(clip.exportFreshness)
   );
   const preparedFinalReady = hasPreparedMedia && !preparedFinalNeedsUpdate;
-  const latestExportRecords = exportHistoryWithFileState.filter((record) => record.isLatest).slice(0, 4);
+  const latestExportRecords = exportHistoryWithFileState;
   const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
   const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
 
@@ -482,59 +478,75 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       preacherName={sermon.speakerName}
     >
       <main className="container clip-studio-shell stack-md">
-      <header className="card clip-studio-topbar stack-sm">
-        <div className="clip-studio-topbar-row">
-          <div className="stack-sm">
-            <p className="kicker">Clip Studio</p>
-            <h1>{clip.title}</h1>
-            <p className="muted clip-studio-topbar-subtitle">{sermon.title}</p>
-            <div className="clip-studio-status-row">
-              <StatusBadge tone={clipStatusTone(clipStatus)}>
-                {formatClipStatusLabel(clipStatus, {
-                  isManuallyEdited: clip.isManuallyEdited,
-                  renderStatus,
-                })}
-              </StatusBadge>
-              <StatusBadge
-                tone={
-                  clip.boundaryQuality === "GOOD"
-                    ? "success"
-                    : clip.boundaryQuality === "NEEDS_REVIEW"
-                      ? "warning"
-                      : "danger"
-                }
-              >
-                {clip.boundaryQuality.replace("_", " ")}
-              </StatusBadge>
-              <StatusBadge tone={clip.score >= 7 ? "success" : clip.score >= 4 ? "accent" : "warning"}>
-                Score {clip.score.toFixed(1)}
-              </StatusBadge>
-              {clip.contextWarning ? <StatusBadge tone="warning">Needs context</StatusBadge> : null}
-              {transcriptReviewRequired ? <StatusBadge tone="warning">Transcript review needed</StatusBadge> : null}
-              {transcriptReviewed ? <StatusBadge tone="success">Transcript reviewed</StatusBadge> : null}
-            </div>
-            {transcriptReviewRequired ? (
-              <p className="warning-banner">
-                Review the local-language wording before preparing this clip. Saving checked caption cues in Studio will clear this safety gate; otherwise captions, export, and posting will stay blocked.
-              </p>
-            ) : null}
-          </div>
+        <header className="clip-studio-topbar" aria-labelledby="clip-studio-title">
+          <div className="clip-studio-topbar-row">
+            <div className="clip-studio-title-block">
+              <div className="stack-sm">
+                <p className="kicker">Clip Studio</p>
+                <h1 id="clip-studio-title">{clip.title}</h1>
+                <p className="muted clip-studio-topbar-subtitle">{sermon.title}</p>
+              </div>
 
-          <div className="clip-studio-topbar-actions">
-            <Link href={`/sermons/${sermonId}`} className="button tertiary">
-              Back to Sermon
-            </Link>
-            <Link href={`/sermons/${sermonId}/review`} className="button tertiary">
-              Back to Clips
-            </Link>
-            <ClipStudioPrepareButton
-              clipId={clip.id}
-              hasPreparedMedia={hasPreparedMedia}
-              serverNeedsUpdate={preparedFinalNeedsUpdate}
-            />
+              <div className="clip-studio-primary-status" aria-label="Current clip status">
+                <StatusBadge tone={clipStatusTone(clipStatus)}>
+                  {formatClipStatusLabel(clipStatus, {
+                    isManuallyEdited: clip.isManuallyEdited,
+                    renderStatus,
+                  })}
+                </StatusBadge>
+                <span className="muted small">Content potential · {formatContentPotential(clip.score)}</span>
+              </div>
+
+              <details className="clip-studio-status-details">
+                <summary>
+                  <span>Clip checks</span>
+                  <span className="muted small">
+                    {clip.boundaryQuality === "GOOD" ? "Timing looks good" : "Review timing and context"}
+                  </span>
+                </summary>
+                <div className="clip-studio-status-row">
+                  <StatusBadge
+                    tone={
+                      clip.boundaryQuality === "GOOD"
+                        ? "success"
+                        : clip.boundaryQuality === "NEEDS_REVIEW"
+                          ? "warning"
+                          : "danger"
+                    }
+                  >
+                    {clip.boundaryQuality.replace("_", " ")}
+                  </StatusBadge>
+                  {clip.contextWarning ? <StatusBadge tone="warning">Needs context</StatusBadge> : null}
+                  {transcriptReviewRequired ? <StatusBadge tone="warning">Transcript review needed</StatusBadge> : null}
+                  {transcriptReviewed ? <StatusBadge tone="success">Transcript reviewed</StatusBadge> : null}
+                </div>
+              </details>
+
+              {transcriptReviewRequired ? (
+                <p className="warning-banner">
+                  Review the local-language wording before preparing this clip. Saving checked caption cues in Studio will clear this safety gate; otherwise captions, export, and posting will stay blocked.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="clip-studio-topbar-actions" aria-label="Clip Studio navigation and preparation">
+              <div className="clip-studio-context-actions">
+                <Link href={`/sermons/${sermonId}`} className="button tertiary">
+                  Sermon overview
+                </Link>
+                <Link href={`/sermons/${sermonId}/review`} className="button tertiary">
+                  Review clips
+                </Link>
+              </div>
+              <ClipStudioPrepareButton
+                clipId={clip.id}
+                clipStatus={clipStatus}
+                hasPreparedMedia={hasPreparedMedia}
+                serverNeedsUpdate={preparedFinalNeedsUpdate}
+              />
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
 
       <div className="clip-studio-layout">
         <ClipStudioTranscriptPanel
@@ -553,7 +565,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
           <ClipStudioLivePreview
             hasPreview={hasPreview}
             previewSrc={previewSrc}
-            sourcePreviewSrc={sourceVideoExists ? `/api/sermons/${sermon.id}/source-preview` : null}
+            sourcePreviewSrc={sourceVideoPreviewAvailable ? `/api/sermons/${sermon.id}/source-preview` : null}
             unavailableDescription={
               localMediaAvailable || hasRemotePreview
                 ? undefined
@@ -592,6 +604,9 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
               <ClipStudioEditor
                 initialStartTimeSeconds={clip.startTimeSeconds}
                 initialEndTimeSeconds={clip.endTimeSeconds}
+                initialTitle={clip.title}
+                initialEditorialHook={clip.hook}
+                initialMainCaption={captionPackage.primaryCaption ?? clip.caption}
                 initialShortCaption={captionPackage.shortCaption ?? ""}
                 initialPlatformCaption={captionPackage.platformCaption ?? ""}
                 initialHashtags={captionPackage.hashtags}
@@ -602,12 +617,17 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 initialCaptionAppearance={captionAppearance}
                 brandCaptionStylePresetId={appBranding?.defaultCaptionStyleName ?? DEFAULT_CAPTION_STYLE_PRESET_ID}
                 suggestedHook={clip.suggestedHook ?? ""}
+                suggestedCaption={clip.suggestedCaption ?? ""}
+                titleOptions={captionPackage.titleOptions}
+                hookOptions={captionPackage.hookOptions}
+                ctaOptions={captionPackage.ctaOptions}
                 initialHookOverlay={hookOverlay}
                 initialBrollLayer={brollLayer}
                 initialSpeechCleanup={speechCleanupSettings}
                 initialSpeechCleanupEdits={speechCleanupEdits}
-                initialAudioSilenceEvents={audioSilenceReview.events}
-                initialAudioSilenceAnalyzed={audioSilenceReview.analyzed}
+                initialAudioSilenceEvents={[]}
+                initialAudioSilenceAnalyzed={false}
+                audioSilenceReviewUrl={audioSilenceReviewUrl}
                 transcriptSegments={studioTranscriptSegments}
                 knownDurationSeconds={sermonDurationSegment?.endTimeSeconds ?? null}
                 captionQualityScore={captionGuidance.qualityScore}
@@ -636,13 +656,21 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
               />
             }
             branding={
-              <ClipStudioBranding
-                initialConfig={brandingConfig}
-                churchName={sermon.churchName}
-                sermonTitle={sermon.title}
-                preacherName={sermon.speakerName}
-                logoAvailable={logoAvailable}
-              />
+              <div className="stack-md">
+                <ClipStudioBranding
+                  initialConfig={brandingConfig}
+                  churchName={sermon.churchName}
+                  sermonTitle={sermon.title}
+                  preacherName={sermon.speakerName}
+                  logoAvailable={logoAvailable}
+                />
+                <ClipStudioCoverFrame
+                  clipId={clip.id}
+                  durationSeconds={clip.durationSeconds ?? Math.max(0, clip.endTimeSeconds - clip.startTimeSeconds)}
+                  initialSelection={parseClipCoverFrameSelection(clip.captionData)}
+                  localMediaAvailable={localMediaAvailable}
+                />
+              </div>
             }
             post={
               <section className="clip-studio-details stack-md">

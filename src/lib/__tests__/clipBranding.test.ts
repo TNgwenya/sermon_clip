@@ -12,6 +12,8 @@ describe("resolveBrandingConfig", () => {
     expect(config.lowerThirdEnabled).toBe(true);
     expect(config.introEnabled).toBe(false);
     expect(config.outroEnabled).toBe(false);
+    expect(config.introDurationSeconds).toBe(2.5);
+    expect(config.outroDurationSeconds).toBe(3);
     expect(config.backgroundStyle).toBe("NONE");
   });
 
@@ -27,6 +29,7 @@ describe("resolveBrandingConfig", () => {
         lowerThirdEnabled: false,
         introEnabled: true,
         outroEnabled: false,
+        introDurationSeconds: 4.5,
         backgroundStyle: "SOFT_GRADIENT",
         themeColor: "#0F766E",
       },
@@ -35,6 +38,7 @@ describe("resolveBrandingConfig", () => {
     expect(config.enabled).toBe(true);
     expect(config.preset).toBe("MINIMAL_WATERMARK");
     expect(config.introEnabled).toBe(true);
+    expect(config.introDurationSeconds).toBe(4.5);
     expect(config.backgroundStyle).toBe("SOFT_GRADIENT");
     expect(config.themeColor).toBe("#0F766E");
   });
@@ -141,8 +145,8 @@ describe("preset summaries", () => {
       },
     );
 
-    expect(summary).toContain("intro brand badge");
-    expect(summary).toContain("outro brand badge");
+    expect(summary).toContain("intro brand card for 2.5s");
+    expect(summary).toContain("outro brand card for 3s");
     expect(summary).toContain("background style");
   });
 });

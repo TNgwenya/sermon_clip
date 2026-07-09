@@ -1,8 +1,13 @@
 "use client";
 
-import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
-import type { ClipBrandingConfig } from "@/lib/clipBranding";
+import {
+  DEFAULT_INTRO_DURATION_SECONDS,
+  DEFAULT_OUTRO_DURATION_SECONDS,
+  normalizeBrandingDurationSeconds,
+  type ClipBrandingConfig,
+} from "@/lib/clipBranding";
 import type {
   BrollLayerConfig,
   CaptionAppearanceSettings,
@@ -21,6 +26,8 @@ export type ClipStudioEditPreview = {
   startSeconds: number | null;
   endSeconds: number | null;
   durationSeconds: number | null;
+  title: string;
+  editorialHook: string;
   mainCaption: string;
   shortCaption: string;
   platformCaption: string;
@@ -61,6 +68,8 @@ type ClipStudioPreviewContextValue = {
   churchName: string;
   sermonTitle: string;
   preacherName: string;
+  isDraftDirty: boolean;
+  markDraftSaved: () => void;
   updateExportSettings: (settings: ExportSettings) => void;
   updateBrandingConfig: (config: ClipBrandingConfig) => void;
   updateEditPreview: (preview: ClipStudioEditPreview) => void;
@@ -115,6 +124,10 @@ function sameBrandingConfig(a: ClipBrandingConfig, b: ClipBrandingConfig): boole
     a.lowerThirdEnabled === b.lowerThirdEnabled &&
     a.introEnabled === b.introEnabled &&
     a.outroEnabled === b.outroEnabled &&
+    normalizeBrandingDurationSeconds(a.introDurationSeconds, DEFAULT_INTRO_DURATION_SECONDS) ===
+      normalizeBrandingDurationSeconds(b.introDurationSeconds, DEFAULT_INTRO_DURATION_SECONDS) &&
+    normalizeBrandingDurationSeconds(a.outroDurationSeconds, DEFAULT_OUTRO_DURATION_SECONDS) ===
+      normalizeBrandingDurationSeconds(b.outroDurationSeconds, DEFAULT_OUTRO_DURATION_SECONDS) &&
     a.backgroundStyle === b.backgroundStyle &&
     a.themeColor === b.themeColor
   );
@@ -128,6 +141,8 @@ function sameEditPreview(a: ClipStudioEditPreview, b: ClipStudioEditPreview): bo
     a.startSeconds === b.startSeconds &&
     a.endSeconds === b.endSeconds &&
     a.durationSeconds === b.durationSeconds &&
+    a.title === b.title &&
+    a.editorialHook === b.editorialHook &&
     a.mainCaption === b.mainCaption &&
     a.shortCaption === b.shortCaption &&
     a.platformCaption === b.platformCaption &&
@@ -203,6 +218,27 @@ function samePreviewClock(a: ClipStudioPreviewClock, b: ClipStudioPreviewClock):
   );
 }
 
+function buildCompositionKey({
+  exportSettings,
+  brandingConfig,
+  editPreview,
+}: {
+  exportSettings: ExportSettings;
+  brandingConfig: ClipBrandingConfig;
+  editPreview: ClipStudioEditPreview;
+}): string {
+  // Audio analysis hydrates after first paint and improves preview accuracy,
+  // but it is not a user-authored composition change. Normalize those fields
+  // so a completed background review never creates a false unsaved-draft state.
+  const compositionEditPreview = {
+    ...editPreview,
+    audioSilenceEvents: [],
+    audioSilenceAnalyzed: false,
+  };
+
+  return JSON.stringify({ exportSettings, brandingConfig, editPreview: compositionEditPreview });
+}
+
 export function ClipStudioPreviewProvider({
   initialExportSettings,
   initialBrandingConfig,
@@ -222,6 +258,104 @@ export function ClipStudioPreviewProvider({
   });
   const [seekRequest, setSeekRequest] = useState<{ seconds: number; requestId: number } | null>(null);
   const [playbackRequest, setPlaybackRequest] = useState<{ requestId: number } | null>(null);
+  const currentCompositionKey = useMemo(
+    () => buildCompositionKey({ exportSettings, brandingConfig, editPreview }),
+    [brandingConfig, editPreview, exportSettings],
+  );
+  const latestCompositionKeyRef = useRef(currentCompositionKey);
+  const [savedCompositionKey, setSavedCompositionKey] = useState(() =>
+    buildCompositionKey({
+      exportSettings: initialExportSettings,
+      brandingConfig: initialBrandingConfig,
+      editPreview: initialEditPreview,
+    }),
+  );
+  const [draftTrackingReady, setDraftTrackingReady] = useState(false);
+  const isDraftDirty = draftTrackingReady && currentCompositionKey !== savedCompositionKey;
+
+  useEffect(() => {
+    latestCompositionKeyRef.current = currentCompositionKey;
+  }, [currentCompositionKey]);
+
+  useEffect(() => {
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        setSavedCompositionKey(latestCompositionKeyRef.current);
+        setDraftTrackingReady(true);
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) {
+        window.cancelAnimationFrame(secondFrame);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isDraftDirty) {
+      return undefined;
+    }
+
+    function warnBeforeLeaving(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, [isDraftDirty]);
+
+  useEffect(() => {
+    if (!isDraftDirty) {
+      return undefined;
+    }
+
+    function confirmStudioNavigation(event: MouseEvent) {
+      if (
+        event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.ctrlKey
+        || event.shiftKey
+        || event.altKey
+      ) {
+        return;
+      }
+
+      const target = event.target instanceof Element ? event.target : null;
+      const anchor = target?.closest("a[href]");
+      if (!(anchor instanceof HTMLAnchorElement) || anchor.target === "_blank" || anchor.hasAttribute("download")) {
+        return;
+      }
+
+      const href = anchor.getAttribute("href");
+      if (!href || href.startsWith("#")) {
+        return;
+      }
+
+      const destination = new URL(anchor.href, window.location.href);
+      if (destination.origin !== window.location.origin) {
+        return;
+      }
+
+      const confirmed = window.confirm("This Clip Studio draft has unsaved changes. Leave without preparing the final video?");
+      if (!confirmed) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }
+
+    document.addEventListener("click", confirmStudioNavigation, true);
+    return () => document.removeEventListener("click", confirmStudioNavigation, true);
+  }, [isDraftDirty]);
+
+  const markDraftSaved = useCallback(() => {
+    setSavedCompositionKey(currentCompositionKey);
+    setDraftTrackingReady(true);
+  }, [currentCompositionKey]);
 
   const updateExportSettings = useCallback((settings: ExportSettings) => {
     setExportSettings((current) => (sameExportSettings(current, settings) ? current : settings));
@@ -267,6 +401,8 @@ export function ClipStudioPreviewProvider({
       churchName,
       sermonTitle,
       preacherName,
+      isDraftDirty,
+      markDraftSaved,
       updateExportSettings,
       updateBrandingConfig,
       updateEditPreview,
@@ -279,6 +415,8 @@ export function ClipStudioPreviewProvider({
       churchName,
       editPreview,
       exportSettings,
+      isDraftDirty,
+      markDraftSaved,
       playbackRequest,
       preacherName,
       previewClock,

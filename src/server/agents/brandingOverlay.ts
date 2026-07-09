@@ -16,6 +16,8 @@ export type BrandingOverlayContext = {
   height: number;
 };
 
+export type BrandingOverlayLayer = "all" | "base" | "intro" | "outro";
+
 type TextLine = {
   text: string;
   x: number;
@@ -142,14 +144,22 @@ function buildWatermarkPosition(
   }
 }
 
-export function buildBrandingOverlaySvg(config: ClipBrandingConfig, context: BrandingOverlayContext): string {
+export function buildBrandingOverlaySvg(
+  config: ClipBrandingConfig,
+  context: BrandingOverlayContext,
+  layer: BrandingOverlayLayer = "all",
+): string {
   const { width, height } = context;
   const layout = buildLayout(width, height);
   const themeColor = normalizeHexColor(context.themeColor, "#FFFFFF");
   const lines: string[] = [];
   const backgroundNode = buildBrandBackgroundNode(config, width, height, themeColor);
 
-  if (backgroundNode) {
+  const showBase = layer === "all" || layer === "base";
+  const showIntro = layer === "all" || layer === "intro";
+  const showOutro = layer === "all" || layer === "outro";
+
+  if (showBase && backgroundNode) {
     lines.push(backgroundNode);
   }
 
@@ -158,7 +168,7 @@ export function buildBrandingOverlaySvg(config: ClipBrandingConfig, context: Bra
   const hasChurch = config.showChurchName && context.churchName.trim().length > 0;
   const showLowerThird = config.lowerThirdEnabled && config.preset !== "MINIMAL_WATERMARK";
 
-  if (showLowerThird && (hasPreacher || hasTitle || hasChurch)) {
+  if (showBase && showLowerThird && (hasPreacher || hasTitle || hasChurch)) {
     lines.push(`<rect x="0" y="${layout.backgroundY}" width="${width}" height="${layout.backgroundHeight}" fill="#000000" fill-opacity="0.65" />`);
 
     if (hasPreacher) {
@@ -174,7 +184,7 @@ export function buildBrandingOverlaySvg(config: ClipBrandingConfig, context: Bra
     }
   }
 
-  if (config.watermarkEnabled || config.preset === "MINIMAL_WATERMARK") {
+  if (showBase && (config.watermarkEnabled || config.preset === "MINIMAL_WATERMARK")) {
     const watermarkText = context.churchName.trim();
     if (watermarkText) {
       const position = buildWatermarkPosition(context.watermarkPosition, width, height);
@@ -193,18 +203,20 @@ export function buildBrandingOverlaySvg(config: ClipBrandingConfig, context: Bra
     }
   }
 
-  if (config.introEnabled) {
+  if (showIntro && config.introEnabled) {
     lines.push(buildBrandBadge({
-      label: "Intro",
+      label: (context.churchName.trim() || context.sermonTitle.trim() || "Sermon Clip").slice(0, 52),
       y: height >= 1600 ? 150 : 90,
       width,
       themeColor,
     }));
   }
 
-  if (config.outroEnabled) {
+  if (showOutro && config.outroEnabled) {
     lines.push(buildBrandBadge({
-      label: "Outro",
+      label: context.churchName.trim()
+        ? `${context.churchName.trim().slice(0, 34)} · Reflect · Share`
+        : "Reflect · Share · Invite",
       y: height >= 1600 ? height - 430 : height - 250,
       width,
       themeColor,
@@ -223,12 +235,13 @@ export async function renderBrandingOverlayPng(
   outputPath: string,
   config: ClipBrandingConfig,
   context: BrandingOverlayContext,
+  layer: BrandingOverlayLayer = "all",
 ): Promise<boolean> {
   if (!config.enabled || config.preset === "NO_BRANDING") {
     return false;
   }
 
-  const svg = buildBrandingOverlaySvg(config, context);
+  const svg = buildBrandingOverlaySvg(config, context, layer);
   const sharp = await getSharp();
   await sharp(Buffer.from(svg)).png().toFile(/* turbopackIgnore: true */ outputPath);
   return true;

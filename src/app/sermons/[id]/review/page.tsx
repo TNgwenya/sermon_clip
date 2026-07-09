@@ -1,10 +1,8 @@
-import { stat } from "node:fs/promises";
-
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { prisma } from "@/lib/prisma";
-import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
+import { hasPreviewMetadata, isFreshRemotePreview } from "@/lib/clipPreview";
 import { ReviewExperience } from "@/app/sermons/[id]/review/review-experience";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
@@ -28,15 +26,25 @@ type ReviewPageData = {
     postReadyBlockers: unknown;
     recommendedNextAction: string | null;
     overallPostScore: number | null;
+    hookStrengthScore: number | null;
+    hookScore: number | null;
     standaloneClarityScore: number | null;
+    emotionalImpactScore: number | null;
+    ministryValueScore: number | null;
+    sermonValueScore: number | null;
+    shareabilityScore: number | null;
+    socialShareabilityScore: number | null;
+    arcCompletenessScore: number | null;
     contextSafetyScore: number | null;
     visualReadinessScore: number | null;
+    bestPlatform: string | null;
     qualitySummary: string | null;
     pastorFriendlyReason: string | null;
     recommendedAction: "KEEP" | "EXTEND" | "SHORTEN" | "MERGE" | "REJECT" | "NEEDS_REVIEW" | null;
     qualityClipCategory: "ENCOURAGEMENT" | "SCRIPTURE_TEACHING" | "ALTAR_CALL" | "TESTIMONY_STORY" | "QUOTE" | "LEADERSHIP" | "EVANGELISTIC" | "PRAYER" | "GENERAL" | null;
     qualityWarnings: unknown;
     qualityReviewedAt: Date | null;
+    qualityReviewSource: "AI" | "FALLBACK" | null;
     reasonSelected: string;
     clipType: string;
     smartClipCategory: string | null;
@@ -100,34 +108,18 @@ const SERVER_ONLY_PREVIEW_KEYS = new Set<string>([
   "exportFreshness",
 ]);
 
-async function fileHasBytes(filePath: string): Promise<boolean> {
-  try {
-    const fileStat = await stat(/* turbopackIgnore: true */ filePath);
-    return fileStat.isFile() && fileStat.size > 0;
-  } catch {
-    return false;
-  }
-}
-
-async function canPreviewClipVideo(
+function canAttemptClipPreview(
   clip: ReviewPageData["clipCandidates"][number],
   localMediaAvailable: boolean,
-): Promise<boolean> {
+): boolean {
   if (isFreshRemotePreview(clip)) {
     return true;
   }
 
-  if (!localMediaAvailable) {
-    return false;
-  }
-
-  const candidates = listBestPreviewCandidates(clip);
-  if (candidates.length === 0) {
-    return false;
-  }
-
-  const candidateReadiness = await Promise.all(candidates.map((candidate) => fileHasBytes(candidate)));
-  return candidateReadiness.some(Boolean);
+  // The preview endpoint verifies local files when the browser requests them.
+  // Keeping that I/O out of this list render avoids several filesystem calls
+  // for every suggested clip in a large review queue.
+  return localMediaAvailable && hasPreviewMetadata(clip);
 }
 
 export default async function SermonReviewPage({ params }: { params: Promise<{ id: string }> }) {
@@ -158,15 +150,25 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
           postReadyBlockers: true,
           recommendedNextAction: true,
           overallPostScore: true,
+          hookStrengthScore: true,
+          hookScore: true,
           standaloneClarityScore: true,
+          emotionalImpactScore: true,
+          ministryValueScore: true,
+          sermonValueScore: true,
+          shareabilityScore: true,
+          socialShareabilityScore: true,
+          arcCompletenessScore: true,
           contextSafetyScore: true,
           visualReadinessScore: true,
+          bestPlatform: true,
           qualitySummary: true,
           pastorFriendlyReason: true,
           recommendedAction: true,
           qualityClipCategory: true,
           qualityWarnings: true,
           qualityReviewedAt: true,
+          qualityReviewSource: true,
           reasonSelected: true,
           clipType: true,
           smartClipCategory: true,
@@ -216,7 +218,7 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
     notFound();
   }
 
-  const clips = await Promise.all(sermon.clipCandidates.map(async (clip) => {
+  const clips = sermon.clipCandidates.map((clip) => {
     const clientClip = { ...clip };
     for (const key of SERVER_ONLY_PREVIEW_KEYS) {
       delete (clientClip as Record<string, unknown>)[key];
@@ -235,14 +237,15 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
       smartCropDebugGeneratedAt: clip.smartCropDebugGeneratedAt?.toISOString() ?? null,
       suggestedHook: clip.suggestedHook ?? null,
       suggestedCaption: clip.suggestedCaption ?? null,
-      canPreviewVideo: await canPreviewClipVideo(clip, localMediaAvailable),
+      canPreviewVideo: canAttemptClipPreview(clip, localMediaAvailable),
       createdAt: clip.createdAt.toISOString(),
     };
-  }));
+  });
 
   return (
     <>
       <ReviewExperience
+        key={clips.map((clip) => `${clip.id}:${clip.renderStatus}:${clip.overlayStatus}:${clip.captionBurnStatus}:${clip.exportStatus}`).join("|")}
         sermonId={sermon.id}
         sermonTitle={sermon.title}
         clips={clips}

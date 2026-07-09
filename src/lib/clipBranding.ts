@@ -54,9 +54,14 @@ export type ClipBrandingConfig = {
   lowerThirdEnabled: boolean;
   introEnabled: boolean;
   outroEnabled: boolean;
+  introDurationSeconds?: number;
+  outroDurationSeconds?: number;
   backgroundStyle: BrandBackgroundStyle;
   themeColor: string | null;
 };
+
+export const DEFAULT_INTRO_DURATION_SECONDS = 2.5;
+export const DEFAULT_OUTRO_DURATION_SECONDS = 3;
 
 export type ClipBrandingSnapshot = ClipBrandingConfig & {
   churchNameUsed: string | null;
@@ -75,6 +80,8 @@ export const DEFAULT_CLIP_BRANDING: ClipBrandingConfig = {
   lowerThirdEnabled: true,
   introEnabled: false,
   outroEnabled: false,
+  introDurationSeconds: DEFAULT_INTRO_DURATION_SECONDS,
+  outroDurationSeconds: DEFAULT_OUTRO_DURATION_SECONDS,
   backgroundStyle: "NONE",
   themeColor: null,
 };
@@ -110,6 +117,17 @@ function safeNullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+export function normalizeBrandingDurationSeconds(
+  value: unknown,
+  fallback: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Number(Math.min(8, Math.max(1, value)).toFixed(1));
+}
+
 function isValidBrandBackgroundStyle(value: unknown): value is BrandBackgroundStyle {
   return typeof value === "string" && ["NONE", "SOFT_GRADIENT", "SOLID_BRAND", "BLURRED_TINT"].includes(value);
 }
@@ -143,6 +161,14 @@ export function resolveBrandingConfig(captionData: unknown): ClipBrandingConfig 
     lowerThirdEnabled: safeBoolean(data["lowerThirdEnabled"], DEFAULT_CLIP_BRANDING.lowerThirdEnabled),
     introEnabled: safeBoolean(data["introEnabled"], DEFAULT_CLIP_BRANDING.introEnabled),
     outroEnabled: safeBoolean(data["outroEnabled"], DEFAULT_CLIP_BRANDING.outroEnabled),
+    introDurationSeconds: normalizeBrandingDurationSeconds(
+      data["introDurationSeconds"],
+      DEFAULT_INTRO_DURATION_SECONDS,
+    ),
+    outroDurationSeconds: normalizeBrandingDurationSeconds(
+      data["outroDurationSeconds"],
+      DEFAULT_OUTRO_DURATION_SECONDS,
+    ),
     backgroundStyle: isValidBrandBackgroundStyle(data["backgroundStyle"]) ? data["backgroundStyle"] : DEFAULT_CLIP_BRANDING.backgroundStyle,
     themeColor: safeNullableString(data["themeColor"]),
   };
@@ -183,15 +209,15 @@ export function buildBrandingSummary(config: ClipBrandingConfig, context: Brandi
   }
 
   if (config.watermarkEnabled || config.preset === "MINIMAL_WATERMARK") {
-    elements.push(context.logoPath ? "logo watermark" : "church name watermark");
+    elements.push("church name watermark");
   }
 
   if (config.introEnabled) {
-    elements.push("intro brand badge");
+    elements.push(`intro brand card for ${normalizeBrandingDurationSeconds(config.introDurationSeconds, DEFAULT_INTRO_DURATION_SECONDS)}s`);
   }
 
   if (config.outroEnabled) {
-    elements.push("outro brand badge");
+    elements.push(`outro brand card for ${normalizeBrandingDurationSeconds(config.outroDurationSeconds, DEFAULT_OUTRO_DURATION_SECONDS)}s`);
   }
 
   if (config.backgroundStyle !== "NONE") {
@@ -399,4 +425,5 @@ export const __clipBrandingTestUtils = {
   appendBrandingToFilter,
   escapeDrawtext,
   isValidBrandingPreset,
+  normalizeBrandingDurationSeconds,
 };

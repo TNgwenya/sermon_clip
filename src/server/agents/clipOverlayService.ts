@@ -33,13 +33,21 @@ import {
   getClipOutputPath,
   getOverlayClipPath,
 } from "@/server/agents/storage";
-import { checkFfmpegInstalled } from "@/server/media/ffmpeg";
+import { checkFfmpegInstalled, getMediaDurationSeconds } from "@/server/media/ffmpeg";
 import {
   invalidateAfterOverlayCompleted,
   markOverlayAssetCompleted,
   markOverlayAssetFailed,
 } from "@/server/regeneration/dependencies";
 import { getBrandingOverlayDimensions, renderBrandingOverlayPng } from "@/server/agents/brandingOverlay";
+import {
+  DEFAULT_CLIP_BRANDING,
+  DEFAULT_INTRO_DURATION_SECONDS,
+  DEFAULT_OUTRO_DURATION_SECONDS,
+  normalizeBrandingDurationSeconds,
+  resolveBrandingConfig,
+  type ClipBrandingConfig,
+} from "@/lib/clipBranding";
 import { getSharp } from "@/server/agents/sharpClient";
 import {
   extractSpeechCleanupCutPlan,
@@ -73,6 +81,7 @@ type ClipForOverlay = Pick<
   | "sermonId"
   | "status"
   | "renderStatus"
+  | "durationSeconds"
   | "renderedFilePath"
   | "captionBurnStatus"
   | "captionedVideoPath"
@@ -561,6 +570,11 @@ function buildBrollOverlayPosition(spec: BrollCardOverlaySpec): string {
 
 function buildOverlayFilterComplex(input: {
   hasBrandingOverlay: boolean;
+  timedBrandingLayers?: Array<{
+    inputIndex: number;
+    startSeconds: number;
+    endSeconds: number;
+  }>;
   brollOverlaySpecs: BrollCardOverlaySpec[];
   brollOverlayInputStartIndex: number | null;
   hookOverlaySpec: HookOverlaySpec | null;
@@ -572,6 +586,14 @@ function buildOverlayFilterComplex(input: {
   if (input.hasBrandingOverlay) {
     parts.push(`${current}[1:v]overlay=0:0:shortest=1:format=auto[branded]`);
     current = "[branded]";
+  }
+
+  for (const [index, layer] of (input.timedBrandingLayers ?? []).entries()) {
+    const outputLabel = `[timedBranding${index}]`;
+    parts.push(
+      `${current}[${layer.inputIndex}:v]overlay=0:0:enable='between(t,${layer.startSeconds.toFixed(3)},${layer.endSeconds.toFixed(3)})':eof_action=pass${outputLabel}`,
+    );
+    current = outputLabel;
   }
 
   input.brollOverlaySpecs.forEach((spec, index) => {
@@ -665,6 +687,7 @@ async function loadClipForOverlay(clipId: string): Promise<ClipForOverlay> {
       sermonId: true,
       status: true,
       renderStatus: true,
+      durationSeconds: true,
       renderedFilePath: true,
       captionBurnStatus: true,
       captionedVideoPath: true,
@@ -710,6 +733,38 @@ async function loadBrandingForOverlay(): Promise<BrandingForOverlay> {
   return branding;
 }
 
+function hasSavedClipBrandingConfig(captionData: unknown): boolean {
+  if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
+    return false;
+  }
+
+  const brandingSettings = (captionData as Record<string, unknown>)["brandingSettings"];
+  return Boolean(brandingSettings && typeof brandingSettings === "object" && !Array.isArray(brandingSettings));
+}
+
+function resolveOverlayBrandingConfig(
+  captionData: unknown,
+  primaryBrandColor: string | null,
+): ClipBrandingConfig {
+  if (hasSavedClipBrandingConfig(captionData)) {
+    const saved = resolveBrandingConfig(captionData);
+    return {
+      ...saved,
+      themeColor: saved.themeColor ?? primaryBrandColor,
+    };
+  }
+
+  // Preserve the established prepared-clip look for clips created before
+  // per-clip branding settings were stored.
+  return {
+    ...DEFAULT_CLIP_BRANDING,
+    enabled: true,
+    watermarkEnabled: true,
+    lowerThirdEnabled: true,
+    themeColor: primaryBrandColor,
+  };
+}
+
 function buildOverlayMetadata(outputPath: string): Pick<
   Prisma.ClipCandidateUpdateInput,
   "overlayStatus" | "overlayVideoPath" | "overlayRenderedAt" | "overlayRenderError"
@@ -739,6 +794,7 @@ async function runFfmpegOverlay(input: {
   outputPath: string;
   filterComplex: string;
   brandingOverlayPath?: string;
+  timedBrandingOverlayPaths?: string[];
   brollOverlayPaths?: string[];
   hookOverlayPath?: string;
   ffmpegPath?: string;
@@ -754,6 +810,10 @@ async function runFfmpegOverlay(input: {
 
   if (input.brandingOverlayPath) {
     args.push("-loop", "1", "-i", input.brandingOverlayPath);
+  }
+
+  for (const timedBrandingOverlayPath of input.timedBrandingOverlayPaths ?? []) {
+    args.push("-loop", "1", "-i", timedBrandingOverlayPath);
   }
 
   for (const brollOverlayPath of input.brollOverlayPaths ?? []) {
@@ -937,6 +997,8 @@ export async function renderClipOverlay(
 
     const overlayDimensions = getBrandingOverlayDimensions("VERTICAL_9_16");
     const brandingOverlayPath = getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".branding.png");
+    const introOverlayPath = getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".branding-intro.png");
+    const outroOverlayPath = getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".branding-outro.png");
     const hookOverlaySpec = extractHookOverlaySpec(clip.captionData);
     const brollOverlaySpecs = extractBrollOverlaySpecs(clip.captionData);
     const captionsOverrideBranding = shouldBrandingLowerThirdYieldToCaptions(clip.captionData);
@@ -946,33 +1008,81 @@ export async function renderClipOverlay(
     const hookOverlayPath = hookOverlaySpec
       ? getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".hook.png")
       : null;
-
+    const brandingConfig = resolveOverlayBrandingConfig(
+      clip.captionData,
+      branding?.primaryBrandColor ?? null,
+    );
+    const brandingContext = {
+      format: "VERTICAL_9_16" as const,
+      sermonTitle: sermon.title,
+      preacherName: sermon.speakerName,
+      churchName: sermon.churchName,
+      themeColor: brandingConfig.themeColor ?? branding?.primaryBrandColor ?? null,
+      watermarkPosition: "BOTTOM_RIGHT" as const,
+      width: overlayDimensions.width,
+      height: overlayDimensions.height,
+    };
+    const baseBrandingConfig: ClipBrandingConfig = {
+      ...brandingConfig,
+      lowerThirdEnabled: brandingConfig.lowerThirdEnabled && !captionsOverrideBranding,
+      introEnabled: false,
+      outroEnabled: false,
+    };
     const overlayEnabled = await renderBrandingOverlayPng(
       brandingOverlayPath,
-      {
-        enabled: true,
-        preset: "CLEAN_LOWER_THIRD",
-        showChurchName: true,
-        showSermonTitle: true,
-        showPreacherName: true,
-        watermarkEnabled: true,
-        lowerThirdEnabled: !captionsOverrideBranding,
-        introEnabled: false,
-        outroEnabled: false,
-        backgroundStyle: "NONE",
-        themeColor: branding?.primaryBrandColor ?? null,
-      },
-      {
-        format: "VERTICAL_9_16",
-        sermonTitle: sermon.title,
-        preacherName: sermon.speakerName,
-        churchName: sermon.churchName,
-        themeColor: branding?.primaryBrandColor ?? null,
-        watermarkPosition: "BOTTOM_RIGHT",
-        width: overlayDimensions.width,
-        height: overlayDimensions.height,
-      },
+      baseBrandingConfig,
+      brandingContext,
+      "base",
     );
+    const mediaDurationSeconds = await getMediaDurationSeconds(renderedPath, options?.ffmpegPath)
+      .catch(() => clip.durationSeconds ?? 60);
+    const timedBrandingOverlayPaths: string[] = [];
+    const timedBrandingLayers: Array<{ inputIndex: number; startSeconds: number; endSeconds: number }> = [];
+    let nextOverlayInputIndex = 1 + (overlayEnabled ? 1 : 0);
+
+    if (brandingConfig.enabled && brandingConfig.introEnabled) {
+      const introRendered = await renderBrandingOverlayPng(
+        introOverlayPath,
+        brandingConfig,
+        brandingContext,
+        "intro",
+      );
+      if (introRendered) {
+        const introDurationSeconds = normalizeBrandingDurationSeconds(
+          brandingConfig.introDurationSeconds,
+          DEFAULT_INTRO_DURATION_SECONDS,
+        );
+        timedBrandingOverlayPaths.push(introOverlayPath);
+        timedBrandingLayers.push({
+          inputIndex: nextOverlayInputIndex,
+          startSeconds: 0,
+          endSeconds: Math.min(mediaDurationSeconds, introDurationSeconds),
+        });
+        nextOverlayInputIndex += 1;
+      }
+    }
+
+    if (brandingConfig.enabled && brandingConfig.outroEnabled) {
+      const outroRendered = await renderBrandingOverlayPng(
+        outroOverlayPath,
+        brandingConfig,
+        brandingContext,
+        "outro",
+      );
+      if (outroRendered) {
+        const outroDurationSeconds = normalizeBrandingDurationSeconds(
+          brandingConfig.outroDurationSeconds,
+          DEFAULT_OUTRO_DURATION_SECONDS,
+        );
+        timedBrandingOverlayPaths.push(outroOverlayPath);
+        timedBrandingLayers.push({
+          inputIndex: nextOverlayInputIndex,
+          startSeconds: Math.max(0, mediaDurationSeconds - outroDurationSeconds),
+          endSeconds: mediaDurationSeconds,
+        });
+        nextOverlayInputIndex += 1;
+      }
+    }
 
     if (hookOverlaySpec && hookOverlayPath) {
       await renderHookOverlayPng(hookOverlayPath, hookOverlaySpec);
@@ -981,13 +1091,14 @@ export async function renderClipOverlay(
       brollOverlaySpecs.map((spec, index) => renderBrollOverlayPng(brollOverlayPaths[index], spec)),
     );
 
-    const brollOverlayInputStartIndex = brollOverlaySpecs.length > 0 ? (overlayEnabled ? 2 : 1) : null;
+    const brollOverlayInputStartIndex = brollOverlaySpecs.length > 0 ? nextOverlayInputIndex : null;
     const hookOverlayInputIndex = hookOverlaySpec
-      ? 1 + (overlayEnabled ? 1 : 0) + brollOverlaySpecs.length
+      ? nextOverlayInputIndex + brollOverlaySpecs.length
       : null;
 
     const fullFilter = buildOverlayFilterComplex({
       hasBrandingOverlay: overlayEnabled,
+      timedBrandingLayers,
       brollOverlaySpecs,
       brollOverlayInputStartIndex,
       hookOverlaySpec,
@@ -1007,6 +1118,7 @@ export async function renderClipOverlay(
       outputPath: tempOutputPath,
       filterComplex: fullFilter,
       brandingOverlayPath: overlayEnabled ? brandingOverlayPath : undefined,
+      timedBrandingOverlayPaths,
       brollOverlayPaths,
       hookOverlayPath: hookOverlayPath ?? undefined,
       ffmpegPath: options?.ffmpegPath,
@@ -1020,6 +1132,11 @@ export async function renderClipOverlay(
     if (overlayEnabled) {
       await unlink(/* turbopackIgnore: true */ brandingOverlayPath).catch(() => undefined);
     }
+    await Promise.all(
+      timedBrandingOverlayPaths.map((overlayPath) =>
+        unlink(/* turbopackIgnore: true */ overlayPath).catch(() => undefined),
+      ),
+    );
     if (hookOverlayPath) {
       await unlink(/* turbopackIgnore: true */ hookOverlayPath).catch(() => undefined);
     }
@@ -1042,6 +1159,16 @@ export async function renderClipOverlay(
         sourceWasCaptioned: Boolean(captionedPath),
         hookOverlayApplied: Boolean(hookOverlaySpec),
         brollOverlayCount: brollOverlaySpecs.length,
+        brandingApplied: overlayEnabled || timedBrandingLayers.length > 0,
+        introDurationSeconds: timedBrandingLayers[0]?.startSeconds === 0
+          ? timedBrandingLayers[0].endSeconds
+          : null,
+        outroDurationSeconds: brandingConfig.outroEnabled
+          ? normalizeBrandingDurationSeconds(
+              brandingConfig.outroDurationSeconds,
+              DEFAULT_OUTRO_DURATION_SECONDS,
+            )
+          : null,
       },
     });
     await invalidateAfterOverlayCompleted(
