@@ -32,6 +32,44 @@ type PublishingHeartbeatRecord = {
   detailsJson?: unknown;
 };
 
+type WorkerHeartbeatStore = {
+  upsert(input: {
+    where: { workerType_workerId: { workerType: string; workerId: string } };
+    create: {
+      workerType: string;
+      workerId: string;
+      status: string;
+      dryRun: boolean;
+      detailsJson?: Prisma.InputJsonValue;
+      heartbeatAt: Date;
+    };
+    update: {
+      status: string;
+      dryRun: boolean;
+      detailsJson?: Prisma.InputJsonValue;
+      heartbeatAt: Date;
+    };
+  }): Promise<unknown>;
+  findFirst(input: {
+    where: { workerType: string };
+    orderBy: { heartbeatAt: "desc" };
+    select: {
+      workerId: true;
+      dryRun: true;
+      heartbeatAt: true;
+      detailsJson: true;
+    };
+  }): Promise<PublishingHeartbeatRecord | null>;
+};
+
+type PrismaWithOptionalWorkerHeartbeat = typeof prisma & {
+  workerHeartbeat?: WorkerHeartbeatStore;
+};
+
+function getWorkerHeartbeatStore(): WorkerHeartbeatStore | null {
+  return (prisma as PrismaWithOptionalWorkerHeartbeat).workerHeartbeat ?? null;
+}
+
 function resolveStaleAfterMs(): number {
   const configuredSeconds = Number(process.env.POSTING_WORKER_HEARTBEAT_STALE_SECONDS ?? 120);
   return Number.isFinite(configuredSeconds) && configuredSeconds > 0
@@ -131,7 +169,7 @@ export async function recordPublishingServiceHeartbeat(input: {
   details?: Prisma.InputJsonValue;
 }): Promise<boolean> {
   const now = new Date();
-  const heartbeatStore = prisma.workerHeartbeat;
+  const heartbeatStore = getWorkerHeartbeatStore();
   if (!heartbeatStore || !(await workerHeartbeatStorageAvailable())) {
     return false;
   }
@@ -167,7 +205,7 @@ export async function recordPublishingServiceHeartbeat(input: {
 }
 
 export async function getPublishingServiceHealth(now = new Date()): Promise<PublishingServiceHealth> {
-  const heartbeatStore = prisma.workerHeartbeat;
+  const heartbeatStore = getWorkerHeartbeatStore();
   if (!heartbeatStore || !(await workerHeartbeatStorageAvailable())) {
     return summarizePublishingServiceHealth({ heartbeat: null, now });
   }
