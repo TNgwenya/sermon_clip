@@ -76,7 +76,7 @@ import {
 import {
   buildLocalUploadSourceUrl,
   createSermonSchema,
-  isUploadedVideoFile,
+  isUploadedMediaFile,
 } from "@/lib/sermonIntake";
 import {
   buildPrepareApprovedSummary,
@@ -1550,9 +1550,9 @@ export async function createSermonAction(
   _prevState: CreateSermonFormState,
   formData: FormData,
 ): Promise<CreateSermonFormState> {
-  const uploadedVideo = formData.get("sermonVideoFile");
-  const hasUploadedVideo = isUploadedVideoFile(uploadedVideo);
-  const uploadedVideoName = hasUploadedVideo ? uploadedVideo.name : "sermon-video";
+  const uploadedMedia = formData.get("sermonVideoFile");
+  const hasUploadedMedia = isUploadedMediaFile(uploadedMedia);
+  const uploadedMediaName = hasUploadedMedia ? uploadedMedia.name : "sermon-media";
   const values = {
     youtubeUrl: String(formData.get("youtubeUrl") ?? "").trim(),
     title: String(formData.get("title") ?? "").trim(),
@@ -1563,7 +1563,7 @@ export async function createSermonAction(
     sermonEndTimestamp: String(formData.get("sermonEndTimestamp") ?? "").trim(),
     sermonDate: String(formData.get("sermonDate") ?? "").trim(),
     rightsConfirmed: formData.get("rightsConfirmed") === "on",
-    hasUploadedVideo,
+    hasUploadedVideo: hasUploadedMedia,
   };
 
   const result = createSermonSchema.safeParse(values);
@@ -1588,10 +1588,10 @@ export async function createSermonAction(
     };
   }
 
-  if (!canRunLocalMediaProcessing() && hasUploadedVideo) {
+  if (!canRunLocalMediaProcessing() && hasUploadedMedia) {
     return {
       success: false,
-      message: "Video file uploads need shared storage before they can run on Vercel. Add this sermon by YouTube URL for now, or upload from the local app.",
+      message: "Media file uploads need shared storage before they can run on Vercel. Add this sermon by YouTube URL for now, or upload from the local app.",
       fieldErrors: {
         mediaFile: "File uploads are local-worker only until shared storage is configured.",
       },
@@ -1601,7 +1601,7 @@ export async function createSermonAction(
   try {
     const sermon = await prisma.sermon.create({
       data: {
-        youtubeUrl: result.data.youtubeUrl || buildLocalUploadSourceUrl(uploadedVideoName),
+        youtubeUrl: result.data.youtubeUrl || buildLocalUploadSourceUrl(uploadedMediaName),
         title: result.data.title,
         speakerName: result.data.speakerName,
         churchName: result.data.churchName,
@@ -1644,16 +1644,16 @@ export async function createSermonAction(
       await ensureSermonFolders(sermon.id, sermon.title);
       const sourceVideoPath = getSourceVideoPath(sermon.id);
       let uploadedDurationSeconds: number | null = null;
-      if (hasUploadedVideo) {
+      if (hasUploadedMedia) {
         const tempSourceVideoPath = getUploadedSourceTempPath(sourceVideoPath);
         await unlink(/* turbopackIgnore: true */ tempSourceVideoPath).catch(() => undefined);
 
-        const arrayBuffer = await uploadedVideo.arrayBuffer();
+        const arrayBuffer = await uploadedMedia.arrayBuffer();
         try {
           await writeFile(/* turbopackIgnore: true */ tempSourceVideoPath, Buffer.from(arrayBuffer));
-          const uploadedMedia = await mediaFileIsUsable(tempSourceVideoPath);
-          if (!uploadedMedia.usable) {
-            throw new Error(`Uploaded sermon video is not usable: ${uploadedMedia.reason}`);
+          const uploadedMediaCheck = await mediaFileIsUsable(tempSourceVideoPath);
+          if (!uploadedMediaCheck.usable) {
+            throw new Error(`Uploaded sermon media is not usable: ${uploadedMediaCheck.reason}`);
           }
 
           await rename(/* turbopackIgnore: true */ tempSourceVideoPath, /* turbopackIgnore: true */ sourceVideoPath);
@@ -1661,7 +1661,7 @@ export async function createSermonAction(
           const finalizedUpload = await mediaFileIsUsable(sourceVideoPath);
           if (!finalizedUpload.usable) {
             await unlink(/* turbopackIgnore: true */ sourceVideoPath).catch(() => undefined);
-            throw new Error(`Finalized uploaded sermon video is not usable: ${finalizedUpload.reason}`);
+            throw new Error(`Finalized uploaded sermon media is not usable: ${finalizedUpload.reason}`);
           }
 
           uploadedDurationSeconds = finalizedUpload.durationSeconds;
@@ -1678,13 +1678,13 @@ export async function createSermonAction(
           audioPath: getAudioPath(sermon.id),
           transcriptJsonPath: getTranscriptJsonPath(sermon.id),
           ...(uploadedDurationSeconds !== null ? { sourceDurationSeconds: uploadedDurationSeconds } : {}),
-          ...(hasUploadedVideo ? { status: "DOWNLOADED" } : {}),
+          ...(hasUploadedMedia ? { status: "DOWNLOADED" } : {}),
         },
       });
       await appendPipelineLog(
         sermon.id,
-        hasUploadedVideo
-          ? "Sermon created from uploaded video file and storage folders initialized."
+        hasUploadedMedia
+          ? "Sermon created from uploaded media file and storage folders initialized."
           : "Sermon created and storage folders initialized.",
       );
     } catch (storageError) {

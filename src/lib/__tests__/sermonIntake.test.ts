@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildLocalUploadSourceUrl,
   createSermonSchema,
-  isUploadedVideoFile,
+  isUploadedMediaFile,
 } from "@/lib/sermonIntake";
 
 function validInput(overrides: Partial<{
@@ -40,7 +40,7 @@ describe("sermon intake", () => {
     expect(parsed.success).toBe(true);
   });
 
-  it("accepts an uploaded video without a video link", () => {
+  it("accepts uploaded media without a video link", () => {
     const parsed = createSermonSchema.safeParse(validInput({
       youtubeUrl: "",
       hasUploadedVideo: true,
@@ -49,7 +49,7 @@ describe("sermon intake", () => {
     expect(parsed.success).toBe(true);
   });
 
-  it("requires either a video link or an uploaded video", () => {
+  it("requires either a video link or uploaded media", () => {
     const parsed = createSermonSchema.safeParse(validInput({
       youtubeUrl: "",
       hasUploadedVideo: false,
@@ -57,7 +57,7 @@ describe("sermon intake", () => {
 
     expect(parsed.success).toBe(false);
     expect(parsed.error?.flatten().fieldErrors.youtubeUrl?.[0]).toBe(
-      "Paste a sermon video link or upload a sermon video file.",
+      "Paste a sermon video link or upload a sermon media file.",
     );
   });
 
@@ -100,11 +100,12 @@ describe("sermon intake", () => {
     expect(parsed.error?.flatten().fieldErrors.sermonStartTimestamp?.[0]).toBe("Use a format like 52:30 or 1:12:45.");
   });
 
-  it("detects real uploaded video files and ignores empty file fields", () => {
-    const videoFile = {
+  it("detects real uploaded media files and ignores empty file fields", () => {
+    const mediaFile = {
       size: 128,
       arrayBuffer: async () => new ArrayBuffer(128),
-      name: "sermon.mp4",
+      name: "IMG_0421.MOV",
+      type: "",
     };
     const emptyFile = {
       size: 0,
@@ -112,10 +113,10 @@ describe("sermon intake", () => {
       name: "",
     };
 
-    expect(isUploadedVideoFile(videoFile as unknown as FormDataEntryValue)).toBe(true);
-    expect(isUploadedVideoFile(emptyFile as unknown as FormDataEntryValue)).toBe(false);
-    expect(isUploadedVideoFile("plain text field")).toBe(false);
-    expect(isUploadedVideoFile(null)).toBe(false);
+    expect(isUploadedMediaFile(mediaFile as unknown as FormDataEntryValue)).toBe(true);
+    expect(isUploadedMediaFile(emptyFile as unknown as FormDataEntryValue)).toBe(false);
+    expect(isUploadedMediaFile("plain text field")).toBe(false);
+    expect(isUploadedMediaFile(null)).toBe(false);
   });
 
   it("builds safe local-upload source markers for uploaded sermon files", () => {
@@ -123,4 +124,3 @@ describe("sermon intake", () => {
     expect(buildLocalUploadSourceUrl("   ")).toBe("local-upload://sermon-video");
   });
 });
-

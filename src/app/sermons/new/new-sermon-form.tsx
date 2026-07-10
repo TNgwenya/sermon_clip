@@ -18,6 +18,19 @@ const initialCreateSermonState: CreateSermonFormState = {
 
 type SermonSourceMode = "youtube" | "upload";
 
+const mobileMediaAcceptTypes = [
+  "video/*",
+  "audio/*",
+  ".mp4",
+  ".mov",
+  ".m4v",
+  ".webm",
+  ".mp3",
+  ".m4a",
+  ".aac",
+  ".wav",
+].join(",");
+
 function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) {
     return `${bytes === 0 ? 0 : Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -58,7 +71,7 @@ function UploadProgressTheater({
       <section className="upload-progress-theater">
         <div className="upload-progress-copy stack-sm">
           <p className="kicker">{sourceMode === "upload" ? "Uploading your recording" : "Starting sermon analysis"}</p>
-          <h2>{sourceMode === "upload" ? "Keep this tab open while the video uploads." : "Your sermon is being added to the studio."}</h2>
+          <h2>{sourceMode === "upload" ? "Keep this tab open while the media uploads." : "Your sermon is being added to the studio."}</h2>
           <p className="muted">
             {sourceMode === "upload"
               ? `${selectedFileName ?? "The selected recording"} will be checked before analysis begins.`
@@ -84,7 +97,7 @@ function UploadProgressTheater({
           {sourceMode === "upload" ? (
             <>
               <span className="workflow-step active">Uploading recording</span>
-              <span className="workflow-step pending">Checking video</span>
+              <span className="workflow-step pending">Checking media</span>
               <span className="workflow-step pending">Starting analysis</span>
             </>
           ) : (
@@ -126,7 +139,7 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
             <span className="intake-section-number">01</span>
             <div>
               <h2 id="sermon-source-heading">Choose the recording</h2>
-              <p className="muted">Use a YouTube link or choose a video file from this device.</p>
+              <p className="muted">Use a YouTube link or choose a media file from this device.</p>
             </div>
           </div>
 
@@ -153,7 +166,7 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
                 onChange={() => setSourceMode("upload")}
               />
               <span>
-                <strong>Upload a video</strong>
+                <strong>Upload media</strong>
                 <small>Choose the recording from this device</small>
               </span>
             </label>
@@ -188,17 +201,17 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
 
             <div className={`source-method-card upload-drop-zone stack-sm dark-drop${sourceMode === "upload" ? " is-selected" : ""}`} hidden={sourceMode !== "upload"}>
               <div className="source-method-heading">
-                <span className="source-method-mark" aria-hidden="true">MP4</span>
+                <span className="source-method-mark" aria-hidden="true">FILE</span>
                 <div>
                   <label htmlFor="sermonVideoFile">Upload a recording</label>
-                  <span className="muted small">Choose a video saved by your church media team</span>
+                  <span className="muted small">Choose a video or audio file saved on this device</span>
                 </div>
               </div>
               <input
                 id="sermonVideoFile"
                 name="sermonVideoFile"
                 type="file"
-                accept="video/*"
+                accept={mobileMediaAcceptTypes}
                 disabled={sourceMode !== "upload"}
                 required={sourceMode === "upload"}
                 onChange={(event) => {

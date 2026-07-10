@@ -54,7 +54,7 @@ describe("create sermon upload workflow", () => {
     }
   });
 
-  it("stores an uploaded sermon video as the local source video", async () => {
+  it("stores an uploaded sermon media file as the local source media", async () => {
     const videoBytes = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]);
     const formData = new FormData();
     formData.set("youtubeUrl", "");
@@ -109,7 +109,7 @@ describe("create sermon upload workflow", () => {
     await expect(readFile(sermon.sourceVideoPath!)).resolves.toEqual(Buffer.from(videoBytes));
   });
 
-  it("stores uploaded sermon video files larger than the default Server Action body limit", async () => {
+  it("stores uploaded sermon media files larger than the default Server Action body limit", async () => {
     const videoBytes = new Uint8Array(1_250_000).fill(7);
     const formData = new FormData();
     formData.set("youtubeUrl", "");
@@ -143,7 +143,36 @@ describe("create sermon upload workflow", () => {
     await expect(readFile(sermon.sourceVideoPath!)).resolves.toEqual(Buffer.from(videoBytes));
   }, 20_000);
 
-  it("rejects uploaded sermon video files that cannot be probed as usable media", async () => {
+  it("stores mobile camera uploads even when the browser omits the MIME type", async () => {
+    const videoBytes = new Uint8Array([9, 8, 7, 6, 5, 4]);
+    const formData = new FormData();
+    formData.set("youtubeUrl", "");
+    formData.set("sermonVideoFile", new File([videoBytes], "IMG_0421.MOV", { type: "" }));
+    formData.set("title", "Mobile Sunday Hope");
+    formData.set("speakerName", "Pastor Test");
+    formData.set("churchName", "Test Church");
+    formData.set("language", "English");
+    formData.set("rightsConfirmed", "on");
+
+    const result = await createSermonAction({ success: false, message: "" }, formData);
+
+    expect(result.success).toBe(true);
+    expect(result.createdSermonId).toBeTruthy();
+    createdSermonIds.push(result.createdSermonId!);
+
+    const sermon = await prisma.sermon.findUniqueOrThrow({
+      where: { id: result.createdSermonId! },
+      select: {
+        youtubeUrl: true,
+        sourceVideoPath: true,
+      },
+    });
+
+    expect(sermon.youtubeUrl).toBe("local-upload://IMG_0421.MOV");
+    await expect(readFile(sermon.sourceVideoPath!)).resolves.toEqual(Buffer.from(videoBytes));
+  });
+
+  it("rejects uploaded sermon media files that cannot be probed as usable media", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     mediaFileIsUsableMock.mockResolvedValueOnce({
       usable: false,
@@ -166,7 +195,7 @@ describe("create sermon upload workflow", () => {
     }
 
     expect(result.success).toBe(false);
-    expect(result.message).toContain("Uploaded sermon video is not usable");
+    expect(result.message).toContain("Uploaded sermon media is not usable");
     expect(result.createdSermonId).toBeTruthy();
     createdSermonIds.push(result.createdSermonId!);
     expect(processSermonPipelineMock).not.toHaveBeenCalled();

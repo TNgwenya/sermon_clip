@@ -36,7 +36,7 @@ export const createSermonSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["youtubeUrl"],
-        message: "Paste a sermon video link or upload a sermon video file.",
+        message: "Paste a sermon video link or upload a sermon media file.",
       });
       return;
     }
@@ -100,7 +100,7 @@ export const createSermonSchema = z
     sermonEndSeconds: parseSermonTimestampInput(value.sermonEndTimestamp).seconds,
   }));
 
-export function isUploadedVideoFile(value: FormDataEntryValue | null): value is File {
+export function isUploadedMediaFile(value: FormDataEntryValue | null): value is File {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -111,8 +111,9 @@ export function isUploadedVideoFile(value: FormDataEntryValue | null): value is 
   );
 }
 
+export const isUploadedVideoFile = isUploadedMediaFile;
+
 export function buildLocalUploadSourceUrl(fileName: string): string {
   const normalizedName = fileName.trim() || "sermon-video";
   return `local-upload://${encodeURIComponent(normalizedName)}`;
 }
-
