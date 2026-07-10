@@ -40,6 +40,16 @@ describe("clip selection prompt", () => {
     expect(prompt).toContain('"ctaOptions"');
   });
 
+  it("preserves local-language wording and forbids unverified translations", () => {
+    const prompt = buildClipSelectionSystemPrompt();
+
+    expect(prompt).toContain("preserve the original transcript wording");
+    expect(prompt).toContain("Do not invent, silently translate");
+    expect(prompt).toContain("Never present an English summary or inferred meaning as an exact translation");
+    expect(prompt).toContain("languageHints.englishMeaning");
+    expect(prompt).toContain("Missing English ministry vocabulary is not proof");
+  });
+
   it("asks the model to explain the landing phrase in each selected clip", () => {
     const prompt = buildClipSelectionUserPrompt(
       {

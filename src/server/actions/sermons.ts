@@ -133,6 +133,7 @@ import {
   canChooseClipForProduction,
   resolveClipStudioAssetInvalidation,
   resolveClipStudioContentValues,
+  shouldRecordExplicitTranscriptReview,
 } from "@/lib/clipContentPersistence";
 import {
   normalizeSpeechCleanupEdits,
@@ -616,6 +617,7 @@ export type UpdateClipStudioEditsInput = {
     intensity: SpeechCleanupIntensity;
   };
   speechCleanupEdits?: SpeechCleanupEdits | null;
+  confirmTranscriptReviewed?: boolean;
 };
 
 export type UpdateClipStudioEditsState = {
@@ -2842,6 +2844,7 @@ export async function approveClipCandidateAction(clipId: string): Promise<ClipCa
       id: true,
       sermonId: true,
       status: true,
+      transcriptSafetyStatus: true,
     },
   });
 
@@ -2856,6 +2859,13 @@ export async function approveClipCandidateAction(clipId: string): Promise<ClipCa
     return {
       success: false,
       message: "Ready-to-post clips are locked. Open Clip Studio and prepare a new version if you need changes.",
+    };
+  }
+
+  if (!canChooseClipForProduction(clip.transcriptSafetyStatus)) {
+    return {
+      success: false,
+      message: "Listen to the clip and confirm the transcript wording before approval.",
     };
   }
 
@@ -2891,6 +2901,7 @@ export async function markClipTranscriptReviewedAction(clipId: string): Promise<
       id: true,
       sermonId: true,
       transcriptSafetyStatus: true,
+      transcriptSafetyReasons: true,
       postReadyBlockers: true,
       qualityWarnings: true,
     },
@@ -2906,7 +2917,9 @@ export async function markClipTranscriptReviewedAction(clipId: string): Promise<
   const qualityWarnings = Array.isArray(clip.qualityWarnings)
     ? clip.qualityWarnings.filter((item): item is string => (
         typeof item === "string" &&
-        item !== "LOCAL_LANGUAGE_TRANSCRIPT_REVIEW_REQUIRED"
+        item !== "LOCAL_LANGUAGE_TRANSCRIPT_REVIEW_REQUIRED" &&
+        item !== "TRANSCRIPT_REVIEW_REQUIRED" &&
+        item !== "TRANSCRIPT_CHANGED_REVIEW_REQUIRED"
       ))
     : [];
 
@@ -2917,7 +2930,12 @@ export async function markClipTranscriptReviewedAction(clipId: string): Promise<
       transcriptSafetyReviewedAt: new Date(),
       transcriptSafetyReviewedBy: "pastor_review",
       transcriptSafetyReasons: clip.transcriptSafetyStatus === "REVIEW_REQUIRED"
-        ? ["PASTOR_CONFIRMED_TRANSCRIPT_REVIEW"]
+        ? Array.from(new Set([
+            ...(Array.isArray(clip.transcriptSafetyReasons)
+              ? clip.transcriptSafetyReasons.filter((reason): reason is string => typeof reason === "string")
+              : []),
+            "PASTOR_CONFIRMED_TRANSCRIPT_REVIEW",
+          ]))
         : undefined,
       postReadyBlockers: removeTranscriptSafetyBlocker(clip.postReadyBlockers),
       qualityWarnings,
@@ -4177,6 +4195,7 @@ export async function updateClipStudioEditsAction(
       captionBurnStatus: true,
       exportStatus: true,
       transcriptSafetyStatus: true,
+      transcriptSafetyReasons: true,
       postReadyBlockers: true,
     },
   });
@@ -4473,12 +4492,20 @@ export async function updateClipStudioEditsAction(
       ...((boundariesChanged || socialCopyChanged || hashtagChanged || editorialHookChanged || captionCuesChanged)
         ? { qualityReviewedAt: null }
         : {}),
-      ...(input.applyCaptionsToClip && normalizedCaptionCues.length > 0
+      ...(shouldRecordExplicitTranscriptReview({
+        transcriptSafetyStatus: clip.transcriptSafetyStatus,
+        explicitlyConfirmed: input.confirmTranscriptReviewed === true,
+      })
         ? {
             transcriptSafetyStatus: "REVIEWED" as const,
             transcriptSafetyReviewedAt: new Date(),
             transcriptSafetyReviewedBy: "clip_studio",
-            transcriptSafetyReasons: ["CAPTION_CUES_MANUALLY_REVIEWED"],
+            transcriptSafetyReasons: Array.from(new Set([
+              ...(Array.isArray(clip.transcriptSafetyReasons)
+                ? clip.transcriptSafetyReasons.filter((reason): reason is string => typeof reason === "string")
+                : []),
+              "HUMAN_CONFIRMED_TRANSCRIPT_REVIEW",
+            ])),
             postReadyBlockers: removeTranscriptSafetyBlocker(clip.postReadyBlockers),
           }
         : {}),
@@ -5455,6 +5482,7 @@ export async function prepareClipStudioForPostingAction(
     brollLayer: input.editPreview.brollLayer,
     speechCleanup: input.editPreview.speechCleanup,
     speechCleanupEdits: input.editPreview.speechCleanupEdits,
+    confirmTranscriptReviewed: false,
   });
 
   if (!editResult.success) {

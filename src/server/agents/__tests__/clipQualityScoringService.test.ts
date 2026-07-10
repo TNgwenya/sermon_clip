@@ -114,6 +114,34 @@ describe("professional clip quality scoring service", () => {
     expect(result.postReadyBlockers).not.toContain("Rendered preview is not complete yet.");
   });
 
+  it("keeps uncertain transcript wording out of post-ready ranking until a human checks it", () => {
+    const result = scoreProfessionalClipQuality({
+      ...baseCandidate,
+      transcriptSafetyStatus: "REVIEW_REQUIRED",
+    });
+
+    expect(result.qualityLabel).toBe("NEEDS_EDITING");
+    expect(result.postReadyStatus).toBe("NEEDS_EDITING");
+    expect(result.qualityWarnings).toContain("TRANSCRIPT_REVIEW_REQUIRED");
+    expect(result.recommendedNextAction).toBe("REVIEW_CLIP");
+  });
+
+  it("keeps a grounded local-language ministry moment in the review tier instead of hard-rejecting English lexical gaps", () => {
+    const result = scoreProfessionalClipQuality({
+      ...baseCandidate,
+      transcriptText: "UNkulunkulu uthembekile futhi abantu bakhe kufanele bakholwe. Manje khetha ukholo, themba uJesu, thandaza, xolela, khonza, futhi hamba ngokulalela nsuku zonke.",
+      hook: "UNkulunkulu uthembekile.",
+      caption: "Manje khetha ukholo futhi thandaza.",
+      transcriptSafetyStatus: "REVIEW_REQUIRED",
+      standaloneClarityScore: 7.5,
+      hookScore: 7.2,
+    });
+
+    expect(result.qualityLabel).toBe("NEEDS_EDITING");
+    expect(result.qualityWarnings).not.toContain("PASTOR_GRADE_NO_SPIRITUAL_ANCHOR");
+    expect(result.qualityWarnings).not.toContain("PASTOR_GRADE_NO_CLEAR_TAKEAWAY");
+  });
+
   it("downgrades valid but weak AI clips", () => {
     const result = scoreProfessionalClipQuality({
       ...baseCandidate,

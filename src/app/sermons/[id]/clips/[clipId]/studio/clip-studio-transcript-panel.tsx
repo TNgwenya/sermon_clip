@@ -32,6 +32,7 @@ type TranscriptSegment = {
   startTimeSeconds: number;
   endTimeSeconds: number;
   text: string;
+  confidence?: number | null;
 };
 
 type ClipStudioTranscriptPanelProps = {
@@ -565,6 +566,9 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
               >
                 <span>{formatSecondsForPastorView(segment.startTimeSeconds)}</span>
                 <strong>{displayText}</strong>
+                {typeof segment.confidence === "number" && segment.confidence < 0.78 ? (
+                  <small className="status-pill quality-needs-editing">Check wording</small>
+                ) : null}
               </button>
             );
           })

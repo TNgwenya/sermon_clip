@@ -99,6 +99,7 @@ function clip(overrides: Partial<CuratableClipSuggestion> = {}): CuratableClipSu
     clipType: fixture.clipType,
     ministryValue: fixture.ministryValue,
     qualityDebugSnapshot: groundingSnapshot(),
+    transcriptSafetyStatus: "TRUSTED",
     createdAt: new Date("2026-06-20T10:00:00.000Z"),
     ...overrides,
   };
@@ -141,6 +142,27 @@ describe("clip suggestion curation service", () => {
       "clip-1",
       "clip-2",
     ]);
+  });
+
+  it("keeps an uncertain local-language moment for review instead of hard-rejecting English lexical gaps", () => {
+    const summary = planAiSuggestionCuration([
+      clip({
+        id: "zulu-review",
+        transcriptText: "UNkulunkulu uthembekile. Namuhla khetha ukumethemba ngaso sonke isikhathi.",
+        transcriptSafetyStatus: "REVIEW_REQUIRED",
+        qualityLabel: "REJECT",
+        postReadyStatus: "REJECT",
+        qualityWarnings: [
+          "PASTOR_GRADE_NO_SPIRITUAL_ANCHOR",
+          "PASTOR_GRADE_TRANSCRIPT_NO_CLEAR_TAKEAWAY",
+          "PASTOR_GRADE_NO_PAYOFF_OR_APPLICATION",
+        ],
+        recommendedAction: "NEEDS_REVIEW",
+        finalQualityScore: 7.4,
+      }),
+    ]);
+
+    expect(summary.decisions[0]).toMatchObject({ action: "KEEP" });
   });
 
   it("rejects duplicate sermon ideas before applying the review-board cap", () => {

@@ -90,7 +90,7 @@ describe("caption burn service validation", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.reason).toContain("Review the local-language transcript");
+    expect(result.reason).toContain("confirm the transcript wording");
   });
 
   it("builds caption burn metadata payload", () => {

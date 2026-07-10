@@ -291,6 +291,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
         startTimeSeconds: true,
         endTimeSeconds: true,
         text: true,
+        confidence: true,
       },
     }),
     prisma.transcriptSegment.findFirst({
@@ -524,7 +525,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
 
               {transcriptReviewRequired ? (
                 <p className="warning-banner">
-                  Review the local-language wording before preparing this clip. Saving checked caption cues in Studio will clear this safety gate; otherwise captions, export, and posting will stay blocked.
+                  Review the local-language wording before preparing this clip. Saving captions does not confirm transcript accuracy; use the explicit transcript check in Review before export or posting.
                 </p>
               ) : null}
             </div>

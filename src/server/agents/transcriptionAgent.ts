@@ -32,6 +32,7 @@ import {
   inferSermonWindowFromTranscript,
   type InferredSermonWindow,
 } from "@/server/agents/sermonWindowInference";
+import { invalidateTranscriptDerivedClipWork } from "@/server/agents/transcriptChangeInvalidation";
 
 type TranscribeOptions = {
   force?: boolean;
@@ -128,7 +129,7 @@ const CHUNK_DURATION_SECONDS = 20 * 60;
 const LOCAL_LANGUAGE_CHUNK_DURATION_SECONDS = 5 * 60;
 const CHUNK_FOLDER_NAME = "chunks";
 const CHUNK_TRANSCRIPT_CACHE_FOLDER_NAME = "chunk-transcripts";
-const CHUNK_TRANSCRIPT_CACHE_VERSION = 3;
+const CHUNK_TRANSCRIPT_CACHE_VERSION = 4;
 const TRANSCRIPTION_CONTEXT_WORDS = 70;
 const SPEECH_ENHANCED_AUDIO_NAME = "speech-enhanced-audio.mp3";
 const MAX_CONSECUTIVE_DUPLICATE_TRANSCRIPT_SEGMENTS = 1;
@@ -144,16 +145,17 @@ const DEGRADED_MULTILINGUAL_MAX_REPEATED_PHRASE_RATIO = 0.13;
 const TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE = 500;
 
 const TRANSCRIPTION_LANGUAGE_ALIASES: Array<{ code: string; aliases: string[] }> = [
-  { code: "xh", aliases: ["xhosa", "isixhosa", "isi xhosa"] },
-  { code: "zu", aliases: ["zulu", "isizulu", "isi zulu"] },
-  { code: "st", aliases: ["sotho", "sesotho", "southern sotho"] },
-  { code: "tn", aliases: ["tswana", "setswana"] },
+  { code: "xh", aliases: ["xh", "xho", "xhosa", "isixhosa", "isi xhosa"] },
+  { code: "zu", aliases: ["zu", "zul", "zulu", "isizulu", "isi zulu"] },
+  { code: "st", aliases: ["st", "sot", "sotho", "sesotho", "southern sotho"] },
+  { code: "tn", aliases: ["tn", "tsn", "tswana", "setswana"] },
+  { code: "nso", aliases: ["nso", "sepedi", "northern sotho"] },
   { code: "af", aliases: ["afrikaans"] },
   { code: "en", aliases: ["english", "eng"] },
 ];
 
 const OPENAI_TRANSCRIPTION_LANGUAGE_CODES = new Set(["af", "en"]);
-const LOCAL_MULTILINGUAL_LANGUAGE_CODES = new Set(["xh", "zu", "st", "tn"]);
+const LOCAL_MULTILINGUAL_LANGUAGE_CODES = new Set(["xh", "zu", "st", "tn", "nso"]);
 type TranscriptionLanguageHint = {
   intendedLanguage: string;
   openAiLanguage?: string;
@@ -214,6 +216,17 @@ function validateNormalizedTranscript(transcript: NormalizedTranscript): Normali
     if (!segment.text.trim()) {
       throw new Error("Transcription returned an empty segment.");
     }
+
+    if (
+      segment.confidence !== undefined &&
+      (
+        !Number.isFinite(segment.confidence) ||
+        segment.confidence < 0 ||
+        segment.confidence > 1
+      )
+    ) {
+      throw new Error("Transcription returned invalid provider confidence evidence.");
+    }
   }
 
   return {
@@ -252,6 +265,21 @@ function isCachedChunkTranscriptPayload(value: unknown): value is CachedChunkTra
   );
 }
 
+function buildTranscriptSegmentRecord(input: {
+  sermonId: string;
+  transcriptId: string;
+  segment: NormalizedTranscript["segments"][number];
+}) {
+  return {
+    sermonId: input.sermonId,
+    transcriptId: input.transcriptId,
+    startTimeSeconds: input.segment.startTimeSeconds,
+    endTimeSeconds: input.segment.endTimeSeconds,
+    text: input.segment.text,
+    confidence: input.segment.confidence ?? null,
+  };
+}
+
 async function replaceTranscriptRecords(input: {
   sermonId: string;
   fullText: string;
@@ -260,6 +288,31 @@ async function replaceTranscriptRecords(input: {
   transcriptJsonPath: string;
   segments: NormalizedTranscript["segments"];
 }): Promise<void> {
+  const previousTranscript = await prisma.transcript.findUnique({
+    where: { sermonId: input.sermonId },
+    select: {
+      fullText: true,
+      segments: {
+        orderBy: { startTimeSeconds: "asc" },
+        select: {
+          startTimeSeconds: true,
+          endTimeSeconds: true,
+          text: true,
+          confidence: true,
+        },
+      },
+    },
+  });
+  const invalidation = previousTranscript
+    ? await invalidateTranscriptDerivedClipWork({
+        sermonId: input.sermonId,
+        previousFullText: previousTranscript.fullText,
+        nextFullText: input.fullText,
+        previousSegments: previousTranscript.segments,
+        segments: input.segments,
+      })
+    : null;
+
   const transcript = await prisma.transcript.upsert({
     where: { sermonId: input.sermonId },
     update: {
@@ -284,12 +337,10 @@ async function replaceTranscriptRecords(input: {
   for (let index = 0; index < input.segments.length; index += TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE) {
     const batch = input.segments.slice(index, index + TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE);
     await prisma.transcriptSegment.createMany({
-      data: batch.map((segment) => ({
+      data: batch.map((segment) => buildTranscriptSegmentRecord({
         sermonId: input.sermonId,
         transcriptId: transcript.id,
-        startTimeSeconds: segment.startTimeSeconds,
-        endTimeSeconds: segment.endTimeSeconds,
-        text: segment.text,
+        segment,
       })),
     });
   }
@@ -300,6 +351,13 @@ async function replaceTranscriptRecords(input: {
       transcriptJsonPath: input.transcriptJsonPath,
     },
   });
+
+  if (invalidation?.transcriptChanged) {
+    await appendPipelineLog(
+      input.sermonId,
+      `Transcript evidence changed: ${invalidation.clipsReviewedAgain} existing clip(s) need fresh quality guidance; ${invalidation.clipsWithChangedEvidence} clip range(s) were safety-blocked and marked for media regeneration (${invalidation.clipsWithChangedExcerpt} with changed wording).`,
+    );
+  }
 }
 
 function buildChunkTranscriptCachePath(cacheDir: string, chunkPath: string): string {
@@ -400,18 +458,11 @@ async function writeCachedChunkTranscript(cachePath: string, payload: CachedChun
 
 function normalizeTranscriptTextForCleanup(text: string): string {
   return text
+    .normalize("NFKC")
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function countTranscriptWords(text: string): number {
-  return text
-    .trim()
-    .split(/\s+/g)
-    .filter(Boolean)
-    .length;
 }
 
 function isNoiseTranscriptSegment(text: string): boolean {
@@ -431,10 +482,6 @@ function isNoiseTranscriptSegment(text: string): boolean {
   }
 
   if (/^(music|applause|laughter|silence|inaudible|crosstalk|foreign language|speaking in foreign language)$/.test(normalized)) {
-    return true;
-  }
-
-  if (/^(amen|yes|yeah|okay|ok|thank you|hallelujah|praise god)$/.test(normalized) && countTranscriptWords(normalized) <= 2) {
     return true;
   }
 
@@ -501,7 +548,7 @@ function buildTranscriptionPromptContext(context?: TranscriptionPromptContext): 
 
 function buildWhisperPromptContext(intendedLanguage: string, context?: TranscriptionPromptContext): string[] {
   return [
-    `Languages: ${intendedLanguage}.`,
+    `Languages spoken may include: ${intendedLanguage}. Preserve the spoken language changes rather than translating them.`,
     "Christian sermon, scripture, Bible verses, prayer, worship, altar call, Jesus, Amen, Hallelujah.",
     ...buildTranscriptionPromptContext(context),
   ];
@@ -514,8 +561,16 @@ function getDeclaredLanguageCodes(language: string | null | undefined): string[]
   }
 
   return TRANSCRIPTION_LANGUAGE_ALIASES
-    .filter(({ aliases }) => aliases.some((alias) => normalized.includes(alias)))
+    .filter(({ aliases }) => aliases.some((alias) => declaredLanguageAliasMatches(normalized, alias)))
     .map(({ code }) => code);
+}
+
+function declaredLanguageAliasMatches(normalizedLanguage: string, alias: string): boolean {
+  if (alias.length > 3) {
+    return normalizedLanguage.includes(alias);
+  }
+  const tokens = new Set(normalizedLanguage.replace(/[^a-z0-9]+/g, " ").split(/\s+/g).filter(Boolean));
+  return tokens.has(alias);
 }
 
 function usesLocalMultilingualLanguageHint(languageHint: TranscriptionLanguageHint | null): boolean {
@@ -541,7 +596,7 @@ function buildTranscriptionLanguageHint(
 
   const normalized = intendedLanguage.toLowerCase();
   const matches = TRANSCRIPTION_LANGUAGE_ALIASES.filter(({ aliases }) => {
-    return aliases.some((alias) => normalized.includes(alias));
+    return aliases.some((alias) => declaredLanguageAliasMatches(normalized, alias));
   });
   const preferredMatch = matches.find((match) => match.code !== "en") ?? matches[0];
   const openAiLanguage = preferredMatch && OPENAI_TRANSCRIPTION_LANGUAGE_CODES.has(preferredMatch.code)
@@ -551,9 +606,7 @@ function buildTranscriptionLanguageHint(
   return {
     intendedLanguage,
     openAiLanguage,
-    prompt: matches.some((match) => LOCAL_MULTILINGUAL_LANGUAGE_CODES.has(match.code))
-      ? undefined
-      : buildWhisperPromptContext(intendedLanguage, context).join(" "),
+    prompt: buildWhisperPromptContext(intendedLanguage, context).join(" "),
   };
 }
 
@@ -619,9 +672,9 @@ function offsetChunkTranscriptSegments(
   timelineOffsetSeconds: number,
 ): NormalizedTranscript["segments"] {
   return segments.map((segment) => ({
+    ...segment,
     startTimeSeconds: Number((segment.startTimeSeconds + timelineOffsetSeconds).toFixed(3)),
     endTimeSeconds: Number((segment.endTimeSeconds + timelineOffsetSeconds).toFixed(3)),
-    text: segment.text,
   }));
 }
 
@@ -1835,7 +1888,7 @@ export async function transcribeSermonAudio(
 	            : offsetTranscriptTimeline(
 	                await transcribeAudioWithOpenAI(enhancedAudioPath, {
 	                  language: languageHint?.openAiLanguage,
-	                  prompt: buildChunkTranscriptionPrompt(languageHint, getTranscriptTail(originalWindowed.transcript.fullText)),
+	                  prompt: languageHint?.prompt,
 	                  onRetry: buildOpenAITranscriptionRetryLogger(
 	                    sermon.id,
 	                    `speech-enhanced ${transcriptionInput.description}`,
@@ -2044,20 +2097,22 @@ export const __transcriptionTestUtils = {
   buildChunkTranscriptionPrompt,
   buildChunkTranscriptCachePath,
   buildChunkTranscriptCachePayload,
+  buildTranscriptSegmentRecord,
   buildSpeechEnhancedAudioArgs,
   buildCumulativeChunkTimelineOffsets,
   cleanupTranscriptForClipping,
   getChunkTimelineOffsetSeconds,
   getTranscriptTail,
   mergeChunkTranscriptSegments,
-	  offsetChunkTranscriptSegments,
-	  offsetTranscriptTimeline,
+  normalizeTranscriptTextForCleanup,
+  offsetChunkTranscriptSegments,
+  offsetTranscriptTimeline,
   readCachedChunkTranscript,
   resolveChunkWorkingDirectories,
   resolveExpectedTranscriptDurationSeconds,
   resolveTranscriptionChunkDurationSeconds,
-	  resolveManualTranscriptionWindow,
-	  selectBestTranscriptAttempt,
+  resolveManualTranscriptionWindow,
+  selectBestTranscriptAttempt,
   finalTranscriptReliabilityIssue,
   isDegradedTranscriptUsableForLocalMultilingualClipping,
   isTranscriptReliableEnoughForClipping,

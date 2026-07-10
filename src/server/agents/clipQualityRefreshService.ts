@@ -38,6 +38,7 @@ export type RefreshableClip = {
   caption: string;
   score: number;
   transcriptText: string;
+  transcriptSafetyStatus: "TRUSTED" | "REVIEW_REQUIRED" | "REVIEWED";
   durationSeconds: number;
   startTimeSeconds: number;
   endTimeSeconds: number;
@@ -271,6 +272,7 @@ export async function refreshClipQualityRecords(input: {
 
       const professional = dependencies.scoreProfessionalQuality({
         ...reviewed,
+        transcriptSafetyStatus: clip.transcriptSafetyStatus,
         visualReadinessScore: visualRefresh?.visualReadinessScore ?? reviewed.visualReadinessScore,
         visualConfidenceScore: visualRefresh?.visualReadinessScore ?? undefined,
         visualQualityScore: visualRefresh?.visualQualityScore ?? undefined,
@@ -339,6 +341,7 @@ export async function refreshSermonClipQuality(input: {
       caption: true,
       score: true,
       transcriptText: true,
+      transcriptSafetyStatus: true,
       durationSeconds: true,
       startTimeSeconds: true,
       endTimeSeconds: true,

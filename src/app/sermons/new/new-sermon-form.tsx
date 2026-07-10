@@ -54,11 +54,14 @@ function formatFileSize(bytes: number): string {
 function SubmitButton({
   sourceMode,
   uploadBlocked,
+  isUploadSubmitting,
 }: {
   sourceMode: SermonSourceMode;
   uploadBlocked: boolean;
+  isUploadSubmitting: boolean;
 }) {
-  const { pending } = useFormStatus();
+  const { pending: actionPending } = useFormStatus();
+  const pending = actionPending || isUploadSubmitting;
 
   return (
     <button className="button primary command-cta" type="submit" disabled={pending || uploadBlocked}>
@@ -74,11 +77,14 @@ function SubmitButton({
 function UploadProgressTheater({
   sourceMode,
   selectedFileName,
+  isUploadSubmitting,
 }: {
   sourceMode: SermonSourceMode;
   selectedFileName: string | null;
+  isUploadSubmitting: boolean;
 }) {
-  const { pending } = useFormStatus();
+  const { pending: actionPending } = useFormStatus();
+  const pending = actionPending || isUploadSubmitting;
 
   if (!pending) {
     return null;
@@ -143,12 +149,15 @@ export function NewSermonForm({
   const [activeFeatureModal, setActiveFeatureModal] = useState<FeatureModalKind | null>(null);
   const [sourceMode, setSourceMode] = useState<SermonSourceMode>("youtube");
   const [youtubeUrl, setYoutubeUrl] = useState(initialYoutubeUrl);
+  const [uploadState, setUploadState] = useState<CreateSermonFormState | null>(null);
+  const [isUploadSubmitting, setIsUploadSubmitting] = useState(false);
   const [selectedFile, setSelectedFile] = useState<{ name: string; size: number } | null>(null);
   const [selectedFileError, setSelectedFileError] = useState<string | null>(null);
+  const displayState = uploadState ?? state;
   const hasSermonWindowErrors = Boolean(
-    state.fieldErrors?.sermonStartTimestamp || state.fieldErrors?.sermonEndTimestamp,
+    displayState.fieldErrors?.sermonStartTimestamp || displayState.fieldErrors?.sermonEndTimestamp,
   );
-  const mediaFileError = selectedFileError ?? state.fieldErrors?.mediaFile;
+  const mediaFileError = selectedFileError ?? displayState.fieldErrors?.mediaFile;
 
   useEffect(() => {
     if (state.success && state.createdSermonId) {
@@ -157,25 +166,97 @@ export function NewSermonForm({
   }, [router, state.createdSermonId, state.success]);
 
   useEffect(() => {
-    if (state.message) {
+    if (state.message || uploadState?.message) {
       window.sessionStorage.removeItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY);
     }
-  }, [state.message]);
+  }, [state.message, uploadState?.message]);
+
+  async function submitRawUpload(event: React.FormEvent<HTMLFormElement>) {
+    if (sourceMode !== "upload") {
+      return;
+    }
+
+    event.preventDefault();
+    setUploadState(null);
+
+    const form = event.currentTarget;
+    const fileInput = form.elements.namedItem("sermonVideoFile") as HTMLInputElement | null;
+    const file = fileInput?.files?.[0] ?? null;
+
+    if (!file) {
+      setUploadState({
+        success: false,
+        message: "Choose a media file before uploading.",
+        fieldErrors: { mediaFile: "Choose a media file before uploading." },
+      });
+      return;
+    }
+
+    if (uploadedMediaExceedsSizeLimit(file)) {
+      setSelectedFileError(UPLOADED_MEDIA_TOO_LARGE_MESSAGE);
+      return;
+    }
+
+    const formData = new FormData(form);
+    const uploadUrl = new URL("/api/sermons/upload", window.location.origin);
+    uploadUrl.searchParams.set("fileName", file.name);
+    uploadUrl.searchParams.set("title", String(formData.get("title") ?? ""));
+    uploadUrl.searchParams.set("speakerName", String(formData.get("speakerName") ?? ""));
+    uploadUrl.searchParams.set("churchName", String(formData.get("churchName") ?? ""));
+    uploadUrl.searchParams.set("language", String(formData.get("language") ?? ""));
+    uploadUrl.searchParams.set("sermonDate", String(formData.get("sermonDate") ?? ""));
+    uploadUrl.searchParams.set("sermonStartTimestamp", String(formData.get("sermonStartTimestamp") ?? ""));
+    uploadUrl.searchParams.set("sermonEndTimestamp", String(formData.get("sermonEndTimestamp") ?? ""));
+    uploadUrl.searchParams.set("rightsConfirmed", formData.get("rightsConfirmed") === "on" ? "true" : "false");
+
+    window.sessionStorage.setItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY, "true");
+    setIsUploadSubmitting(true);
+    try {
+      const response = await fetch(uploadUrl, {
+        method: "POST",
+        headers: {
+          "content-type": file.type || "application/octet-stream",
+        },
+        body: file,
+      });
+      const result = await response.json().catch(() => ({
+        success: false,
+        message: "The upload ended before Sermon Clip received a normal response.",
+        fieldErrors: { mediaFile: "The upload ended early. Try again or use a YouTube link." },
+      })) as CreateSermonFormState;
+
+      setUploadState(result);
+      if (result.success && result.createdSermonId) {
+        window.sessionStorage.removeItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY);
+        router.replace(`/sermons/${result.createdSermonId}`);
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "The upload request could not be completed.";
+      setUploadState({
+        success: false,
+        message: `The upload did not finish. Reason: ${reason}`,
+        fieldErrors: { mediaFile: "The upload did not finish. Try again on a stable connection, or use a YouTube link." },
+      });
+    } finally {
+      setIsUploadSubmitting(false);
+    }
+  }
 
   return (
     <>
       <form
         action={formAction}
         className="upload-form-panel premium-intake-form stack-lg"
-        onSubmit={() => {
+        onSubmit={(event) => {
           if (sourceMode === "upload") {
-            window.sessionStorage.setItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY, "true");
+            void submitRawUpload(event);
           } else {
             window.sessionStorage.removeItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY);
+            setUploadState(null);
           }
         }}
       >
-        <UploadProgressTheater sourceMode={sourceMode} selectedFileName={selectedFile?.name ?? null} />
+        <UploadProgressTheater sourceMode={sourceMode} selectedFileName={selectedFile?.name ?? null} isUploadSubmitting={isUploadSubmitting} />
         <section className="intake-form-section stack-md" aria-labelledby="sermon-source-heading">
           <div className="intake-section-heading">
             <span className="intake-section-number">01</span>
@@ -251,7 +332,7 @@ export function NewSermonForm({
                 aria-invalid={Boolean(state.fieldErrors?.youtubeUrl)}
                 aria-describedby={state.fieldErrors?.youtubeUrl ? "youtubeUrl-error" : undefined}
               />
-              {state.fieldErrors?.youtubeUrl ? <p id="youtubeUrl-error" className="field-error">{state.fieldErrors.youtubeUrl}</p> : null}
+              {displayState.fieldErrors?.youtubeUrl ? <p id="youtubeUrl-error" className="field-error">{displayState.fieldErrors.youtubeUrl}</p> : null}
             </div>
 
             <div className={`source-method-card upload-drop-zone stack-sm dark-drop${sourceMode === "upload" ? " is-selected" : ""}`} hidden={sourceMode !== "upload"}>
@@ -306,32 +387,32 @@ export function NewSermonForm({
           <div className="stack-sm">
             <label htmlFor="title">Sermon title</label>
             <input id="title" name="title" type="text" required placeholder="Hope in hard times" />
-            {state.fieldErrors?.title ? <p className="field-error">{state.fieldErrors.title}</p> : null}
+              {displayState.fieldErrors?.title ? <p className="field-error">{displayState.fieldErrors.title}</p> : null}
           </div>
 
           <div className="review-edit-grid upload-meta-grid">
             <div className="stack-sm">
               <label htmlFor="speakerName">Preacher</label>
               <input id="speakerName" name="speakerName" type="text" required placeholder="Pastor Jane Doe" />
-              {state.fieldErrors?.speakerName ? <p className="field-error">{state.fieldErrors.speakerName}</p> : null}
+              {displayState.fieldErrors?.speakerName ? <p className="field-error">{displayState.fieldErrors.speakerName}</p> : null}
             </div>
 
             <div className="stack-sm">
               <label htmlFor="churchName">Church</label>
               <input id="churchName" name="churchName" type="text" required placeholder="Grace Community Church" />
-              {state.fieldErrors?.churchName ? <p className="field-error">{state.fieldErrors.churchName}</p> : null}
+              {displayState.fieldErrors?.churchName ? <p className="field-error">{displayState.fieldErrors.churchName}</p> : null}
             </div>
 
             <div className="stack-sm">
               <label htmlFor="language">Sermon language</label>
               <input id="language" name="language" type="text" required placeholder="English" />
-              {state.fieldErrors?.language ? <p className="field-error">{state.fieldErrors.language}</p> : null}
+              {displayState.fieldErrors?.language ? <p className="field-error">{displayState.fieldErrors.language}</p> : null}
             </div>
 
             <div className="stack-sm">
               <label htmlFor="sermonDate">Date preached <span className="field-optional">Optional</span></label>
               <input id="sermonDate" name="sermonDate" type="date" />
-              {state.fieldErrors?.sermonDate ? <p className="field-error">{state.fieldErrors.sermonDate}</p> : null}
+              {displayState.fieldErrors?.sermonDate ? <p className="field-error">{displayState.fieldErrors.sermonDate}</p> : null}
             </div>
           </div>
         </section>
@@ -349,14 +430,14 @@ export function NewSermonForm({
               <label htmlFor="sermonStartTimestamp">Sermon starts at</label>
               <input id="sermonStartTimestamp" name="sermonStartTimestamp" type="text" inputMode="numeric" placeholder="Example: 32:15" />
               <p className="muted small">Format: <span className="code-text">MM:SS</span> or <span className="code-text">H:MM:SS</span>.</p>
-              {state.fieldErrors?.sermonStartTimestamp ? <p className="field-error">{state.fieldErrors.sermonStartTimestamp}</p> : null}
+              {displayState.fieldErrors?.sermonStartTimestamp ? <p className="field-error">{displayState.fieldErrors.sermonStartTimestamp}</p> : null}
             </div>
 
             <div className="stack-sm">
               <label htmlFor="sermonEndTimestamp">Sermon ends at</label>
               <input id="sermonEndTimestamp" name="sermonEndTimestamp" type="text" inputMode="numeric" placeholder="Example: 1:18:40" />
               <p className="muted small">Leave blank if the sermon runs to the end of the video.</p>
-              {state.fieldErrors?.sermonEndTimestamp ? <p className="field-error">{state.fieldErrors.sermonEndTimestamp}</p> : null}
+              {displayState.fieldErrors?.sermonEndTimestamp ? <p className="field-error">{displayState.fieldErrors.sermonEndTimestamp}</p> : null}
             </div>
           </div>
         </details>
@@ -366,8 +447,8 @@ export function NewSermonForm({
             <input id="rightsConfirmed" name="rightsConfirmed" type="checkbox" required />
             <span>I confirm that our church or media team has permission to process this sermon recording.</span>
           </label>
-          {state.fieldErrors?.rightsConfirmed ? (
-            <p className="field-error">{state.fieldErrors.rightsConfirmed}</p>
+          {displayState.fieldErrors?.rightsConfirmed ? (
+            <p className="field-error">{displayState.fieldErrors.rightsConfirmed}</p>
           ) : null}
         </div>
 
@@ -375,6 +456,7 @@ export function NewSermonForm({
           <SubmitButton
             sourceMode={sourceMode}
             uploadBlocked={sourceMode === "upload" && (!canUploadMedia || Boolean(selectedFileError))}
+            isUploadSubmitting={isUploadSubmitting}
           />
           <p className="muted small">Analysis begins after your sermon is saved. You can leave while it works.</p>
         </div>
@@ -391,17 +473,17 @@ export function NewSermonForm({
           </div>
         </details>
 
-        {state.message ? (
-          <p className={state.success ? "success-banner" : "error-banner"} role="status">{state.message}</p>
+        {displayState.message ? (
+          <p className={displayState.success ? "success-banner" : "error-banner"} role="status">{displayState.message}</p>
         ) : null}
 
-        {state.createdSermonId ? (
+        {displayState.createdSermonId ? (
           <div className="actions-row">
             <Link className="button secondary" href="/">
               Back to Dashboard
             </Link>
-            <Link className="button primary" href={`/sermons/${state.createdSermonId}`}>
-              {state.success ? "Open live progress" : "Open saved sermon"}
+            <Link className="button primary" href={`/sermons/${displayState.createdSermonId}`}>
+              {displayState.success ? "Open live progress" : "Open saved sermon"}
             </Link>
           </div>
         ) : null}

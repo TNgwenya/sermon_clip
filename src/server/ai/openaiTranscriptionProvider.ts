@@ -7,6 +7,13 @@ export type NormalizedTranscriptSegment = {
   startTimeSeconds: number;
   endTimeSeconds: number;
   text: string;
+  /**
+   * Conservative, provider-derived transcription evidence. This is a
+   * heuristic built from Whisper diagnostics, not a calibrated probability
+   * that every word is correct. It is omitted when the provider does not
+   * return enough evidence.
+   */
+  confidence?: number;
 };
 
 export type NormalizedTranscript = {
@@ -38,6 +45,8 @@ type OpenAISegmentLike = {
   start?: number | string;
   end?: number | string;
   text?: string;
+  avg_logprob?: number | string;
+  no_speech_prob?: number | string;
 };
 
 type OpenAIWordLike = {
@@ -59,6 +68,7 @@ const WORD_GAP_SPLIT_SECONDS = 1.2;
 const MIN_WORDS_FOR_WORD_TIMED_SEGMENTS = 20;
 const MIN_WORD_TIMED_SEGMENT_RETENTION_RATIO = 0.72;
 const MAX_WORD_TIMED_RETENTION_LOSS_VS_SEGMENTS = 0.08;
+const MIN_PROVIDER_CONFIDENCE_OVERLAP_RATIO = 0.8;
 const DEFAULT_TRANSCRIPTION_MAX_ATTEMPTS = 4;
 const MAX_TRANSCRIPTION_MAX_ATTEMPTS = 8;
 const DEFAULT_TRANSCRIPTION_RETRY_BASE_DELAY_MS = 2_000;
@@ -212,6 +222,29 @@ function normalizeNumber(value: number | string | undefined): number | null {
   return null;
 }
 
+/**
+ * Derive conservative transcription evidence from Whisper's verbose segment
+ * diagnostics. `exp(avg_logprob)` is the geometric mean token likelihood and
+ * `1 - no_speech_prob` discounts regions Whisper considered non-speech. Their
+ * product is useful for relative review guidance, but is not a calibrated word
+ * accuracy probability. Without average log probability, no confidence is
+ * emitted because speech likelihood alone says nothing about word correctness.
+ */
+function deriveWhisperSegmentConfidence(segment: OpenAISegmentLike): number | undefined {
+  const averageLogProbability = normalizeNumber(segment.avg_logprob);
+  if (averageLogProbability === null) {
+    return undefined;
+  }
+
+  const tokenLikelihood = Math.exp(Math.max(-20, Math.min(0, averageLogProbability)));
+  const noSpeechProbability = normalizeNumber(segment.no_speech_prob);
+  const speechLikelihood = noSpeechProbability === null
+    ? 1
+    : 1 - Math.max(0, Math.min(1, noSpeechProbability));
+
+  return Number(Math.max(0, Math.min(1, tokenLikelihood * speechLikelihood)).toFixed(4));
+}
+
 function normalizeSegments(rawSegments: unknown): NormalizedTranscriptSegment[] {
   if (!Array.isArray(rawSegments)) {
     return [];
@@ -233,10 +266,13 @@ function normalizeSegments(rawSegments: unknown): NormalizedTranscriptSegment[] 
         return null;
       }
 
+      const confidence = deriveWhisperSegmentConfidence(candidate);
+
       return {
         startTimeSeconds,
         endTimeSeconds,
         text,
+        ...(confidence !== undefined ? { confidence } : {}),
       };
     })
     .filter((segment): segment is NormalizedTranscriptSegment => segment !== null);
@@ -327,6 +363,48 @@ function wordsToTranscriptSegments(words: NormalizedWordTimestamp[]): Normalized
   return segments;
 }
 
+function mapProviderConfidenceByOverlap(
+  targetSegments: NormalizedTranscriptSegment[],
+  providerSegments: NormalizedTranscriptSegment[],
+): NormalizedTranscriptSegment[] {
+  return targetSegments.map((target) => {
+    let weightedConfidence = 0;
+    let coveredSeconds = 0;
+
+    for (const providerSegment of providerSegments) {
+      if (typeof providerSegment.confidence !== "number") {
+        continue;
+      }
+
+      const overlapSeconds = Math.max(
+        0,
+        Math.min(target.endTimeSeconds, providerSegment.endTimeSeconds) -
+          Math.max(target.startTimeSeconds, providerSegment.startTimeSeconds),
+      );
+      if (overlapSeconds <= 0) {
+        continue;
+      }
+
+      weightedConfidence += providerSegment.confidence * overlapSeconds;
+      coveredSeconds += overlapSeconds;
+    }
+
+    const targetDurationSeconds = target.endTimeSeconds - target.startTimeSeconds;
+    if (
+      coveredSeconds <= 0 ||
+      targetDurationSeconds <= 0 ||
+      coveredSeconds / targetDurationSeconds < MIN_PROVIDER_CONFIDENCE_OVERLAP_RATIO
+    ) {
+      return target;
+    }
+
+    return {
+      ...target,
+      confidence: Number((weightedConfidence / coveredSeconds).toFixed(4)),
+    };
+  });
+}
+
 function selectBestTimestampedSegments(input: {
   responseText: string;
   segmentTimestamps: NormalizedTranscriptSegment[];
@@ -354,7 +432,7 @@ function selectBestTimestampedSegments(input: {
     return input.segmentTimestamps;
   }
 
-  return wordTimedSegments;
+  return mapProviderConfidenceByOverlap(wordTimedSegments, input.segmentTimestamps);
 }
 
 export function resolveOpenAITranscriptionModel(modelOverride?: string): string {
@@ -448,7 +526,10 @@ export async function transcribeAudioWithOpenAI(
 }
 
 export const __openAITranscriptionProviderTestUtils = {
+  deriveWhisperSegmentConfidence,
   isRetryableOpenAITranscriptionError,
+  mapProviderConfidenceByOverlap,
+  normalizeSegments,
   normalizeWords,
   runTranscriptionRequestWithRetry,
   wordsToTranscriptSegments,

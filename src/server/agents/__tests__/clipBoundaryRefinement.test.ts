@@ -454,4 +454,124 @@ describe("clip boundary refinement", () => {
       expect(refined.candidate.boundaryQuality).toBe("GOOD");
     }
   });
+
+  it("recognizes a lower-case microsegment that begins inside the previous spoken thought", () => {
+    const segments = [
+      { startTimeSeconds: 0, endTimeSeconds: 8, text: "God gives every believer a gift to serve" },
+      { startTimeSeconds: 8.05, endTimeSeconds: 20, text: "the church with courage and faithful obedience" },
+      { startTimeSeconds: 20.05, endTimeSeconds: 34, text: "so this week choose one faithful act and pray again." },
+    ];
+
+    const validation = validateFinalClipBoundary({
+      startTimeSeconds: 8.05,
+      endTimeSeconds: 34,
+      transcriptText: segments.slice(1).map((segment) => segment.text).join(" "),
+      segments,
+    });
+
+    expect(validation.quality).toBe("NEEDS_REVIEW");
+    expect(validation.reasons.map((reason) => reason.code)).toContain("STARTS_MID_SENTENCE");
+  });
+
+  it("moves a lower-case continuation start back to the likely beginning of the thought", () => {
+    const segments = [
+      { startTimeSeconds: 0, endTimeSeconds: 8, text: "God gives every believer a gift to serve" },
+      { startTimeSeconds: 8.05, endTimeSeconds: 20, text: "the church with courage and faithful obedience" },
+      { startTimeSeconds: 20.05, endTimeSeconds: 34, text: "so this week choose one faithful act and pray again." },
+    ];
+
+    const refined = refineClipBoundaries({
+      startTimeSeconds: 8.05,
+      endTimeSeconds: 34,
+      durationSeconds: 25.95,
+      transcriptText: "",
+      reasonSelected: "Faithful service",
+      riskReasons: [],
+    }, segments);
+
+    expect(refined.accepted).toBe(true);
+    if (refined.accepted) {
+      expect(refined.candidate.startTimeSeconds).toBe(0);
+      expect(refined.candidate.transcriptText).toContain("God gives every believer");
+      expect(refined.candidate.boundaryQuality).toBe("GOOD");
+    }
+  });
+
+  it("does not automatically extend a clip across a long unexplained transcript gap", () => {
+    const segments = [
+      { startTimeSeconds: 0, endTimeSeconds: 15, text: "Paul teaches that God gives courage for faithful service." },
+      { startTimeSeconds: 15, endTimeSeconds: 30, text: "The church learns obedience when fear speaks because" },
+      { startTimeSeconds: 43, endTimeSeconds: 55, text: "So this week choose one faithful act of service and pray again." },
+    ];
+
+    const refined = refineClipBoundaries({
+      startTimeSeconds: 0,
+      endTimeSeconds: 30,
+      durationSeconds: 30,
+      transcriptText: "",
+      reasonSelected: "Teaching",
+      riskReasons: [],
+    }, segments);
+
+    expect(refined.accepted).toBe(true);
+    if (refined.accepted) {
+      expect(refined.candidate.endTimeSeconds).toBe(30);
+      expect(refined.candidate.transcriptText).not.toContain("So this week");
+      expect(refined.candidate.boundaryAdjustmentReason).toContain("13-second transcript gap");
+      expect(refined.candidate.boundaryQuality).toBe("NEEDS_REVIEW");
+    }
+  });
+
+  it("marks a moderate internal transcript gap for review without treating a short rhetorical pause as dead air", () => {
+    const moderateSegments = [
+      { startTimeSeconds: 0, endTimeSeconds: 12, text: "God gives courage when pressure comes." },
+      { startTimeSeconds: 15, endTimeSeconds: 30, text: "So this week choose obedience and pray again." },
+    ];
+    const shortPauseSegments = [
+      { startTimeSeconds: 0, endTimeSeconds: 12, text: "God gives courage when pressure comes." },
+      { startTimeSeconds: 13.5, endTimeSeconds: 30, text: "So this week choose obedience and pray again." },
+    ];
+
+    const moderate = validateFinalClipBoundary({
+      startTimeSeconds: 0,
+      endTimeSeconds: 30,
+      transcriptText: moderateSegments.map((segment) => segment.text).join(" "),
+      segments: moderateSegments,
+    });
+    const shortPause = validateFinalClipBoundary({
+      startTimeSeconds: 0,
+      endTimeSeconds: 30,
+      transcriptText: shortPauseSegments.map((segment) => segment.text).join(" "),
+      segments: shortPauseSegments,
+    });
+
+    expect(moderate.quality).toBe("NEEDS_REVIEW");
+    expect(moderate.reasons.map((reason) => reason.code)).toContain("MODERATE_INTERNAL_GAP");
+    expect(shortPause.reasons.map((reason) => reason.code)).not.toContain("MODERATE_INTERNAL_GAP");
+    expect(shortPause.reasons.map((reason) => reason.code)).not.toContain("LONG_INTERNAL_GAP");
+  });
+
+  it("preserves a nearby scripture reference lead-in when it can be included safely", () => {
+    const segments = [
+      { startTimeSeconds: 0, endTimeSeconds: 7, text: "John chapter three verse sixteen says:" },
+      { startTimeSeconds: 7.1, endTimeSeconds: 22, text: "For God so loved the world that he gave his only Son." },
+      { startTimeSeconds: 22.1, endTimeSeconds: 38, text: "That love gives us courage to trust him today." },
+    ];
+
+    const refined = refineClipBoundaries({
+      startTimeSeconds: 7.1,
+      endTimeSeconds: 38,
+      durationSeconds: 30.9,
+      transcriptText: "",
+      reasonSelected: "Scripture truth",
+      riskReasons: [],
+    }, segments);
+
+    expect(refined.accepted).toBe(true);
+    if (refined.accepted) {
+      expect(refined.candidate.startTimeSeconds).toBe(0);
+      expect(refined.candidate.transcriptText).toContain("John chapter three verse sixteen");
+      expect(refined.candidate.boundaryAdjustmentReason).toContain("spoken scripture reference");
+    }
+  });
 });

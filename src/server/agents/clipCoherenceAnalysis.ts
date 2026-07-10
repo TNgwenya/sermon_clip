@@ -1,3 +1,8 @@
+import {
+  hasLocalActionMarker,
+  hasLocalSpiritualAnchor,
+} from "@/server/agents/multilingualTranscriptAnalysis";
+
 export type ClipOpeningStatus = "CLEAN" | "SOFT_CONNECTOR" | "DEPENDENT" | "MID_SENTENCE";
 export type ClipEndingStatus = "CLEAN" | "DANGLING" | "INCOMPLETE_SENTENCE";
 export type ClipLandingStatus =
@@ -26,7 +31,7 @@ export type ClipCoherenceAnalysis = {
   };
 };
 
-const SOFT_CONNECTOR_PATTERN = /^(and|so|but|because|then|now|also|therefore|or)\b/i;
+const SOFT_CONNECTOR_PATTERN = /^(and|so|but|because|then|now|also|therefore|or|futhi|kodwa|ngoba|ngakho|manje|kwaye|ngoko|mme|empa|hobane|kahoo|jaanong|gonne|joale)\b/iu;
 const DEPENDENT_OPENING_PATTERN =
   /^(as i said|like i said|we said|we talked about|remember when|this is why|that is why|that's why|and so|so now|but now|because of that|therefore|so then)\b|^(this|that)\s+(means|is why|is how|is what|shows|reminds|teaches|reveals)\b|^(it|they|he|she)\s+(means|shows|reminds|teaches|reveals|is|was|has|will|can|must)\b|^(for|because of)\s+(this|that)\s+reason\b|^(in|from|through)\s+(this|that|these|those)\s+(place|moment|season|truth|scripture|story|valley|reason|point|word|promise|calling|assignment)\b/i;
 const DANGLING_ENDING_PATTERN = /[,;:–-]$|\b(and|but|because|so that|which means|in order to|if|when|while|although|unless|until|therefore|so)\s*$/i;
@@ -60,7 +65,12 @@ const GIFT_RESPONSE_PATTERN =
   /\b(stir up|fan into flame|use it|use what|serve with|step into|walk in|do not bury|don't bury|don t bury|stop hiding|bring it out|put it to work|be faithful with|steward|activate|release|serve somebody|serve someone)\b|\b(gift|gifts|calling|purpose|assignment|anointing|what is in your hand)\b.{0,120}\b(serve|use|stir|step|walk|obey|faithful|courage|boldness|build|strengthen|encourage)\b/i;
 
 export function normalizeCoherenceText(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9'\s]/g, " ").replace(/\s+/g, " ").trim();
+  return text
+    .normalize("NFKC")
+    .toLocaleLowerCase("en")
+    .replace(/[^\p{L}\p{M}\p{N}'’\s]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
 }
 
 function sentenceEndIndex(text: string): number {
@@ -158,6 +168,14 @@ function classifyLanding(text: string): { status: ClipLandingStatus; landingText
   const declaration = findSentence(DECLARATION_PATTERN);
   if (declaration) return { status: "DECLARATION", landingText: declaration, reasonCodes: ["LANDING_DECLARATION"] };
 
+  if (hasLocalSpiritualAnchor(text) && hasLocalActionMarker(text)) {
+    return {
+      status: "APPLICATION",
+      landingText: sentences.at(-1) ?? text.trim(),
+      reasonCodes: ["LANDING_LOCAL_LANGUAGE_ACTION", "LOCAL_LANGUAGE_REVIEW_REQUIRED"],
+    };
+  }
+
   return { status: "NONE", landingText: null, reasonCodes: ["NO_LANDING"] };
 }
 
@@ -177,7 +195,7 @@ export function analyzeClipCoherence(text: string): ClipCoherenceAnalysis {
   const landing = classifyLanding(trimmed);
   const setupOnly = SETUP_ONLY_PATTERN.test(trimmed);
   const pointsToFutureResponse = FUTURE_RESPONSE_PATTERN.test(trimmed);
-  const hasSpiritualAnchor = SPIRITUAL_ANCHOR_PATTERN.test(trimmed);
+  const hasSpiritualAnchor = SPIRITUAL_ANCHOR_PATTERN.test(trimmed) || hasLocalSpiritualAnchor(trimmed);
   const hasClearTakeaway = detectClearTakeaway(trimmed, landing.status);
   const reasonCodes = new Set<string>(landing.reasonCodes);
 

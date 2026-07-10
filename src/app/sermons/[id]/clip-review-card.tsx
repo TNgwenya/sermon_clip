@@ -483,7 +483,7 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
           {transcriptReviewRequired ? (
             <div className="warning-banner stack-sm">
               <p>
-                <strong>Review the words before captions or export.</strong> This clip may include local-language wording the transcript misunderstood. Watch the moment and check the transcript before creating captions or a final post.
+                <strong>Review the words before approval.</strong> Listen to the moment and confirm any local-language, code-switched, or lower-confidence wording before creating captions or a final post.
               </p>
               {clip.transcriptSafetyReasons && clip.transcriptSafetyReasons.length > 0 ? (
                 <p className="muted small">Reason: {clip.transcriptSafetyReasons.map((reason) => reason.replace(/_/g, " ").toLowerCase()).join(", ")}</p>
@@ -494,7 +494,7 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
                 onClick={onMarkTranscriptReviewed}
                 disabled={isPending}
               >
-                I reviewed the transcript
+                I listened and checked these words
               </button>
             </div>
           ) : null}
@@ -983,8 +983,8 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
       )}
 
       <div className="actions-row">
-        <button type="button" className="button primary" onClick={onApprove} disabled={isPending || isExported}>
-          Approve
+        <button type="button" className="button primary" onClick={onApprove} disabled={isPending || isExported || transcriptReviewRequired}>
+          {transcriptReviewRequired ? "Check transcript first" : "Approve"}
         </button>
         <button type="button" className="button danger" onClick={onReject} disabled={isPending || isExported}>
           Reject

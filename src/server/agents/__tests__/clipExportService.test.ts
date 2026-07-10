@@ -90,7 +90,7 @@ describe("clip export service", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.reason).toContain("Review the local-language transcript");
+    expect(result.reason).toContain("confirm the transcript wording");
     expect(result.shouldMarkFailed).toBe(false);
   });
 

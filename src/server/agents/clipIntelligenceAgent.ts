@@ -54,8 +54,17 @@ import { refreshVideoSubjectTracking } from "@/server/agents/videoSubjectTrackin
 import {
   decideClipTranscriptSafety,
   mergeTranscriptSafetyBlocker,
+  usesLocalSouthernAfricanLanguage,
 } from "@/server/agents/localLanguageTranscriptSafety";
 import { detectClipArc } from "@/server/agents/clipArcDetection";
+import {
+  analyzeMultilingualTranscript,
+  type MultilingualTranscriptAnalysis,
+} from "@/server/agents/multilingualTranscriptAnalysis";
+import {
+  classifySermonSegment,
+  deriveLikelyThoughtStartAnchors,
+} from "@/server/agents/sermonThoughtSegmentation";
 
 export type ClipWindow = {
   windowId: string;
@@ -75,6 +84,7 @@ export type ClipWindow = {
   repairableWarnings?: string[];
   landingContextAvailable?: boolean;
   suggestedExtendedEndTimeSeconds?: number;
+  transcriptEvidence?: MultilingualTranscriptAnalysis;
 };
 
 type GenerateClipOptions = {
@@ -123,6 +133,7 @@ type TranscriptSegmentRecord = {
   startTimeSeconds: number;
   endTimeSeconds: number;
   text: string;
+  confidence?: number | null;
 };
 
 const WINDOW_STEP_SECONDS = 60;
@@ -131,6 +142,7 @@ const MAX_WINDOW_SECONDS = 90;
 const BATCH_SIZE = 4;
 const MAX_BATCH_CLIPS = 4;
 const WINDOW_TARGET_DURATIONS_SECONDS = [40, 60, 90] as const;
+const SEMANTIC_ANCHOR_MIN_SPACING_SECONDS = 24;
 const INLINE_VIDEO_SUBJECT_TRACKING_LIMIT = 6;
 const MAX_TRANSCRIPT_ISLAND_GAP_SECONDS = 12;
 const MAX_REPAIR_EXTENSION_SECONDS = 72;
@@ -272,10 +284,16 @@ const REPAIRABLE_WINDOW_WARNINGS = new Set([
   "WINDOW_NO_CLEAR_LANDING",
   "WINDOW_SETUP_WITHOUT_LANDING",
   "WINDOW_DEPENDENT_OPENING",
+  "WINDOW_LOCAL_LANGUAGE_SEMANTICS_REVIEW",
 ]);
 
 function normalizePlainText(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9'\s]/g, " ").replace(/\s+/g, " ").trim();
+  return text
+    .normalize("NFKC")
+    .toLocaleLowerCase("en")
+    .replace(/[^\p{L}\p{M}\p{N}'’\s]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
 }
 
 function transcriptTokens(text: string): string[] {
@@ -358,7 +376,8 @@ function hasSpokenMinistryLanding(text: string): boolean {
   return (
     hasActionLanding(text) ||
     hasTeachingLanding(text) ||
-    hasCallingGiftStewardshipPayoff(text)
+    hasCallingGiftStewardshipPayoff(text) ||
+    analyzeClipCoherence(text).landingStatus !== "NONE"
   );
 }
 
@@ -385,6 +404,7 @@ function openingHookScore(text: string): number {
   if (hasSetupLanguage(opening)) return 4.2;
   if (/^(and|so|but|that means|this means|therefore)\b/i.test(opening.trim())) return 4.8;
   if (/\b(god|jesus|grace|faith|fear|gift|calling|church|scripture|prayer|forgiveness|leadership)\b/i.test(opening)) return 7.4;
+  if (analyzeClipCoherence(opening).hasSpiritualAnchor) return 7.1;
   return 6.2;
 }
 
@@ -399,6 +419,7 @@ function ministryPayoffScore(text: string): number {
 function assessClipWindowQuality(
   segments: TranscriptSegmentRecord[],
   durationSeconds = segmentDuration(segments),
+  options: { sermonLanguage?: string | null } = {},
 ): WindowQualityResult {
   const transcriptText = segmentTranscriptText(segments);
   const wordCount = countTranscriptWords(transcriptText);
@@ -406,6 +427,12 @@ function assessClipWindowQuality(
   const distinctSermonTokenCount = uniqueSubstanceTokenCount(transcriptText);
   const repeatRatio = repeatedSegmentRatio(segments);
   const coherence = analyzeClipCoherence(transcriptText);
+  const transcriptEvidence = analyzeMultilingualTranscript(segments);
+  const localLanguageSemanticsNeedReview =
+    transcriptEvidence.languageProfile === "NGUNI_LOCAL" ||
+    transcriptEvidence.languageProfile === "SOTHO_TSWANA" ||
+    transcriptEvidence.languageProfile === "MIXED" ||
+    usesLocalSouthernAfricanLanguage(options.sermonLanguage);
   const openingScore = openingHookScore(transcriptText);
   const payoffScore = ministryPayoffScore(transcriptText);
   const warnings: string[] = [];
@@ -427,7 +454,11 @@ function assessClipWindowQuality(
     warnings.push("WINDOW_SETUP_WITHOUT_LANDING");
   }
   if (!hasLanding) {
-    warnings.push("WINDOW_NO_CLEAR_LANDING");
+    warnings.push(
+      localLanguageSemanticsNeedReview
+        ? "WINDOW_LOCAL_LANGUAGE_SEMANTICS_REVIEW"
+        : "WINDOW_NO_CLEAR_LANDING",
+    );
   }
   if (coherence.openingStatus === "DEPENDENT" || earlyDependentSegment) {
     warnings.push("WINDOW_DEPENDENT_OPENING");
@@ -509,6 +540,7 @@ function makeClipWindow(
     repairableWarnings: options.repairableWarnings ?? quality.repairableWarnings,
     landingContextAvailable: options.landingContextAvailable,
     suggestedExtendedEndTimeSeconds: options.suggestedExtendedEndTimeSeconds,
+    transcriptEvidence: analyzeMultilingualTranscript(windowSegments),
   };
 }
 
@@ -584,6 +616,17 @@ function buildWindowAnchors(
     const anchorTime = Math.max(0, moment.startTimeSeconds - 15);
     const index = segments.findIndex((segment) => segment.startTimeSeconds >= anchorTime);
     if (index !== -1) anchors.add(index);
+  }
+
+  let lastSemanticAnchorTime = Number.NEGATIVE_INFINITY;
+  for (const anchor of deriveLikelyThoughtStartAnchors(segments)) {
+    if (anchor.segmentIndex === 0 || anchor.strength === "WEAK") continue;
+    const hasStructureSignal = anchor.signals.length > 0;
+    if (!hasStructureSignal && anchor.timeSeconds - lastSemanticAnchorTime < SEMANTIC_ANCHOR_MIN_SPACING_SECONDS) {
+      continue;
+    }
+    anchors.add(anchor.segmentIndex);
+    lastSemanticAnchorTime = anchor.timeSeconds;
   }
 
   return [...anchors].sort((left, right) => left - right);
@@ -718,6 +761,7 @@ function hasCandidateMinistryLanding(text: string): boolean {
   return (
     hasActionLanding(text) ||
     hasCallingGiftStewardshipPayoff(text) ||
+    analyzeClipCoherence(text).landingStatus !== "NONE" ||
     /\b(freedom|grace|mercy|faith|prayer|obedience|forgiveness)\b.{0,100}\b(lets|helps|keeps|strengthens|encourages|reminds)\b.{0,100}\b(families|neighbors|church|people|believers|heart)\b/i.test(normalizePlainText(text))
   );
 }
@@ -1058,6 +1102,8 @@ function buildHeuristicClipCandidatesFromWindows(
     .filter((window) => !options.excludeRanges?.some((range) => hasSignificantClipOverlap(range, window)))
     .slice(0, limit)
     .map((window) => {
+      const transcriptEvidence = window.transcriptEvidence ?? analyzeMultilingualTranscript(window.segments);
+      const transcriptNeedsReview = transcriptEvidence.requiresHumanReview;
       const landingSentence = analyzeClipCoherence(window.transcriptText).evidence.landingText ?? firstCoherenceSentence(window.transcriptText);
       const title = deterministicPastorTitle({ transcriptText: window.transcriptText, landingSentence });
       const score = options.scoreCap === undefined
@@ -1073,16 +1119,20 @@ function buildHeuristicClipCandidatesFromWindows(
         caption: landingSentence || title,
         hashtags: ["#Faith", "#Church"],
         score,
-        reasonSelected: options.reasonSelected ?? "Deterministic fallback selected this clip because the spoken transcript lands with a clear ministry payoff.",
+        reasonSelected: options.reasonSelected ?? (transcriptNeedsReview
+          ? "Deterministic fallback found a structurally complete sermon section; the original local or uncertain wording still needs a human transcript check."
+          : "Deterministic fallback selected this clip because the spoken transcript lands with a clear ministry payoff."),
         landingSentence: landingSentence || window.transcriptText,
         clipType: "teaching",
         smartClipCategory: hasCallingGiftStewardshipPayoff(window.transcriptText) ? "Best Discipleship Clip" : "Best Faith Clip",
         intendedAudience: "Believers ready to apply the sermon.",
         ministryValue: "Grounded sermon application for pastor review.",
         socialValue: "Short, clear spoken moment with a usable takeaway.",
-        riskLevel: "LOW",
-        riskReasons: [],
-        contextWarning: options.contextWarning ?? false,
+        riskLevel: transcriptNeedsReview ? "MEDIUM" : "LOW",
+        riskReasons: transcriptNeedsReview
+          ? transcriptEvidence.reviewReasons.map((reason) => reason.code)
+          : [],
+        contextWarning: options.contextWarning ?? transcriptNeedsReview,
         arcType: "PROBLEM_TRUTH_APPLICATION",
         arcSummary: "Deterministic fallback arc from spoken transcript.",
         setupStartTime: window.startTimeSeconds,
@@ -1164,6 +1214,7 @@ function buildCoverageTopUpClipCandidates(
     }
 
     const quality = assessClipWindowQuality(selectedSegments, durationSeconds);
+    const transcriptEvidence = analyzeMultilingualTranscript(selectedSegments);
     const landingSentence = analyzeClipCoherence(transcriptText).evidence.landingText ?? firstCoherenceSentence(transcriptText);
     const title = deterministicPastorTitle({ transcriptText, landingSentence });
 
@@ -1184,8 +1235,11 @@ function buildCoverageTopUpClipCandidates(
       intendedAudience: "Pastor review queue",
       ministryValue: "Additional grounded sermon section for review coverage.",
       socialValue: "Potential short-form teaching moment; review before posting.",
-      riskLevel: "LOW",
-      riskReasons: quality.windowQualityWarnings,
+      riskLevel: transcriptEvidence.requiresHumanReview ? "MEDIUM" : "LOW",
+      riskReasons: Array.from(new Set([
+        ...quality.windowQualityWarnings,
+        ...transcriptEvidence.reviewReasons.map((reason) => reason.code),
+      ])),
       contextWarning: true,
       arcType: "PROBLEM_TRUTH_APPLICATION",
       arcSummary: "Coverage top-up arc from the spoken transcript.",
@@ -1341,8 +1395,8 @@ function buildLowTranscriptTimedFallbackCandidates(
       intendedAudience: "Pastor review queue",
       ministryValue: "A grounded timed option from sparse transcript evidence.",
       socialValue: "Needs review before posting.",
-      riskLevel: "LOW",
-      riskReasons: [],
+      riskLevel: "MEDIUM",
+      riskReasons: ["LOW_TRANSCRIPT_TIMED_FALLBACK"],
       contextWarning: true,
       arcType: "PROBLEM_TRUTH_APPLICATION",
       arcSummary: "Low-transcript rescue candidate.",
@@ -1563,7 +1617,13 @@ function resolveCandidateGenerationSource(
 function buildGeneratedClipEvidence(
   candidate: ClipJsonCandidateWithRuntimeMetadata,
   segments: TranscriptSegmentRecord[],
+  providedTranscriptEvidence?: MultilingualTranscriptAnalysis,
 ): GeneratedClipEvidence {
+  const selectedSegments = segments.filter((segment) => (
+    segment.endTimeSeconds > candidate.startTimeSeconds &&
+    segment.startTimeSeconds < candidate.endTimeSeconds
+  ));
+  const transcriptEvidence = providedTranscriptEvidence ?? analyzeMultilingualTranscript(selectedSegments);
   const transcriptGrounding = assessCandidateTranscriptGrounding({
     candidateTranscriptText: candidate.transcriptText,
     startTimeSeconds: candidate.startTimeSeconds,
@@ -1576,10 +1636,7 @@ function buildGeneratedClipEvidence(
     endTimeSeconds: candidate.endTimeSeconds,
     segments,
   });
-  const arc = detectClipArc(candidate, segments.filter((segment) => (
-    segment.endTimeSeconds > candidate.startTimeSeconds &&
-    segment.startTimeSeconds < candidate.endTimeSeconds
-  )));
+  const arc = detectClipArc(candidate, selectedSegments);
   const inSelectedRange = (value: number | null): number | null => (
     typeof value === "number" &&
     value >= candidate.startTimeSeconds &&
@@ -1589,12 +1646,13 @@ function buildGeneratedClipEvidence(
   );
   const source = resolveCandidateGenerationSource(candidate);
   const hasContentPackage = Boolean(
-    candidate.captionPackage || candidate.socialPotential || candidate.selectionReasoning,
+    candidate.captionPackage || candidate.socialPotential || candidate.selectionReasoning || candidate.languageHints,
   );
   const captionData = hasContentPackage
     ? toInputJson({
         schemaVersion: 1,
         ...(candidate.captionPackage ? { captionPackage: candidate.captionPackage } : {}),
+        ...(candidate.languageHints ? { languageHints: candidate.languageHints } : {}),
         contentIntelligence: {
           schemaVersion: 1,
           source,
@@ -1614,6 +1672,7 @@ function buildGeneratedClipEvidence(
         canonicalizationWarnings: candidate.canonicalizationWarnings ?? [],
       },
       transcriptGrounding,
+      transcriptEvidence,
       landingEvidence,
       arcEvidence: {
         clipArcType: arc.clipArcType,
@@ -1982,11 +2041,14 @@ type ExistingClipRange = {
 };
 
 function formatSegmentLine(segment: TranscriptSegmentRecord): string {
-  return `[${segment.startTimeSeconds.toFixed(1)} - ${segment.endTimeSeconds.toFixed(1)}] ${segment.text.trim()}`;
+  const confidenceNote = typeof segment.confidence === "number" && segment.confidence < 0.78
+    ? " [wording confidence needs review]"
+    : "";
+  return `[${segment.startTimeSeconds.toFixed(1)} - ${segment.endTimeSeconds.toFixed(1)}]${confidenceNote} ${segment.text.trim()}`;
 }
 
 function countTranscriptWords(text: string): number {
-  return (text.match(/[A-Za-z0-9']+/g) ?? []).length;
+  return (text.normalize("NFKC").match(/[\p{L}\p{M}\p{N}]+(?:[’'][\p{L}\p{M}\p{N}]+)*/gu) ?? []).length;
 }
 
 function normalizeMomentText(value: string | null | undefined): string {
@@ -2071,7 +2133,11 @@ export function enrichCandidate(candidate: BoundaryAdjustedCandidate, moments: M
   };
 }
 
-function buildRollingWindows(segments: TranscriptSegmentRecord[], ministryMoments: MinistryMomentRecord[] = []): ClipWindow[] {
+function buildRollingWindows(
+  segments: TranscriptSegmentRecord[],
+  ministryMoments: MinistryMomentRecord[] = [],
+  options: { sermonLanguage?: string | null } = {},
+): ClipWindow[] {
   if (segments.length === 0) {
     return [];
   }
@@ -2079,7 +2145,13 @@ function buildRollingWindows(segments: TranscriptSegmentRecord[], ministryMoment
   const windows: ClipWindow[] = [];
 
   for (const startIndex of buildWindowAnchors(segments, ministryMoments)) {
-    for (const targetDuration of WINDOW_TARGET_DURATIONS_SECONDS) {
+    const startSignals = classifySermonSegment(segments[startIndex].text).signals;
+    const targetDurations: readonly number[] = startSignals.includes("STORY")
+      ? [...WINDOW_TARGET_DURATIONS_SECONDS, 120, 150]
+      : startSignals.includes("SCRIPTURE_REFERENCE") || startSignals.includes("PRAYER")
+        ? [...WINDOW_TARGET_DURATIONS_SECONDS, 120]
+        : WINDOW_TARGET_DURATIONS_SECONDS;
+    for (const targetDuration of targetDurations) {
       const endIndex = findEndIndexForTargetDuration(segments, startIndex, targetDuration);
       if (endIndex === null) continue;
 
@@ -2087,6 +2159,7 @@ function buildRollingWindows(segments: TranscriptSegmentRecord[], ministryMoment
       const quality = assessClipWindowQuality(
         windowSegments,
         segments[endIndex].endTimeSeconds - segments[startIndex].startTimeSeconds,
+        options,
       );
 
       if (quality.accepted) {
@@ -2101,6 +2174,7 @@ function buildRollingWindows(segments: TranscriptSegmentRecord[], ministryMoment
           const repairedQuality = assessClipWindowQuality(
             repairedSegments,
             segments[repair.endIndex].endTimeSeconds - segments[startIndex].startTimeSeconds,
+            options,
           );
           windows.push(makeClipWindow(segments, startIndex, repair.endIndex, windows.length + 1, repairedQuality, {
             windowEligibility: "REPAIRABLE",
@@ -2565,6 +2639,7 @@ export async function generateClipSuggestions(
         startTimeSeconds: true,
         endTimeSeconds: true,
         text: true,
+        confidence: true,
       },
     });
 
@@ -2679,7 +2754,7 @@ export async function generateClipSuggestions(
       `Transcript clip-generation mode: ${transcriptQualityMode}. ${transcriptReadiness.reason} Words: ${transcriptReadiness.wordCount}, meaningful segments: ${transcriptReadiness.meaningfulSegmentCount}.`,
     );
 
-    const windows = buildRollingWindows(segments, ministryMoments);
+    const windows = buildRollingWindows(segments, ministryMoments, { sermonLanguage: sermon.language });
     const transcriptRescueCandidates = transcriptQualityMode === "READY"
       ? []
       : buildLowTranscriptTimedFallbackCandidates(segments);
@@ -2959,13 +3034,19 @@ export async function generateClipSuggestions(
 
       await tx.clipCandidate.createMany({
         data: dedupedWithBoundaryFields.map((candidate) => {
+          const candidateSegments = segments.filter((segment) => (
+            segment.endTimeSeconds > candidate.startTimeSeconds &&
+            segment.startTimeSeconds < candidate.endTimeSeconds
+          ));
+          const transcriptEvidence = analyzeMultilingualTranscript(candidateSegments);
           const transcriptSafety = decideClipTranscriptSafety({
             sermonLanguage: sermon.language,
             transcriptQualityMode,
             candidate,
+            transcriptEvidence,
           });
           const safetyRequiresReview = transcriptSafety.status === "REVIEW_REQUIRED";
-          const generatedEvidence = buildGeneratedClipEvidence(candidate, segments);
+          const generatedEvidence = buildGeneratedClipEvidence(candidate, segments, transcriptEvidence);
 
           return {
             sermonId: sermon.id,
@@ -2977,7 +3058,9 @@ export async function generateClipSuggestions(
             socialValue: candidate.socialValue,
             suggestedHook: candidate.suggestedHook ?? candidate.hook,
             suggestedCaption: candidate.suggestedCaption ?? candidate.caption,
-            recommendationConfidence: candidate.recommendationConfidence ?? candidate.score / 10,
+            recommendationConfidence: safetyRequiresReview
+              ? null
+              : candidate.recommendationConfidence ?? candidate.score / 10,
             isAiGenerated: true,
             isManuallyEdited: false,
             startTimeSeconds: candidate.startTimeSeconds,

@@ -35,6 +35,10 @@ import {
   type ReviewRiskLevel,
   type ReviewSort,
 } from "@/lib/clipReview";
+import {
+  buildTranscriptReviewGuidance,
+  type TranscriptReviewEvidenceView,
+} from "@/lib/transcriptReviewGuidance";
 
 type ClipReviewItem = {
   id: string;
@@ -86,6 +90,10 @@ type ClipReviewItem = {
   riskLevel: ReviewRiskLevel;
   contextWarning: boolean;
   boundaryQuality: "GOOD" | "NEEDS_REVIEW" | "BAD";
+  boundaryAdjustmentReason: string | null;
+  suggestedStartTimeSeconds: number | null;
+  suggestedEndTimeSeconds: number | null;
+  transcriptEvidence: TranscriptReviewEvidenceView | null;
   renderStatus: "NOT_RENDERED" | "QUEUED" | "RENDERING" | "COMPLETED" | "FAILED";
   captionStatus: "NOT_GENERATED" | "GENERATING" | "GENERATED" | "FAILED";
   captionBurnStatus: "NOT_BURNED" | "BURNING" | "COMPLETED" | "FAILED";
@@ -708,6 +716,11 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             const isFallbackClip = isDeterministicFallbackClip(clip);
             const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
             const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
+            const transcriptGuidance = buildTranscriptReviewGuidance({
+              transcriptSafetyReasons: clip.transcriptSafetyReasons,
+              evidence: clip.transcriptEvidence,
+              boundaryQuality: clip.boundaryQuality,
+            });
             const previewRequestFailed = failedPreviewClipIds.includes(clip.id);
             const canPreviewVideo = clip.canPreviewVideo && !previewRequestFailed;
             const isApprovedState = clip.status === "APPROVED" || clip.status === "EXPORTED";
@@ -809,17 +822,36 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
 
                     {transcriptReviewRequired ? (
                       <div className="warning-banner stack-sm premium-review-safety-gate">
-                        <strong>Check the wording before approval</strong>
-                        <p>
-                          Read the transcript excerpt and confirm that local-language words and ministry context are accurate.
-                        </p>
+                        <strong>{transcriptGuidance.title}</strong>
+                        <p>{transcriptGuidance.summary}</p>
+                        <blockquote className="review-feed-transcript">&ldquo;{clip.transcriptText}&rdquo;</blockquote>
+                        {clip.transcriptEvidence?.uncertainRegions.length ? (
+                          <div className="stack-sm">
+                            <strong className="small">Listen closely here</strong>
+                            <ul className="warning-list">
+                              {clip.transcriptEvidence.uncertainRegions.slice(0, 3).map((region) => (
+                                <li key={`${region.startTimeSeconds}-${region.endTimeSeconds}`}>
+                                  {toDurationLabel(region.startTimeSeconds)}–{toDurationLabel(region.endTimeSeconds)}: {region.text}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                        {transcriptGuidance.reasonLabels.length ? (
+                          <details>
+                            <summary>Why this check is required</summary>
+                            <ul className="warning-list">
+                              {transcriptGuidance.reasonLabels.map((reason) => <li key={reason}>{reason}</li>)}
+                            </ul>
+                          </details>
+                        ) : null}
                         <button
                           type="button"
                           className="button secondary"
                           disabled={isPending}
                           onClick={() => applySingleAction(() => markClipTranscriptReviewedAction(clip.id))}
                         >
-                          I checked the transcript
+                          {transcriptGuidance.actionLabel}
                         </button>
                       </div>
                     ) : null}
@@ -872,6 +904,18 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                           <p>{qualityView.platformFit.reason}</p>
                         </div>
                         <p className="status-help small"><strong>Recommended next check:</strong> {qualityView.nextStep}</p>
+
+                        {clip.boundaryAdjustmentReason ? (
+                          <p className="status-help small"><strong>Boundary guidance:</strong> {clip.boundaryAdjustmentReason}</p>
+                        ) : null}
+                        {typeof clip.suggestedStartTimeSeconds === "number" || typeof clip.suggestedEndTimeSeconds === "number" ? (
+                          <p className="status-help small">
+                            <strong>Suggested timing:</strong>{" "}
+                            {typeof clip.suggestedStartTimeSeconds === "number" ? toDurationLabel(clip.suggestedStartTimeSeconds) : "current start"}
+                            {" – "}
+                            {typeof clip.suggestedEndTimeSeconds === "number" ? toDurationLabel(clip.suggestedEndTimeSeconds) : "current end"}
+                          </p>
+                        ) : null}
 
                         {clip.postReadyBlockers.length > 0 ? (
                           <p className="status-help small">

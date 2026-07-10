@@ -1,10 +1,11 @@
 import type { ClipCandidate, ClipTranscriptSafetyStatus } from "@prisma/client";
+import type { MultilingualTranscriptAnalysis } from "@/server/agents/multilingualTranscriptAnalysis";
 
 export const TRANSCRIPT_SAFETY_REVIEW_BLOCKER =
-  "Review the local-language transcript before captions, export, or posting.";
+  "Review the transcript wording before captions, export, or posting.";
 
 export const TRANSCRIPT_SAFETY_REVIEW_MESSAGE =
-  "Review the local-language transcript before captions or export. This clip may include Zulu, Sotho, Xhosa, Tswana, or mixed-language wording that the transcript may have misunderstood.";
+  "Listen to the clip and confirm the transcript wording before captions or export. It may contain local-language, code-switched, or lower-confidence wording that needs a human check.";
 
 export type TranscriptQualityMode = "READY" | "LOW_RESCUE" | "MANUAL_RESCUE" | "UNUSABLE";
 
@@ -13,7 +14,12 @@ export type ClipTranscriptSafetyReason =
   | "LOW_TRANSCRIPT_RESCUE"
   | "MANUAL_TRANSCRIPT_RESCUE"
   | "LOW_TRANSCRIPT_TIMED_FALLBACK"
-  | "TRANSCRIPT_REVIEW_ONLY";
+  | "TRANSCRIPT_REVIEW_ONLY"
+  | "LOCAL_LANGUAGE_DETECTED"
+  | "CODE_SWITCHING_DETECTED"
+  | "LOW_CONFIDENCE_TRANSCRIPT_REGION"
+  | "MISSING_TRANSCRIPT_CONFIDENCE"
+  | "UNKNOWN_TRANSCRIPT_LANGUAGE";
 
 export type ClipTranscriptSafetyDecision = {
   status: ClipTranscriptSafetyStatus;
@@ -49,6 +55,9 @@ const LOCAL_LANGUAGE_ALIASES = [
   "tsn",
   "tswana",
   "setswana",
+  "nso",
+  "sepedi",
+  "northern sotho",
   "multilingual local",
   "south african local",
 ];
@@ -95,6 +104,10 @@ export function decideClipTranscriptSafety(input: {
   sermonLanguage?: string | null;
   transcriptQualityMode?: TranscriptQualityMode | null;
   candidate?: SafetyCandidateInput | null;
+  transcriptEvidence?: Pick<
+    MultilingualTranscriptAnalysis,
+    "requiresHumanReview" | "reviewReasons" | "languageProfile" | "confidenceBand" | "codeSwitching"
+  > | null;
 }): ClipTranscriptSafetyDecision {
   const reasons = new Set<ClipTranscriptSafetyReason>();
   const candidate = input.candidate ?? null;
@@ -102,8 +115,9 @@ export function decideClipTranscriptSafety(input: {
   const qualityMode = input.transcriptQualityMode ?? "READY";
   const lowTranscriptFallback = candidate ? includesLowTranscriptFallback(candidate) : false;
   const transcriptReviewOnly = candidate ? mentionsTranscriptReview(candidate) : false;
+  const transcriptEvidence = input.transcriptEvidence ?? null;
 
-  if (localLanguage && qualityMode !== "READY") {
+  if (localLanguage && (qualityMode !== "READY" || !transcriptEvidence)) {
     reasons.add("LOCAL_LANGUAGE_TRANSCRIPT_UNCERTAIN");
   }
   if (qualityMode === "LOW_RESCUE") {
@@ -117,6 +131,18 @@ export function decideClipTranscriptSafety(input: {
   }
   if (transcriptReviewOnly || (candidate?.contextWarning && qualityMode !== "READY")) {
     reasons.add("TRANSCRIPT_REVIEW_ONLY");
+  }
+
+  if (transcriptEvidence?.requiresHumanReview) {
+    for (const reason of transcriptEvidence.reviewReasons) {
+      if (reason.code === "LOCAL_LANGUAGE_DETECTED") reasons.add("LOCAL_LANGUAGE_DETECTED");
+      if (reason.code === "CODE_SWITCHING_DETECTED") reasons.add("CODE_SWITCHING_DETECTED");
+      if (reason.code === "LOW_CONFIDENCE_TRANSCRIPT") reasons.add("LOW_CONFIDENCE_TRANSCRIPT_REGION");
+      if (reason.code === "MISSING_CONFIDENCE" || reason.code === "PARTIAL_CONFIDENCE_COVERAGE") {
+        reasons.add("MISSING_TRANSCRIPT_CONFIDENCE");
+      }
+      if (reason.code === "UNKNOWN_LANGUAGE") reasons.add("UNKNOWN_TRANSCRIPT_LANGUAGE");
+    }
   }
 
   const reasonList = Array.from(reasons);

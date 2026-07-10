@@ -94,6 +94,7 @@ const ACTIONABLE_EDIT_WARNING_CODES = new Set([
   "LONG_INTERNAL_SILENCE",
   "FILLER_WORD_DENSITY",
   "SPEECH_POLISH_NEEDED",
+  "TRANSCRIPT_REVIEW_REQUIRED",
 ]);
 
 const ACTIONABLE_EDIT_ACTIONS = new Set([
@@ -121,7 +122,7 @@ export function hasHardQualityWarning(warnings: string[] | undefined): boolean {
 }
 
 function countTranscriptWords(text: string): number {
-  return (text.match(/[A-Za-z0-9']+/g) ?? []).length;
+  return (text.normalize("NFKC").match(/[\p{L}\p{M}\p{N}]+(?:[’'][\p{L}\p{M}\p{N}]+)*/gu) ?? []).length;
 }
 
 function readNumberProperty(value: unknown, key: string): number | null {

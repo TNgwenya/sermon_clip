@@ -122,7 +122,7 @@ describe("clip intelligence generation summary", () => {
     expect(selected.map((clip) => clip.id)).toEqual(["ready-1", "ready-2", "review-1", "review-2"]);
   });
 
-  it("builds deterministic fallback candidates when AI clip selection quota is unavailable", () => {
+  it("builds review-gated deterministic fallback candidates when AI quota is unavailable and confidence is missing", () => {
     const candidates = __clipIntelligenceTestUtils.buildHeuristicClipCandidatesFromWindows([
       makeClipWindowFixture({
         windowId: "window-fixture",
@@ -149,10 +149,11 @@ describe("clip intelligence generation summary", () => {
       score: 8.7,
       clipType: "teaching",
       smartClipCategory: "Best Discipleship Clip",
-      riskLevel: "LOW",
-      contextWarning: false,
+      riskLevel: "MEDIUM",
+      contextWarning: true,
     });
-    expect(candidates[0]?.reasonSelected).toContain("spoken transcript lands with");
+    expect(candidates[0]?.riskReasons).toContain("MISSING_CONFIDENCE");
+    expect(candidates[0]?.reasonSelected).toContain("needs a human transcript check");
   });
 
   it("builds deterministic top-up candidates beyond one AI batch while skipping existing ranges", () => {

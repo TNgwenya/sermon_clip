@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { hasPreviewMetadata, isFreshRemotePreview } from "@/lib/clipPreview";
 import { ReviewExperience } from "@/app/sermons/[id]/review/review-experience";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+import { extractTranscriptReviewEvidence } from "@/lib/transcriptReviewGuidance";
 
 type ReviewPageData = {
   id: string;
@@ -61,6 +62,10 @@ type ReviewPageData = {
     contextWarning: boolean;
     status: "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
     boundaryQuality: "GOOD" | "NEEDS_REVIEW" | "BAD";
+    boundaryAdjustmentReason: string | null;
+    suggestedStartTimeSeconds: number | null;
+    suggestedEndTimeSeconds: number | null;
+    qualityDebugSnapshot: unknown;
     renderStatus: "NOT_RENDERED" | "QUEUED" | "RENDERING" | "COMPLETED" | "FAILED";
     renderedAt: Date | null;
     renderedFilePath: string | null;
@@ -106,6 +111,7 @@ const SERVER_ONLY_PREVIEW_KEYS = new Set<string>([
   "captionBurnFreshness",
   "overlayFreshness",
   "exportFreshness",
+  "qualityDebugSnapshot",
 ]);
 
 function canAttemptClipPreview(
@@ -185,6 +191,10 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
           contextWarning: true,
           status: true,
           boundaryQuality: true,
+          boundaryAdjustmentReason: true,
+          suggestedStartTimeSeconds: true,
+          suggestedEndTimeSeconds: true,
+          qualityDebugSnapshot: true,
           renderStatus: true,
           renderedAt: true,
           renderedFilePath: true,
@@ -232,6 +242,7 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
       postReadyBlockers: normalizeStringArray(clip.postReadyBlockers),
       transcriptSafetyReasons: normalizeStringArray(clip.transcriptSafetyReasons),
       transcriptSafetyReviewedAt: clip.transcriptSafetyReviewedAt?.toISOString() ?? null,
+      transcriptEvidence: extractTranscriptReviewEvidence(clip.qualityDebugSnapshot),
       qualityReviewedAt: clip.qualityReviewedAt?.toISOString() ?? null,
       manualCropUpdatedAt: clip.manualCropUpdatedAt?.toISOString() ?? null,
       smartCropDebugGeneratedAt: clip.smartCropDebugGeneratedAt?.toISOString() ?? null,

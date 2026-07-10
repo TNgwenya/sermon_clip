@@ -215,7 +215,7 @@ describe("caption service helpers", () => {
     if (result.ok) {
       throw new Error("Expected transcript review to block caption generation.");
     }
-    expect(result.reason).toContain("Review the local-language transcript");
+    expect(result.reason).toContain("confirm the transcript wording");
   });
 
   it("does not treat empty subtitle files as reusable caption assets", async () => {

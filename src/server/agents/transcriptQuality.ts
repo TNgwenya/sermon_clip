@@ -97,9 +97,10 @@ function countWords(text: string): number {
 
 function normalizeSegmentText(text: string): string {
   return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
+    .normalize("NFKC")
+    .toLocaleLowerCase("en")
+    .replace(/[^\p{L}\p{M}\p{N}\s'’]/gu, " ")
+    .replace(/\s+/gu, " ")
     .trim();
 }
 

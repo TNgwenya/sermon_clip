@@ -9,6 +9,10 @@ import {
 } from "@/server/agents/clipCandidatePolicy";
 import { semanticDedupeCandidates } from "@/server/agents/semanticDedupe";
 import { resolveClipVolumeTarget } from "@/lib/clipVolumeTargets";
+import {
+  hasLocalActionMarker,
+  hasLocalSpiritualAnchor,
+} from "@/server/agents/multilingualTranscriptAnalysis";
 
 export type CuratableClipSuggestion = {
   id: string;
@@ -42,6 +46,7 @@ export type CuratableClipSuggestion = {
   ministryValue?: string | null;
   visualConfidenceScore?: number | null;
   qualityDebugSnapshot?: unknown;
+  transcriptSafetyStatus?: "TRUSTED" | "REVIEW_REQUIRED" | "REVIEWED" | null;
   createdAt: Date;
 };
 
@@ -73,6 +78,49 @@ const MIN_REVIEWABLE_COMPLETENESS_SCORE = 5.5;
 const MIN_REVIEWABLE_TRANSCRIPT_GROUNDING_SCORE = 0.72;
 const MIN_REVIEWABLE_TRANSCRIPT_ORDERED_FLOW_RATIO = 0.82;
 const MIN_REUSABLE_REVIEW_BOARD_WORDS = 18;
+const MIN_LOCAL_MINISTRY_REVIEW_WORDS = 8;
+const LANGUAGE_SEMANTIC_REVIEW_WARNINGS = new Set([
+  "PASTOR_GRADE_NO_SPIRITUAL_ANCHOR",
+  "PASTOR_GRADE_TRANSCRIPT_NO_SPIRITUAL_ANCHOR",
+  "PASTOR_GRADE_NO_CLEAR_TAKEAWAY",
+  "PASTOR_GRADE_TRANSCRIPT_NO_CLEAR_TAKEAWAY",
+  "PASTOR_GRADE_NO_PAYOFF_OR_APPLICATION",
+]);
+
+function transcriptSafetyRank(clip: CuratableClipSuggestion): number {
+  if (clip.transcriptSafetyStatus === "REVIEW_REQUIRED") return 1;
+  return 0;
+}
+
+function effectiveWarningsForCuration(clip: CuratableClipSuggestion): string[] {
+  const warnings = clip.qualityWarnings ?? [];
+  if (clip.transcriptSafetyStatus !== "REVIEW_REQUIRED") {
+    return warnings;
+  }
+
+  // When the words themselves still need review, English-only semantic checks
+  // are not proof that a local/mixed-language clip is weak. Keep it in the
+  // transcript-review tier while retaining timing, grounding, and context gates.
+  return Array.from(new Set([
+    ...warnings.filter((warning) => !LANGUAGE_SEMANTIC_REVIEW_WARNINGS.has(warning)),
+    "TRANSCRIPT_REVIEW_REQUIRED",
+  ]));
+}
+
+function minTranscriptWordsForCuration(clip: CuratableClipSuggestion): number {
+  const hasGroundedLocalMinistrySignal =
+    clip.transcriptSafetyStatus === "REVIEW_REQUIRED" &&
+    hasLocalSpiritualAnchor(clip.transcriptText) &&
+    hasLocalActionMarker(clip.transcriptText);
+
+  // Nguni and Sotho-Tswana wording can carry more meaning per written word
+  // than the English-oriented review threshold assumes. This narrower gate
+  // only admits grounded ministry excerpts to human transcript review; all
+  // timing, risk, boundary, and transcript-grounding checks still apply.
+  return hasGroundedLocalMinistrySignal
+    ? MIN_LOCAL_MINISTRY_REVIEW_WORDS
+    : MIN_REUSABLE_REVIEW_BOARD_WORDS;
+}
 
 function qualityRank(clip: CuratableClipSuggestion): number {
   const label = clip.qualityLabel ?? clip.postReadyStatus;
@@ -88,8 +136,14 @@ function scoreForRanking(clip: CuratableClipSuggestion): number {
 }
 
 function buildWeakRejectReason(clip: CuratableClipSuggestion): string | null {
-  const policy = evaluateReviewableClipPolicy(clip, {
-    minTranscriptWords: MIN_REUSABLE_REVIEW_BOARD_WORDS,
+  const qualityWarnings = effectiveWarningsForCuration(clip);
+  const policy = evaluateReviewableClipPolicy({
+    ...clip,
+    qualityLabel: clip.transcriptSafetyStatus === "REVIEW_REQUIRED" ? "NEEDS_EDITING" : clip.qualityLabel,
+    postReadyStatus: clip.transcriptSafetyStatus === "REVIEW_REQUIRED" ? "NEEDS_EDITING" : clip.postReadyStatus,
+    qualityWarnings,
+  }, {
+    minTranscriptWords: minTranscriptWordsForCuration(clip),
     minGroundingScore: MIN_REVIEWABLE_TRANSCRIPT_GROUNDING_SCORE,
     minOrderedFlowRatio: MIN_REVIEWABLE_TRANSCRIPT_ORDERED_FLOW_RATIO,
     allowBadBoundaryWhenRepairable: true,
@@ -99,7 +153,6 @@ function buildWeakRejectReason(clip: CuratableClipSuggestion): string | null {
     return policy.reason;
   }
 
-  const qualityWarnings = clip.qualityWarnings ?? [];
   const reviewScore = clip.finalQualityScore ?? clip.overallPostScore ?? clip.score;
   const pastorReviewOption =
     ((clip.qualityLabel === "GOOD_NEEDS_REVIEW" || clip.postReadyStatus === "GOOD_NEEDS_REVIEW") &&
@@ -194,6 +247,9 @@ export function planAiSuggestionCuration(
   }
 
   const ranked = [...candidatesToRank].sort((left, right) => {
+    const safetyDiff = transcriptSafetyRank(left) - transcriptSafetyRank(right);
+    if (safetyDiff !== 0) return safetyDiff;
+
     const rankDiff = qualityRank(left) - qualityRank(right);
     if (rankDiff !== 0) return rankDiff;
 
@@ -214,6 +270,9 @@ export function planAiSuggestionCuration(
   }
 
   const dedupedRanked = semanticDedupe.kept.sort((left, right) => {
+    const safetyDiff = transcriptSafetyRank(left) - transcriptSafetyRank(right);
+    if (safetyDiff !== 0) return safetyDiff;
+
     const rankDiff = qualityRank(left) - qualityRank(right);
     if (rankDiff !== 0) return rankDiff;
 
@@ -365,6 +424,7 @@ export async function curateSermonAiSuggestions(input: {
       ministryValue: true,
       visualConfidenceScore: true,
       qualityDebugSnapshot: true,
+      transcriptSafetyStatus: true,
       clipNotes: true,
       createdAt: true,
     },

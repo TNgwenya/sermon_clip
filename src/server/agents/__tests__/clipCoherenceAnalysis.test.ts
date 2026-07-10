@@ -28,6 +28,17 @@ function candidateFromSegments(segments: TranscriptSegmentBoundary[]): ClipCompl
 }
 
 describe("clip coherence analysis", () => {
+  it("uses local-language ministry markers as positive evidence without translating them", () => {
+    const result = analyzeClipCoherence(
+      "UNkulunkulu uthembekile futhi abantu bakhe kufanele bakholwe. Manje khetha ukholo, themba uJesu, futhi thandaza.",
+    );
+
+    expect(result.hasSpiritualAnchor).toBe(true);
+    expect(result.landingStatus).toBe("APPLICATION");
+    expect(result.evidence.reasonCodes).toContain("LOCAL_LANGUAGE_REVIEW_REQUIRED");
+    expect(result.evidence.landingText).toContain("thandaza");
+  });
+
   it("detects application landing", () => {
     const result = analyzeClipCoherence("God gives courage when pressure comes. So this week choose obedience and pray again.");
 

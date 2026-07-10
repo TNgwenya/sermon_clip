@@ -7,6 +7,68 @@ import {
 } from "@/server/ai/openaiTranscriptionProvider";
 
 describe("openai transcription provider", () => {
+  it("derives conservative segment evidence from Whisper diagnostics", () => {
+    const confidence = __openAITranscriptionProviderTestUtils.deriveWhisperSegmentConfidence({
+      avg_logprob: Math.log(0.8),
+      no_speech_prob: 0.1,
+    });
+
+    expect(confidence).toBe(0.72);
+  });
+
+  it("does not invent confidence when average log probability is absent", () => {
+    expect(
+      __openAITranscriptionProviderTestUtils.deriveWhisperSegmentConfidence({
+        no_speech_prob: 0.01,
+      }),
+    ).toBeUndefined();
+
+    expect(
+      __openAITranscriptionProviderTestUtils.normalizeSegments([
+        { start: 0, end: 3, text: "A timestamped phrase." },
+      ])[0],
+    ).not.toHaveProperty("confidence");
+  });
+
+  it("normalizes provider diagnostics onto timestamped segments", () => {
+    const segments = __openAITranscriptionProviderTestUtils.normalizeSegments([
+      {
+        start: 0,
+        end: 3,
+        text: "A timestamped phrase.",
+        avg_logprob: Math.log(0.75),
+        no_speech_prob: 0.2,
+      },
+    ]);
+
+    expect(segments).toEqual([
+      {
+        startTimeSeconds: 0,
+        endTimeSeconds: 3,
+        text: "A timestamped phrase.",
+        confidence: 0.6,
+      },
+    ]);
+  });
+
+  it("maps provider evidence onto word-timed phrases by temporal overlap", () => {
+    const mapped = __openAITranscriptionProviderTestUtils.mapProviderConfidenceByOverlap(
+      [
+        { startTimeSeconds: 3, endTimeSeconds: 7, text: "A phrase across two segments." },
+        { startTimeSeconds: 11, endTimeSeconds: 12, text: "No provider overlap." },
+        { startTimeSeconds: 9, endTimeSeconds: 11, text: "Only partial provider evidence." },
+      ],
+      [
+        { startTimeSeconds: 0, endTimeSeconds: 5, text: "First provider segment.", confidence: 0.8 },
+        { startTimeSeconds: 5, endTimeSeconds: 10, text: "Second provider segment.", confidence: 0.4 },
+      ],
+    );
+
+    expect(mapped[0]).toMatchObject({ confidence: 0.6 });
+    expect(mapped[1]).not.toHaveProperty("confidence");
+    expect(mapped[2]).not.toHaveProperty("confidence");
+  });
+
   it("defaults to the timestamp-safe Whisper model", () => {
     expect(resolveOpenAITranscriptionModel()).toBe("whisper-1");
   });
@@ -134,6 +196,7 @@ describe("openai transcription provider", () => {
           startTimeSeconds: 0,
           endTimeSeconds: 18,
           text: responseText,
+          confidence: 0.64,
         },
       ],
       wordTimestamps,
@@ -141,6 +204,7 @@ describe("openai transcription provider", () => {
 
     expect(selected.length).toBeGreaterThan(1);
     expect(Math.max(...selected.map((segment) => segment.endTimeSeconds - segment.startTimeSeconds))).toBeLessThanOrEqual(4.5);
+    expect(selected.every((segment) => segment.confidence === 0.64)).toBe(true);
   });
 
   it("falls back to provider segments when word timestamps are too incomplete", () => {

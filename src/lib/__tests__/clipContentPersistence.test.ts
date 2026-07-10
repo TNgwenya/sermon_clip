@@ -4,6 +4,7 @@ import {
   canChooseClipForProduction,
   resolveClipStudioAssetInvalidation,
   resolveClipStudioContentValues,
+  shouldRecordExplicitTranscriptReview,
 } from "@/lib/clipContentPersistence";
 
 describe("clip content persistence", () => {
@@ -43,5 +44,20 @@ describe("clip content persistence", () => {
     expect(canChooseClipForProduction("REVIEW_REQUIRED")).toBe(false);
     expect(canChooseClipForProduction("REVIEWED")).toBe(true);
     expect(canChooseClipForProduction("TRUSTED")).toBe(true);
+  });
+
+  it("does not infer human transcript review from saved caption cues", () => {
+    expect(shouldRecordExplicitTranscriptReview({
+      transcriptSafetyStatus: "REVIEW_REQUIRED",
+      explicitlyConfirmed: false,
+    })).toBe(false);
+    expect(shouldRecordExplicitTranscriptReview({
+      transcriptSafetyStatus: "REVIEW_REQUIRED",
+      explicitlyConfirmed: true,
+    })).toBe(true);
+    expect(shouldRecordExplicitTranscriptReview({
+      transcriptSafetyStatus: "TRUSTED",
+      explicitlyConfirmed: true,
+    })).toBe(false);
   });
 });

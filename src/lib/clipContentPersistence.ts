@@ -47,3 +47,15 @@ export function canChooseClipForProduction(
 ): boolean {
   return transcriptSafetyStatus !== "REVIEW_REQUIRED";
 }
+
+/**
+ * Transcript review is a human safety decision, not a side effect of saving
+ * generated or existing caption cues. Keep this explicit so default-on
+ * captions can never clear a local-language review gate.
+ */
+export function shouldRecordExplicitTranscriptReview(input: {
+  transcriptSafetyStatus: "TRUSTED" | "REVIEW_REQUIRED" | "REVIEWED";
+  explicitlyConfirmed: boolean;
+}): boolean {
+  return input.transcriptSafetyStatus === "REVIEW_REQUIRED" && input.explicitlyConfirmed;
+}

@@ -35,7 +35,7 @@ describe("local-language transcript safety", () => {
     expect(decision.blocker).toBe(TRANSCRIPT_SAFETY_REVIEW_BLOCKER);
   });
 
-  it("does not block a ready transcript without rescue signals", () => {
+  it("does not treat a declared local-language transcript as trusted when section evidence is missing", () => {
     const decision = decideClipTranscriptSafety({
       sermonLanguage: "Zulu",
       transcriptQualityMode: "READY",
@@ -45,11 +45,37 @@ describe("local-language transcript safety", () => {
       },
     });
 
-    expect(decision).toEqual({
-      status: "TRUSTED",
-      reasons: [],
-      blocker: null,
+    expect(decision.status).toBe("REVIEW_REQUIRED");
+    expect(decision.reasons).toContain("LOCAL_LANGUAGE_TRANSCRIPT_UNCERTAIN");
+  });
+
+  it("requires review for code-switching and low-confidence timed evidence", () => {
+    const decision = decideClipTranscriptSafety({
+      sermonLanguage: "English",
+      transcriptQualityMode: "READY",
+      candidate: { contextWarning: false },
+      transcriptEvidence: {
+        requiresHumanReview: true,
+        languageProfile: "MIXED",
+        confidenceBand: "LOW",
+        codeSwitching: {
+          detected: true,
+          withinSegment: true,
+          betweenSegments: false,
+          transitionTimesSeconds: [],
+        },
+        reviewReasons: [
+          { code: "CODE_SWITCHING_DETECTED", message: "Check the language change." },
+          { code: "LOW_CONFIDENCE_TRANSCRIPT", message: "Check the wording." },
+        ],
+      },
     });
+
+    expect(decision.status).toBe("REVIEW_REQUIRED");
+    expect(decision.reasons).toEqual(expect.arrayContaining([
+      "CODE_SWITCHING_DETECTED",
+      "LOW_CONFIDENCE_TRANSCRIPT_REGION",
+    ]));
   });
 
   it("blocks publishing until transcript review is cleared", () => {

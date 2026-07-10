@@ -1,4 +1,14 @@
 import { analyzeClipCoherence } from "@/server/agents/clipCoherenceAnalysis";
+import {
+  assessTranscriptGap,
+  deriveSermonThoughtSpans,
+  findSafeScriptureLeadInIndex,
+  findThoughtSpanForSegment,
+  isLikelyContinuationChunk,
+  rangeContainsLongTranscriptGap,
+  transcriptGapsInRange,
+  type SermonThoughtSpan,
+} from "@/server/agents/sermonThoughtSegmentation";
 
 export type BoundaryQuality = "GOOD" | "NEEDS_REVIEW" | "BAD";
 
@@ -46,7 +56,9 @@ export type BoundaryRevalidationIssueCode =
   | "STARTS_MID_SENTENCE"
   | "DEPENDENT_OPENING"
   | "CONTEXT_DEPENDENT_OPENING"
-  | "INCOMPLETE_ENDING";
+  | "INCOMPLETE_ENDING"
+  | "MODERATE_INTERNAL_GAP"
+  | "LONG_INTERNAL_GAP";
 
 export type BoundaryRevalidationIssue = {
   code: BoundaryRevalidationIssueCode;
@@ -132,6 +144,80 @@ function findEndIndexForTime(segments: TranscriptSegmentBoundary[], endTimeSecon
   return endIndex;
 }
 
+function startsInsideDerivedThought(
+  spans: SermonThoughtSpan[],
+  startIndex: number,
+): boolean {
+  const span = findThoughtSpanForSegment(spans, startIndex);
+  return Boolean(
+    span &&
+    (
+      span.startIndex < startIndex ||
+      (span.startIndex === startIndex && startIndex > 0 && span.startStrength === "WEAK")
+    )
+  );
+}
+
+function endsInsideDerivedThought(
+  spans: SermonThoughtSpan[],
+  endIndex: number,
+): boolean {
+  const spanIndex = spans.findIndex((span) => span.startIndex <= endIndex && span.endIndex >= endIndex);
+  const span = spanIndex === -1 ? null : spans[spanIndex];
+  const nextSpan = spanIndex === -1 ? null : spans[spanIndex + 1];
+  return Boolean(
+    span &&
+    (
+      span.endIndex > endIndex ||
+      (span.endIndex === endIndex && nextSpan?.startStrength === "WEAK")
+    )
+  );
+}
+
+function internalGapReasons(
+  segments: TranscriptSegmentBoundary[],
+  startIndex: number,
+  endIndex: number,
+): string[] {
+  const gaps = transcriptGapsInRange(segments, startIndex, endIndex);
+  const longGap = gaps.find((gap) => gap.severity === "LONG");
+  if (longGap) {
+    return [`Clip contains an unexplained ${longGap.gapSeconds}-second transcript gap.`];
+  }
+
+  const moderateGap = gaps.find((gap) => gap.severity === "MODERATE");
+  return moderateGap
+    ? [`Clip contains a ${moderateGap.gapSeconds}-second pause that should be reviewed.`]
+    : [];
+}
+
+function addGapRevalidationReason(
+  reasons: BoundaryRevalidationIssue[],
+  segments: TranscriptSegmentBoundary[],
+  startIndex: number,
+  endIndex: number,
+): void {
+  const gaps = transcriptGapsInRange(segments, startIndex, endIndex);
+  const longGap = gaps.find((gap) => gap.severity === "LONG");
+  if (longGap) {
+    reasons.push({
+      code: "LONG_INTERNAL_GAP",
+      message: `Final clip contains an unexplained ${longGap.gapSeconds}-second transcript gap.`,
+      severity: "NEEDS_REVIEW",
+    });
+    return;
+  }
+
+  const moderateGap = gaps.find((gap) => gap.severity === "MODERATE");
+  if (moderateGap) {
+    reasons.push({
+      code: "MODERATE_INTERNAL_GAP",
+      message: `Final clip contains a ${moderateGap.gapSeconds}-second pause that should be reviewed.`,
+      severity: "NEEDS_REVIEW",
+    });
+  }
+}
+
 export function validateFinalClipBoundary(input: {
   startTimeSeconds: number;
   endTimeSeconds: number;
@@ -197,6 +283,7 @@ export function validateFinalClipBoundary(input: {
   const endIndex = startIndex === -1 ? -1 : findEndIndexForTime(input.segments, input.endTimeSeconds, startIndex);
   const openingSegment = startIndex === -1 ? null : input.segments[startIndex];
   const endingSegment = endIndex === -1 ? null : input.segments[endIndex];
+  const thoughtSpans = deriveSermonThoughtSpans(input.segments);
 
   if (!openingSegment || !endingSegment) {
     addReason({
@@ -207,10 +294,10 @@ export function validateFinalClipBoundary(input: {
   }
 
   if (openingSegment) {
-    if (startsMidSentence(openingSegment.text)) {
+    if (startsMidSentence(openingSegment.text) || startsInsideDerivedThought(thoughtSpans, startIndex)) {
       addReason({
         code: "STARTS_MID_SENTENCE",
-        message: "Final clip starts mid-sentence.",
+        message: "Final clip starts inside a likely sentence or spoken thought.",
         severity: "NEEDS_REVIEW",
       });
     }
@@ -232,12 +319,16 @@ export function validateFinalClipBoundary(input: {
     }
   }
 
-  if (endingSegment && !endsThought(endingSegment.text)) {
+  if (endingSegment && (!endsThought(endingSegment.text) || endsInsideDerivedThought(thoughtSpans, endIndex))) {
     addReason({
       code: "INCOMPLETE_ENDING",
       message: "Final clip still ends before the sentence or thought is complete.",
       severity: "NEEDS_REVIEW",
     });
+  }
+
+  if (startIndex !== -1 && endIndex !== -1) {
+    addGapRevalidationReason(reasons, input.segments, startIndex, endIndex);
   }
 
   const quality: BoundaryQuality = reasons.some((reason) => reason.severity === "BAD")
@@ -331,19 +422,30 @@ function calculateBoundaryQuality(input: {
   durationSeconds: number;
   transcriptText: string;
   includesLeadInContext: boolean;
+  startsInsideThought: boolean;
+  endsInsideThought: boolean;
+  internalGapReasons: string[];
 }): { quality: BoundaryQuality; reasons: string[] } {
   const reasons: string[] = [];
-  const { startText, endText, durationSeconds, transcriptText, includesLeadInContext } = input;
+  const {
+    startText,
+    endText,
+    durationSeconds,
+    transcriptText,
+    includesLeadInContext,
+    startsInsideThought,
+    endsInsideThought,
+  } = input;
 
   if (!transcriptText.trim()) {
     reasons.push("Transcript text is missing.");
   }
 
-  if (startsMidSentence(startText)) {
-    reasons.push("Clip starts mid-sentence.");
+  if (startsMidSentence(startText) || startsInsideThought) {
+    reasons.push("Clip starts inside a likely sentence or spoken thought.");
   }
 
-  if (!endsThought(endText)) {
+  if (!endsThought(endText) || endsInsideThought) {
     reasons.push("Clip ends before the sentence or thought is complete.");
   }
 
@@ -358,6 +460,8 @@ function calculateBoundaryQuality(input: {
   if (durationSeconds < TARGET_MIN_DURATION_SECONDS) {
     reasons.push("Clip is shorter than the target duration range.");
   }
+
+  reasons.push(...input.internalGapReasons);
 
   if (durationSeconds < HARD_MIN_DURATION_SECONDS || durationSeconds > HARD_MAX_DURATION_SECONDS || !transcriptText.trim()) {
     return { quality: "BAD", reasons };
@@ -387,8 +491,15 @@ export function refineClipBoundaries<T extends BoundaryCandidateBase>(
     endIndex = startIndex;
   }
 
+  const thoughtSpans = deriveSermonThoughtSpans(segments);
   const adjustmentNotes: string[] = [];
   let includesLeadInContext = false;
+  let longGapNoteAdded = false;
+  const noteBlockedLongGap = (gapSeconds: number) => {
+    if (longGapNoteAdded) return;
+    adjustmentNotes.push(`Automatic boundary extension stopped before an unexplained ${gapSeconds}-second transcript gap.`);
+    longGapNoteAdded = true;
+  };
   const protectedIndexes = protectedArcTimes(candidate)
     .map((timeSeconds) => segmentIndexContainingTime(segments, timeSeconds))
     .filter((index): index is number => index !== null);
@@ -399,12 +510,18 @@ export function refineClipBoundaries<T extends BoundaryCandidateBase>(
   const earliestLeadInProtectedIndex = leadInProtectedIndexes.length > 0 ? Math.min(...leadInProtectedIndexes) : null;
   const latestProtectedIndex = protectedIndexes.length > 0 ? Math.max(...protectedIndexes) : null;
   let protectedEndExtensionSkipped = false;
+  const initialScriptureLeadInIndex = findSafeScriptureLeadInIndex(
+    segments,
+    startIndex,
+    MAX_START_BACKTRACK_SECONDS,
+  );
 
   while (startIndex > 0) {
     const previous = segments[startIndex - 1];
     const current = segments[startIndex];
     const projectedDuration = segments[endIndex].endTimeSeconds - previous.startTimeSeconds;
     const expandedStartDelta = originalStart - previous.startTimeSeconds;
+    const currentThought = findThoughtSpanForSegment(thoughtSpans, startIndex);
 
     if (projectedDuration > HARD_MAX_DURATION_SECONDS || expandedStartDelta > MAX_START_BACKTRACK_SECONDS) {
       break;
@@ -414,15 +531,41 @@ export function refineClipBoundaries<T extends BoundaryCandidateBase>(
       startsWithUnclearConnector(current.text) ||
       startsWithContextDependentReference(current.text) ||
       startsMidSentence(current.text) ||
+      isLikelyContinuationChunk(current, previous) ||
+      Boolean(currentThought && currentThought.startIndex < startIndex) ||
       !endsThought(previous.text);
 
     if (!shouldIncludePrevious) {
       break;
     }
 
+    const gap = assessTranscriptGap(previous, current, startIndex - 1);
+    if (gap.severity === "LONG") {
+      noteBlockedLongGap(gap.gapSeconds);
+      break;
+    }
+
     startIndex -= 1;
     includesLeadInContext = true;
-    adjustmentNotes.push("Start moved earlier to include the beginning of the sentence.");
+    adjustmentNotes.push(
+      startIndex === initialScriptureLeadInIndex
+        ? "Start moved earlier to preserve the nearby spoken scripture reference."
+        : "Start moved earlier to include the beginning of the sentence.",
+    );
+  }
+
+  const scriptureLeadInIndex = initialScriptureLeadInIndex ?? findSafeScriptureLeadInIndex(
+    segments,
+    startIndex,
+    MAX_START_BACKTRACK_SECONDS,
+  );
+  if (scriptureLeadInIndex !== null && scriptureLeadInIndex < startIndex) {
+    const projectedDuration = segments[endIndex].endTimeSeconds - segments[scriptureLeadInIndex].startTimeSeconds;
+    if (projectedDuration <= HARD_MAX_DURATION_SECONDS) {
+      startIndex = scriptureLeadInIndex;
+      includesLeadInContext = true;
+      adjustmentNotes.push("Start moved earlier to preserve the nearby spoken scripture reference.");
+    }
   }
 
   if (earliestLeadInProtectedIndex !== null && earliestLeadInProtectedIndex < startIndex) {
@@ -432,7 +575,8 @@ export function refineClipBoundaries<T extends BoundaryCandidateBase>(
     const canSafelyReachProtectedLeadIn =
       Number.isFinite(protectedStart) &&
       projectedDurationToProtected <= HARD_MAX_DURATION_SECONDS &&
-      backtrackToProtected <= MAX_START_BACKTRACK_SECONDS;
+      backtrackToProtected <= MAX_START_BACKTRACK_SECONDS &&
+      !rangeContainsLongTranscriptGap(segments, earliestLeadInProtectedIndex, startIndex);
 
     if (canSafelyReachProtectedLeadIn) {
       startIndex = earliestLeadInProtectedIndex;
@@ -450,7 +594,8 @@ export function refineClipBoundaries<T extends BoundaryCandidateBase>(
     const canSafelyReachProtectedArcPoint =
       Number.isFinite(protectedEnd) &&
       projectedDurationToProtected <= HARD_MAX_DURATION_SECONDS &&
-      extensionToProtected <= MAX_END_EXTENSION_SECONDS;
+      extensionToProtected <= MAX_END_EXTENSION_SECONDS &&
+      !rangeContainsLongTranscriptGap(segments, endIndex, latestProtectedIndex);
 
     if (canSafelyReachProtectedArcPoint) {
       while (endIndex < latestProtectedIndex && endIndex < segments.length - 1) {
@@ -475,6 +620,7 @@ export function refineClipBoundaries<T extends BoundaryCandidateBase>(
     const extensionFromOriginalEnd = next.endTimeSeconds - originalEnd;
     const nextLooksLikeLanding = hasSpokenLanding(next.text);
     const currentAlreadyHasLanding = hasSpokenLanding(currentTranscript);
+    const gap = assessTranscriptGap(segments[endIndex], next, endIndex);
 
     if (
       currentAlreadyHasLanding ||
@@ -482,6 +628,11 @@ export function refineClipBoundaries<T extends BoundaryCandidateBase>(
       projectedDuration > TARGET_MAX_DURATION_SECONDS ||
       extensionFromOriginalEnd > MAX_END_EXTENSION_SECONDS
     ) {
+      break;
+    }
+
+    if (gap.severity === "LONG") {
+      noteBlockedLongGap(gap.gapSeconds);
       break;
     }
 
@@ -494,13 +645,23 @@ export function refineClipBoundaries<T extends BoundaryCandidateBase>(
     const next = segments[endIndex + 1];
     const projectedDuration = next.endTimeSeconds - segments[startIndex].startTimeSeconds;
     const extensionFromOriginalEnd = next.endTimeSeconds - originalEnd;
-    const shouldExtend = !endsThought(current.text) || current.text.trim().endsWith(",") || current.text.trim().endsWith(":");
+    const currentThought = findThoughtSpanForSegment(thoughtSpans, endIndex);
+    const shouldExtend =
+      Boolean(currentThought && currentThought.endIndex > endIndex) ||
+      current.text.trim().endsWith(",") ||
+      current.text.trim().endsWith(":");
 
     if (!shouldExtend) {
       break;
     }
 
     if (projectedDuration > HARD_MAX_DURATION_SECONDS || extensionFromOriginalEnd > MAX_END_EXTENSION_SECONDS) {
+      break;
+    }
+
+    const gap = assessTranscriptGap(current, next, endIndex);
+    if (gap.severity === "LONG") {
+      noteBlockedLongGap(gap.gapSeconds);
       break;
     }
 
@@ -517,6 +678,12 @@ export function refineClipBoundaries<T extends BoundaryCandidateBase>(
     const next = segments[endIndex + 1];
     const projectedDuration = next.endTimeSeconds - segments[startIndex].startTimeSeconds;
     if (projectedDuration > HARD_MAX_DURATION_SECONDS) {
+      break;
+    }
+
+    const gap = assessTranscriptGap(segments[endIndex], next, endIndex);
+    if (gap.severity === "LONG") {
+      noteBlockedLongGap(gap.gapSeconds);
       break;
     }
 
@@ -580,6 +747,9 @@ export function refineClipBoundaries<T extends BoundaryCandidateBase>(
     durationSeconds: validation.durationSeconds,
     transcriptText,
     includesLeadInContext,
+    startsInsideThought: startsInsideDerivedThought(thoughtSpans, startIndex),
+    endsInsideThought: endsInsideDerivedThought(thoughtSpans, endIndex),
+    internalGapReasons: internalGapReasons(segments, startIndex, endIndex),
   });
 
   if (

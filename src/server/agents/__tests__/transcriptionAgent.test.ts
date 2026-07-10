@@ -61,19 +61,20 @@ describe("transcription sermon segment filtering", () => {
     }
   });
 
-  it("does not send Whisper prompts for unsupported local language hints", () => {
+  it("keeps local language auto-detection while supplying non-translating sermon vocabulary context", () => {
     const result = __transcriptionTestUtils.buildTranscriptionLanguageHint("Xhosa and English");
 
     expect(result?.intendedLanguage).toBe("Xhosa and English");
     expect(result?.openAiLanguage).toBeUndefined();
-    expect(result?.prompt).toBeUndefined();
+    expect(result?.prompt).toContain("Xhosa and English");
+    expect(result?.prompt).toContain("rather than translating");
   });
 
-  it("keeps South African local language prompts disabled", () => {
+  it("supplies code-switch context without forcing an unsupported provider language code", () => {
     const result = __transcriptionTestUtils.buildTranscriptionLanguageHint("English, Zulu, Xhosa");
 
     expect(result?.openAiLanguage).toBeUndefined();
-    expect(result?.prompt).toBeUndefined();
+    expect(result?.prompt).toContain("English, Zulu, Xhosa");
   });
 
   it("adds sermon title, preacher, and church context to improve proper-name transcription", () => {
@@ -107,7 +108,7 @@ describe("transcription sermon segment filtering", () => {
 
     expect(result?.intendedLanguage).toBe("Zulu");
     expect(result?.openAiLanguage).toBeUndefined();
-    expect(result?.prompt).toBeUndefined();
+    expect(result?.prompt).toContain("Languages spoken may include: Zulu");
   });
 
   it("passes supported language codes when available", () => {
@@ -133,7 +134,7 @@ describe("transcription sermon segment filtering", () => {
     const prompt = __transcriptionTestUtils.buildChunkTranscriptionPrompt(languageHint, tail);
 
     expect(tail).toBe("reminds us to stir up the gift again");
-    expect(prompt).toContain("Languages: English.");
+    expect(prompt).toContain("Languages spoken may include: English.");
     expect(prompt).toContain("Previous transcript context");
     expect(prompt).not.toContain("continue from the next spoken words");
     expect(prompt).not.toContain("do not invent bridge wording");
@@ -141,12 +142,13 @@ describe("transcription sermon segment filtering", () => {
     expect(prompt).toContain("stir up the gift again");
   });
 
-  it("omits chunk prompts for local multilingual sermons", () => {
+  it("carries exact previous context across local multilingual chunks", () => {
     const languageHint = __transcriptionTestUtils.buildTranscriptionLanguageHint("English and Zulu");
     const prompt = __transcriptionTestUtils.buildChunkTranscriptionPrompt(languageHint, "power of life and death");
 
-    expect(languageHint?.prompt).toBeUndefined();
-    expect(prompt).toBeUndefined();
+    expect(languageHint?.prompt).toContain("English and Zulu");
+    expect(prompt).toContain("Previous transcript context");
+    expect(prompt).toContain("power of life and death");
   });
 
   it("keeps chunked transcript timestamps on the original sermon timeline", () => {
@@ -166,6 +168,49 @@ describe("transcription sermon segment filtering", () => {
       startTimeSeconds: 1214.25,
       endTimeSeconds: 1219.75,
     });
+  });
+
+  it("preserves provider confidence while shifting chunk timestamps", () => {
+    const shifted = __transcriptionTestUtils.offsetChunkTranscriptSegments([
+      {
+        startTimeSeconds: 1,
+        endTimeSeconds: 4,
+        text: "Timestamped sermon words.",
+        confidence: 0.71,
+      },
+    ], 300);
+
+    expect(shifted).toEqual([
+      {
+        startTimeSeconds: 301,
+        endTimeSeconds: 304,
+        text: "Timestamped sermon words.",
+        confidence: 0.71,
+      },
+    ]);
+  });
+
+  it("stores missing provider confidence as unknown instead of inventing a score", () => {
+    expect(__transcriptionTestUtils.buildTranscriptSegmentRecord({
+      sermonId: "sermon-1",
+      transcriptId: "transcript-1",
+      segment: {
+        startTimeSeconds: 0,
+        endTimeSeconds: 3,
+        text: "Words without provider diagnostics.",
+      },
+    })).toMatchObject({ confidence: null });
+
+    expect(__transcriptionTestUtils.buildTranscriptSegmentRecord({
+      sermonId: "sermon-1",
+      transcriptId: "transcript-1",
+      segment: {
+        startTimeSeconds: 3,
+        endTimeSeconds: 6,
+        text: "Words with provider diagnostics.",
+        confidence: 0.68,
+      },
+    })).toMatchObject({ confidence: 0.68 });
   });
 
   it("uses shorter transcription chunks for declared local multilingual sermons", () => {
@@ -220,6 +265,7 @@ describe("transcription sermon segment filtering", () => {
           startTimeSeconds: 0,
           endTimeSeconds: 6,
           text: "God is faithful in every season.",
+          confidence: 0.73,
         },
       ],
       raw: {},
@@ -227,15 +273,17 @@ describe("transcription sermon segment filtering", () => {
 
     try {
       await writeFile(chunkPath, Buffer.alloc(24));
+      const payload = __transcriptionTestUtils.buildChunkTranscriptCachePayload({
+        chunkPath,
+        bytes: 24,
+        durationSeconds: 6,
+        languageCode: "en",
+        transcript,
+      });
+      expect(payload.version).toBe(4);
       await __transcriptionTestUtils.writeCachedChunkTranscript(
         cachePath,
-        __transcriptionTestUtils.buildChunkTranscriptCachePayload({
-          chunkPath,
-          bytes: 24,
-          durationSeconds: 6,
-          languageCode: "en",
-          transcript,
-        }),
+        payload,
       );
 
       await expect(
@@ -248,7 +296,7 @@ describe("transcription sermon segment filtering", () => {
         }),
       ).resolves.toMatchObject({
         fullText: "God is faithful in every season.",
-        segments: [{ startTimeSeconds: 0, endTimeSeconds: 6 }],
+        segments: [{ startTimeSeconds: 0, endTimeSeconds: 6, confidence: 0.73 }],
       });
 
       await expect(
@@ -808,7 +856,7 @@ describe("transcription sermon segment filtering", () => {
     })).toBe(1800);
   });
 
-  it("removes obvious non-speech and duplicate transcript spam before clipping", () => {
+  it("removes non-speech and duplicate spam while preserving audience-response evidence", () => {
     const transcript = {
       ...baseTranscript,
       fullText: "Music. God is faithful today. God is faithful today. God is faithful today. Amen. The church must use every gift with courage.",
@@ -827,11 +875,18 @@ describe("transcription sermon segment filtering", () => {
     expect(cleaned.segments.map((segment) => segment.text)).toEqual([
       "God is faithful today.",
       "God is faithful today.",
+      "Amen.",
       "The church must use every gift with courage.",
     ]);
     expect(cleaned.fullText).not.toContain("Music");
-    expect(cleaned.fullText).not.toContain("Amen");
-    expect((cleaned.raw as { cleanup?: { removedSegmentCount: number } }).cleanup?.removedSegmentCount).toBe(3);
+    expect(cleaned.fullText).toContain("Amen");
+    expect((cleaned.raw as { cleanup?: { removedSegmentCount: number } }).cleanup?.removedSegmentCount).toBe(2);
+  });
+
+  it("keeps Unicode letters intact when normalizing multilingual transcript text", () => {
+    expect(
+      __transcriptionTestUtils.normalizeTranscriptTextForCleanup("Lefatše — tšepo, Môre!"),
+    ).toBe("lefatše tšepo môre");
   });
 
   it("reuses saved transcripts only when they are clipping-ready", () => {

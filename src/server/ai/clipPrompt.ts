@@ -66,7 +66,16 @@ const jsonShape = `{
       "payoffTime": null,
       "applicationTime": null,
       "whyThisClipFeelsComplete": "The thought has setup, a clear point, and a landing.",
-      "whatContextMightBeMissing": null
+      "whatContextMightBeMissing": null,
+      "languageHints": {
+        "detectedLanguage": "Observed or declared language label",
+        "mixedLanguage": false,
+        "translatedFrom": null,
+        "originalPhrase": "Exact spoken phrase only, or null",
+        "englishMeaning": null,
+        "translationConfidence": null,
+        "translationUncertaintyNote": "State uncertainty without translating or guessing"
+      }
     }
   ]
 }`;
@@ -107,6 +116,10 @@ export function buildClipSelectionSystemPrompt(): string {
     "Prefer diversity over a single exceptional ministry-climax clip. When several windows contain different useful moments, include several options so the pastor can choose.",
     "Avoid private names, giving or money appeals, counseling details, church discipline, internal admin, and controversial claims without context.",
     "Avoid clickbait or manipulative language.",
+    "For local-language or code-switched excerpts, preserve the original transcript wording. Do not invent, silently translate, or normalize unfamiliar words into English.",
+    "Never present an English summary or inferred meaning as an exact translation. Set languageHints.englishMeaning, translatedFrom, and translationConfidence to null unless a verified human translation was supplied in the input (this workflow does not normally supply one).",
+    "Use languageHints.originalPhrase only for an exact phrase copied from the selected transcript. Set mixedLanguage honestly when the excerpt visibly changes language, and explain uncertainty in translationUncertaintyNote without guessing the meaning.",
+    "Missing English ministry vocabulary is not proof that a local-language clip is weak. Use structural completeness, transcript evidence, and the declared sermon language; set contextWarning true when meaning cannot be safely assessed.",
     "Treat title, hook, caption, and CTA writing as a content package, not filler metadata.",
     "For every clip, include captionPackage with two or three distinct titleOptions and hookOptions plus up to three optional ctaOptions.",
     "Titles should usually be 4-10 words, name the actual ministry idea, and avoid vague clickbait such as 'You need to hear this'.",
@@ -178,6 +191,15 @@ function buildIndexedExample(window: ClipWindow): string {
         applicationTime: null,
         whyThisClipFeelsComplete: "The selected segment range contains setup, truth, and landing.",
         whatContextMightBeMissing: null,
+        languageHints: {
+          detectedLanguage: "Use the observed or declared sermon language",
+          mixedLanguage: false,
+          translatedFrom: null,
+          originalPhrase: "Exact phrase from the selected transcript, or null",
+          englishMeaning: null,
+          translationConfidence: null,
+          translationUncertaintyNote: "No translation was verified; preserve the original wording.",
+        },
       },
     ],
   }, null, 2);
@@ -195,6 +217,7 @@ export function buildClipSelectionUserPrompt(
 ): string {
   const windowText = windows
     .map((window, index) => {
+      const transcriptEvidence = window.transcriptEvidence;
       return [
         `Window ${index + 1}`,
         `Window ID: ${window.windowId}`,
@@ -206,6 +229,12 @@ export function buildClipSelectionUserPrompt(
         `Ministry payoff quality: ${window.ministryPayoffScore ?? "not scored"}/10`,
         `Words: ${window.wordCount}`,
         `Meaningful segments: ${window.meaningfulSegmentCount}`,
+        `Transcript language evidence: ${transcriptEvidence?.languageProfile ?? "not assessed"}`,
+        `Transcript confidence band: ${transcriptEvidence?.confidenceBand ?? "UNKNOWN"}`,
+        `Code-switching review: ${transcriptEvidence?.codeSwitching.detected ? "yes" : "no"}`,
+        transcriptEvidence?.requiresHumanReview
+          ? `Transcript review reasons: ${transcriptEvidence.reviewReasons.map((reason) => reason.message).join(" | ")}`
+          : "Transcript review reasons: none",
         "Transcript segments:",
         ...window.segmentLines,
       ].join("\n");
@@ -233,6 +262,7 @@ export function buildClipSelectionUserPrompt(
     "Make reasonSelected evidence-based: include distinctive words spoken in the selected range, especially the payoff, invitation, or application line.",
     "Skip weak candidates, but include good review-worthy options that need trimming, captions, or pastor judgment.",
     "Set contextWarning to true when a clip may be misunderstood without surrounding context.",
+    "When a selected range contains local-language or code-switched wording, preserve that wording exactly and use languageHints to flag uncertainty. Do not create an English translation or gloss.",
     `Valid window IDs for this batch: ${validWindowIds}`,
     "Use zero-based segment indexes exactly as shown in each transcript segment line.",
     "Application-derived fields: startTimeSeconds, endTimeSeconds, durationSeconds, and transcriptText. Do not include or rely on those fields in your response.",

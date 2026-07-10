@@ -57,6 +57,7 @@ function clip(overrides: Partial<RefreshableClip> = {}): RefreshableClip {
     caption: "God is faithful in the waiting.",
     score: 8,
     transcriptText: "God is faithful in the waiting.",
+    transcriptSafetyStatus: "TRUSTED",
     durationSeconds: 45,
     startTimeSeconds: 10,
     endTimeSeconds: 55,

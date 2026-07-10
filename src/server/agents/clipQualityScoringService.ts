@@ -75,6 +75,7 @@ export type ProfessionalQualityCandidate = {
   completenessScore?: number | null;
   completenessAction?: string | null;
   completenessWarnings?: string[] | null;
+  transcriptSafetyStatus?: "TRUSTED" | "REVIEW_REQUIRED" | "REVIEWED" | null;
 };
 
 export type ProfessionalQualityFields = ClipHookAnalysis & ClipArcAnalysis & ClipDurationQuality & AudioQualityResult & {
@@ -203,6 +204,13 @@ function scoreCaptionLifecycle(candidate: ProfessionalQualityCandidate): Pick<Pr
 const MIN_PASTOR_GRADE_TRANSCRIPT_WORDS = 18;
 const MIN_PASTOR_GRADE_QUOTE_WORDS = 12;
 const MIN_PASTOR_GRADE_WORDS_PER_MINUTE = 18;
+const LANGUAGE_SEMANTIC_BLOCKERS = new Set([
+  "PASTOR_GRADE_NO_SPIRITUAL_ANCHOR",
+  "PASTOR_GRADE_TRANSCRIPT_NO_SPIRITUAL_ANCHOR",
+  "PASTOR_GRADE_NO_CLEAR_TAKEAWAY",
+  "PASTOR_GRADE_TRANSCRIPT_NO_CLEAR_TAKEAWAY",
+  "PASTOR_GRADE_NO_PAYOFF_OR_APPLICATION",
+]);
 
 function countWords(text: string): number {
   return text
@@ -520,6 +528,7 @@ function hasCorePastorGradeBlocker(warnings: string[]): boolean {
 }
 
 export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandidate): ProfessionalQualityFields {
+  const transcriptReviewRequired = candidate.transcriptSafetyStatus === "REVIEW_REQUIRED";
   const hook: ClipHookAnalysis = typeof candidate.hookScore === "number"
     ? {
         hookScore: candidate.hookScore,
@@ -565,6 +574,7 @@ export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandi
   const inheritedWarnings = candidate.qualityWarnings ?? [];
   const qualityWarnings = Array.from(new Set([
     ...inheritedWarnings,
+    ...(transcriptReviewRequired ? ["TRANSCRIPT_REVIEW_REQUIRED"] : []),
     ...(hook.hookProblem ? ["WEAK_HOOK"] : []),
     ...(arc.whatContextMightBeMissing ? ["INCOMPLETE_ARC"] : []),
     ...(duration.durationQualityLabel === "TOO_SHORT" || duration.durationQualityLabel === "TOO_LONG" ? ["DURATION_NEEDS_EDIT"] : []),
@@ -572,7 +582,7 @@ export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandi
     ...captionFields.captionQualityWarnings,
     ...speechPolish.warnings,
   ]));
-  const pastorGradeBlockers = buildPastorGradeBlockers({
+  const detectedPastorGradeBlockers = buildPastorGradeBlockers({
     candidate,
     hookScore: hook.hookScore,
     arcCompletenessScore: arc.arcCompletenessScore,
@@ -580,6 +590,9 @@ export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandi
     boundaryQualityScore,
     durationQualityLabel: duration.durationQualityLabel,
   });
+  const pastorGradeBlockers = transcriptReviewRequired
+    ? detectedPastorGradeBlockers.filter((warning) => !LANGUAGE_SEMANTIC_BLOCKERS.has(warning))
+    : detectedPastorGradeBlockers;
   const pastorGradeReviewWarnings = buildPastorGradeReviewWarnings({
     candidate,
     hookScore: hook.hookScore,
@@ -614,7 +627,24 @@ export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandi
   const corePastorGradeBlocked = hasCorePastorGradeBlocker(pastorGradeBlockers);
   const qualityLabel: ClipQualityLabel = corePastorGradeBlocked
     ? "REJECT"
+    : transcriptReviewRequired
+      ? "NEEDS_EDITING"
     : postReady.postReadyStatus;
+  const resolvedPostReady: PostReadyReviewResult = transcriptReviewRequired && postReady.postReadyStatus !== "REJECT"
+    ? {
+        ...postReady,
+        postReadyStatus: "NEEDS_EDITING",
+        postReadyReasons: Array.from(new Set([
+          ...postReady.postReadyReasons,
+          "Transcript wording needs a human check before this clip is ready.",
+        ])),
+        postReadyBlockers: Array.from(new Set([
+          ...postReady.postReadyBlockers,
+          "Review the transcript wording before captions, export, or posting.",
+        ])),
+        recommendedNextAction: "REVIEW_CLIP",
+      }
+    : postReady;
   const qualityReasons = [
     hook.hookReason,
     arc.whyThisClipFeelsComplete,
@@ -643,7 +673,7 @@ export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandi
     qualityWarnings: allQualityWarnings,
     rankingCategory: inferRankingCategory(candidate, finalQualityScore, qualityLabel),
     bestPlatform: bestPlatform(candidate, candidate.durationSeconds),
-    ...postReady,
+    ...resolvedPostReady,
   };
 }
 
