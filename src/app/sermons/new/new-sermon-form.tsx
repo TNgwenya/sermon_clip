@@ -7,6 +7,11 @@ import { useRouter } from "next/navigation";
 
 import { FeatureModal, type FeatureModalKind } from "@/components/feature-modal";
 import {
+  MAX_UPLOADED_MEDIA_LABEL,
+  UPLOADED_MEDIA_TOO_LARGE_MESSAGE,
+  uploadedMediaExceedsSizeLimit,
+} from "@/lib/sermonIntake";
+import {
   createSermonAction,
   type CreateSermonFormState,
 } from "@/server/actions/sermons";
@@ -36,14 +41,24 @@ function formatFileSize(bytes: number): string {
     return `${bytes === 0 ? 0 : Math.max(1, Math.round(bytes / 1024))} KB`;
   }
 
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }
+
   return `${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
 }
 
-function SubmitButton({ sourceMode }: { sourceMode: SermonSourceMode }) {
+function SubmitButton({
+  sourceMode,
+  uploadBlocked,
+}: {
+  sourceMode: SermonSourceMode;
+  uploadBlocked: boolean;
+}) {
   const { pending } = useFormStatus();
 
   return (
-    <button className="button primary command-cta" type="submit" disabled={pending}>
+    <button className="button primary command-cta" type="submit" disabled={pending || uploadBlocked}>
       {pending
         ? sourceMode === "upload"
           ? "Uploading recording..."
@@ -120,9 +135,11 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
   const [sourceMode, setSourceMode] = useState<SermonSourceMode>("youtube");
   const [youtubeUrl, setYoutubeUrl] = useState(initialYoutubeUrl);
   const [selectedFile, setSelectedFile] = useState<{ name: string; size: number } | null>(null);
+  const [selectedFileError, setSelectedFileError] = useState<string | null>(null);
   const hasSermonWindowErrors = Boolean(
     state.fieldErrors?.sermonStartTimestamp || state.fieldErrors?.sermonEndTimestamp,
   );
+  const mediaFileError = selectedFileError ?? state.fieldErrors?.mediaFile;
 
   useEffect(() => {
     if (state.success && state.createdSermonId) {
@@ -204,7 +221,7 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
                 <span className="source-method-mark" aria-hidden="true">FILE</span>
                 <div>
                   <label htmlFor="sermonVideoFile">Upload a recording</label>
-                  <span className="muted small">Choose a video or audio file saved on this device</span>
+                  <span className="muted small">Choose a video or audio file up to {MAX_UPLOADED_MEDIA_LABEL}</span>
                 </div>
               </div>
               <input
@@ -217,9 +234,12 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
                 onChange={(event) => {
                   const file = event.target.files?.[0];
                   setSelectedFile(file ? { name: file.name, size: file.size } : null);
+                  setSelectedFileError(file && uploadedMediaExceedsSizeLimit(file)
+                    ? UPLOADED_MEDIA_TOO_LARGE_MESSAGE
+                    : null);
                 }}
-                aria-invalid={Boolean(state.fieldErrors?.mediaFile)}
-                aria-describedby={state.fieldErrors?.mediaFile ? "sermonVideoFile-error" : selectedFile ? "sermonVideoFile-selection" : undefined}
+                aria-invalid={Boolean(mediaFileError)}
+                aria-describedby={mediaFileError ? "sermonVideoFile-error" : selectedFile ? "sermonVideoFile-selection" : undefined}
               />
               {selectedFile ? (
                 <p id="sermonVideoFile-selection" className="selected-source-file" role="status">
@@ -228,7 +248,7 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
                   <span>{formatFileSize(selectedFile.size)}</span>
                 </p>
               ) : null}
-              {state.fieldErrors?.mediaFile ? <p id="sermonVideoFile-error" className="field-error">{state.fieldErrors.mediaFile}</p> : null}
+              {mediaFileError ? <p id="sermonVideoFile-error" className="field-error">{mediaFileError}</p> : null}
             </div>
           </div>
         </section>
@@ -311,7 +331,7 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
         </div>
 
         <div className="upload-form-footer premium-upload-footer">
-          <SubmitButton sourceMode={sourceMode} />
+          <SubmitButton sourceMode={sourceMode} uploadBlocked={sourceMode === "upload" && Boolean(selectedFileError)} />
           <p className="muted small">Analysis begins after your sermon is saved. You can leave while it works.</p>
         </div>
 

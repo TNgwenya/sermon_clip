@@ -4,6 +4,8 @@ import {
   buildLocalUploadSourceUrl,
   createSermonSchema,
   isUploadedMediaFile,
+  MAX_UPLOADED_MEDIA_BYTES,
+  uploadedMediaExceedsSizeLimit,
 } from "@/lib/sermonIntake";
 
 function validInput(overrides: Partial<{
@@ -117,6 +119,11 @@ describe("sermon intake", () => {
     expect(isUploadedMediaFile(emptyFile as unknown as FormDataEntryValue)).toBe(false);
     expect(isUploadedMediaFile("plain text field")).toBe(false);
     expect(isUploadedMediaFile(null)).toBe(false);
+  });
+
+  it("detects uploaded media over the mobile upload size limit", () => {
+    expect(uploadedMediaExceedsSizeLimit({ size: MAX_UPLOADED_MEDIA_BYTES })).toBe(false);
+    expect(uploadedMediaExceedsSizeLimit({ size: MAX_UPLOADED_MEDIA_BYTES + 1 })).toBe(true);
   });
 
   it("builds safe local-upload source markers for uploaded sermon files", () => {

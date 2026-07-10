@@ -5,6 +5,10 @@ import {
   validateSermonSegmentRange,
 } from "@/lib/sermonSegment";
 
+export const MAX_UPLOADED_MEDIA_BYTES = Math.floor(1.5 * 1024 * 1024 * 1024);
+export const MAX_UPLOADED_MEDIA_LABEL = "1.5 GB";
+export const UPLOADED_MEDIA_TOO_LARGE_MESSAGE = `This recording is too large to upload from this form. The current mobile upload limit is ${MAX_UPLOADED_MEDIA_LABEL}. Compress the video, trim the recording, or use a YouTube link instead.`;
+
 export const createSermonSchema = z
   .object({
     youtubeUrl: z.string().trim(),
@@ -112,6 +116,10 @@ export function isUploadedMediaFile(value: FormDataEntryValue | null): value is 
 }
 
 export const isUploadedVideoFile = isUploadedMediaFile;
+
+export function uploadedMediaExceedsSizeLimit(file: Pick<File, "size">): boolean {
+  return file.size > MAX_UPLOADED_MEDIA_BYTES;
+}
 
 export function buildLocalUploadSourceUrl(fileName: string): string {
   const normalizedName = fileName.trim() || "sermon-video";

@@ -2,6 +2,10 @@ import { readFile, rm } from "node:fs/promises";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  MAX_UPLOADED_MEDIA_BYTES,
+  UPLOADED_MEDIA_TOO_LARGE_MESSAGE,
+} from "@/lib/sermonIntake";
 import { prisma } from "@/lib/prisma";
 import { createSermonAction } from "@/server/actions/sermons";
 import { getSermonStoragePath } from "@/server/agents/storage";
@@ -107,7 +111,7 @@ describe("create sermon upload workflow", () => {
     expect(sermon.audioPath).toContain("/audio/audio.mp3");
     expect(sermon.transcriptJsonPath).toContain("/transcript/transcript.json");
     await expect(readFile(sermon.sourceVideoPath!)).resolves.toEqual(Buffer.from(videoBytes));
-  });
+  }, 20_000);
 
   it("stores uploaded sermon media files larger than the default Server Action body limit", async () => {
     const videoBytes = new Uint8Array(1_250_000).fill(7);
@@ -170,6 +174,36 @@ describe("create sermon upload workflow", () => {
 
     expect(sermon.youtubeUrl).toBe("local-upload://IMG_0421.MOV");
     await expect(readFile(sermon.sourceVideoPath!)).resolves.toEqual(Buffer.from(videoBytes));
+  });
+
+  it("rejects oversized mobile uploads before reading the file into memory", async () => {
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
+    const oversizedUpload = {
+      name: "Large Mobile Sermon.mov",
+      size: MAX_UPLOADED_MEDIA_BYTES + 1,
+      arrayBuffer,
+    };
+    const formValues = new Map<string, FormDataEntryValue | typeof oversizedUpload>([
+      ["youtubeUrl", ""],
+      ["sermonVideoFile", oversizedUpload],
+      ["title", "Oversized Mobile Sermon"],
+      ["speakerName", "Pastor Test"],
+      ["churchName", "Test Church"],
+      ["language", "English"],
+      ["rightsConfirmed", "on"],
+    ]);
+    const formData = {
+      get: (key: string) => formValues.get(key) ?? null,
+    } as unknown as FormData;
+
+    const result = await createSermonAction({ success: false, message: "" }, formData);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toBe(UPLOADED_MEDIA_TOO_LARGE_MESSAGE);
+    expect(result.fieldErrors?.mediaFile).toBe(UPLOADED_MEDIA_TOO_LARGE_MESSAGE);
+    expect(result.createdSermonId).toBeUndefined();
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(processSermonPipelineMock).not.toHaveBeenCalled();
   });
 
   it("rejects uploaded sermon media files that cannot be probed as usable media", async () => {

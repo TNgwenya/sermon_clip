@@ -77,6 +77,8 @@ import {
   buildLocalUploadSourceUrl,
   createSermonSchema,
   isUploadedMediaFile,
+  uploadedMediaExceedsSizeLimit,
+  UPLOADED_MEDIA_TOO_LARGE_MESSAGE,
 } from "@/lib/sermonIntake";
 import {
   buildPrepareApprovedSummary,
@@ -1594,6 +1596,16 @@ export async function createSermonAction(
       message: "Media file uploads need shared storage before they can run on Vercel. Add this sermon by YouTube URL for now, or upload from the local app.",
       fieldErrors: {
         mediaFile: "File uploads are local-worker only until shared storage is configured.",
+      },
+    };
+  }
+
+  if (hasUploadedMedia && uploadedMediaExceedsSizeLimit(uploadedMedia)) {
+    return {
+      success: false,
+      message: UPLOADED_MEDIA_TOO_LARGE_MESSAGE,
+      fieldErrors: {
+        mediaFile: UPLOADED_MEDIA_TOO_LARGE_MESSAGE,
       },
     };
   }
