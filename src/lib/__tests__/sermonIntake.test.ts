@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildUploadedMediaCheckFailureMessage,
   buildLocalUploadSourceUrl,
   createSermonSchema,
   isUploadedMediaFile,
@@ -124,6 +125,12 @@ describe("sermon intake", () => {
   it("detects uploaded media over the mobile upload size limit", () => {
     expect(uploadedMediaExceedsSizeLimit({ size: MAX_UPLOADED_MEDIA_BYTES })).toBe(false);
     expect(uploadedMediaExceedsSizeLimit({ size: MAX_UPLOADED_MEDIA_BYTES + 1 })).toBe(true);
+  });
+
+  it("builds a clear uploaded media processing failure message", () => {
+    expect(buildUploadedMediaCheckFailureMessage("Media duration probe returned an invalid duration.")).toBe(
+      "The upload reached Sermon Clip, but the recording could not be processed. Reason: Media duration probe returned an invalid duration.",
+    );
   });
 
   it("builds safe local-upload source markers for uploaded sermon files", () => {

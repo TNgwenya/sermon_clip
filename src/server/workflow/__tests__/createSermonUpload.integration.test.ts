@@ -229,7 +229,10 @@ describe("create sermon upload workflow", () => {
     }
 
     expect(result.success).toBe(false);
-    expect(result.message).toContain("Uploaded sermon media is not usable");
+    expect(result.message).toBe(
+      "The upload reached Sermon Clip, but the recording could not be processed. Reason: Media duration probe returned an invalid duration.",
+    );
+    expect(result.fieldErrors?.mediaFile).toBe(result.message);
     expect(result.createdSermonId).toBeTruthy();
     createdSermonIds.push(result.createdSermonId!);
     expect(processSermonPipelineMock).not.toHaveBeenCalled();

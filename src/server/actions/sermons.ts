@@ -74,6 +74,7 @@ import {
   validateClipStudioTiming,
 } from "@/lib/clipStudioEditing";
 import {
+  buildUploadedMediaCheckFailureMessage,
   buildLocalUploadSourceUrl,
   createSermonSchema,
   isUploadedMediaFile,
@@ -1665,7 +1666,7 @@ export async function createSermonAction(
           await writeFile(/* turbopackIgnore: true */ tempSourceVideoPath, Buffer.from(arrayBuffer));
           const uploadedMediaCheck = await mediaFileIsUsable(tempSourceVideoPath);
           if (!uploadedMediaCheck.usable) {
-            throw new Error(`Uploaded sermon media is not usable: ${uploadedMediaCheck.reason}`);
+            throw new Error(buildUploadedMediaCheckFailureMessage(uploadedMediaCheck.reason));
           }
 
           await rename(/* turbopackIgnore: true */ tempSourceVideoPath, /* turbopackIgnore: true */ sourceVideoPath);
@@ -1673,7 +1674,7 @@ export async function createSermonAction(
           const finalizedUpload = await mediaFileIsUsable(sourceVideoPath);
           if (!finalizedUpload.usable) {
             await unlink(/* turbopackIgnore: true */ sourceVideoPath).catch(() => undefined);
-            throw new Error(`Finalized uploaded sermon media is not usable: ${finalizedUpload.reason}`);
+            throw new Error(buildUploadedMediaCheckFailureMessage(finalizedUpload.reason));
           }
 
           uploadedDurationSeconds = finalizedUpload.durationSeconds;
@@ -1702,9 +1703,13 @@ export async function createSermonAction(
     } catch (storageError) {
       const reason = storageError instanceof Error ? storageError.message : "Unknown storage setup error.";
       console.error(`Storage initialization failed for sermon ${sermon.id}: ${reason}`);
+      const message = hasUploadedMedia
+        ? reason
+        : `Sermon was saved, but storage setup failed: ${reason}`;
       return {
         success: false,
-        message: `Sermon was saved, but storage setup failed: ${reason}`,
+        message,
+        fieldErrors: hasUploadedMedia ? { mediaFile: reason } : undefined,
         createdSermonId: sermon.id,
       };
     }
@@ -1717,10 +1722,17 @@ export async function createSermonAction(
       message: "Sermon saved. The full clip workflow has started automatically.",
       createdSermonId: sermon.id,
     };
-  } catch {
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Unknown save error.";
+    console.error(`Create sermon failed: ${reason}`);
     return {
       success: false,
-      message: "Unable to save sermon right now. Please try again.",
+      message: hasUploadedMedia
+        ? `The upload could not be saved. Reason: ${reason}`
+        : "Unable to save sermon right now. Please try again.",
+      fieldErrors: hasUploadedMedia
+        ? { mediaFile: `The upload could not be saved. Reason: ${reason}` }
+        : undefined,
     };
   }
 }

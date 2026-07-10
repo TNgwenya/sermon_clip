@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 import { FeatureModal, type FeatureModalKind } from "@/components/feature-modal";
 import {
   MAX_UPLOADED_MEDIA_LABEL,
+  MOBILE_UPLOAD_FAILURE_HELP,
   UPLOADED_MEDIA_TOO_LARGE_MESSAGE,
   uploadedMediaExceedsSizeLimit,
 } from "@/lib/sermonIntake";
@@ -247,6 +248,9 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
                   <strong>{selectedFile.name}</strong>
                   <span>{formatFileSize(selectedFile.size)}</span>
                 </p>
+              ) : null}
+              {selectedFile && !selectedFileError ? (
+                <p className="muted small">{MOBILE_UPLOAD_FAILURE_HELP}</p>
               ) : null}
               {mediaFileError ? <p id="sermonVideoFile-error" className="field-error">{mediaFileError}</p> : null}
             </div>

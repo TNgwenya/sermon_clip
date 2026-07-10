@@ -5,9 +5,10 @@ import {
   validateSermonSegmentRange,
 } from "@/lib/sermonSegment";
 
-export const MAX_UPLOADED_MEDIA_BYTES = Math.floor(1.5 * 1024 * 1024 * 1024);
-export const MAX_UPLOADED_MEDIA_LABEL = "1.5 GB";
+export const MAX_UPLOADED_MEDIA_BYTES = Math.floor(2.5 * 1024 * 1024 * 1024);
+export const MAX_UPLOADED_MEDIA_LABEL = "2.5 GB";
 export const UPLOADED_MEDIA_TOO_LARGE_MESSAGE = `This recording is too large to upload from this form. The current mobile upload limit is ${MAX_UPLOADED_MEDIA_LABEL}. Compress the video, trim the recording, or use a YouTube link instead.`;
+export const MOBILE_UPLOAD_FAILURE_HELP = `If a mobile upload fails before this page can show a server response, the phone may have interrupted the upload, the file may still be in cloud storage, or the recording may be larger than ${MAX_UPLOADED_MEDIA_LABEL}. Keep the app open on Wi-Fi, choose a file stored on the device, or use a YouTube link.`;
 
 export const createSermonSchema = z
   .object({
@@ -119,6 +120,11 @@ export const isUploadedVideoFile = isUploadedMediaFile;
 
 export function uploadedMediaExceedsSizeLimit(file: Pick<File, "size">): boolean {
   return file.size > MAX_UPLOADED_MEDIA_BYTES;
+}
+
+export function buildUploadedMediaCheckFailureMessage(reason: string): string {
+  const normalizedReason = reason.trim() || "The media check did not return a reason.";
+  return `The upload reached Sermon Clip, but the recording could not be processed. Reason: ${normalizedReason}`;
 }
 
 export function buildLocalUploadSourceUrl(fileName: string): string {
