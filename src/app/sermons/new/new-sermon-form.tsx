@@ -7,8 +7,10 @@ import { useRouter } from "next/navigation";
 
 import { FeatureModal, type FeatureModalKind } from "@/components/feature-modal";
 import {
+  HOSTED_MEDIA_UPLOAD_UNAVAILABLE_MESSAGE,
   MAX_UPLOADED_MEDIA_LABEL,
   MOBILE_UPLOAD_FAILURE_HELP,
+  SERMON_UPLOAD_ATTEMPT_STORAGE_KEY,
   UPLOADED_MEDIA_TOO_LARGE_MESSAGE,
   uploadedMediaExceedsSizeLimit,
 } from "@/lib/sermonIntake";
@@ -129,7 +131,13 @@ function UploadProgressTheater({
   );
 }
 
-export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: string }) {
+export function NewSermonForm({
+  initialYoutubeUrl = "",
+  canUploadMedia = true,
+}: {
+  initialYoutubeUrl?: string;
+  canUploadMedia?: boolean;
+}) {
   const [state, formAction] = useActionState(createSermonAction, initialCreateSermonState);
   const router = useRouter();
   const [activeFeatureModal, setActiveFeatureModal] = useState<FeatureModalKind | null>(null);
@@ -148,16 +156,36 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
     }
   }, [router, state.createdSermonId, state.success]);
 
+  useEffect(() => {
+    if (state.message) {
+      window.sessionStorage.removeItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY);
+    }
+  }, [state.message]);
+
   return (
     <>
-      <form action={formAction} className="upload-form-panel premium-intake-form stack-lg">
+      <form
+        action={formAction}
+        className="upload-form-panel premium-intake-form stack-lg"
+        onSubmit={() => {
+          if (sourceMode === "upload") {
+            window.sessionStorage.setItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY, "true");
+          } else {
+            window.sessionStorage.removeItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY);
+          }
+        }}
+      >
         <UploadProgressTheater sourceMode={sourceMode} selectedFileName={selectedFile?.name ?? null} />
         <section className="intake-form-section stack-md" aria-labelledby="sermon-source-heading">
           <div className="intake-section-heading">
             <span className="intake-section-number">01</span>
             <div>
               <h2 id="sermon-source-heading">Choose the recording</h2>
-              <p className="muted">Use a YouTube link or choose a media file from this device.</p>
+              <p className="muted">
+                {canUploadMedia
+                  ? "Use a YouTube link or choose a media file from this device."
+                  : "Use a public or unlisted YouTube link to add the sermon to the hosted app."}
+              </p>
             </div>
           </div>
 
@@ -175,20 +203,29 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
                 <small>Use a public or unlisted sermon video</small>
               </span>
             </label>
-            <label className={sourceMode === "upload" ? "source-mode-option is-selected" : "source-mode-option"}>
+            <label className={`${sourceMode === "upload" ? "source-mode-option is-selected" : "source-mode-option"}${canUploadMedia ? "" : " is-unavailable"}`}>
               <input
                 type="radio"
                 name="sourceMode"
                 value="upload"
                 checked={sourceMode === "upload"}
+                disabled={!canUploadMedia}
+                aria-describedby={!canUploadMedia ? "hosted-upload-unavailable" : undefined}
                 onChange={() => setSourceMode("upload")}
               />
               <span>
                 <strong>Upload media</strong>
-                <small>Choose the recording from this device</small>
+                <small>{canUploadMedia ? "Choose the recording from this device" : "Unavailable on the hosted app"}</small>
               </span>
             </label>
           </div>
+
+          {!canUploadMedia ? (
+            <p id="hosted-upload-unavailable" className="upload-availability-notice" role="note">
+              <strong>Why can’t I upload a video?</strong>
+              <span>{HOSTED_MEDIA_UPLOAD_UNAVAILABLE_MESSAGE}</span>
+            </p>
+          ) : null}
 
           <div className="source-method-grid">
             <div className={`source-method-card stack-sm${sourceMode === "youtube" ? " is-selected" : ""}`} hidden={sourceMode !== "youtube"}>
@@ -230,8 +267,8 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
                 name="sermonVideoFile"
                 type="file"
                 accept={mobileMediaAcceptTypes}
-                disabled={sourceMode !== "upload"}
-                required={sourceMode === "upload"}
+                disabled={sourceMode !== "upload" || !canUploadMedia}
+                required={sourceMode === "upload" && canUploadMedia}
                 onChange={(event) => {
                   const file = event.target.files?.[0];
                   setSelectedFile(file ? { name: file.name, size: file.size } : null);
@@ -335,7 +372,10 @@ export function NewSermonForm({ initialYoutubeUrl = "" }: { initialYoutubeUrl?: 
         </div>
 
         <div className="upload-form-footer premium-upload-footer">
-          <SubmitButton sourceMode={sourceMode} uploadBlocked={sourceMode === "upload" && Boolean(selectedFileError)} />
+          <SubmitButton
+            sourceMode={sourceMode}
+            uploadBlocked={sourceMode === "upload" && (!canUploadMedia || Boolean(selectedFileError))}
+          />
           <p className="muted small">Analysis begins after your sermon is saved. You can leave while it works.</p>
         </div>
 

@@ -8,7 +8,9 @@ import {
 export const MAX_UPLOADED_MEDIA_BYTES = Math.floor(2.5 * 1024 * 1024 * 1024);
 export const MAX_UPLOADED_MEDIA_LABEL = "2.5 GB";
 export const UPLOADED_MEDIA_TOO_LARGE_MESSAGE = `This recording is too large to upload from this form. The current mobile upload limit is ${MAX_UPLOADED_MEDIA_LABEL}. Compress the video, trim the recording, or use a YouTube link instead.`;
+export const HOSTED_MEDIA_UPLOAD_UNAVAILABLE_MESSAGE = "Direct video uploads from this website are temporarily unavailable because the hosted app cannot safely receive and store large recordings. No file was uploaded. Use a public or unlisted YouTube link instead.";
 export const MOBILE_UPLOAD_FAILURE_HELP = `If a mobile upload fails before this page can show a server response, the phone may have interrupted the upload, the file may still be in cloud storage, or the recording may be larger than ${MAX_UPLOADED_MEDIA_LABEL}. Keep the app open on Wi-Fi, choose a file stored on the device, or use a YouTube link.`;
+export const SERMON_UPLOAD_ATTEMPT_STORAGE_KEY = "sermon-clip:upload-attempt";
 
 export const createSermonSchema = z
   .object({

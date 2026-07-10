@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+
 import { NewSermonForm } from "./new-sermon-form";
 
 type NewSermonSearchParams = {
@@ -8,6 +10,7 @@ type NewSermonSearchParams = {
 
 export default async function NewSermonPage({ searchParams }: { searchParams: Promise<NewSermonSearchParams> }) {
   const params = await searchParams;
+  const canUploadMedia = canRunLocalMediaProcessing();
 
   return (
     <main id="main-content" className="upload-page-shell premium-intake-page stack-lg">
@@ -32,7 +35,7 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
       </nav>
 
       <div className="premium-intake-layout">
-        <NewSermonForm initialYoutubeUrl={params.youtubeUrl ?? ""} />
+        <NewSermonForm initialYoutubeUrl={params.youtubeUrl ?? ""} canUploadMedia={canUploadMedia} />
 
         <aside className="upload-outcome-panel" aria-label="What Sermon Clip will prepare">
           <div className="stack-sm">

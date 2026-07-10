@@ -534,6 +534,31 @@
   line-height: 1.35;
 }
 
+.source-mode-option.is-unavailable {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.source-mode-option.is-unavailable:hover {
+  border-color: var(--workflow-line);
+}
+
+.upload-availability-notice {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0.85rem 1rem;
+  border-left: 3px solid var(--accent-mint, #8adbc1);
+  background: color-mix(in srgb, var(--accent-mint, #8adbc1) 8%, transparent);
+  color: var(--text-secondary, #aaa9a2);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.upload-availability-notice strong {
+  color: var(--text, #f5f3ec);
+}
+
 .source-method-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
