@@ -33,9 +33,12 @@ type PublishErrorWithStagedMedia = Error & {
 };
 
 class CompletionPersistenceError extends Error {
-  constructor(message: string, readonly statusCode: number) {
+  readonly statusCode: number;
+
+  constructor(message: string, statusCode: number) {
     super(message);
     this.name = "CompletionPersistenceError";
+    this.statusCode = statusCode;
   }
 }
 

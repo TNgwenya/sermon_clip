@@ -25,6 +25,7 @@ const initialCreateSermonState: CreateSermonFormState = {
 };
 
 type SermonSourceMode = "youtube" | "upload";
+const uploadChunkSize = 8 * 1024 * 1024;
 
 const mobileMediaAcceptTypes = [
   "video/*",
@@ -49,6 +50,14 @@ function formatFileSize(bytes: number): string {
   }
 
   return `${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+async function parseUploadResponse(response: Response): Promise<CreateSermonFormState> {
+  return response.json().catch(() => ({
+    success: false,
+    message: "The upload ended before Sermon Clip received a normal response.",
+    fieldErrors: { mediaFile: "The upload ended early. Try again or use a YouTube link." },
+  })) as Promise<CreateSermonFormState>;
 }
 
 function SubmitButton({
@@ -199,7 +208,9 @@ export function NewSermonForm({
 
     const formData = new FormData(form);
     const uploadUrl = new URL("/api/sermons/upload", window.location.origin);
+    uploadUrl.searchParams.set("uploadMode", "start");
     uploadUrl.searchParams.set("fileName", file.name);
+    uploadUrl.searchParams.set("totalBytes", String(file.size));
     uploadUrl.searchParams.set("title", String(formData.get("title") ?? ""));
     uploadUrl.searchParams.set("speakerName", String(formData.get("speakerName") ?? ""));
     uploadUrl.searchParams.set("churchName", String(formData.get("churchName") ?? ""));
@@ -212,21 +223,48 @@ export function NewSermonForm({
     window.sessionStorage.setItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY, "true");
     setIsUploadSubmitting(true);
     try {
-      const response = await fetch(uploadUrl, {
+      const startResponse = await fetch(uploadUrl, {
         method: "POST",
-        headers: {
-          "content-type": file.type || "application/octet-stream",
-        },
-        body: file,
       });
-      const result = await response.json().catch(() => ({
-        success: false,
-        message: "The upload ended before Sermon Clip received a normal response.",
-        fieldErrors: { mediaFile: "The upload ended early. Try again or use a YouTube link." },
-      })) as CreateSermonFormState;
+      const startResult = await parseUploadResponse(startResponse);
+      if (!startResponse.ok || !startResult.success || !startResult.createdSermonId) {
+        setUploadState(startResult);
+        return;
+      }
+
+      let uploadedBytes = 0;
+      while (uploadedBytes < file.size) {
+        const nextUploadedBytes = Math.min(uploadedBytes + uploadChunkSize, file.size);
+        const chunkUrl = new URL("/api/sermons/upload", window.location.origin);
+        chunkUrl.searchParams.set("uploadMode", "chunk");
+        chunkUrl.searchParams.set("sermonId", startResult.createdSermonId);
+        chunkUrl.searchParams.set("offset", String(uploadedBytes));
+        chunkUrl.searchParams.set("totalBytes", String(file.size));
+
+        const chunkResponse = await fetch(chunkUrl, {
+          method: "POST",
+          headers: { "content-type": file.type || "application/octet-stream" },
+          body: file.slice(uploadedBytes, nextUploadedBytes),
+        });
+        const chunkResult = await parseUploadResponse(chunkResponse);
+        if (!chunkResponse.ok || !chunkResult.success) {
+          setUploadState(chunkResult);
+          return;
+        }
+
+        uploadedBytes = nextUploadedBytes;
+      }
+
+      const finishUrl = new URL("/api/sermons/upload", window.location.origin);
+      finishUrl.searchParams.set("uploadMode", "finish");
+      finishUrl.searchParams.set("sermonId", startResult.createdSermonId);
+      finishUrl.searchParams.set("totalBytes", String(file.size));
+
+      const finishResponse = await fetch(finishUrl, { method: "POST" });
+      const result = await parseUploadResponse(finishResponse);
 
       setUploadState(result);
-      if (result.success && result.createdSermonId) {
+      if (finishResponse.ok && result.success && result.createdSermonId) {
         window.sessionStorage.removeItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY);
         router.replace(`/sermons/${result.createdSermonId}`);
       }

@@ -47,6 +47,12 @@ Create a `.env` file:
 
 OPENAI_API_KEY=your_key_here
 OPENAI_TRANSCRIPTION_MODEL=whisper-1
+OPENAI_TRANSCRIPTION_ACCURACY_MODEL=gpt-4o-transcribe
+OPENAI_TRANSCRIPTION_DIARIZATION_MODEL=gpt-4o-transcribe-diarize
+OPENAI_TRANSCRIPTION_HYBRID_ENABLED=true
+OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED=true
+OPENAI_TRANSCRIPTION_SPEECH_ENHANCEMENT_ENABLED=false
+OPENAI_TRANSCRIPTION_GLOSSARY=
 OPENAI_CHAT_MODEL=
 OPENAI_CHAT_MAX_ATTEMPTS=3
 OPENAI_CHAT_RETRY_BASE_DELAY_MS=1500
@@ -89,7 +95,7 @@ FACEBOOK_GRAPH_VERSION=v23.0
 FACEBOOK_DEFAULT_PUBLISHED=false
 POSTING_WORKER_DRY_RUN=true
 
-`OPENAI_TRANSCRIPTION_MODEL` defaults to `whisper-1` because the clipping pipeline requires segment timestamps for accurate video boundaries.
+`OPENAI_TRANSCRIPTION_MODEL` stays on `whisper-1` to provide word timestamps. By default, the pipeline also runs `gpt-4o-transcribe` for higher-accuracy wording, aligns that text back onto the Whisper timeline, and runs `gpt-4o-transcribe-diarize` to label the dominant preacher and secondary speakers. Set either feature flag to `false` to reduce transcription cost. `OPENAI_TRANSCRIPTION_GLOSSARY` accepts comma-, semicolon-, or newline-separated names, scripture terms, places, and local-language spellings. The older FFmpeg speech-enhancement retry is disabled by default because production samples consistently performed worse; it can be re-enabled explicitly for controlled evaluation.
 Chat-based AI calls go through the shared AI gateway. Use `OPENAI_CHAT_MODEL` as a global override, or task-specific model variables when clip selection, sermon intelligence, ministry moments, content opportunities, quality review, or completeness review need different cost/quality tradeoffs. AI calls are logged as `AiInvocation` records with request hashes, model names, latency, token counts when available, and failure status; raw prompts are not stored by default.
 `MEDIA_WORKER_HEARTBEAT_SECONDS`, `MEDIA_WORKER_STALE_JOB_MINUTES`, and `MEDIA_WORKER_MAX_ATTEMPTS` control media job leases. A stale `RUNNING` job can be reclaimed by another local worker, then marked failed after the configured claim limit.
 `POSTING_WORKER_DRY_RUN` defaults to true unless explicitly set to `false`, so the worker can be tested without posting.

@@ -7,6 +7,7 @@ export type NormalizedTranscriptSegment = {
   startTimeSeconds: number;
   endTimeSeconds: number;
   text: string;
+  speakerLabel?: string;
   /**
    * Conservative, provider-derived transcription evidence. This is a
    * heuristic built from Whisper diagnostics, not a calibrated probability
@@ -22,6 +23,7 @@ export type NormalizedTranscript = {
   provider: "openai";
   model: string;
   segments: NormalizedTranscriptSegment[];
+  words?: NormalizedWordTimestamp[];
   raw: unknown;
 };
 
@@ -29,6 +31,10 @@ export type OpenAITranscriptionOptions = {
   language?: string;
   prompt?: string;
   model?: string;
+  accuracyModel?: string;
+  diarizationModel?: string;
+  hybrid?: boolean;
+  diarization?: boolean;
   onRetry?: (info: OpenAITranscriptionRetryInfo) => void | Promise<void>;
 };
 
@@ -47,6 +53,7 @@ type OpenAISegmentLike = {
   text?: string;
   avg_logprob?: number | string;
   no_speech_prob?: number | string;
+  speaker?: string;
 };
 
 type OpenAIWordLike = {
@@ -56,10 +63,24 @@ type OpenAIWordLike = {
   text?: string;
 };
 
-type NormalizedWordTimestamp = {
+export type NormalizedWordTimestamp = {
   startTimeSeconds: number;
   endTimeSeconds: number;
   text: string;
+};
+
+type HighAccuracyTranscript = {
+  fullText: string;
+  model: string;
+  confidence?: number;
+  raw: unknown;
+};
+
+type TranscriptAlignment = {
+  segments: NormalizedTranscriptSegment[];
+  matchedAnchorRatio: number;
+  wordCountRatio: number;
+  accepted: boolean;
 };
 
 const MAX_WORD_TIMED_SEGMENT_SECONDS = 4.5;
@@ -73,6 +94,13 @@ const DEFAULT_TRANSCRIPTION_MAX_ATTEMPTS = 4;
 const MAX_TRANSCRIPTION_MAX_ATTEMPTS = 8;
 const DEFAULT_TRANSCRIPTION_RETRY_BASE_DELAY_MS = 2_000;
 const RETRYABLE_STATUS_CODES = new Set([408, 409, 429, 500, 502, 503, 504]);
+const DEFAULT_ACCURACY_TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
+const DEFAULT_DIARIZATION_TRANSCRIPTION_MODEL = "gpt-4o-transcribe-diarize";
+const MIN_ACCURACY_ALIGNMENT_ANCHOR_RATIO = 0.22;
+const MIN_ACCURACY_WORD_COUNT_RATIO = 0.68;
+const MAX_ACCURACY_WORD_COUNT_RATIO = 1.42;
+const ALIGNMENT_LOOKAHEAD_WORDS = 48;
+const MIN_WORDS_FOR_ACCURACY_ALIGNMENT = 8;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -267,11 +295,13 @@ function normalizeSegments(rawSegments: unknown): NormalizedTranscriptSegment[] 
       }
 
       const confidence = deriveWhisperSegmentConfidence(candidate);
+      const speakerLabel = candidate.speaker?.trim();
 
       return {
         startTimeSeconds,
         endTimeSeconds,
         text,
+        ...(speakerLabel ? { speakerLabel } : {}),
         ...(confidence !== undefined ? { confidence } : {}),
       };
     })
@@ -284,6 +314,208 @@ function countWords(text: string): number {
     .split(/\s+/g)
     .filter(Boolean)
     .length;
+}
+
+function resolveBooleanEnv(name: string, fallback: boolean): boolean {
+  const configured = process.env[name]?.trim().toLowerCase();
+  if (!configured) return fallback;
+  if (["1", "true", "yes", "on"].includes(configured)) return true;
+  if (["0", "false", "no", "off"].includes(configured)) return false;
+  return fallback;
+}
+
+function normalizeAlignmentToken(text: string): string {
+  return text
+    .normalize("NFKD")
+    .toLocaleLowerCase("en")
+    .replace(/\p{M}+/gu, "")
+    .replace(/[^\p{L}\p{N}'’]+/gu, "")
+    .replace(/[’']/g, "");
+}
+
+function transcriptTokens(text: string): string[] {
+  return text.trim().match(/\S+/gu) ?? [];
+}
+
+function deriveHighAccuracyConfidence(rawLogprobs: unknown): number | undefined {
+  if (!Array.isArray(rawLogprobs)) return undefined;
+  const values = rawLogprobs
+    .map((entry) => entry && typeof entry === "object" ? normalizeNumber((entry as { logprob?: number | string }).logprob) : null)
+    .filter((value): value is number => value !== null);
+  if (values.length === 0) return undefined;
+  const averageLogProbability = values.reduce((sum, value) => sum + value, 0) / values.length;
+  return Number(Math.exp(Math.max(-20, Math.min(0, averageLogProbability))).toFixed(4));
+}
+
+function findGreedyAlignmentAnchors(
+  accurateTokens: string[],
+  timedWords: NormalizedWordTimestamp[],
+): Array<{ accurateIndex: number; timedIndex: number }> {
+  const normalizedTimed = timedWords.map((word) => normalizeAlignmentToken(word.text));
+  const anchors: Array<{ accurateIndex: number; timedIndex: number }> = [];
+  let nextTimedIndex = 0;
+
+  for (let accurateIndex = 0; accurateIndex < accurateTokens.length && nextTimedIndex < timedWords.length; accurateIndex += 1) {
+    const token = normalizeAlignmentToken(accurateTokens[accurateIndex]);
+    if (!token) continue;
+
+    const searchEnd = Math.min(timedWords.length, nextTimedIndex + ALIGNMENT_LOOKAHEAD_WORDS);
+    let matchedIndex = -1;
+    for (let timedIndex = nextTimedIndex; timedIndex < searchEnd; timedIndex += 1) {
+      if (normalizedTimed[timedIndex] === token) {
+        matchedIndex = timedIndex;
+        break;
+      }
+    }
+
+    if (matchedIndex >= 0) {
+      anchors.push({ accurateIndex, timedIndex: matchedIndex });
+      nextTimedIndex = matchedIndex + 1;
+    }
+  }
+
+  return anchors;
+}
+
+function interpolateAccurateWordTimeline(
+  accurateTokens: string[],
+  timedWords: NormalizedWordTimestamp[],
+  anchors: Array<{ accurateIndex: number; timedIndex: number }>,
+): NormalizedWordTimestamp[] {
+  if (accurateTokens.length === 0 || timedWords.length === 0) return [];
+
+  const anchorByAccurateIndex = new Map(anchors.map((anchor) => [anchor.accurateIndex, anchor.timedIndex]));
+  const sentinels = [
+    { accurateIndex: -1, timedIndex: -1 },
+    ...anchors,
+    { accurateIndex: accurateTokens.length, timedIndex: timedWords.length },
+  ];
+  const result: NormalizedWordTimestamp[] = [];
+  let intervalIndex = 0;
+
+  for (let accurateIndex = 0; accurateIndex < accurateTokens.length; accurateIndex += 1) {
+    while (intervalIndex < sentinels.length - 2 && accurateIndex > sentinels[intervalIndex + 1].accurateIndex) {
+      intervalIndex += 1;
+    }
+
+    const exactTimedIndex = anchorByAccurateIndex.get(accurateIndex);
+    if (typeof exactTimedIndex === "number") {
+      result.push({ ...timedWords[exactTimedIndex], text: accurateTokens[accurateIndex] });
+      continue;
+    }
+
+    const previous = sentinels[intervalIndex];
+    const next = sentinels[intervalIndex + 1];
+    const accurateSpan = Math.max(1, next.accurateIndex - previous.accurateIndex);
+    const progress = (accurateIndex - previous.accurateIndex) / accurateSpan;
+    const projectedTimedIndex = Math.max(
+      0,
+      Math.min(timedWords.length - 1, Math.round(previous.timedIndex + progress * (next.timedIndex - previous.timedIndex))),
+    );
+    const projected = timedWords[projectedTimedIndex];
+    const duration = Math.max(0.04, projected.endTimeSeconds - projected.startTimeSeconds);
+    result.push({
+      startTimeSeconds: projected.startTimeSeconds,
+      endTimeSeconds: projected.startTimeSeconds + duration,
+      text: accurateTokens[accurateIndex],
+    });
+  }
+
+  for (let index = 1; index < result.length; index += 1) {
+    if (result[index].startTimeSeconds < result[index - 1].startTimeSeconds) {
+      result[index].startTimeSeconds = result[index - 1].startTimeSeconds;
+    }
+    if (result[index].endTimeSeconds <= result[index].startTimeSeconds) {
+      result[index].endTimeSeconds = result[index].startTimeSeconds + 0.04;
+    }
+  }
+
+  return result;
+}
+
+function alignHighAccuracyTranscript(input: {
+  accurateText: string;
+  timedWords: NormalizedWordTimestamp[];
+  timingSegments: NormalizedTranscriptSegment[];
+  accuracyConfidence?: number;
+}): TranscriptAlignment {
+  const accurateTokens = transcriptTokens(input.accurateText);
+  const timingWordCount = input.timedWords.length;
+  const wordCountRatio = timingWordCount > 0 ? accurateTokens.length / timingWordCount : 0;
+  const anchors = findGreedyAlignmentAnchors(accurateTokens, input.timedWords);
+  const matchedAnchorRatio = accurateTokens.length > 0 ? anchors.length / accurateTokens.length : 0;
+  const accepted = (
+    accurateTokens.length >= MIN_WORDS_FOR_ACCURACY_ALIGNMENT &&
+    wordCountRatio >= MIN_ACCURACY_WORD_COUNT_RATIO &&
+    wordCountRatio <= MAX_ACCURACY_WORD_COUNT_RATIO &&
+    matchedAnchorRatio >= MIN_ACCURACY_ALIGNMENT_ANCHOR_RATIO
+  );
+
+  if (!accepted) {
+    return {
+      segments: input.timingSegments,
+      matchedAnchorRatio: Number(matchedAnchorRatio.toFixed(4)),
+      wordCountRatio: Number(wordCountRatio.toFixed(4)),
+      accepted: false,
+    };
+  }
+
+  const accurateWords = interpolateAccurateWordTimeline(accurateTokens, input.timedWords, anchors);
+  let segments = wordsToTranscriptSegments(accurateWords);
+  segments = mapProviderConfidenceByOverlap(segments, input.timingSegments);
+  if (typeof input.accuracyConfidence === "number") {
+    const accuracyConfidence = input.accuracyConfidence;
+    segments = segments.map((segment) => ({
+      ...segment,
+      confidence: typeof segment.confidence === "number"
+        ? Number(Math.min(segment.confidence, accuracyConfidence).toFixed(4))
+        : accuracyConfidence,
+    }));
+  }
+
+  return {
+    segments,
+    matchedAnchorRatio: Number(matchedAnchorRatio.toFixed(4)),
+    wordCountRatio: Number(wordCountRatio.toFixed(4)),
+    accepted: true,
+  };
+}
+
+function mapSpeakerLabelsByOverlap(
+  segments: NormalizedTranscriptSegment[],
+  speakerSegments: NormalizedTranscriptSegment[],
+): NormalizedTranscriptSegment[] {
+  if (speakerSegments.length === 0) return segments;
+  return segments.map((segment) => {
+    const overlapBySpeaker = new Map<string, number>();
+    for (const speakerSegment of speakerSegments) {
+      if (!speakerSegment.speakerLabel) continue;
+      const overlap = Math.max(
+        0,
+        Math.min(segment.endTimeSeconds, speakerSegment.endTimeSeconds) -
+          Math.max(segment.startTimeSeconds, speakerSegment.startTimeSeconds),
+      );
+      if (overlap > 0) {
+        overlapBySpeaker.set(speakerSegment.speakerLabel, (overlapBySpeaker.get(speakerSegment.speakerLabel) ?? 0) + overlap);
+      }
+    }
+    const best = [...overlapBySpeaker.entries()].sort((left, right) => right[1] - left[1])[0];
+    return best ? { ...segment, speakerLabel: best[0] } : segment;
+  });
+}
+
+function normalizePrimarySpeakerLabel(segments: NormalizedTranscriptSegment[]): NormalizedTranscriptSegment[] {
+  const durationBySpeaker = new Map<string, number>();
+  for (const segment of segments) {
+    if (!segment.speakerLabel) continue;
+    const duration = Math.max(0, segment.endTimeSeconds - segment.startTimeSeconds);
+    durationBySpeaker.set(segment.speakerLabel, (durationBySpeaker.get(segment.speakerLabel) ?? 0) + duration);
+  }
+  const primarySpeaker = [...durationBySpeaker.entries()].sort((left, right) => right[1] - left[1])[0]?.[0];
+  if (!primarySpeaker) return segments;
+  return segments.map((segment) => segment.speakerLabel
+    ? { ...segment, speakerLabel: segment.speakerLabel === primarySpeaker ? "PRIMARY" : `SECONDARY_${segment.speakerLabel}` }
+    : segment);
 }
 
 function normalizeWords(rawWords: unknown): NormalizedWordTimestamp[] {
@@ -439,6 +671,14 @@ export function resolveOpenAITranscriptionModel(modelOverride?: string): string 
   return modelOverride?.trim() || process.env.OPENAI_TRANSCRIPTION_MODEL?.trim() || "whisper-1";
 }
 
+export function resolveOpenAIAccuracyTranscriptionModel(modelOverride?: string): string {
+  return modelOverride?.trim() || process.env.OPENAI_TRANSCRIPTION_ACCURACY_MODEL?.trim() || DEFAULT_ACCURACY_TRANSCRIPTION_MODEL;
+}
+
+export function resolveOpenAIDiarizationTranscriptionModel(modelOverride?: string): string {
+  return modelOverride?.trim() || process.env.OPENAI_TRANSCRIPTION_DIARIZATION_MODEL?.trim() || DEFAULT_DIARIZATION_TRANSCRIPTION_MODEL;
+}
+
 export function assertTimestampedTranscriptionModel(model: string): void {
   if (model !== "whisper-1") {
     throw new Error(
@@ -515,20 +755,173 @@ export async function transcribeAudioWithOpenAI(
     },
   });
 
-  return {
+  const timingTranscript: NormalizedTranscript = {
     fullText,
     language,
     provider: "openai",
     model,
     segments,
+    words: wordTimestamps,
     raw: response,
   };
+
+  const hybridEnabled = options?.hybrid ?? resolveBooleanEnv("OPENAI_TRANSCRIPTION_HYBRID_ENABLED", true);
+  const diarizationEnabled = options?.diarization ?? resolveBooleanEnv("OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED", true);
+  if (!hybridEnabled && !diarizationEnabled) {
+    return timingTranscript;
+  }
+
+  const accuracyModel = resolveOpenAIAccuracyTranscriptionModel(options?.accuracyModel);
+  const diarizationModel = resolveOpenAIDiarizationTranscriptionModel(options?.diarizationModel);
+  const accuracyPromise = hybridEnabled
+    ? transcribeHighAccuracyText(audioPath, {
+        model: accuracyModel,
+        language: options?.language,
+        prompt: options?.prompt,
+        onRetry: options?.onRetry,
+      })
+    : Promise.resolve(null);
+  const diarizationPromise = diarizationEnabled
+    ? transcribeSpeakerSegments(audioPath, {
+        model: diarizationModel,
+        language: options?.language,
+        onRetry: options?.onRetry,
+      })
+    : Promise.resolve(null);
+  const [accuracyResult, diarizationResult] = await Promise.allSettled([accuracyPromise, diarizationPromise]);
+  const accuracy = accuracyResult.status === "fulfilled" ? accuracyResult.value : null;
+  const speakerSegments = diarizationResult.status === "fulfilled" ? diarizationResult.value : null;
+  const alignment = accuracy && wordTimestamps.length > 0
+    ? alignHighAccuracyTranscript({
+        accurateText: accuracy.fullText,
+        timedWords: wordTimestamps,
+        timingSegments: segments,
+        accuracyConfidence: accuracy.confidence,
+      })
+    : null;
+  const alignedSegments = alignment?.accepted ? alignment.segments : segments;
+  const speakerLabeledSegments = mapSpeakerLabelsByOverlap(alignedSegments, speakerSegments?.segments ?? []);
+  const resolvedFullText = alignment?.accepted
+    ? speakerLabeledSegments.map((segment) => segment.text).join(" ").replace(/\s+/g, " ").trim()
+    : fullText;
+
+  return {
+    ...timingTranscript,
+    fullText: resolvedFullText,
+    model: alignment?.accepted ? `${model}+${accuracyModel}` : model,
+    segments: speakerLabeledSegments,
+    raw: {
+      timing: response,
+      hybrid: {
+        enabled: hybridEnabled,
+        model: accuracyModel,
+        succeeded: accuracyResult.status === "fulfilled" && Boolean(accuracy),
+        error: accuracyResult.status === "rejected" ? getErrorMessage(accuracyResult.reason) : null,
+        alignment,
+        response: accuracy?.raw ?? null,
+      },
+      diarization: {
+        enabled: diarizationEnabled,
+        model: diarizationModel,
+        succeeded: diarizationResult.status === "fulfilled" && Boolean(speakerSegments),
+        error: diarizationResult.status === "rejected" ? getErrorMessage(diarizationResult.reason) : null,
+        segmentCount: speakerSegments?.segments.length ?? 0,
+        response: speakerSegments?.raw ?? null,
+      },
+    },
+  };
+}
+
+async function transcribeHighAccuracyText(
+  audioPath: string,
+  options: Pick<OpenAITranscriptionOptions, "language" | "prompt" | "onRetry"> & { model: string },
+): Promise<HighAccuracyTranscript> {
+  const client = getOpenAiClient("OPENAI_API_KEY is missing. Add it to your environment before transcribing.");
+  const startedAt = Date.now();
+  try {
+    const response = await runTranscriptionRequestWithRetry(
+      () => client.audio.transcriptions.create({
+        model: options.model,
+        file: createReadStream(audioPath),
+        response_format: "json",
+        include: ["logprobs"],
+        temperature: 0,
+        ...(options.language ? { language: options.language } : {}),
+        ...(options.prompt ? { prompt: options.prompt } : {}),
+      }),
+      { onRetry: options.onRetry },
+    );
+    const fullText = response.text.trim();
+    const confidence = deriveHighAccuracyConfidence(response.logprobs);
+    await recordAiInvocation({
+      operation: "transcription_accuracy",
+      model: options.model,
+      status: "SUCCEEDED",
+      latencyMs: Date.now() - startedAt,
+      metadata: { textCharacters: fullText.length, confidence: confidence ?? null, promptProvided: Boolean(options.prompt) },
+    });
+    return { fullText, model: options.model, confidence, raw: response };
+  } catch (error) {
+    await recordAiInvocation({
+      operation: "transcription_accuracy",
+      model: options.model,
+      status: "FAILED",
+      latencyMs: Date.now() - startedAt,
+      errorMessage: getErrorMessage(error),
+      metadata: { promptProvided: Boolean(options.prompt) },
+    });
+    throw error;
+  }
+}
+
+async function transcribeSpeakerSegments(
+  audioPath: string,
+  options: Pick<OpenAITranscriptionOptions, "language" | "onRetry"> & { model: string },
+): Promise<{ segments: NormalizedTranscriptSegment[]; raw: unknown }> {
+  const client = getOpenAiClient("OPENAI_API_KEY is missing. Add it to your environment before transcribing.");
+  const startedAt = Date.now();
+  try {
+    const response = await runTranscriptionRequestWithRetry(
+      () => client.audio.transcriptions.create({
+        model: options.model,
+        file: createReadStream(audioPath),
+        response_format: "diarized_json",
+        chunking_strategy: "auto",
+        ...(options.language ? { language: options.language } : {}),
+      }),
+      { onRetry: options.onRetry },
+    );
+    const speakerSegments = normalizePrimarySpeakerLabel(
+      normalizeSegments((response as { segments?: unknown }).segments),
+    );
+    await recordAiInvocation({
+      operation: "transcription_diarization",
+      model: options.model,
+      status: "SUCCEEDED",
+      latencyMs: Date.now() - startedAt,
+      metadata: { segmentCount: speakerSegments.length },
+    });
+    return { segments: speakerSegments, raw: response };
+  } catch (error) {
+    await recordAiInvocation({
+      operation: "transcription_diarization",
+      model: options.model,
+      status: "FAILED",
+      latencyMs: Date.now() - startedAt,
+      errorMessage: getErrorMessage(error),
+    });
+    throw error;
+  }
 }
 
 export const __openAITranscriptionProviderTestUtils = {
   deriveWhisperSegmentConfidence,
   isRetryableOpenAITranscriptionError,
   mapProviderConfidenceByOverlap,
+  mapSpeakerLabelsByOverlap,
+  normalizePrimarySpeakerLabel,
+  alignHighAccuracyTranscript,
+  deriveHighAccuracyConfidence,
   normalizeSegments,
   normalizeWords,
   runTranscriptionRequestWithRetry,

@@ -134,6 +134,7 @@ type TranscriptSegmentRecord = {
   endTimeSeconds: number;
   text: string;
   confidence?: number | null;
+  speakerLabel?: string | null;
 };
 
 const WINDOW_STEP_SECONDS = 60;
@@ -428,6 +429,18 @@ function assessClipWindowQuality(
   const repeatRatio = repeatedSegmentRatio(segments);
   const coherence = analyzeClipCoherence(transcriptText);
   const transcriptEvidence = analyzeMultilingualTranscript(segments);
+  const labeledSegments = segments.filter((segment) => Boolean(segment.speakerLabel));
+  const labeledDuration = labeledSegments.reduce(
+    (total, segment) => total + Math.max(0, segment.endTimeSeconds - segment.startTimeSeconds),
+    0,
+  );
+  const primarySpeakerDuration = labeledSegments
+    .filter((segment) => segment.speakerLabel === "PRIMARY")
+    .reduce((total, segment) => total + Math.max(0, segment.endTimeSeconds - segment.startTimeSeconds), 0);
+  const primarySpeakerRatio = labeledDuration > 0 ? primarySpeakerDuration / labeledDuration : 1;
+  const speakerTransitionCount = labeledSegments.slice(1).reduce((count, segment, index) => (
+    segment.speakerLabel !== labeledSegments[index].speakerLabel ? count + 1 : count
+  ), 0);
   const localLanguageSemanticsNeedReview =
     transcriptEvidence.languageProfile === "NGUNI_LOCAL" ||
     transcriptEvidence.languageProfile === "SOTHO_TSWANA" ||
@@ -442,6 +455,9 @@ function assessClipWindowQuality(
   if (distinctSermonTokenCount < MIN_WINDOW_SERMON_TOKENS) warnings.push("LOW_WINDOW_DISTINCT_SERMON_SUBSTANCE");
   if (repeatRatio > 0.28) warnings.push("REPETITIVE_WINDOW");
   if (durationSeconds < MIN_WINDOW_SECONDS || durationSeconds > 150) warnings.push("WINDOW_DURATION_OUT_OF_RANGE");
+  if (labeledDuration > 0 && (primarySpeakerRatio < 0.6 || speakerTransitionCount >= 3)) {
+    warnings.push("WINDOW_MULTI_SPEAKER_DOMINANT");
+  }
 
   const hasLanding = hasSpokenMinistryLanding(transcriptText);
   const setupOnly = hasSetupLanguage(transcriptText) || coherence.setupOnly;
@@ -477,12 +493,22 @@ function assessClipWindowQuality(
   const densityScore = Math.min(10, Math.max(1, wordCount / 10));
   const distinctScore = Math.min(10, Math.max(1, distinctSermonTokenCount / 3));
   const repairPenalty = windowEligibility === "REPAIRABLE" ? 0.6 : windowEligibility === "REJECTED" ? 2.2 : 0;
+  const confidencePenalty = transcriptEvidence.confidenceBand === "LOW"
+    ? 1.1
+    : transcriptEvidence.confidenceBand === "REVIEW"
+      ? 0.35
+      : 0;
+  const speakerPenalty = labeledDuration > 0
+    ? Math.min(1.4, (1 - primarySpeakerRatio) * 1.8 + speakerTransitionCount * 0.18)
+    : 0;
   const windowQualityScore = Number(Math.max(1, Math.min(10, (
     densityScore * 0.18 +
     distinctScore * 0.18 +
     openingScore * 0.24 +
     payoffScore * 0.4 -
-    repairPenalty
+    repairPenalty -
+    confidencePenalty -
+    speakerPenalty
   ))).toFixed(2));
 
   return {
@@ -2044,7 +2070,8 @@ function formatSegmentLine(segment: TranscriptSegmentRecord): string {
   const confidenceNote = typeof segment.confidence === "number" && segment.confidence < 0.78
     ? " [wording confidence needs review]"
     : "";
-  return `[${segment.startTimeSeconds.toFixed(1)} - ${segment.endTimeSeconds.toFixed(1)}]${confidenceNote} ${segment.text.trim()}`;
+  const speakerNote = segment.speakerLabel ? ` [speaker: ${segment.speakerLabel}]` : "";
+  return `[${segment.startTimeSeconds.toFixed(1)} - ${segment.endTimeSeconds.toFixed(1)}]${speakerNote}${confidenceNote} ${segment.text.trim()}`;
 }
 
 function countTranscriptWords(text: string): number {
@@ -2640,6 +2667,7 @@ export async function generateClipSuggestions(
         endTimeSeconds: true,
         text: true,
         confidence: true,
+        speakerLabel: true,
       },
     });
 

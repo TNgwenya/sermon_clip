@@ -1,6 +1,7 @@
-import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import type { SermonStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import {
@@ -37,6 +38,35 @@ import { invalidateTranscriptDerivedClipWork } from "@/server/agents/transcriptC
 type TranscribeOptions = {
   force?: boolean;
 };
+
+const TRANSCRIBED_OR_LATER_STATUSES: ReadonlySet<SermonStatus> = new Set([
+  "TRANSCRIBED",
+  "GENERATING_CLIPS",
+  "CLIPS_GENERATED",
+  "REVIEWING",
+  "EXPORTING",
+  "EXPORTED",
+]);
+
+async function markSermonTranscribedUnlessAdvanced(sermonId: string): Promise<void> {
+  const sermon = await prisma.sermon.findUnique({
+    where: { id: sermonId },
+    select: { status: true },
+  });
+
+  if (!sermon) {
+    throw new Error(`Sermon ${sermonId} not found.`);
+  }
+
+  if (TRANSCRIBED_OR_LATER_STATUSES.has(sermon.status)) {
+    if (sermon.status !== "TRANSCRIBED") {
+      await appendPipelineLog(sermonId, `Transcript status update skipped because sermon is already ${sermon.status}.`);
+    }
+    return;
+  }
+
+  await updateSermonStatus(sermonId, "TRANSCRIBED");
+}
 
 function buildOpenAITranscriptionRetryLogger(
   sermonId: string,
@@ -82,6 +112,7 @@ type CachedChunkTranscriptPayload = {
   bytes: number;
   durationSeconds: number | null;
   languageCode: string | null;
+  configurationKey: string;
   transcript: NormalizedTranscript;
 };
 
@@ -129,9 +160,14 @@ const CHUNK_DURATION_SECONDS = 20 * 60;
 const LOCAL_LANGUAGE_CHUNK_DURATION_SECONDS = 5 * 60;
 const CHUNK_FOLDER_NAME = "chunks";
 const CHUNK_TRANSCRIPT_CACHE_FOLDER_NAME = "chunk-transcripts";
-const CHUNK_TRANSCRIPT_CACHE_VERSION = 4;
+const CHUNK_TRANSCRIPT_CACHE_VERSION = 5;
 const TRANSCRIPTION_CONTEXT_WORDS = 70;
 const SPEECH_ENHANCED_AUDIO_NAME = "speech-enhanced-audio.mp3";
+const TRANSCRIPTION_CHUNK_MANIFEST_VERSION = 1;
+const TRANSCRIPTION_CHUNK_MANIFEST_NAME = "chunk-manifest.json";
+const TRANSCRIPTION_CHUNK_OVERLAP_SECONDS = 3;
+const TRANSCRIPTION_SILENCE_SEARCH_SECONDS = 45;
+const TRANSCRIPTION_SILENCE_MIN_DURATION_SECONDS = 0.45;
 const MAX_CONSECUTIVE_DUPLICATE_TRANSCRIPT_SEGMENTS = 1;
 const CHUNK_SEAM_DUPLICATE_LOOKBACK_SEGMENTS = 3;
 const CHUNK_SEAM_DUPLICATE_MAX_GAP_SECONDS = 12;
@@ -166,6 +202,20 @@ type TranscriptionPromptContext = {
   sermonTitle?: string | null;
   speakerName?: string | null;
   churchName?: string | null;
+};
+
+type TranscriptionChunkManifest = {
+  version: typeof TRANSCRIPTION_CHUNK_MANIFEST_VERSION;
+  sourceBytes: number;
+  sourceDurationSeconds: number;
+  targetDurationSeconds: number;
+  overlapSeconds: number;
+  silenceAware: boolean;
+  chunks: Array<{
+    fileName: string;
+    startTimeSeconds: number;
+    endTimeSeconds: number;
+  }>;
 };
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -261,8 +311,20 @@ function isCachedChunkTranscriptPayload(value: unknown): value is CachedChunkTra
     typeof payload.bytes === "number" &&
     (typeof payload.durationSeconds === "number" || payload.durationSeconds === null) &&
     (typeof payload.languageCode === "string" || payload.languageCode === null) &&
+    typeof payload.configurationKey === "string" &&
     isNormalizedTranscriptLike(payload.transcript)
   );
+}
+
+function transcriptionConfigurationKey(): string {
+  return [
+    process.env.OPENAI_TRANSCRIPTION_MODEL?.trim() || "whisper-1",
+    process.env.OPENAI_TRANSCRIPTION_ACCURACY_MODEL?.trim() || "gpt-4o-transcribe",
+    process.env.OPENAI_TRANSCRIPTION_DIARIZATION_MODEL?.trim() || "gpt-4o-transcribe-diarize",
+    process.env.OPENAI_TRANSCRIPTION_HYBRID_ENABLED?.trim().toLowerCase() || "true",
+    process.env.OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED?.trim().toLowerCase() || "true",
+    process.env.OPENAI_TRANSCRIPTION_GLOSSARY?.trim() || "",
+  ].join("|");
 }
 
 function buildTranscriptSegmentRecord(input: {
@@ -277,6 +339,7 @@ function buildTranscriptSegmentRecord(input: {
     endTimeSeconds: input.segment.endTimeSeconds,
     text: input.segment.text,
     confidence: input.segment.confidence ?? null,
+    speakerLabel: input.segment.speakerLabel ?? null,
   };
 }
 
@@ -377,6 +440,7 @@ function buildChunkTranscriptCachePayload(input: {
     bytes: input.bytes,
     durationSeconds: input.durationSeconds,
     languageCode: input.languageCode ?? null,
+    configurationKey: transcriptionConfigurationKey(),
     transcript: input.transcript,
   };
 }
@@ -444,6 +508,7 @@ async function readCachedChunkTranscript(input: {
     parsed.chunkFileName !== path.basename(input.chunkPath) ||
     parsed.bytes !== input.bytes ||
     parsed.languageCode !== expectedLanguageCode ||
+    parsed.configurationKey !== transcriptionConfigurationKey() ||
     !durationMatches
   ) {
     return null;
@@ -541,8 +606,14 @@ function buildTranscriptionPromptContext(context?: TranscriptionPromptContext): 
   const speakerName = normalizePromptContextValue(context?.speakerName);
   const churchName = normalizePromptContextValue(context?.churchName);
   const expectedTerms = Array.from(new Set([sermonTitle, speakerName, churchName].filter((value): value is string => Boolean(value))));
-  return expectedTerms.length > 0
-    ? [`Known sermon terms: ${expectedTerms.join(", ")}.`]
+  const configuredGlossary = process.env.OPENAI_TRANSCRIPTION_GLOSSARY
+    ?.split(/[,;\n]+/g)
+    .map((value) => normalizePromptContextValue(value))
+    .filter((value): value is string => Boolean(value))
+    .slice(0, 40) ?? [];
+  const glossaryTerms = Array.from(new Set([...expectedTerms, ...configuredGlossary]));
+  return glossaryTerms.length > 0
+    ? [`Known sermon terms: ${glossaryTerms.join(", ")}. Spell them exactly when spoken.`]
     : [];
 }
 
@@ -550,6 +621,7 @@ function buildWhisperPromptContext(intendedLanguage: string, context?: Transcrip
   return [
     `Languages spoken may include: ${intendedLanguage}. Preserve the spoken language changes rather than translating them.`,
     "Christian sermon, scripture, Bible verses, prayer, worship, altar call, Jesus, Amen, Hallelujah.",
+    "Use natural sentence punctuation. Keep scripture references, personal names, place names, and local-language spelling faithful to the audio.",
     ...buildTranscriptionPromptContext(context),
   ];
 }
@@ -689,6 +761,11 @@ function offsetTranscriptTimeline(
   return {
     ...transcript,
     segments: offsetChunkTranscriptSegments(transcript.segments, timelineOffsetSeconds),
+    words: transcript.words?.map((word) => ({
+      ...word,
+      startTimeSeconds: Number((word.startTimeSeconds + timelineOffsetSeconds).toFixed(3)),
+      endTimeSeconds: Number((word.endTimeSeconds + timelineOffsetSeconds).toFixed(3)),
+    })),
     raw: {
       ...(transcript.raw && typeof transcript.raw === "object" ? transcript.raw : {}),
       timelineOffsetSeconds,
@@ -923,6 +1000,7 @@ function resolveManualTranscriptionWindow(
 function assessReusableTranscriptForClipping(input: {
   transcriptExists: boolean;
   transcriptJsonExists: boolean;
+  transcriptConfigurationMatches?: boolean;
   segments: NormalizedTranscript["segments"];
   expectedDurationSeconds?: number | null;
   window?: SermonSegmentWindowInput | null;
@@ -933,6 +1011,10 @@ function assessReusableTranscriptForClipping(input: {
 
   if (!input.transcriptJsonExists) {
     return { reusable: false, reason: "Saved transcript JSON file is missing." };
+  }
+
+  if (input.transcriptConfigurationMatches === false) {
+    return { reusable: false, reason: "Saved transcript was produced by an older transcription configuration." };
   }
 
   if (input.segments.length === 0) {
@@ -1020,6 +1102,12 @@ async function getReusableTranscriptDecision(sermonId: string, transcriptJsonPat
   }
 
   const transcriptJsonExists = await fileExists(transcriptJsonPath);
+  const transcriptConfigurationMatches = transcriptJsonExists
+    ? await readFile(transcriptJsonPath, "utf8")
+        .then((value) => JSON.parse(value) as { transcriptionConfigurationKey?: unknown })
+        .then((payload) => payload.transcriptionConfigurationKey === transcriptionConfigurationKey())
+        .catch(() => false)
+    : false;
   const segments = await prisma.transcriptSegment.findMany({
     where: { sermonId },
     orderBy: { startTimeSeconds: "asc" },
@@ -1027,13 +1115,22 @@ async function getReusableTranscriptDecision(sermonId: string, transcriptJsonPat
       startTimeSeconds: true,
       endTimeSeconds: true,
       text: true,
+      speakerLabel: true,
+      confidence: true,
     },
   });
 
   return assessReusableTranscriptForClipping({
     transcriptExists: true,
     transcriptJsonExists,
-    segments,
+    transcriptConfigurationMatches,
+    segments: segments.map((segment) => ({
+      startTimeSeconds: segment.startTimeSeconds,
+      endTimeSeconds: segment.endTimeSeconds,
+      text: segment.text,
+      ...(segment.speakerLabel ? { speakerLabel: segment.speakerLabel } : {}),
+      ...(typeof segment.confidence === "number" ? { confidence: segment.confidence } : {}),
+    })),
     expectedDurationSeconds: sermon
       ? resolveExpectedTranscriptDurationSeconds({
           sermonStartSeconds: sermon.sermonStartSeconds,
@@ -1088,68 +1185,175 @@ async function checkFfmpegInstalled(binaryPath?: string): Promise<void> {
   });
 }
 
+function buildSilenceAwareChunkSpecs(input: {
+  sourceDurationSeconds: number;
+  targetDurationSeconds: number;
+  silenceCentersSeconds: number[];
+  overlapSeconds?: number;
+}): TranscriptionChunkManifest["chunks"] {
+  const overlapSeconds = input.overlapSeconds ?? TRANSCRIPTION_CHUNK_OVERLAP_SECONDS;
+  const boundaries = [0];
+  for (
+    let target = input.targetDurationSeconds;
+    target < input.sourceDurationSeconds;
+    target += input.targetDurationSeconds
+  ) {
+    const nearestSilence = input.silenceCentersSeconds
+      .filter((center) => Math.abs(center - target) <= TRANSCRIPTION_SILENCE_SEARCH_SECONDS)
+      .sort((left, right) => Math.abs(left - target) - Math.abs(right - target))[0];
+    const boundary = nearestSilence ?? target;
+    if (boundary - boundaries[boundaries.length - 1] >= Math.min(60, input.targetDurationSeconds * 0.5)) {
+      boundaries.push(Number(boundary.toFixed(3)));
+    }
+  }
+  boundaries.push(Number(input.sourceDurationSeconds.toFixed(3)));
+
+  return boundaries.slice(0, -1).map((boundary, index) => ({
+    fileName: `chunk-${String(index).padStart(3, "0")}.mp3`,
+    startTimeSeconds: Number(Math.max(0, boundary - (index > 0 ? overlapSeconds : 0)).toFixed(3)),
+    endTimeSeconds: Number(Math.min(
+      input.sourceDurationSeconds,
+      boundaries[index + 1] + (index < boundaries.length - 2 ? overlapSeconds : 0),
+    ).toFixed(3)),
+  }));
+}
+
 async function runFfmpegChunking(
   sermonId: string,
   sourceAudioPath: string,
-  chunkPatternPath: string,
+  chunkDirectory: string,
   chunkDurationSeconds = CHUNK_DURATION_SECONDS,
   binaryPath?: string,
-): Promise<void> {
+): Promise<TranscriptionChunkManifest> {
   const command = ffmpegCommand(binaryPath);
-  const args = [
-    "-y",
-    "-i",
-    sourceAudioPath,
-    "-f",
-    "segment",
-    "-segment_time",
-    String(chunkDurationSeconds),
-    "-reset_timestamps",
-    "1",
-    "-ac",
-    "1",
-    "-ar",
-    "16000",
-    "-codec:a",
-    "libmp3lame",
-    "-b:a",
-    "96k",
-    chunkPatternPath,
-  ];
+  const sourceInfo = await stat(sourceAudioPath);
+  const sourceDurationSeconds = await getMediaDurationSeconds(sourceAudioPath);
+
+  const silenceOutput = await new Promise<string>((resolve) => {
+    const child = spawn(command, [
+      "-hide_banner",
+      "-nostats",
+      "-i",
+      sourceAudioPath,
+      "-af",
+      `silencedetect=noise=-35dB:d=${TRANSCRIPTION_SILENCE_MIN_DURATION_SECONDS}`,
+      "-f",
+      "null",
+      "-",
+    ], { stdio: ["ignore", "ignore", "pipe"], shell: false });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.on("error", () => resolve(""));
+    child.on("close", () => resolve(stderr));
+  });
+  const silenceStarts = [...silenceOutput.matchAll(/silence_start:\s*(-?\d+(?:\.\d+)?)/gi)]
+    .map((match) => Number(match[1]));
+  const silenceEnds = [...silenceOutput.matchAll(/silence_end:\s*(-?\d+(?:\.\d+)?)/gi)]
+    .map((match) => Number(match[1]));
+  const silenceCenters = silenceStarts
+    .map((start, index) => {
+      const end = silenceEnds[index];
+      return Number.isFinite(end) && end > start ? (start + end) / 2 : null;
+    })
+    .filter((value): value is number => value !== null);
+
+  const chunks = buildSilenceAwareChunkSpecs({
+    sourceDurationSeconds,
+    targetDurationSeconds: chunkDurationSeconds,
+    silenceCentersSeconds: silenceCenters,
+  });
 
   await appendPipelineLog(
     sermonId,
-    `Running FFmpeg chunking for oversized transcription input: ${sourceAudioPath} (${chunkDurationSeconds}s chunks).`,
+    `Running silence-aware FFmpeg chunking for oversized transcription input: ${sourceAudioPath} (${chunkDurationSeconds}s target, ${TRANSCRIPTION_CHUNK_OVERLAP_SECONDS}s overlap, ${silenceCenters.length} pause candidate(s)).`,
   );
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
+  for (const chunk of chunks) {
+    const outputPath = path.join(chunkDirectory, chunk.fileName);
+    const durationSeconds = chunk.endTimeSeconds - chunk.startTimeSeconds;
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(command, [
+        "-y",
+        "-ss",
+        String(chunk.startTimeSeconds),
+        "-t",
+        String(durationSeconds),
+        "-i",
+        sourceAudioPath,
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-codec:a",
+        "libmp3lame",
+        "-b:a",
+        "96k",
+        outputPath,
+      ], { stdio: ["ignore", "ignore", "pipe"], shell: false });
+      let stderr = "";
+      child.stderr.on("data", (data) => { stderr += String(data); });
+      child.on("error", (error) => reject(new Error(`Failed to start FFmpeg for chunking: ${error.message}`)));
+      child.on("close", (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`FFmpeg chunking failed with code ${code ?? "unknown"}. ${stderr.trim().slice(-1500)}`.trim()));
+      });
     });
+  }
 
-    let stderr = "";
+  const manifest: TranscriptionChunkManifest = {
+    version: TRANSCRIPTION_CHUNK_MANIFEST_VERSION,
+    sourceBytes: sourceInfo.size,
+    sourceDurationSeconds: Number(sourceDurationSeconds.toFixed(3)),
+    targetDurationSeconds: chunkDurationSeconds,
+    overlapSeconds: TRANSCRIPTION_CHUNK_OVERLAP_SECONDS,
+    silenceAware: true,
+    chunks,
+  };
+  await writeFile(path.join(chunkDirectory, TRANSCRIPTION_CHUNK_MANIFEST_NAME), JSON.stringify(manifest, null, 2), "utf8");
+  return manifest;
+}
 
-    child.stderr.on("data", (chunk) => {
-      const text = String(chunk);
-      stderr += text;
-      void appendPipelineLog(sermonId, `[ffmpeg chunking] ${text.trimEnd()}`);
-    });
+function isTranscriptionChunkManifest(value: unknown): value is TranscriptionChunkManifest {
+  if (!value || typeof value !== "object") return false;
+  const manifest = value as Partial<TranscriptionChunkManifest>;
+  return (
+    manifest.version === TRANSCRIPTION_CHUNK_MANIFEST_VERSION &&
+    typeof manifest.sourceBytes === "number" &&
+    typeof manifest.sourceDurationSeconds === "number" &&
+    typeof manifest.targetDurationSeconds === "number" &&
+    typeof manifest.overlapSeconds === "number" &&
+    manifest.silenceAware === true &&
+    Array.isArray(manifest.chunks) &&
+    manifest.chunks.every((chunk) => (
+      typeof chunk?.fileName === "string" &&
+      typeof chunk.startTimeSeconds === "number" &&
+      typeof chunk.endTimeSeconds === "number" &&
+      chunk.endTimeSeconds > chunk.startTimeSeconds
+    ))
+  );
+}
 
-    child.on("error", (error) => {
-      reject(new Error(`Failed to start FFmpeg for chunking: ${error.message}`));
-    });
-
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-
-      const details = stderr.trim().slice(-1500);
-      reject(new Error(`FFmpeg chunking failed with code ${code ?? "unknown"}. ${details}`.trim()));
-    });
-  });
+async function readReusableChunkManifest(input: {
+  chunkDir: string;
+  sourceAudioPath: string;
+  targetDurationSeconds: number;
+}): Promise<TranscriptionChunkManifest | null> {
+  const manifestPath = path.join(input.chunkDir, TRANSCRIPTION_CHUNK_MANIFEST_NAME);
+  const parsed = await readFile(manifestPath, "utf8").then((value) => JSON.parse(value) as unknown).catch(() => null);
+  if (!isTranscriptionChunkManifest(parsed)) return null;
+  const sourceInfo = await stat(input.sourceAudioPath);
+  const sourceDurationSeconds = await getMediaDurationSeconds(input.sourceAudioPath);
+  if (
+    parsed.sourceBytes !== sourceInfo.size ||
+    Math.abs(parsed.sourceDurationSeconds - sourceDurationSeconds) > 0.75 ||
+    parsed.targetDurationSeconds !== input.targetDurationSeconds ||
+    parsed.overlapSeconds !== TRANSCRIPTION_CHUNK_OVERLAP_SECONDS
+  ) {
+    return null;
+  }
+  const filesExist = await Promise.all(parsed.chunks.map((chunk) => fileExists(path.join(input.chunkDir, chunk.fileName))));
+  return filesExist.every(Boolean) ? parsed : null;
 }
 
 async function runFfmpegSpeechEnhancement(
@@ -1453,6 +1657,11 @@ function shouldRetryWithSpeechEnhancedAudio(
   return false;
 }
 
+function speechEnhancedRetryEnabled(): boolean {
+  const configured = process.env.OPENAI_TRANSCRIPTION_SPEECH_ENHANCEMENT_ENABLED?.trim().toLowerCase();
+  return configured ? ["1", "true", "yes", "on"].includes(configured) : false;
+}
+
 function selectBestTranscriptAttempt(
   attempts: AssessedTranscriptAttempt[],
   context?: TranscriptReliabilityContext,
@@ -1493,18 +1702,25 @@ async function transcribeAudioWithChunking(
 
   await checkFfmpegInstalled();
 
-  const chunkPatternPath = path.join(chunkDir, "chunk-%03d.mp3");
+  let chunkManifest = await readReusableChunkManifest({
+    chunkDir,
+    sourceAudioPath: audioPath,
+    targetDurationSeconds: chunkDurationSeconds,
+  });
   const existingBeforeChunking = (await readdir(chunkDir).catch(() => []))
     .filter((entry) => entry.endsWith(".mp3"))
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
-  if (existingBeforeChunking.length > 0) {
+  if (chunkManifest && existingBeforeChunking.length > 0) {
     await appendPipelineLog(
       sermonId,
-      `Reusing ${existingBeforeChunking.length} existing transcription chunk file(s) for resume${legacyRootChunkDirectory ? " from the legacy chunk folder" : ""}. Delete the matching transcript chunks folder to force re-chunking.`,
+      `Reusing ${existingBeforeChunking.length} silence-aware overlapping transcription chunk file(s) for resume${legacyRootChunkDirectory ? " from the legacy chunk folder" : ""}.`,
     );
   } else {
-    await runFfmpegChunking(sermonId, audioPath, chunkPatternPath, chunkDurationSeconds);
+    for (const fileName of existingBeforeChunking) {
+      await unlink(path.join(chunkDir, fileName)).catch(() => undefined);
+    }
+    chunkManifest = await runFfmpegChunking(sermonId, audioPath, chunkDir, chunkDurationSeconds);
   }
 
   const files = await readdir(chunkDir);
@@ -1562,16 +1778,17 @@ async function transcribeAudioWithChunking(
     }
   }
 
-  const chunkTimeline = buildCumulativeChunkTimelineOffsets(chunkDurationsSeconds, chunkDurationSeconds);
-  if (chunkTimeline.fallbackCount > 0) {
+  const legacyChunkTimeline = buildCumulativeChunkTimelineOffsets(chunkDurationsSeconds, chunkDurationSeconds);
+  if (!chunkManifest && legacyChunkTimeline.fallbackCount > 0) {
     await appendPipelineLog(
       sermonId,
-      `Used nominal chunk duration fallback for ${chunkTimeline.fallbackCount} transcription chunk offset(s).`,
+      `Used nominal chunk duration fallback for ${legacyChunkTimeline.fallbackCount} transcription chunk offset(s).`,
     );
   }
 
   let mergedSegments: NormalizedTranscript["segments"] = [];
   const chunkSummaries: ChunkTimelineSummary[] = [];
+  const chunkModels = new Set<string>();
   let language: string | undefined;
   let previousTranscriptTail: string | null = null;
 
@@ -1648,8 +1865,14 @@ async function transcribeAudioWithChunking(
     if (!language && chunkTranscript.language) {
       language = chunkTranscript.language;
     }
+    chunkModels.add(chunkTranscript.model);
 
-    const timelineOffsetSeconds = timelineBaseOffsetSeconds + (chunkTimeline.offsets[index] ?? getChunkTimelineOffsetSeconds(index, chunkDurationSeconds));
+    const manifestChunk = chunkManifest?.chunks.find((chunk) => chunk.fileName === path.basename(chunkPath));
+    const timelineOffsetSeconds = timelineBaseOffsetSeconds + (
+      manifestChunk?.startTimeSeconds ??
+      legacyChunkTimeline.offsets[index] ??
+      getChunkTimelineOffsetSeconds(index, chunkDurationSeconds)
+    );
     const shiftedSegments = offsetChunkTranscriptSegments(chunkTranscript.segments, timelineOffsetSeconds);
     const merged = mergeChunkTranscriptSegments(mergedSegments, shiftedSegments);
     if (merged.removedDuplicateCount > 0) {
@@ -1677,7 +1900,7 @@ async function transcribeAudioWithChunking(
     fullText: mergedSegments.map((segment) => segment.text.trim()).join(" ").trim(),
     language,
     provider: "openai",
-    model: "chunked-openai",
+    model: chunkModels.size > 0 ? `chunked:${Array.from(chunkModels).join(",")}` : "chunked-openai",
     segments: mergedSegments,
     raw: {
       chunking: {
@@ -1685,6 +1908,8 @@ async function transcribeAudioWithChunking(
         used: true,
         chunkDurationSeconds: CHUNK_DURATION_SECONDS,
         effectiveChunkDurationSeconds: chunkDurationSeconds,
+        silenceAware: chunkManifest?.silenceAware ?? false,
+        overlapSeconds: chunkManifest?.overlapSeconds ?? 0,
         chunkCount: existingChunkFiles.length,
         cacheHitCount: chunkSummaries.filter((chunk) => chunk.cacheHit).length,
         timelineBaseOffsetSeconds,
@@ -1737,7 +1962,7 @@ export async function transcribeSermonAudio(
         where: { id: sermon.id },
         data: { transcriptJsonPath },
       });
-      await updateSermonStatus(sermon.id, "TRANSCRIBED");
+      await markSermonTranscribedUnlessAdvanced(sermon.id);
       await markJobSucceeded(job.id, `Existing transcript and segments reused; skipped API call. ${reusableTranscript.reason}`);
       await appendPipelineLog(sermon.id, `Existing transcript and segments reused; skipped API call. ${reusableTranscript.reason}`);
 
@@ -1864,7 +2089,10 @@ export async function transcribeSermonAudio(
       expectedDurationSeconds: originalExpectedDurationSeconds,
     });
 
-    if (shouldRetryWithSpeechEnhancedAudio(originalQuality, { expectedDurationSeconds: originalExpectedDurationSeconds })) {
+    if (
+      speechEnhancedRetryEnabled() &&
+      shouldRetryWithSpeechEnhancedAudio(originalQuality, { expectedDurationSeconds: originalExpectedDurationSeconds })
+    ) {
 	      const enhancedAudioPath = path.join(getSermonStoragePath(sermon.id), "transcript", SPEECH_ENHANCED_AUDIO_NAME);
 	      await appendJobLog(
 	        job.id,
@@ -1972,6 +2200,7 @@ export async function transcribeSermonAudio(
       : transcriptWindowed.transcript.language ?? "unknown";
 
     const rawPayload = {
+      transcriptionConfigurationKey: transcriptionConfigurationKey(),
       provider: normalizedTranscript.provider,
       model: normalizedTranscript.model,
       language: storedTranscriptLanguage,
@@ -2058,7 +2287,7 @@ export async function transcribeSermonAudio(
       segments: transcriptWindowed.transcript.segments,
     });
 
-    await updateSermonStatus(sermon.id, "TRANSCRIBED");
+    await markSermonTranscribedUnlessAdvanced(sermon.id);
     await markJobSucceeded(
       job.id,
       `Transcription saved with ${transcriptWindowed.transcript.segments.length} timestamped segments. Readiness: ${
@@ -2100,6 +2329,7 @@ export const __transcriptionTestUtils = {
   buildTranscriptSegmentRecord,
   buildSpeechEnhancedAudioArgs,
   buildCumulativeChunkTimelineOffsets,
+  buildSilenceAwareChunkSpecs,
   cleanupTranscriptForClipping,
   getChunkTimelineOffsetSeconds,
   getTranscriptTail,
@@ -2117,6 +2347,7 @@ export const __transcriptionTestUtils = {
   isDegradedTranscriptUsableForLocalMultilingualClipping,
   isTranscriptReliableEnoughForClipping,
   shouldRetryWithSpeechEnhancedAudio,
+  speechEnhancedRetryEnabled,
   transcriptQualityScore,
   writeCachedChunkTranscript,
 };

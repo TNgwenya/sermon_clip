@@ -1,4 +1,8 @@
-import { rename, unlink, writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { rename, stat, unlink } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
@@ -29,6 +33,27 @@ export const runtime = "nodejs";
 
 function getUploadedSourceTempPath(sourceVideoPath: string): string {
   return sourceVideoPath.replace(/\.mp4$/i, ".upload.partial.mp4");
+}
+
+async function streamRequestBodyToFile(request: Request, filePath: string, flags: "w" | "a" = "w"): Promise<number> {
+  if (!request.body) {
+    throw new Error("The upload request did not include a readable file body.");
+  }
+
+  await pipeline(Readable.fromWeb(request.body as unknown as NodeReadableStream), createWriteStream(filePath, { flags }));
+  const fileStat = await stat(filePath);
+  return fileStat.size;
+}
+
+function parseByteParam(url: URL, name: string): number | null {
+  const value = Number(url.searchParams.get(name));
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function parseContentLength(request: Request): number | null {
+  const header = request.headers.get("content-length");
+  const value = header ? Number(header) : null;
+  return value !== null && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function fieldErrorsFromResult(result: ReturnType<typeof createSermonSchema.safeParse>) {
@@ -77,14 +102,128 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const url = new URL(request.url);
+  const uploadMode = url.searchParams.get("uploadMode") ?? "direct";
   const fileName = url.searchParams.get("fileName")?.trim() || "sermon-media";
-  const contentLength = Number(request.headers.get("content-length") ?? 0);
+  const contentLength = parseContentLength(request);
+  const totalBytes = parseByteParam(url, "totalBytes");
 
-  if (contentLength > MAX_UPLOADED_MEDIA_BYTES) {
+  if ((contentLength !== null && contentLength > MAX_UPLOADED_MEDIA_BYTES) || (totalBytes !== null && totalBytes > MAX_UPLOADED_MEDIA_BYTES)) {
     return NextResponse.json(
       { success: false, message: UPLOADED_MEDIA_TOO_LARGE_MESSAGE, fieldErrors: { mediaFile: UPLOADED_MEDIA_TOO_LARGE_MESSAGE } },
       { status: 413 },
     );
+  }
+
+  if (uploadMode === "chunk") {
+    const sermonId = url.searchParams.get("sermonId") ?? "";
+    const offset = parseByteParam(url, "offset");
+
+    if (!sermonId || offset === null || totalBytes === null) {
+      return NextResponse.json(
+        { success: false, message: "The chunk upload request was missing required upload details.", fieldErrors: { mediaFile: "The upload could not continue. Try again." } },
+        { status: 400 },
+      );
+    }
+
+    const sermon = await prisma.sermon.findUnique({ where: { id: sermonId }, select: { id: true, title: true } });
+    if (!sermon) {
+      return NextResponse.json(
+        { success: false, message: "The upload session could not be found.", fieldErrors: { mediaFile: "The upload session expired. Try again." } },
+        { status: 404 },
+      );
+    }
+
+    try {
+      await ensureSermonFolders(sermon.id, sermon.title);
+      const tempSourceVideoPath = getUploadedSourceTempPath(getSourceVideoPath(sermon.id));
+      const existingBytes = await stat(/* turbopackIgnore: true */ tempSourceVideoPath).then((fileStat) => fileStat.size).catch(() => 0);
+      if (existingBytes !== offset) {
+        throw new Error(`The upload chunk arrived out of order. Expected offset ${existingBytes} but received ${offset}.`);
+      }
+
+      const finalBytes = await streamRequestBodyToFile(request, tempSourceVideoPath, offset === 0 ? "w" : "a");
+      if (contentLength !== null && finalBytes !== offset + contentLength) {
+        throw new Error(`The upload chunk ended early. Expected ${offset + contentLength} bytes but received ${finalBytes} bytes.`);
+      }
+
+      return NextResponse.json({ success: true, message: "Upload chunk received.", receivedBytes: finalBytes, createdSermonId: sermon.id });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Unknown chunk upload error.";
+      console.error(`Raw upload chunk failed for sermon ${sermon.id}: ${reason}`);
+      return NextResponse.json(
+        { success: false, message: reason, fieldErrors: { mediaFile: reason }, createdSermonId: sermon.id },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (uploadMode === "finish") {
+    const sermonId = url.searchParams.get("sermonId") ?? "";
+    if (!sermonId || totalBytes === null) {
+      return NextResponse.json(
+        { success: false, message: "The upload finalization request was missing required upload details.", fieldErrors: { mediaFile: "The upload could not be finalized. Try again." } },
+        { status: 400 },
+      );
+    }
+
+    const sermon = await prisma.sermon.findUnique({ where: { id: sermonId }, select: { id: true, title: true } });
+    if (!sermon) {
+      return NextResponse.json(
+        { success: false, message: "The upload session could not be found.", fieldErrors: { mediaFile: "The upload session expired. Try again." } },
+        { status: 404 },
+      );
+    }
+
+    try {
+      await ensureSermonFolders(sermon.id, sermon.title);
+      const sourceVideoPath = getSourceVideoPath(sermon.id);
+      const tempSourceVideoPath = getUploadedSourceTempPath(sourceVideoPath);
+      const receivedBytes = await stat(/* turbopackIgnore: true */ tempSourceVideoPath).then((fileStat) => fileStat.size).catch(() => 0);
+      if (receivedBytes !== totalBytes) {
+        throw new Error(`The upload ended early. Expected ${totalBytes} bytes but received ${receivedBytes} bytes.`);
+      }
+
+      const uploadedMediaCheck = await mediaFileIsUsable(tempSourceVideoPath);
+      if (!uploadedMediaCheck.usable) {
+        throw new Error(buildUploadedMediaCheckFailureMessage(uploadedMediaCheck.reason));
+      }
+
+      await rename(/* turbopackIgnore: true */ tempSourceVideoPath, /* turbopackIgnore: true */ sourceVideoPath);
+
+      const finalizedUpload = await mediaFileIsUsable(sourceVideoPath);
+      if (!finalizedUpload.usable) {
+        await unlink(/* turbopackIgnore: true */ sourceVideoPath).catch(() => undefined);
+        throw new Error(buildUploadedMediaCheckFailureMessage(finalizedUpload.reason));
+      }
+
+      await prisma.sermon.update({
+        where: { id: sermon.id },
+        data: {
+          sourceVideoPath,
+          audioPath: getAudioPath(sermon.id),
+          transcriptJsonPath: getTranscriptJsonPath(sermon.id),
+          sourceDurationSeconds: finalizedUpload.durationSeconds,
+          status: "DOWNLOADED",
+        },
+      });
+
+      await appendPipelineLog(sermon.id, "Sermon created from chunked uploaded media file and storage folders initialized.");
+      revalidatePath("/");
+      startUploadedSermonPipeline(sermon.id);
+
+      return NextResponse.json({
+        success: true,
+        message: "Sermon saved. The full clip workflow has started automatically.",
+        createdSermonId: sermon.id,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Unknown upload finalization error.";
+      console.error(`Raw upload finalization failed for sermon ${sermon.id}: ${reason}`);
+      return NextResponse.json(
+        { success: false, message: reason, fieldErrors: { mediaFile: reason }, createdSermonId: sermon.id },
+        { status: 400 },
+      );
+    }
   }
 
   const values = {
@@ -108,35 +247,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  let body: ArrayBuffer;
-  try {
-    body = await request.arrayBuffer();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "The upload stream ended before the file was received.";
-    return NextResponse.json(
-      {
-        success: false,
-        message: `The upload did not finish. Reason: ${message}`,
-        fieldErrors: { mediaFile: "The upload did not finish. Keep the tab open and try again, or use a YouTube link." },
-      },
-      { status: 400 },
-    );
-  }
-
-  if (body.byteLength === 0) {
-    return NextResponse.json(
-      { success: false, message: "No media file was received.", fieldErrors: { mediaFile: "Choose a media file before uploading." } },
-      { status: 400 },
-    );
-  }
-
-  if (body.byteLength > MAX_UPLOADED_MEDIA_BYTES) {
-    return NextResponse.json(
-      { success: false, message: UPLOADED_MEDIA_TOO_LARGE_MESSAGE, fieldErrors: { mediaFile: UPLOADED_MEDIA_TOO_LARGE_MESSAGE } },
-      { status: 413 },
-    );
-  }
-
   try {
     const sermon = await prisma.sermon.create({
       data: {
@@ -155,6 +265,29 @@ export async function POST(request: Request): Promise<NextResponse> {
       select: { id: true, title: true },
     });
 
+    if (uploadMode === "start") {
+      try {
+        await ensureSermonFolders(sermon.id, sermon.title);
+        const sourceVideoPath = getSourceVideoPath(sermon.id);
+        const tempSourceVideoPath = getUploadedSourceTempPath(sourceVideoPath);
+        await unlink(/* turbopackIgnore: true */ tempSourceVideoPath).catch(() => undefined);
+        await unlink(/* turbopackIgnore: true */ sourceVideoPath).catch(() => undefined);
+      } catch (storageError) {
+        const reason = storageError instanceof Error ? storageError.message : "Unknown storage setup error.";
+        console.error(`Raw upload session initialization failed for sermon ${sermon.id}: ${reason}`);
+        return NextResponse.json(
+          { success: false, message: reason, fieldErrors: { mediaFile: reason }, createdSermonId: sermon.id },
+          { status: 400 },
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: "Upload session started.",
+        createdSermonId: sermon.id,
+      });
+    }
+
     try {
       await ensureSermonFolders(sermon.id, sermon.title);
       const sourceVideoPath = getSourceVideoPath(sermon.id);
@@ -162,7 +295,17 @@ export async function POST(request: Request): Promise<NextResponse> {
       await unlink(/* turbopackIgnore: true */ tempSourceVideoPath).catch(() => undefined);
 
       try {
-        await writeFile(/* turbopackIgnore: true */ tempSourceVideoPath, Buffer.from(body));
+        const receivedBytes = await streamRequestBodyToFile(request, tempSourceVideoPath);
+        if (receivedBytes === 0) {
+          throw new Error("No media file was received.");
+        }
+        if (receivedBytes > MAX_UPLOADED_MEDIA_BYTES) {
+          throw new Error(UPLOADED_MEDIA_TOO_LARGE_MESSAGE);
+        }
+        if (contentLength !== null && Number.isFinite(contentLength) && receivedBytes !== contentLength) {
+          throw new Error(`The upload ended early. Expected ${contentLength} bytes but received ${receivedBytes} bytes.`);
+        }
+
         const uploadedMediaCheck = await mediaFileIsUsable(tempSourceVideoPath);
         if (!uploadedMediaCheck.usable) {
           throw new Error(buildUploadedMediaCheckFailureMessage(uploadedMediaCheck.reason));

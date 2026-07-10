@@ -48,4 +48,19 @@ describe("multilingual clip discovery", () => {
     expect(windows.some((window) => window.transcriptEvidence?.codeSwitching.detected)).toBe(true);
     expect(windows.some((window) => window.transcriptEvidence?.requiresHumanReview)).toBe(true);
   });
+
+  it("prefers preacher-dominant windows over multi-speaker windows", () => {
+    const preacherOnly = zuluSegments.map((segment) => ({ ...segment, speakerLabel: "PRIMARY" }));
+    const multiSpeaker = zuluSegments.map((segment, index) => ({
+      ...segment,
+      speakerLabel: index < 2 ? "PRIMARY" : index % 2 === 0 ? "SECONDARY_B" : "SECONDARY_C",
+    }));
+
+    const preacherQuality = __clipIntelligenceTestUtils.assessClipWindowQuality(preacherOnly, 60, { sermonLanguage: "isiZulu" });
+    const multiSpeakerQuality = __clipIntelligenceTestUtils.assessClipWindowQuality(multiSpeaker, 60, { sermonLanguage: "isiZulu" });
+
+    expect(preacherQuality.windowQualityWarnings).not.toContain("WINDOW_MULTI_SPEAKER_DOMINANT");
+    expect(multiSpeakerQuality.windowQualityWarnings).toContain("WINDOW_MULTI_SPEAKER_DOMINANT");
+    expect(preacherQuality.windowQualityScore).toBeGreaterThan(multiSpeakerQuality.windowQualityScore);
+  });
 });

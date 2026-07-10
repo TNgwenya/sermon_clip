@@ -280,7 +280,7 @@ describe("transcription sermon segment filtering", () => {
         languageCode: "en",
         transcript,
       });
-      expect(payload.version).toBe(4);
+      expect(payload.version).toBe(5);
       await __transcriptionTestUtils.writeCachedChunkTranscript(
         cachePath,
         payload,
@@ -518,6 +518,35 @@ describe("transcription sermon segment filtering", () => {
     expect(args).toContain("-af");
     expect(args).toContain("highpass=f=80,lowpass=f=8000,dynaudnorm=f=150:g=15");
     expect(args[args.length - 1]).toBe("/tmp/enhanced.mp3");
+  });
+
+  it("keeps the historically harmful speech-enhancement retry disabled by default", () => {
+    const previous = process.env.OPENAI_TRANSCRIPTION_SPEECH_ENHANCEMENT_ENABLED;
+    delete process.env.OPENAI_TRANSCRIPTION_SPEECH_ENHANCEMENT_ENABLED;
+    try {
+      expect(__transcriptionTestUtils.speechEnhancedRetryEnabled()).toBe(false);
+      process.env.OPENAI_TRANSCRIPTION_SPEECH_ENHANCEMENT_ENABLED = "true";
+      expect(__transcriptionTestUtils.speechEnhancedRetryEnabled()).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.OPENAI_TRANSCRIPTION_SPEECH_ENHANCEMENT_ENABLED;
+      else process.env.OPENAI_TRANSCRIPTION_SPEECH_ENHANCEMENT_ENABLED = previous;
+    }
+  });
+
+  it("places overlapping chunk boundaries on nearby pauses", () => {
+    const chunks = __transcriptionTestUtils.buildSilenceAwareChunkSpecs({
+      sourceDurationSeconds: 930,
+      targetDurationSeconds: 300,
+      silenceCentersSeconds: [287, 614],
+      overlapSeconds: 3,
+    });
+
+    expect(chunks).toEqual([
+      { fileName: "chunk-000.mp3", startTimeSeconds: 0, endTimeSeconds: 290 },
+      { fileName: "chunk-001.mp3", startTimeSeconds: 284, endTimeSeconds: 617 },
+      { fileName: "chunk-002.mp3", startTimeSeconds: 611, endTimeSeconds: 903 },
+      { fileName: "chunk-003.mp3", startTimeSeconds: 897, endTimeSeconds: 930 },
+    ]);
   });
 
   it("scores a clipping-ready transcription retry above a sparse first attempt", () => {
@@ -919,6 +948,23 @@ describe("transcription sermon segment filtering", () => {
 
     expect(result.reusable).toBe(false);
     expect(result.reason).toContain("not clipping-ready");
+  });
+
+  it("does not reuse a clipping-ready transcript from an older transcription configuration", () => {
+    const readySegments = strongSermonLines.map((text, index) => ({
+      startTimeSeconds: index * 10,
+      endTimeSeconds: index * 10 + 9,
+      text,
+    }));
+    const result = __transcriptionTestUtils.assessReusableTranscriptForClipping({
+      transcriptExists: true,
+      transcriptJsonExists: true,
+      transcriptConfigurationMatches: false,
+      segments: readySegments,
+    });
+
+    expect(result.reusable).toBe(false);
+    expect(result.reason).toContain("older transcription configuration");
   });
 
   it("does not reuse saved transcripts with coarse timestamps", () => {

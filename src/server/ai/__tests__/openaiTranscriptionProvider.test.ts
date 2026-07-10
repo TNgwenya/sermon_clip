@@ -253,4 +253,66 @@ describe("openai transcription provider", () => {
 
     expect(selected).toBe(segmentTimestamps);
   });
+
+  it("aligns higher-accuracy wording onto the Whisper word timeline", () => {
+    const timedWords = "Pastor Thabang said God is faithful in every season and we can trust him today"
+      .split(" ")
+      .map((text, index) => ({
+        startTimeSeconds: index * 0.45,
+        endTimeSeconds: index * 0.45 + 0.35,
+        text,
+      }));
+    const timingSegments = [{
+      startTimeSeconds: 0,
+      endTimeSeconds: timedWords[timedWords.length - 1].endTimeSeconds,
+      text: timedWords.map((word) => word.text).join(" "),
+      confidence: 0.82,
+    }];
+
+    const aligned = __openAITranscriptionProviderTestUtils.alignHighAccuracyTranscript({
+      accurateText: "Pastor Thabang said, “God is faithful in every season, and we can trust Him today.”",
+      timedWords,
+      timingSegments,
+      accuracyConfidence: 0.91,
+    });
+
+    expect(aligned.accepted).toBe(true);
+    expect(aligned.segments.map((segment) => segment.text).join(" ")).toContain("faithful");
+    expect(aligned.segments[0].startTimeSeconds).toBe(0);
+    expect(aligned.segments.every((segment) => segment.confidence === 0.82)).toBe(true);
+  });
+
+  it("keeps Whisper wording when the accuracy pass cannot be safely aligned", () => {
+    const timedWords = Array.from({ length: 30 }, (_, index) => ({
+      startTimeSeconds: index * 0.4,
+      endTimeSeconds: index * 0.4 + 0.3,
+      text: `sermon${index}`,
+    }));
+    const timingSegments = [{ startTimeSeconds: 0, endTimeSeconds: 12, text: "Original timed sermon wording." }];
+
+    const aligned = __openAITranscriptionProviderTestUtils.alignHighAccuracyTranscript({
+      accurateText: Array.from({ length: 30 }, (_, index) => `unrelated${index}`).join(" "),
+      timedWords,
+      timingSegments,
+    });
+
+    expect(aligned.accepted).toBe(false);
+    expect(aligned.segments).toBe(timingSegments);
+  });
+
+  it("maps diarized speakers by overlap and normalizes the dominant speaker", () => {
+    const diarized = __openAITranscriptionProviderTestUtils.normalizePrimarySpeakerLabel([
+      { startTimeSeconds: 0, endTimeSeconds: 8, text: "Main sermon", speakerLabel: "A" },
+      { startTimeSeconds: 8, endTimeSeconds: 10, text: "Amen", speakerLabel: "B" },
+    ]);
+    const mapped = __openAITranscriptionProviderTestUtils.mapSpeakerLabelsByOverlap(
+      [
+        { startTimeSeconds: 1, endTimeSeconds: 4, text: "Main sermon" },
+        { startTimeSeconds: 8.2, endTimeSeconds: 9.5, text: "Amen" },
+      ],
+      diarized,
+    );
+
+    expect(mapped.map((segment) => segment.speakerLabel)).toEqual(["PRIMARY", "SECONDARY_B"]);
+  });
 });
