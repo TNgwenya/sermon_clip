@@ -136,6 +136,7 @@ async function runCaptionBurnJob(sermonId: string): Promise<string> {
       status: { in: ["APPROVED", "EXPORTED"] },
       renderStatus: "COMPLETED",
       captionStatus: "GENERATED",
+      captionBurnStatus: { not: "BURNING" },
       OR: [
         { captionBurnStatus: { not: "COMPLETED" } },
         { captionBurnFreshness: { not: "UP_TO_DATE" } },

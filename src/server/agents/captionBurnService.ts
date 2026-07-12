@@ -109,6 +109,7 @@ type CaptionCueOverlay = {
 type CaptionSafeArea = "STANDARD" | "RAISED" | "LOWER_MINIMAL";
 
 const FALLBACK_VIDEO_ENCODER = SOFTWARE_VIDEO_ENCODER;
+const MAX_WORD_HIGHLIGHT_OVERLAY_CUES = 120;
 
 function commandFor(binaryPath?: string): string {
   return binaryPath?.trim() || "ffmpeg";
@@ -1071,8 +1072,13 @@ async function burnCaptionsForClipCore(
     await appendJobLog(jobId, "Caption timing remapped to the speech-cleaned render timeline.");
   }
 
-  if (shouldUseWordHighlightOverlay(clip.captionData)) {
-    const wordHighlightCues = expandCaptionCueWordHighlightOverlays(renderCaptionCues);
+  let usedWordHighlightOverlay = false;
+  const wordHighlightCues = shouldUseWordHighlightOverlay(clip.captionData)
+    ? expandCaptionCueWordHighlightOverlays(renderCaptionCues)
+    : [];
+
+  if (wordHighlightCues.length > 0 && wordHighlightCues.length <= MAX_WORD_HIGHLIGHT_OVERLAY_CUES) {
+    usedWordHighlightOverlay = true;
     await appendJobLog(jobId, "Caption burn using active-word image overlays.");
     await appendPipelineLog(clip.sermonId, "Caption burn using active-word image overlays.");
     await runFfmpegCaptionOverlayFallback({
@@ -1086,6 +1092,10 @@ async function burnCaptionsForClipCore(
       appearance: captionAppearance,
     });
   } else {
+    if (wordHighlightCues.length > MAX_WORD_HIGHLIGHT_OVERLAY_CUES) {
+      await appendJobLog(jobId, `Caption burn skipped active-word image overlays because ${wordHighlightCues.length} overlays exceeds the ${MAX_WORD_HIGHLIGHT_OVERLAY_CUES} local limit.`);
+      await appendPipelineLog(clip.sermonId, "Caption burn using subtitle filter because active-word overlay graph is too large.");
+    }
     try {
       await runFfmpegCaptionBurn({
         sermonId: clip.sermonId,
@@ -1163,7 +1173,7 @@ async function burnCaptionsForClipCore(
       reusedExistingFile: false,
       captionStylePresetId,
       captionPosition,
-      wordHighlightOverlay: shouldUseWordHighlightOverlay(clip.captionData),
+      wordHighlightOverlay: usedWordHighlightOverlay,
     },
   });
 
@@ -1270,4 +1280,5 @@ export const __captionBurnTestUtils = {
   buildCaptionOverlaySvg,
   captionOverlayYExpression,
   shouldUseCaptionOverlayFallback,
+  MAX_WORD_HIGHLIGHT_OVERLAY_CUES,
 };
