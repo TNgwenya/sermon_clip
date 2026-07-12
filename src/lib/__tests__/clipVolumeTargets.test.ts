@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isSubstantialClipReviewBoard,
   resolveClipVolumeTarget,
+  resolveClipReviewAcceptanceFloor,
   shouldReuseClipSuggestionsForTarget,
 } from "@/lib/clipVolumeTargets";
 
@@ -51,5 +53,17 @@ describe("clip volume targets", () => {
       force: true,
       target: { minReviewSuggestions: 20 },
     })).toBe(false);
+  });
+
+  it("accepts and reuses a substantial below-target long-sermon review board", () => {
+    const longSermonTarget = resolveClipVolumeTarget(77 * 60);
+
+    expect(resolveClipReviewAcceptanceFloor(longSermonTarget.minReviewSuggestions)).toBe(23);
+    expect(isSubstantialClipReviewBoard({ suggestionCount: 24, target: longSermonTarget })).toBe(true);
+    expect(isSubstantialClipReviewBoard({ suggestionCount: 22, target: longSermonTarget })).toBe(false);
+    expect(shouldReuseClipSuggestionsForTarget({
+      existingSuggestionCount: 24,
+      target: longSermonTarget,
+    })).toBe(true);
   });
 });

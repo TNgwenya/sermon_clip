@@ -42,6 +42,8 @@ import {
 } from "@/server/agents/clipCoherenceAnalysis";
 import {
   resolveClipVolumeTarget,
+  resolveClipReviewAcceptanceFloor,
+  isSubstantialClipReviewBoard,
   shouldReuseClipSuggestionsForTarget,
   type ClipVolumeTarget,
 } from "@/lib/clipVolumeTargets";
@@ -3041,7 +3043,13 @@ export async function generateClipSuggestions(
       );
     }
 
-    if (!options?.targetCategory && totalReviewableSuggestions < clipVolumeTarget.minReviewSuggestions) {
+    const belowVolumeTarget = totalReviewableSuggestions < clipVolumeTarget.minReviewSuggestions;
+    const substantialReviewBoard = isSubstantialClipReviewBoard({
+      suggestionCount: totalReviewableSuggestions,
+      target: clipVolumeTarget,
+    });
+
+    if (!options?.targetCategory && belowVolumeTarget && !substantialReviewBoard) {
       throw new Error([
         `Clip generation produced ${totalReviewableSuggestions} pastor-review option(s), below the ${clipVolumeTarget.rangeLabel} target minimum of ${clipVolumeTarget.minReviewSuggestions} for this transcript.`,
         appendMode
@@ -3051,6 +3059,17 @@ export async function generateClipSuggestions(
         `Rejected ${rejectedReasons.length} validation/scope candidate(s), ${boundaryRejected.length} boundary candidate(s), and removed ${overlapDuplicateCount + semanticDuplicateCount + existingOverlapDuplicateCount + topUpDuplicateCount} duplicate/overlapping candidate(s).`,
         "The job was stopped before replacing/saving the low-count result so the review board does not quietly regress.",
       ].join(" "));
+    }
+
+    if (!options?.targetCategory && belowVolumeTarget && substantialReviewBoard) {
+      await appendJobLog(
+        job.id,
+        `Saving ${totalReviewableSuggestions} distinct pastor-review option(s), below the ${clipVolumeTarget.rangeLabel} duration target but above the substantial review-board floor of ${resolveClipReviewAcceptanceFloor(clipVolumeTarget.minReviewSuggestions)}.`,
+      );
+      await appendPipelineLog(
+        sermon.id,
+        `Clip generation accepted a substantial below-target review board: ${totalReviewableSuggestions} option(s), target minimum ${clipVolumeTarget.minReviewSuggestions}.`,
+      );
     }
 
     await prisma.$transaction(async (tx) => {
@@ -3174,6 +3193,9 @@ export async function generateClipSuggestions(
       `Repair used in ${repairUsedCount} batch(es).`,
       `Target duration guidance ${TARGET_MIN_DURATION_SECONDS}-${TARGET_MAX_DURATION_SECONDS}s applied.`,
       `Clip volume target was ${clipVolumeTarget.rangeLabel}; review board has ${totalReviewableSuggestions} option(s).`,
+      belowVolumeTarget
+        ? `Below the duration target, but saved because the review board met the substantial quality floor of ${resolveClipReviewAcceptanceFloor(clipVolumeTarget.minReviewSuggestions)}.`
+        : "Clip volume target minimum met.",
       topUpCandidateCount > 0
         ? `Deterministic top-up considered ${topUpCandidateCount} candidate(s) and added ${topUpSavedCount}.`
         : "Deterministic top-up was not needed.",

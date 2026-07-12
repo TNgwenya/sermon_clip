@@ -8,6 +8,14 @@ export type ClipVolumeTarget = {
   rangeLabel: string;
 };
 
+/**
+ * The duration target is aspirational. A sermon can contain fewer genuinely
+ * distinct, grounded moments than its runtime implies, so retain a substantial
+ * review board instead of failing the entire generation after quality filters.
+ */
+const SUBSTANTIAL_REVIEW_BOARD_RATIO = 0.7;
+const MIN_SUBSTANTIAL_REVIEW_SUGGESTIONS = 3;
+
 function normalizeDurationSeconds(durationSeconds: number | null | undefined): number {
   return typeof durationSeconds === "number" && Number.isFinite(durationSeconds)
     ? Math.max(0, durationSeconds)
@@ -87,5 +95,20 @@ export function shouldReuseClipSuggestionsForTarget(input: {
   }
 
   const minNeeded = input.target?.minReviewSuggestions ?? 1;
-  return input.existingSuggestionCount >= minNeeded;
+  return input.existingSuggestionCount >= resolveClipReviewAcceptanceFloor(minNeeded);
+}
+
+export function resolveClipReviewAcceptanceFloor(minReviewSuggestions: number): number {
+  const normalizedMinimum = Math.max(1, Math.floor(minReviewSuggestions));
+  return Math.min(
+    normalizedMinimum,
+    Math.max(MIN_SUBSTANTIAL_REVIEW_SUGGESTIONS, Math.ceil(normalizedMinimum * SUBSTANTIAL_REVIEW_BOARD_RATIO)),
+  );
+}
+
+export function isSubstantialClipReviewBoard(input: {
+  suggestionCount: number;
+  target: Pick<ClipVolumeTarget, "minReviewSuggestions">;
+}): boolean {
+  return input.suggestionCount >= resolveClipReviewAcceptanceFloor(input.target.minReviewSuggestions);
 }
