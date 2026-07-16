@@ -1,6 +1,7 @@
 import { getOpenAiClient } from "@/server/ai/openaiClient";
 import { recordAiInvocation, type AiInvocationUsage } from "@/server/ai/aiInvocationLogger";
 import type { Prisma } from "@prisma/client";
+import type { ChatCompletion } from "openai/resources/chat/completions";
 
 type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -16,12 +17,17 @@ type LoggedChatCompletionInput = {
   model: string;
   messages: ChatMessage[];
   temperature?: number;
+  reasoningEffort?: "low" | "medium" | "high";
   response_format?: JsonObjectResponseFormat;
   sermonId?: string | null;
   clipCandidateId?: string | null;
   promptVersion?: string | null;
   metadata?: Prisma.InputJsonValue;
   missingKeyMessage?: string;
+};
+
+type ValidatedLoggedChatCompletionInput<T> = LoggedChatCompletionInput & {
+  validateResponse: (completion: ChatCompletion) => T | Promise<T>;
 };
 
 const DEFAULT_CHAT_MAX_ATTEMPTS = 3;
@@ -86,6 +92,19 @@ function usageFromCompletion(completion: { usage?: { prompt_tokens?: number; com
   };
 }
 
+function withFailureStageMetadata(
+  metadata: Prisma.InputJsonValue | undefined,
+  failureStage: "provider_request" | "response_validation",
+): Prisma.InputJsonValue {
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    return { ...metadata, failureStage };
+  }
+
+  return metadata === undefined
+    ? { failureStage }
+    : { failureStage, context: metadata };
+}
+
 async function runWithRetry<T>(operation: () => Promise<T>): Promise<T> {
   const maxAttempts = Math.max(
     1,
@@ -114,18 +133,27 @@ async function runWithRetry<T>(operation: () => Promise<T>): Promise<T> {
   throw new Error("OpenAI chat retry loop exited unexpectedly.");
 }
 
-export async function createLoggedChatCompletion(input: LoggedChatCompletionInput) {
+export function createLoggedChatCompletion<T>(input: ValidatedLoggedChatCompletionInput<T>): Promise<T>;
+export function createLoggedChatCompletion(input: LoggedChatCompletionInput): Promise<ChatCompletion>;
+export async function createLoggedChatCompletion<T>(
+  input: LoggedChatCompletionInput | ValidatedLoggedChatCompletionInput<T>,
+): Promise<ChatCompletion | T> {
   const startedAt = Date.now();
   const request = {
     model: input.model,
     temperature: input.temperature,
+    reasoning_effort: input.reasoningEffort,
     response_format: input.response_format,
     messages: input.messages,
   };
+  let completion: ChatCompletion | null = null;
 
   try {
     const client = getOpenAiClient(input.missingKeyMessage);
-    const completion = await runWithRetry(() => client.chat.completions.create(request));
+    completion = await runWithRetry(() => client.chat.completions.create(request));
+    const result = "validateResponse" in input
+      ? await input.validateResponse(completion)
+      : completion;
     await recordAiInvocation({
       sermonId: input.sermonId,
       clipCandidateId: input.clipCandidateId,
@@ -138,7 +166,7 @@ export async function createLoggedChatCompletion(input: LoggedChatCompletionInpu
       latencyMs: Date.now() - startedAt,
       metadata: input.metadata,
     });
-    return completion;
+    return result;
   } catch (error) {
     await recordAiInvocation({
       sermonId: input.sermonId,
@@ -148,9 +176,13 @@ export async function createLoggedChatCompletion(input: LoggedChatCompletionInpu
       promptVersion: input.promptVersion,
       request,
       status: "FAILED",
+      usage: completion ? usageFromCompletion(completion) : undefined,
       latencyMs: Date.now() - startedAt,
       errorMessage: errorMessage(error),
-      metadata: input.metadata,
+      metadata: withFailureStageMetadata(
+        input.metadata,
+        completion ? "response_validation" : "provider_request",
+      ),
     });
     throw error;
   }

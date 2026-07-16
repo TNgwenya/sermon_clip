@@ -2,6 +2,20 @@ import type { SermonStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 
+export class SermonStatusTransitionError extends Error {
+  readonly code = "INVALID_SERMON_STATUS_TRANSITION";
+
+  constructor(
+    message: string,
+    readonly sermonId: string,
+    readonly currentStatus: SermonStatus,
+    readonly nextStatus: SermonStatus,
+  ) {
+    super(message);
+    this.name = "SermonStatusTransitionError";
+  }
+}
+
 const SERMON_STATUS_FLOW: SermonStatus[] = [
   "CREATED",
   "DOWNLOADING",
@@ -113,7 +127,12 @@ export async function updateSermonStatus(
 
   const validation = validateStatusTransition(sermon.status, nextStatus);
   if (!validation.valid) {
-    throw new Error(validation.reason ?? "Invalid sermon status transition.");
+    throw new SermonStatusTransitionError(
+      validation.reason ?? "Invalid sermon status transition.",
+      sermonId,
+      sermon.status,
+      nextStatus,
+    );
   }
 
   await prisma.sermon.update({

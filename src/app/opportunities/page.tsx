@@ -11,6 +11,7 @@ import {
   PageHeader,
 } from "@/components/ui";
 import { prisma } from "@/lib/prisma";
+import { normalizeContentHashtags } from "@/lib/contentPublishing";
 import { OpportunitiesExperience } from "@/app/opportunities/opportunities-experience";
 import {
   CONTENT_OPPORTUNITY_TYPES,
@@ -118,7 +119,7 @@ export default async function OpportunitiesPage({
     ],
   };
 
-  const [opportunities, sermons, momentTypes] = await Promise.all([
+  const [opportunities, sermons, momentTypes, preparedAssets] = await Promise.all([
     prisma.contentOpportunity.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -135,6 +136,8 @@ export default async function OpportunitiesPage({
         confidenceScore: true,
         suggestedPlatform: true,
         relatedScripture: true,
+        sourceTranscriptExcerpt: true,
+        aiReason: true,
         status: true,
         createdAt: true,
         sermon: {
@@ -160,6 +163,28 @@ export default async function OpportunitiesPage({
       distinct: ["momentType"],
       take: 100,
     }),
+    prisma.contentAsset.findMany({
+      where: {
+        status: { not: "ARCHIVED" },
+        ...(filters.sermonId ? { sermonId: filters.sermonId } : {}),
+        contentOpportunityId: { not: null },
+      },
+      orderBy: { updatedAt: "desc" },
+      distinct: ["contentOpportunityId"],
+      select: {
+        id: true,
+        contentOpportunityId: true,
+        assetType: true,
+        status: true,
+        platform: true,
+        title: true,
+        bodyContent: true,
+        caption: true,
+        hashtagsJson: true,
+        callToAction: true,
+      },
+      take: 300,
+    }),
   ]);
 
   const topicSuggestions = await prisma.sermonTopicTag.findMany({
@@ -183,6 +208,8 @@ export default async function OpportunitiesPage({
     confidenceScore: item.confidenceScore,
     suggestedPlatform: item.suggestedPlatform,
     relatedScripture: item.relatedScripture,
+    sourceTranscriptExcerpt: item.sourceTranscriptExcerpt,
+    aiReason: item.aiReason,
     ministryMomentType: item.ministryMoment?.momentType ?? null,
     status: item.status,
     createdAt: item.createdAt.toISOString(),
@@ -225,6 +252,18 @@ export default async function OpportunitiesPage({
         opportunities={normalized}
         activeSermonId={activeSermonId}
         activeSermonTitle={activeSermonTitle}
+        preparedAssets={preparedAssets.map((asset) => ({
+          id: asset.id,
+          contentOpportunityId: asset.contentOpportunityId,
+          assetType: asset.assetType,
+          status: asset.status,
+          platform: asset.platform,
+          title: asset.title,
+          bodyContent: asset.bodyContent,
+          caption: asset.caption,
+          hashtags: normalizeContentHashtags(Array.isArray(asset.hashtagsJson) ? asset.hashtagsJson.filter((item): item is string => typeof item === "string") : []),
+          callToAction: asset.callToAction,
+        }))}
       />
 
       {opportunityStats.length > 0 ? (

@@ -359,6 +359,15 @@ enum ContentOpportunityType {
   INVITATION_CONTENT
   ALTAR_CALL_FOLLOW_UP_CONTENT
   EVENT_FOLLOW_UP_CONTENT
+  PLATFORM_CAPTION_PACK
+  ENGAGEMENT_STORY_SET
+  PRAYER_GUIDE
+  DEVOTIONAL_GUIDE
+  SMALL_GROUP_GUIDE
+  FAMILY_DISCUSSION_GUIDE
+  YOUTH_DISCUSSION_GUIDE
+  SERMON_CONTENT_MAP
+  CONTENT_CALENDAR_PLAN
 }
 
 enum ContentOpportunityStatus {
@@ -367,6 +376,34 @@ enum ContentOpportunityStatus {
   APPROVED
   REJECTED
   USED
+  ARCHIVED
+}
+
+enum ContentAssetType {
+  QUOTE_GRAPHIC
+  SCRIPTURE_GRAPHIC
+  CAROUSEL
+  TEXT_POST
+  DEVOTIONAL
+  PRAYER
+  INVITATION
+  DISCUSSION
+  SERMON_RECAP
+  STORY
+  GUIDE
+  EMAIL
+  NEWSLETTER
+  BLOG
+  OTHER
+}
+
+enum ContentAssetStatus {
+  GENERATED
+  APPROVED
+  PREPARED
+  READY
+  SCHEDULED
+  PUBLISHED
   ARCHIVED
 }
 
@@ -531,6 +568,7 @@ model Sermon {
   subjectTracks         SermonSubjectTrack[]
   speakerTracks         SermonSpeakerTrack[]
   contentOpportunities  ContentOpportunity[]
+  contentAssets         ContentAsset[]
   clipEditPlans         ClipEditPlan[]
   clipArtifacts         ClipArtifact[]
   aiInvocations         AiInvocation[]
@@ -811,15 +849,15 @@ model ProcessingJob {
 }
 
 model WorkerHeartbeat {
-  id            String   @id @default(cuid())
-  workerType    String
-  workerId      String
-  status        String   @default("ONLINE")
-  dryRun        Boolean  @default(false)
-  detailsJson   Json?
-  heartbeatAt   DateTime @default(now())
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id          String   @id @default(cuid())
+  workerType  String
+  workerId    String
+  status      String   @default("ONLINE")
+  dryRun      Boolean  @default(false)
+  detailsJson Json?
+  heartbeatAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@unique([workerType, workerId])
   @@index([workerType, heartbeatAt])
@@ -1097,6 +1135,7 @@ model ContentOpportunity {
   sermon                  Sermon                     @relation(fields: [sermonId], references: [id], onDelete: Cascade)
   ministryMoment          MinistryMoment?            @relation(fields: [ministryMomentId], references: [id], onDelete: SetNull)
   relatedClip             ClipCandidate?             @relation("RelatedClipContentOpportunities", fields: [relatedClipId], references: [id], onDelete: SetNull)
+  contentAssets           ContentAsset[]
 
   @@index([sermonId])
   @@index([sermonId, category])
@@ -1109,6 +1148,62 @@ model ContentOpportunity {
   @@index([opportunityType])
   @@index([status])
   @@index([createdAt])
+}
+
+model ContentAsset {
+  id                   String                      @id @default(cuid())
+  sermonId             String
+  contentOpportunityId String?
+  assetType            ContentAssetType
+  status               ContentAssetStatus          @default(GENERATED)
+  platform             PostingPlatform?
+  title                String
+  bodyContent          String?
+  caption              String?
+  hashtagsJson         Json?
+  callToAction         String?
+  metadataJson         Json?
+  approvedAt           DateTime?
+  preparedAt           DateTime?
+  readyAt              DateTime?
+  scheduledAt          DateTime?
+  publishedAt          DateTime?
+  archivedAt           DateTime?
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+  sermon               Sermon                      @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  contentOpportunity   ContentOpportunity?         @relation(fields: [contentOpportunityId], references: [id], onDelete: SetNull)
+  files                ContentAssetFile[]
+  scheduledPostLinks   ScheduledPostContentAsset[]
+
+  @@index([sermonId])
+  @@index([contentOpportunityId])
+  @@index([assetType])
+  @@index([status])
+  @@index([platform])
+  @@index([sermonId, status])
+  @@index([createdAt])
+}
+
+model ContentAssetFile {
+  id             String       @id @default(cuid())
+  contentAssetId String
+  fileName       String
+  mimeType       String
+  filePath       String?
+  objectKey      String?
+  publicUrl      String?
+  width          Int?
+  height         Int?
+  sizeBytes      BigInt?
+  sortOrder      Int          @default(0)
+  metadataJson   Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  contentAsset   ContentAsset @relation(fields: [contentAssetId], references: [id], onDelete: Cascade)
+
+  @@unique([contentAssetId, sortOrder])
+  @@index([objectKey])
 }
 
 model SocialAccount {
@@ -1212,6 +1307,7 @@ model ScheduledPost {
   predictions        PostPerformancePrediction[]
   ministryOutcomes   MinistryOutcome[]
   guardrailReviews   GrowthGuardrailReview[]
+  contentAssetLinks  ScheduledPostContentAsset[]
 
   @@index([postingDraftId])
   @@index([socialAccountId])
@@ -1221,6 +1317,19 @@ model ScheduledPost {
   @@index([workerStatus])
   @@index([scheduledFor])
   @@index([createdAt])
+}
+
+model ScheduledPostContentAsset {
+  scheduledPostId String
+  contentAssetId  String
+  sortOrder       Int           @default(0)
+  createdAt       DateTime      @default(now())
+  scheduledPost   ScheduledPost @relation(fields: [scheduledPostId], references: [id], onDelete: Cascade)
+  contentAsset    ContentAsset  @relation(fields: [contentAssetId], references: [id], onDelete: Cascade)
+
+  @@id([scheduledPostId, contentAssetId])
+  @@index([scheduledPostId, sortOrder])
+  @@index([contentAssetId])
 }
 
 model SocialMetricSnapshot {

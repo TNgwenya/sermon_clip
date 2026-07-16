@@ -1,4 +1,4 @@
-import type { ProcessingJob, ProcessingJobType, SermonStatus } from "@prisma/client";
+import type { Prisma, ProcessingJob, ProcessingJobType, SermonStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { appendPipelineLog } from "@/server/agents/storage";
@@ -13,6 +13,29 @@ type RetryableStepOptions = {
 };
 
 const PROCESSING_JOB_DB_RETRY_DELAYS_MS = [500, 1_500, 3_000];
+const MAX_PROCESSING_JOB_LOG_CHARACTERS = 120_000;
+const MAX_PROCESSING_JOB_LOG_ENTRY_CHARACTERS = 8_000;
+const MAX_PROCESSING_ERROR_STACK_CHARACTERS = 4_000;
+
+export type ProcessingFailureDiagnostics = {
+  error?: unknown;
+  code?: string;
+  stage?: string;
+  retryable?: boolean;
+  workerId?: string;
+  parentJobId?: string;
+  sermonStatus?: string;
+  details?: Record<string, unknown>;
+};
+
+export type SerializedProcessingError = {
+  name: string;
+  message: string;
+  code?: string;
+  stack?: string;
+  context?: Record<string, string | number | boolean | null>;
+  cause?: SerializedProcessingError;
+};
 
 export async function createProcessingJob(
   sermonId: string,
@@ -28,21 +51,82 @@ export async function createProcessingJob(
 }
 
 function timestampedMessage(message: string): string {
-  return `[${new Date().toISOString()}] ${message}`;
+  const normalized = message.trim().slice(0, MAX_PROCESSING_JOB_LOG_ENTRY_CHARACTERS);
+  return `[${new Date().toISOString()}] ${normalized}`;
 }
 
-async function mergeLogs(jobId: string, logs?: string): Promise<string | undefined> {
-  if (!logs) {
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("code" in error)) {
     return undefined;
   }
 
-  const existing = await prisma.processingJob.findUnique({
-    where: { id: jobId },
-    select: { logs: true },
-  });
+  const code = String((error as { code?: unknown }).code ?? "").trim();
+  return code || undefined;
+}
 
-  const nextChunk = timestampedMessage(logs);
-  return existing?.logs ? `${existing.logs}\n${nextChunk}` : nextChunk;
+export function serializeProcessingError(error: unknown, depth = 0): SerializedProcessingError {
+  const normalized = error instanceof Error ? error : new Error(String(error ?? "Unknown processing error."));
+  const serialized: SerializedProcessingError = {
+    name: normalized.name || "Error",
+    message: normalized.message || "Unknown processing error.",
+  };
+  const code = errorCode(error);
+  if (code) {
+    serialized.code = code;
+  }
+  if (normalized.stack) {
+    serialized.stack = normalized.stack.slice(0, MAX_PROCESSING_ERROR_STACK_CHARACTERS);
+  }
+  if (error && typeof error === "object") {
+    const contextEntries = Object.entries(error as Record<string, unknown>)
+      .filter(([key, value]) => (
+        !["name", "message", "stack", "cause", "code"].includes(key)
+        && (value === null || ["string", "number", "boolean"].includes(typeof value))
+      ))
+      .slice(0, 20) as Array<[string, string | number | boolean | null]>;
+    if (contextEntries.length > 0) {
+      serialized.context = Object.fromEntries(contextEntries);
+    }
+  }
+
+  if (depth < 2 && normalized.cause !== undefined) {
+    serialized.cause = serializeProcessingError(normalized.cause, depth + 1);
+  }
+
+  return serialized;
+}
+
+function jsonSafeValue(value: unknown, depth = 0): Prisma.InputJsonValue {
+  if (value === null || value === undefined) return String(value ?? "");
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : String(value);
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Date) return value.toISOString();
+  if (depth >= 5) return "[truncated]";
+  if (Array.isArray(value)) return value.slice(0, 100).map((item) => jsonSafeValue(item, depth + 1));
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined && typeof item !== "function")
+      .slice(0, 100)
+      .map(([key, item]) => [key, jsonSafeValue(item, depth + 1)] as const);
+    return Object.fromEntries(entries) as Prisma.InputJsonObject;
+  }
+
+  return String(value);
+}
+
+function diagnosticLogMessage(diagnostics: ProcessingFailureDiagnostics, serialized: SerializedProcessingError): string {
+  const fields = {
+    code: diagnostics.code ?? serialized.code ?? "PROCESSING_FAILED",
+    stage: diagnostics.stage ?? "unknown",
+    retryable: diagnostics.retryable ?? false,
+    errorType: serialized.name,
+    workerId: diagnostics.workerId,
+    parentJobId: diagnostics.parentJobId,
+    sermonStatus: diagnostics.sermonStatus,
+    details: diagnostics.details,
+  };
+  return `Failure diagnostics ${JSON.stringify(fields)}`;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -81,18 +165,29 @@ async function retryProcessingJobDbWrite<T>(operation: () => Promise<T>): Promis
 }
 
 export async function appendJobLog(jobId: string, message: string): Promise<void> {
+  const nextChunk = timestampedMessage(message);
   try {
-    const logs = await retryProcessingJobDbWrite(() => mergeLogs(jobId, message));
-
-    await retryProcessingJobDbWrite(() => prisma.processingJob.update({
-      where: { id: jobId },
-      data: { logs: logs ?? null },
-    }));
+    const updated = await retryProcessingJobDbWrite(() => prisma.$executeRaw`
+      UPDATE "ProcessingJob"
+      SET
+        "logs" = RIGHT(
+          CASE
+            WHEN COALESCE("logs", '') = '' THEN ${nextChunk}
+            ELSE "logs" || E'\n' || ${nextChunk}
+          END,
+          CAST(${MAX_PROCESSING_JOB_LOG_CHARACTERS} AS INTEGER)
+        ),
+        "updatedAt" = NOW()
+      WHERE "id" = ${jobId}
+    `);
+    if (updated === 0) {
+      throw new Error(`Processing job ${jobId} was not found while appending logs.`);
+    }
   } catch (error) {
     if (!isTransientDatabaseError(error)) {
       throw error;
     }
-    console.warn(`Processing job log append skipped for ${jobId}: ${message}`);
+    console.warn(`Processing job log append skipped for ${jobId}: ${message}`, serializeProcessingError(error));
   }
 }
 
@@ -112,26 +207,72 @@ export async function markJobRunning(jobId: string, workerId?: string): Promise<
 }
 
 export async function markJobSucceeded(jobId: string, logs?: string): Promise<void> {
-  const mergedLogs = await retryProcessingJobDbWrite(() => mergeLogs(jobId, logs));
-
   await retryProcessingJobDbWrite(() => prisma.processingJob.update({
     where: { id: jobId },
     data: {
       status: "SUCCEEDED",
       completedAt: new Date(),
       heartbeatAt: null,
-      logs: mergedLogs,
       errorMessage: null,
     },
   }));
+
+  if (logs) {
+    try {
+      await appendJobLog(jobId, logs);
+    } catch (error) {
+      console.error(`Processing job ${jobId} succeeded, but its final log could not be appended.`, serializeProcessingError(error));
+    }
+  }
 }
 
 export async function markJobFailed(
   jobId: string,
   errorMessage: string,
   logs?: string,
+  diagnostics: ProcessingFailureDiagnostics = {},
 ): Promise<void> {
-  const mergedLogs = await retryProcessingJobDbWrite(() => mergeLogs(jobId, logs));
+  const serializedError = serializeProcessingError(diagnostics.error ?? new Error(errorMessage));
+  const current = await retryProcessingJobDbWrite(() => prisma.processingJob.findUnique({
+    where: { id: jobId },
+    select: { generationSummary: true },
+  }));
+  if (!current) {
+    throw new Error(`Processing job ${jobId} was not found while recording its failure.`);
+  }
+
+  const existingSummary = current.generationSummary
+    && typeof current.generationSummary === "object"
+    && !Array.isArray(current.generationSummary)
+    ? current.generationSummary
+    : {};
+  const existingFailure = "failure" in existingSummary
+    && existingSummary.failure
+    && typeof existingSummary.failure === "object"
+    && !Array.isArray(existingSummary.failure)
+    ? existingSummary.failure
+    : null;
+  const hasExplicitDiagnostics = diagnostics.error !== undefined
+    || diagnostics.code !== undefined
+    || diagnostics.stage !== undefined
+    || diagnostics.retryable !== undefined
+    || diagnostics.workerId !== undefined
+    || diagnostics.parentJobId !== undefined
+    || diagnostics.sermonStatus !== undefined
+    || diagnostics.details !== undefined;
+  const nextFailure = {
+    version: 1,
+    occurredAt: new Date().toISOString(),
+    code: diagnostics.code ?? serializedError.code ?? "PROCESSING_FAILED",
+    stage: diagnostics.stage ?? "unknown",
+    retryable: diagnostics.retryable ?? false,
+    workerId: diagnostics.workerId ?? null,
+    parentJobId: diagnostics.parentJobId ?? null,
+    sermonStatus: diagnostics.sermonStatus ?? null,
+    error: serializedError,
+    details: diagnostics.details ? jsonSafeValue(diagnostics.details) : {},
+  };
+  const failure = !hasExplicitDiagnostics && existingFailure ? existingFailure : nextFailure;
 
   await retryProcessingJobDbWrite(() => prisma.processingJob.update({
     where: { id: jobId },
@@ -140,9 +281,21 @@ export async function markJobFailed(
       completedAt: new Date(),
       heartbeatAt: null,
       errorMessage,
-      logs: mergedLogs,
+      generationSummary: {
+        ...existingSummary,
+        failure,
+      } as Prisma.InputJsonObject,
     },
   }));
+
+  for (const log of [logs, diagnosticLogMessage(diagnostics, serializedError)]) {
+    if (!log) continue;
+    try {
+      await appendJobLog(jobId, log);
+    } catch (error) {
+      console.error(`Processing job ${jobId} failed, but a diagnostic log could not be appended.`, serializeProcessingError(error));
+    }
+  }
 }
 
 export async function executeRetryableStep({
@@ -169,7 +322,13 @@ export async function executeRetryableStep({
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unknown processing error.";
       await appendJobLog(job.id, `Attempt ${attempt}/${maxAttempts} failed: ${errorMessage}`);
-      await markJobFailed(job.id, errorMessage, `Attempt ${attempt}/${maxAttempts} failed.`);
+      await markJobFailed(job.id, errorMessage, `Attempt ${attempt}/${maxAttempts} failed.`, {
+        error,
+        code: "RETRYABLE_STEP_FAILED",
+        stage: jobType,
+        retryable: attempt < maxAttempts,
+        details: { attempt, maxAttempts },
+      });
       await appendPipelineLog(sermonId, `${jobType} attempt ${attempt}/${maxAttempts} failed: ${errorMessage}`);
 
       if (attempt === maxAttempts) {

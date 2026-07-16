@@ -8,6 +8,10 @@ import type {
 
 import { prisma } from "@/lib/prisma";
 import {
+  markScheduledPostContentAssetsPublished,
+  reconcileScheduledPostContentAssetLifecycle,
+} from "@/lib/contentAssets";
+import {
   fromPrismaPostingPlatform,
   type PostingPlatform,
 } from "@/lib/postingDrafts";
@@ -44,6 +48,29 @@ export type ScheduledPost = {
   mediaUploadedAt: string | null;
   idempotencyKey: string;
   createdAt: string;
+  contentAssets?: Array<{
+    id: string;
+    title: string;
+    assetType: string;
+    status: string;
+    caption: string | null;
+    bodyContent: string | null;
+    callToAction: string | null;
+    hashtags: unknown;
+    files: Array<{
+      id: string;
+      fileName: string;
+      mimeType: string;
+      filePath: string | null;
+      objectKey: string | null;
+      publicUrl: string | null;
+      width: number | null;
+      height: number | null;
+      sizeBytes: string | null;
+      sortOrder: number;
+      metadata: unknown;
+    }>;
+  }>;
 };
 
 export type ManualPublishingStatus = "POSTED" | "SKIPPED";
@@ -163,6 +190,31 @@ function toScheduledPost(input: {
     externalAccountId: string | null;
     externalPlatform: string | null;
   } | null;
+  contentAssetLinks?: Array<{
+    contentAsset: {
+      id: string;
+      title: string;
+      assetType: string;
+      status: string;
+      caption: string | null;
+      bodyContent: string | null;
+      callToAction: string | null;
+      hashtagsJson: unknown;
+      files: Array<{
+        id: string;
+        fileName: string;
+        mimeType: string;
+        filePath: string | null;
+        objectKey: string | null;
+        publicUrl: string | null;
+        width: number | null;
+        height: number | null;
+        sizeBytes: bigint | null;
+        sortOrder: number;
+        metadataJson: unknown;
+      }>;
+    };
+  }>;
 }): ScheduledPost {
   return {
     id: input.id,
@@ -196,6 +248,29 @@ function toScheduledPost(input: {
     mediaUploadedAt: input.mediaUploadedAt?.toISOString() ?? null,
     idempotencyKey: input.idempotencyKey,
     createdAt: input.createdAt.toISOString(),
+    contentAssets: (input.contentAssetLinks ?? []).map(({ contentAsset }) => ({
+      id: contentAsset.id,
+      title: contentAsset.title,
+      assetType: contentAsset.assetType,
+      status: contentAsset.status,
+      caption: contentAsset.caption,
+      bodyContent: contentAsset.bodyContent,
+      callToAction: contentAsset.callToAction,
+      hashtags: contentAsset.hashtagsJson,
+      files: contentAsset.files.map((file) => ({
+        id: file.id,
+        fileName: file.fileName,
+        mimeType: file.mimeType,
+        filePath: file.filePath,
+        objectKey: file.objectKey,
+        publicUrl: file.publicUrl,
+        width: file.width,
+        height: file.height,
+        sizeBytes: file.sizeBytes?.toString() ?? null,
+        sortOrder: file.sortOrder,
+        metadata: file.metadataJson,
+      })),
+    })),
   };
 }
 
@@ -209,6 +284,39 @@ export async function listScheduledPosts(): Promise<ScheduledPost[]> {
           externalProvider: true,
           externalAccountId: true,
           externalPlatform: true,
+        },
+      },
+      contentAssetLinks: {
+        orderBy: { sortOrder: "asc" },
+        select: {
+          contentAsset: {
+            select: {
+              id: true,
+              title: true,
+              assetType: true,
+              status: true,
+              caption: true,
+              bodyContent: true,
+              callToAction: true,
+              hashtagsJson: true,
+              files: {
+                orderBy: { sortOrder: "asc" },
+                select: {
+                  id: true,
+                  fileName: true,
+                  mimeType: true,
+                  filePath: true,
+                  objectKey: true,
+                  publicUrl: true,
+                  width: true,
+                  height: true,
+                  sizeBytes: true,
+                  sortOrder: true,
+                  metadataJson: true,
+                },
+              },
+            },
+          },
         },
       },
     },
@@ -322,6 +430,11 @@ export async function updateScheduledPostStatus(input: {
   if (!(await mutationAppliedOrThrowConflict(input.id, updateResult.count))) {
     return null;
   }
+  if (input.status === "POSTED") {
+    await markScheduledPostContentAssetsPublished({ scheduledPostId: input.id });
+  } else {
+    await reconcileScheduledPostContentAssetLifecycle({ scheduledPostId: input.id });
+  }
 
   const post = await prisma.scheduledPost.findUnique({
     where: { id: input.id },
@@ -332,6 +445,39 @@ export async function updateScheduledPostStatus(input: {
           externalProvider: true,
           externalAccountId: true,
           externalPlatform: true,
+        },
+      },
+      contentAssetLinks: {
+        orderBy: { sortOrder: "asc" },
+        select: {
+          contentAsset: {
+            select: {
+              id: true,
+              title: true,
+              assetType: true,
+              status: true,
+              caption: true,
+              bodyContent: true,
+              callToAction: true,
+              hashtagsJson: true,
+              files: {
+                orderBy: { sortOrder: "asc" },
+                select: {
+                  id: true,
+                  fileName: true,
+                  mimeType: true,
+                  filePath: true,
+                  objectKey: true,
+                  publicUrl: true,
+                  width: true,
+                  height: true,
+                  sizeBytes: true,
+                  sortOrder: true,
+                  metadataJson: true,
+                },
+              },
+            },
+          },
         },
       },
     },
@@ -369,6 +515,8 @@ export async function restoreScheduledPostStatus(input: {
   if (updateResult.count === 0) {
     return null;
   }
+
+  await reconcileScheduledPostContentAssetLifecycle({ scheduledPostId: input.id });
 
   const post = await prisma.scheduledPost.findUnique({
     where: { id: input.id },
@@ -454,6 +602,10 @@ export async function updateScheduledPostSchedule(input: {
 export async function deleteScheduledPost(input: {
   id: string;
 }): Promise<boolean> {
+  const contentAssetLinks = await prisma.scheduledPostContentAsset.findMany({
+    where: { scheduledPostId: input.id },
+    select: { contentAssetId: true },
+  });
   const deleted = await prisma.scheduledPost.deleteMany({
     where: {
       id: input.id,
@@ -467,7 +619,13 @@ export async function deleteScheduledPost(input: {
     },
   });
 
-  return mutationAppliedOrThrowConflict(input.id, deleted.count);
+  const applied = await mutationAppliedOrThrowConflict(input.id, deleted.count);
+  if (applied && contentAssetLinks.length > 0) {
+    await reconcileScheduledPostContentAssetLifecycle({
+      contentAssetIds: contentAssetLinks.map((link) => link.contentAssetId),
+    });
+  }
+  return applied;
 }
 
 export async function postScheduledPostNow(input: {
@@ -563,6 +721,39 @@ export async function listUpcomingAutomationPosts(input: {
           externalProvider: true,
           externalAccountId: true,
           externalPlatform: true,
+        },
+      },
+      contentAssetLinks: {
+        orderBy: { sortOrder: "asc" },
+        select: {
+          contentAsset: {
+            select: {
+              id: true,
+              title: true,
+              assetType: true,
+              status: true,
+              caption: true,
+              bodyContent: true,
+              callToAction: true,
+              hashtagsJson: true,
+              files: {
+                orderBy: { sortOrder: "asc" },
+                select: {
+                  id: true,
+                  fileName: true,
+                  mimeType: true,
+                  filePath: true,
+                  objectKey: true,
+                  publicUrl: true,
+                  width: true,
+                  height: true,
+                  sizeBytes: true,
+                  sortOrder: true,
+                  metadataJson: true,
+                },
+              },
+            },
+          },
         },
       },
     },
@@ -783,6 +974,11 @@ export async function completeScheduledPost(input: {
       && alreadyCompleted.workerId === input.workerId
       && (input.externalPostId == null || alreadyCompleted.externalPostId === input.externalPostId)
     ) {
+      if (completion.status === "POSTED") {
+        await markScheduledPostContentAssetsPublished({ scheduledPostId: input.id });
+      } else if (completion.status === "SKIPPED") {
+        await reconcileScheduledPostContentAssetLifecycle({ scheduledPostId: input.id });
+      }
       return toScheduledPost(alreadyCompleted);
     }
     return null;
@@ -808,6 +1004,11 @@ export async function completeScheduledPost(input: {
       platform: post.platform,
       publishError: completion.publishError,
     });
+  }
+  if (post && completion.status === "POSTED") {
+    await markScheduledPostContentAssetsPublished({ scheduledPostId: input.id });
+  } else if (post && completion.status === "SKIPPED") {
+    await reconcileScheduledPostContentAssetLifecycle({ scheduledPostId: input.id });
   }
 
   return post ? toScheduledPost(post) : null;

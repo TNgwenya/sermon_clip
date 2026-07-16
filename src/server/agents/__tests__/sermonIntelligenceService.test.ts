@@ -8,6 +8,7 @@ import {
   MINISTRY_TOPICS,
   normalizeScriptureUsageType,
   normalizeStructureSectionType,
+  parseSermonIntelligenceResponse,
   scriptureUsageTypes,
   structureSectionTypes,
 } from "@/server/ai/sermonIntelligenceSchema";
@@ -209,6 +210,57 @@ describe("aiSermonIntelligenceSchema", () => {
   it("accepts a fully valid payload", () => {
     const result = aiSermonIntelligenceSchema.safeParse(makeValidPayload());
     expect(result.success).toBe(true);
+  });
+
+  it("parses a valid response body", () => {
+    expect(parseSermonIntelligenceResponse(JSON.stringify(makeValidPayload()))).toMatchObject({
+      title: "Walking in Faith",
+      confidenceScore: 0.87,
+    });
+  });
+
+  it("reports the exact path, received enum, and allowed values", () => {
+    const payload = makeValidPayload();
+    payload.structureSections[0] = {
+      ...payload.structureSections[0],
+      sectionType: "OFFERING",
+    };
+
+    expect(() => parseSermonIntelligenceResponse(JSON.stringify(payload))).toThrow(
+      /structureSections\[0\]\.sectionType: invalid_value; received="OFFERING"; expected=\["INTRODUCTION".*"OTHER"\]/,
+    );
+  });
+
+  it("bounds invalid JSON and received values in diagnostics", () => {
+    const invalidJson = `not-json-${"x".repeat(1_000)}-PRIVATE-TAIL`;
+    let invalidJsonMessage = "";
+    try {
+      parseSermonIntelligenceResponse(invalidJson);
+    } catch (error) {
+      invalidJsonMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(invalidJsonMessage).toContain("JSON validation failed at <root>");
+    expect(invalidJsonMessage).not.toContain("PRIVATE-TAIL");
+    expect(invalidJsonMessage.length).toBeLessThanOrEqual(1_800);
+
+    const payload = makeValidPayload();
+    payload.keyTakeaways = Array.from(
+      { length: 50 },
+      (_, index) => index === 49 ? "PRIVATE-TAIL" : `takeaway-${index}`,
+    );
+    let schemaMessage = "";
+    try {
+      parseSermonIntelligenceResponse(JSON.stringify(payload));
+    } catch (error) {
+      schemaMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(schemaMessage).toContain("keyTakeaways: too_big");
+    expect(schemaMessage).toContain("received=");
+    expect(schemaMessage).toContain("expected=array <= 10");
+    expect(schemaMessage).not.toContain("PRIVATE-TAIL");
+    expect(schemaMessage.length).toBeLessThanOrEqual(1_800);
   });
 
   it("rejects empty title", () => {

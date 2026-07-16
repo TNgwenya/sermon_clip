@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  formatInvalidJsonDiagnostics,
+  formatZodValidationDiagnostics,
+} from "@/server/ai/validationDiagnostics";
+
 // ─── Controlled topic list ─────────────────────────────────────────────────────
 
 export const MINISTRY_TOPICS = [
@@ -180,6 +185,22 @@ export const aiSermonIntelligenceSchema = z.object({
   structureSections: z.array(aiStructureSectionSchema).max(20),
   topics: z.array(aiTopicTagSchema).min(1).max(10),
 });
+
+export function parseSermonIntelligenceResponse(rawContent: string): AiSermonIntelligence {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawContent);
+  } catch (error) {
+    throw new Error(formatInvalidJsonDiagnostics(rawContent, error), { cause: error });
+  }
+
+  const result = aiSermonIntelligenceSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(formatZodValidationDiagnostics(result.error, parsed), { cause: result.error });
+  }
+
+  return result.data;
+}
 
 export type AiScriptureRef = z.infer<typeof aiScriptureRefSchema>;
 export type AiStructureSection = z.infer<typeof aiStructureSectionSchema>;

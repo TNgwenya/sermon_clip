@@ -39,6 +39,15 @@ export const CONTENT_OPPORTUNITY_TYPES = [
   "INVITATION_CONTENT",
   "ALTAR_CALL_FOLLOW_UP_CONTENT",
   "EVENT_FOLLOW_UP_CONTENT",
+  "PLATFORM_CAPTION_PACK",
+  "ENGAGEMENT_STORY_SET",
+  "PRAYER_GUIDE",
+  "DEVOTIONAL_GUIDE",
+  "SMALL_GROUP_GUIDE",
+  "FAMILY_DISCUSSION_GUIDE",
+  "YOUTH_DISCUSSION_GUIDE",
+  "SERMON_CONTENT_MAP",
+  "CONTENT_CALENDAR_PLAN",
 ] as const;
 
 export type ContentOpportunityType = (typeof CONTENT_OPPORTUNITY_TYPES)[number];
@@ -70,6 +79,15 @@ export const CONTENT_OPPORTUNITY_TYPE_LABELS: Record<ContentOpportunityType, str
   INVITATION_CONTENT: "Invitation content",
   ALTAR_CALL_FOLLOW_UP_CONTENT: "Altar call follow-up content",
   EVENT_FOLLOW_UP_CONTENT: "Event follow-up content",
+  PLATFORM_CAPTION_PACK: "Platform caption pack",
+  ENGAGEMENT_STORY_SET: "Engagement story set",
+  PRAYER_GUIDE: "Prayer guide",
+  DEVOTIONAL_GUIDE: "Devotional guide",
+  SMALL_GROUP_GUIDE: "Small-group guide",
+  FAMILY_DISCUSSION_GUIDE: "Family discussion guide",
+  YOUTH_DISCUSSION_GUIDE: "Youth discussion guide",
+  SERMON_CONTENT_MAP: "Sermon content map",
+  CONTENT_CALENDAR_PLAN: "Content calendar plan",
 };
 
 export const CONTENT_OPPORTUNITY_CATEGORY_LABELS: Record<ContentOpportunityCategory, string> = {
@@ -109,6 +127,15 @@ export const DEFAULT_CONTENT_OPPORTUNITY_QUANTITIES: Record<ContentOpportunityTy
   INVITATION_CONTENT: 1,
   ALTAR_CALL_FOLLOW_UP_CONTENT: 0,
   EVENT_FOLLOW_UP_CONTENT: 0,
+  PLATFORM_CAPTION_PACK: 0,
+  ENGAGEMENT_STORY_SET: 0,
+  PRAYER_GUIDE: 0,
+  DEVOTIONAL_GUIDE: 0,
+  SMALL_GROUP_GUIDE: 0,
+  FAMILY_DISCUSSION_GUIDE: 0,
+  YOUTH_DISCUSSION_GUIDE: 0,
+  SERMON_CONTENT_MAP: 0,
+  CONTENT_CALENDAR_PLAN: 0,
 };
 
 export const contentOpportunitySchema = z.object({

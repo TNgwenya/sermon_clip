@@ -1,10 +1,8 @@
-import { ZodError } from "zod";
-
 import { prisma } from "@/lib/prisma";
 import {
-  aiSermonIntelligenceSchema,
   INTELLIGENCE_JSON_SHAPE,
   MINISTRY_TOPICS,
+  parseSermonIntelligenceResponse,
   type AiSermonIntelligence,
 } from "@/server/ai/sermonIntelligenceSchema";
 import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
@@ -33,6 +31,7 @@ type SermonContext = {
 
 export type GenerateIntelligenceOptions = {
   force?: boolean;
+  parentJobId?: string;
 };
 
 export type IntelligenceResult = {
@@ -87,7 +86,7 @@ async function callIntelligenceAI(
 ): Promise<AiSermonIntelligence> {
   const model = resolveOpenAIChatModel("sermonIntelligence");
 
-  const response = await createLoggedChatCompletion({
+  return createLoggedChatCompletion({
     operation: "sermon_intelligence",
     sermonId: sermon.id,
     model,
@@ -102,18 +101,10 @@ async function callIntelligenceAI(
       language: sermon.language,
     },
     missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before generating intelligence.",
+    validateResponse: (response) => parseSermonIntelligenceResponse(
+      response.choices[0]?.message?.content ?? "",
+    ),
   });
-
-  const rawContent = response.choices[0]?.message?.content ?? "";
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawContent);
-  } catch {
-    throw new Error(`AI returned invalid JSON: ${rawContent.slice(0, 200)}`);
-  }
-
-  return aiSermonIntelligenceSchema.parse(parsed);
 }
 
 // ─── Persistence: upsert intelligence and related rows ────────────────────────
@@ -280,8 +271,22 @@ export async function generateSermonIntelligence(
   });
 
   const job = await createProcessingJob(sermonId, "PROCESS_SERMON");
+  if (options?.parentJobId) {
+    await prisma.processingJob.update({
+      where: { id: job.id },
+      data: {
+        generationSummary: {
+          operation: "sermon_intelligence",
+          parentJobId: options.parentJobId,
+        },
+      },
+    });
+  }
   await markJobRunning(job.id);
-  await appendJobLog(job.id, `Generating sermon intelligence for ${sermon.title}.`);
+  await appendJobLog(
+    job.id,
+    `Generating sermon intelligence for ${sermon.title}. sermonId=${sermonId} jobId=${job.id}${options?.parentJobId ? ` parentJobId=${options.parentJobId}` : ""}`,
+  );
   await appendPipelineLog(sermonId, "Sermon intelligence generation started.");
 
   try {
@@ -315,15 +320,24 @@ export async function generateSermonIntelligence(
 
     return { intelligenceId, status: "COMPLETED" };
   } catch (error) {
-    const reason =
-      error instanceof ZodError
-        ? `AI output failed validation: ${error.issues.map((i) => i.message).join("; ")}`
-        : error instanceof Error
-          ? error.message
-          : "Unknown error during intelligence generation.";
+    const reason = error instanceof Error
+      ? error.message
+      : "Unknown error during intelligence generation.";
 
     await markIntelligenceFailed(sermonId, reason);
-    await markJobFailed(job.id, reason);
+    const validationFailure = reason.startsWith("AI response validation failed")
+      || reason.startsWith("AI response JSON validation failed");
+    await markJobFailed(job.id, reason, "Sermon intelligence generation failed.", {
+      error,
+      code: validationFailure ? "AI_RESPONSE_VALIDATION_FAILED" : "SERMON_INTELLIGENCE_FAILED",
+      stage: validationFailure ? "response_validation" : "sermon_intelligence_generation",
+      retryable: true,
+      parentJobId: options?.parentJobId,
+      details: {
+        operation: "sermon_intelligence",
+        validationFailure,
+      },
+    });
     await appendPipelineLog(sermonId, `Sermon intelligence failed: ${reason}`);
 
     return { intelligenceId: sermonId, status: "FAILED", failureReason: reason };

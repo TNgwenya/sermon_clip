@@ -10,6 +10,7 @@ type NavigationIconName =
   | "create"
   | "library"
   | "publish"
+  | "plan"
   | "growth"
   | "ideas"
   | "insights"
@@ -69,6 +70,12 @@ const navigationGroups: NavigationGroup[] = [
     label: "Plan and learn",
     items: [
       {
+        href: "/weekly-plan",
+        label: "Weekly planner",
+        icon: "plan",
+        isActive: (pathname) => pathname.startsWith("/weekly-plan"),
+      },
+      {
         href: "/growth",
         label: "Growth",
         icon: "growth",
@@ -115,6 +122,7 @@ function NavigationIcon({ name }: { name: NavigationIconName }) {
     create: "+",
     library: "□",
     publish: "↑",
+    plan: "▦",
     growth: "↗",
     ideas: "✦",
     insights: "∴",

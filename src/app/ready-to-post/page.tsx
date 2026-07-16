@@ -10,6 +10,7 @@ import { listSocialAccounts } from "@/lib/socialAccounts";
 import { PrepareApprovedClipsButton } from "@/app/ready-to-post/prepare-approved-clips-button";
 import { ReadyQueueExperience } from "@/app/ready-to-post/ready-queue-experience";
 import { ReadyQueueLiveRefresh } from "@/app/ready-to-post/ready-queue-live-refresh";
+import { GeneratedContentAssets } from "@/app/ready-to-post/generated-content-assets";
 import { ClipAssetRecoveryButton } from "@/components/clip-asset-recovery-button";
 import { buildClipAssetRecoveryPlan } from "@/lib/clipAssetRecovery";
 import { isFreshRemotePreview } from "@/lib/clipPreview";
@@ -17,12 +18,14 @@ import { resolveReadyMedia } from "@/lib/readyMedia";
 import { getPublishingServiceHealth } from "@/lib/publishingServiceHealth";
 import { parseClipCoverFrameSelection } from "@/lib/clipCoverFrame";
 import { extractCaptionPackage } from "@/lib/clipStudio";
+import { normalizeContentHashtags } from "@/lib/contentPublishing";
 
 export const dynamic = "force-dynamic";
 
 type SearchParams = {
   sermonId?: string;
   clipId?: string;
+  contentAssetId?: string;
 };
 
 function normalizeStringArray(value: unknown): string[] {
@@ -66,6 +69,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
   const controlPanelMode = process.env.VERCEL === "1" || process.env.CONTROL_PANEL_MODE === "true";
   const sermonId = params.sermonId?.trim() || null;
   const clipId = params.clipId?.trim() || null;
+  const contentAssetId = params.contentAssetId?.trim() || null;
   const scopeWhere: Prisma.ClipCandidateWhereInput = {
     ...(sermonId ? { sermonId } : {}),
     ...(clipId ? { id: clipId } : {}),
@@ -119,6 +123,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
     drafts,
     packageHistory,
     socialAccounts,
+    metaPublishingAccountRecords,
     scheduledPosts,
     publishingServiceHealth,
     preparingClipCount,
@@ -127,6 +132,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
     approvedWaitingClips,
     focusedSermon,
     focusedClip,
+    contentAssetRecords,
   ] = await Promise.all([
     prisma.clipCandidate.findMany({
       where: clipWhere,
@@ -179,6 +185,38 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
     listPostingDrafts(),
     listPostingPackageHistory(),
     listSocialAccounts(),
+    prisma.socialAccount.findMany({
+      where: {
+        status: "CONNECTED",
+        OR: [
+          {
+            platform: "FACEBOOK",
+            credentials: { some: { provider: "META_FACEBOOK", status: "CONNECTED" } },
+          },
+          {
+            platform: "INSTAGRAM",
+            credentials: { some: { provider: "META_INSTAGRAM", status: "CONNECTED" } },
+          },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        platform: true,
+        label: true,
+        handle: true,
+        credentials: {
+          where: {
+            status: "CONNECTED",
+            provider: { in: ["META_FACEBOOK", "META_INSTAGRAM"] },
+          },
+          select: {
+            provider: true,
+            scopesJson: true,
+          },
+        },
+      },
+    }),
     listScheduledPosts(),
     getPublishingServiceHealth(),
     prisma.clipCandidate.count({
@@ -244,6 +282,54 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           },
         })
       : Promise.resolve(null),
+    prisma.contentAsset.findMany({
+      where: contentAssetId
+        ? { id: contentAssetId }
+        : {
+            status: { in: ["PREPARED", "READY", "SCHEDULED", "PUBLISHED"] },
+            ...(sermonId ? { sermonId } : {}),
+          },
+      orderBy: { updatedAt: "desc" },
+      take: 100,
+      select: {
+        id: true,
+        sermonId: true,
+        contentOpportunityId: true,
+        assetType: true,
+        status: true,
+        platform: true,
+        title: true,
+        bodyContent: true,
+        caption: true,
+        hashtagsJson: true,
+        callToAction: true,
+        sermon: { select: { title: true } },
+        files: {
+          orderBy: { sortOrder: "asc" },
+          select: {
+            id: true,
+            fileName: true,
+            mimeType: true,
+            publicUrl: true,
+            width: true,
+            height: true,
+          },
+        },
+        scheduledPostLinks: {
+          orderBy: { createdAt: "desc" },
+          select: {
+            scheduledPost: {
+              select: {
+                id: true,
+                platform: true,
+                status: true,
+                scheduledFor: true,
+              },
+            },
+          },
+        },
+      },
+    }),
   ]);
   const clips = await Promise.all(
     clipRecords.map(async (clip) => {
@@ -294,16 +380,67 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
   const scopedClipIds = clips.map((clip) => clip.id);
   const scopeClipIds = clipId ? [clipId] : scopedClipIds;
   const scopedClipIdSet = new Set(scopeClipIds);
-  const scopeIsActive = Boolean(sermonId || clipId);
+  const scopedContentAssetIdSet = new Set(contentAssetRecords.map((asset) => asset.id));
+  const scopeIsActive = Boolean(sermonId || clipId || contentAssetId);
   const visibleDrafts = scopeIsActive
     ? drafts.filter((draft) => hasClipOverlap(draft.clipIds, scopedClipIdSet))
     : drafts;
   const visiblePackageHistory = scopeIsActive
     ? packageHistory.filter((item) => hasClipOverlap(item.clipIds, scopedClipIdSet))
     : packageHistory;
-  const visibleScheduledPosts = scopeIsActive
-    ? scheduledPosts.filter((post) => hasClipOverlap(post.clipIds, scopedClipIdSet))
-    : scheduledPosts;
+  const visibleScheduledPosts = contentAssetId
+    ? scheduledPosts.filter((post) => post.contentAssets?.some((asset) => asset.id === contentAssetId))
+    : scopeIsActive
+      ? scheduledPosts.filter((post) => (
+          hasClipOverlap(post.clipIds, scopedClipIdSet)
+          || post.contentAssets?.some((asset) => scopedContentAssetIdSet.has(asset.id))
+        ))
+      : scheduledPosts;
+  const contentAssets = contentAssetRecords.map((asset) => ({
+    id: asset.id,
+    sermonId: asset.sermonId,
+    sermonTitle: asset.sermon.title,
+    contentOpportunityId: asset.contentOpportunityId,
+    assetType: asset.assetType,
+    status: asset.status,
+    platform: asset.platform,
+    title: asset.title,
+    bodyContent: asset.bodyContent,
+    caption: asset.caption,
+    hashtags: normalizeContentHashtags(Array.isArray(asset.hashtagsJson) ? asset.hashtagsJson.filter((item): item is string => typeof item === "string") : []),
+    callToAction: asset.callToAction,
+    files: asset.files,
+    scheduledPosts: asset.scheduledPostLinks.map((link) => ({
+      id: link.scheduledPost.id,
+      platform: link.scheduledPost.platform,
+      status: link.scheduledPost.status,
+      scheduledFor: link.scheduledPost.scheduledFor?.toISOString() ?? null,
+    })),
+  }));
+  const metaPublishingAccounts = metaPublishingAccountRecords.flatMap((account) => {
+    if (account.platform !== "FACEBOOK" && account.platform !== "INSTAGRAM") return [];
+    const provider = account.platform === "FACEBOOK" ? "META_FACEBOOK" : "META_INSTAGRAM";
+    const requiredScope = account.platform === "FACEBOOK" ? "pages_manage_posts" : "instagram_content_publish";
+    const credential = account.credentials.find((item) => item.provider === provider);
+    const scopes = Array.isArray(credential?.scopesJson)
+      ? credential.scopesJson.filter((scope): scope is string => typeof scope === "string")
+      : [];
+    if (
+      !credential
+      || !scopes.includes(requiredScope)
+    ) {
+      return [];
+    }
+    return [{
+      id: account.id,
+      platform: account.platform,
+      label: account.label,
+      handle: account.handle,
+    }];
+  });
+  const focusedContentAsset = contentAssetId
+    ? contentAssets.find((asset) => asset.id === contentAssetId) ?? null
+    : null;
   const scopedSermonTitle = sermonId || focusedClip
     ? focusedSermon?.title ?? focusedClip?.sermon.title ?? clips[0]?.sermon.title ?? "this sermon"
     : null;
@@ -330,20 +467,23 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           <p className="kicker">Ready to post</p>
           <h1>Prepare your next post</h1>
           <p className="muted">
-            {scopedClipTitle
+            {focusedContentAsset
+              ? `Review ${focusedContentAsset.title} from ${focusedContentAsset.sermonTitle}, then download its files or schedule a media-team handoff.`
+              : scopedClipTitle
               ? `Review ${scopedClipTitle}${scopedSermonTitle ? ` from ${scopedSermonTitle}` : ""}, prepare the platform copy, then download or schedule it.`
             : scopedSermonTitle
               ? `Choose a finished clip from ${scopedSermonTitle}, check the final video and caption, then send it to the right channel.`
               : "Choose a finished sermon clip, prepare its post, then download or schedule it."}
           </p>
-          {scopedClipTitle || scopedSermonTitle ? (
+          {focusedContentAsset || scopedClipTitle || scopedSermonTitle ? (
             <div className="ready-scope-pill">
-              <span>{scopedClipTitle ? "Showing clip" : "Showing sermon"}</span>
-              <strong>{scopedClipTitle ?? scopedSermonTitle}</strong>
+              <span>{focusedContentAsset ? "Showing generated post" : scopedClipTitle ? "Showing clip" : "Showing sermon"}</span>
+              <strong>{focusedContentAsset?.title ?? scopedClipTitle ?? scopedSermonTitle}</strong>
             </div>
           ) : null}
-          <div className="ready-quick-stats" aria-label="Prepared clip summary">
+          <div className="ready-quick-stats" aria-label="Prepared publishing summary">
             <span className="ready-stat-ready"><strong>{downloadableClipCount}</strong> ready</span>
+            {contentAssets.length > 0 ? <span><strong>{contentAssets.length}</strong> generated post{contentAssets.length === 1 ? "" : "s"}</span> : null}
             {preparingClipCount > 0 ? (
               <span><strong>{preparingClipCount}</strong> preparing</span>
             ) : null}
@@ -357,7 +497,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           </div>
         </div>
         <nav className="ready-publishing-nav" aria-label="Ready to post actions">
-          {scopeIsActive ? <Link href="/ready-to-post" className="button tertiary">All ready clips</Link> : null}
+          {scopeIsActive ? <Link href="/ready-to-post" className="button tertiary">All ready content</Link> : null}
           {!controlPanelMode && downloadableClipCount > 0 ? (
             <a href={downloadAllHref} className="button secondary">
               {blockedReadyClipCount > 0 ? "Download ready clips" : "Download all"}
@@ -371,13 +511,13 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         </nav>
 
         <ol className="premium-ready-steps" aria-label="Ready-to-post workflow">
-          <li className={clipId ? "is-complete" : "is-current"}>
+          <li className={clipId || contentAssetId ? "is-complete" : "is-current"}>
             <span>1</span>
-            <div><strong>Choose a clip</strong><small>Start with the message you want to share.</small></div>
+            <div><strong>Choose content</strong><small>Start with the message and format you want to share.</small></div>
           </li>
-          <li className={clipId ? "is-current" : ""}>
+          <li className={clipId || contentAssetId ? "is-current" : ""}>
             <span>2</span>
-            <div><strong>Prepare the post</strong><small>Check the final video and platform copy.</small></div>
+            <div><strong>Prepare the post</strong><small>Check the final media and platform copy.</small></div>
           </li>
           <li>
             <span>3</span>
@@ -387,7 +527,8 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
 
         <nav className="premium-ready-view-nav" aria-label="Publishing desk sections">
           <a href="#ready-clips">Ready clips</a>
-          <a href="#posting-calendar">Calendar</a>
+          <a href="#generated-content-assets">Generated content</a>
+          <a href="#posting-calendar">Mixed calendar</a>
           <a href="#publishing-support">Publishing history</a>
         </nav>
       </header>
@@ -484,6 +625,12 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
             </div>
           </section>
         ) : null}
+        <GeneratedContentAssets
+          assets={contentAssets}
+          focusedAssetId={contentAssetId}
+          metaPublishingAccounts={metaPublishingAccounts}
+          publishingServiceHealth={publishingServiceHealth}
+        />
         <ReadyQueueLiveRefresh status={queueStatus} />
         <ReadyQueueExperience
           clips={clips}

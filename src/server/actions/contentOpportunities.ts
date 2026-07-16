@@ -10,6 +10,7 @@ import {
   type OpportunityGenerationResult,
 } from "@/server/agents/contentMultiplicationService";
 import { CONTENT_OPPORTUNITY_TYPES } from "@/server/ai/contentOpportunitySchema";
+import { getContentPackPreset } from "@/lib/contentPackPresets";
 
 export type ContentOpportunityActionState = {
   success: boolean;
@@ -74,6 +75,35 @@ export async function generateContentOpportunitiesAction(
     return { success: true, message: buildGenerationMessage(result) };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown generation error.";
+    return { success: false, message };
+  }
+}
+
+export async function generateContentPackAction(
+  sermonId: string,
+  presetId: string,
+): Promise<ContentOpportunityActionState> {
+  if (!sermonId?.trim()) {
+    return { success: false, message: "Sermon ID is required." };
+  }
+
+  const preset = getContentPackPreset(presetId);
+  if (!preset) {
+    return { success: false, message: "Invalid content pack preset." };
+  }
+
+  try {
+    const result = await regenerateContentOpportunities(sermonId, {
+      quantities: preset.quantities,
+      replaceDefaultQuantities: true,
+    });
+    revalidateOpportunityPaths(sermonId);
+    return {
+      success: true,
+      message: `${preset.label}: generated ${result.opportunityCount} reviewed draft${result.opportunityCount === 1 ? "" : "s"}.`,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Content pack generation failed.";
     return { success: false, message };
   }
 }
@@ -143,6 +173,8 @@ export async function updateContentOpportunityStatusAction(
       where: { id: opportunityId, sermonId },
       select: {
         id: true,
+        opportunityType: true,
+        sourceTranscriptExcerpt: true,
         editedContent: true,
         bodyContent: true,
         approvedContent: true,
@@ -151,6 +183,14 @@ export async function updateContentOpportunityStatusAction(
 
     if (!current) {
       return { success: false, message: "Opportunity not found for this sermon." };
+    }
+
+    if (
+      parsedStatus.data === "APPROVED" &&
+      current.opportunityType === "QUOTE_GRAPHIC" &&
+      !current.sourceTranscriptExcerpt?.trim()
+    ) {
+      return { success: false, message: "A pastor quote cannot be approved without transcript evidence." };
     }
 
     await prisma.contentOpportunity.update({

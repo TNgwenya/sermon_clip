@@ -2302,7 +2302,20 @@ export async function transcribeSermonAudio(
     return { transcriptJsonPath, reusedExistingTranscript: false };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown transcription error.";
-    await markJobFailed(job.id, message, "Transcription failed.");
+    const code = error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code ?? "")
+      : "";
+    await markJobFailed(job.id, message, "Transcription failed.", {
+      error,
+      code: code || "TRANSCRIPTION_FAILED",
+      stage: code === "INVALID_SERMON_STATUS_TRANSITION"
+        ? "sermon_status_transition"
+        : "transcription",
+      retryable: code !== "INVALID_SERMON_STATUS_TRANSITION",
+      details: {
+        forceRequested: options?.force === true,
+      },
+    });
 
     try {
       await updateSermonStatus(sermon.id, "FAILED");
@@ -2312,7 +2325,7 @@ export async function transcribeSermonAudio(
     }
 
     await appendPipelineLog(sermon.id, `Transcription failed: ${message}`);
-    throw new Error(message);
+    throw error instanceof Error ? error : new Error(message);
   }
 }
 

@@ -597,6 +597,7 @@ function getScheduledPostGroupKey(post: ScheduledPost): string {
     post.socialAccountId ?? post.socialAccountLabel ?? "media-team",
     post.postingSlot,
     [...post.clipIds].sort().join("|"),
+    [...(post.contentAssets ?? []).map((asset) => asset.id)].sort().join("|"),
   ].join("::");
 }
 
@@ -951,6 +952,7 @@ export function ReadyQueueExperience({
   const calendarWindowPosts = calendarDays.flatMap((day) => day.posts);
   const calendarPlannedCount = calendarWindowPosts.filter((post) => ACTIVE_CALENDAR_STATUSES.has(post.status)).length;
   const calendarPostedCount = calendarWindowPosts.filter((post) => post.status === "POSTED").length;
+  const calendarGeneratedContentCount = calendarWindowPosts.filter((post) => (post.contentAssets?.length ?? 0) > 0).length;
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 760px)");
@@ -1643,13 +1645,13 @@ export function ReadyQueueExperience({
         </aside>
       </section>
 
-      <section id="posting-calendar" className="social-calendar-panel premium-ready-calendar" aria-label="Social media calendar">
+      <section id="posting-calendar" className="social-calendar-panel premium-ready-calendar" aria-label="Mixed-content social media calendar">
         <div className="social-calendar-header">
           <div>
             <p className="kicker">Plan ahead</p>
-            <h2>Social media calendar</h2>
+            <h2>Mixed-content calendar</h2>
             <p className="muted small">
-              Pick a day, schedule the selected clip, then track each platform post through publishing.
+              Track clips, quote cards, carousels, prayers, devotionals, and invitations in one publishing plan.
             </p>
           </div>
           <div className="social-calendar-window-controls" aria-label="Calendar window controls">
@@ -1694,7 +1696,10 @@ export function ReadyQueueExperience({
         <div className="social-calendar-toolbar">
           <div className="social-calendar-summary">
             <strong>{calendarWindowLabel}</strong>
-            <span>{calendarPlannedCount} active · {calendarPostedCount} posted · {calendarClipIds.length} clip{calendarClipIds.length === 1 ? "" : "s"} selected</span>
+            <span>
+              {calendarPlannedCount} active · {calendarPostedCount} posted · {calendarGeneratedContentCount} generated post{calendarGeneratedContentCount === 1 ? "" : "s"}
+              {calendarClipIds.length > 0 ? ` · ${calendarClipIds.length} clip${calendarClipIds.length === 1 ? "" : "s"} selected` : ""}
+            </span>
           </div>
           <label className="ready-select-field">
             <span>Platform</span>
@@ -1782,6 +1787,9 @@ export function ReadyQueueExperience({
                             {SCHEDULED_POST_STATUS_LABELS[post.status]}
                           </span>
                           <span className="status-pill">{post.automationMode === "AUTOMATIC" ? "Automatic" : "Manual"}</span>
+                          {(post.contentAssets ?? []).slice(0, 2).map((asset) => (
+                            <span key={asset.id} className="status-pill">{asset.assetType.replace(/_/g, " ").toLowerCase()}</span>
+                          ))}
                         </div>
                         {post.publishError ? (
                           <div className="error-banner stack-sm">

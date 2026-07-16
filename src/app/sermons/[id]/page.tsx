@@ -20,7 +20,10 @@ import { SermonDetailPreviewCard } from "@/app/sermons/[id]/sermon-detail-previe
 import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
 import { getAudioPath, getLogPath, getSourceVideoPath } from "@/server/agents/storage";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
-import { pastorFriendlyError } from "@/lib/pastorFriendlyErrors";
+import {
+  buildPastorProcessingFailurePresentation,
+  summarizeTranscriptFailureDiagnostics,
+} from "@/lib/pastorFriendlyErrors";
 import {
   derivePastorSermonWorkflow,
   isStaleActiveProcessingJob,
@@ -177,6 +180,7 @@ type SermonDetailItem = {
   status: SermonStatus;
   transcript: {
     fullText: string;
+    updatedAt: Date;
   } | null;
   sourceDurationSeconds: number | null;
   sermonStartSeconds: number | null;
@@ -732,6 +736,7 @@ export default async function SermonDetailPage({
       transcript: {
         select: {
           fullText: true,
+          updatedAt: true,
         },
       },
       transcriptSegments: {
@@ -1001,6 +1006,27 @@ export default async function SermonDetailPage({
   const hasOutdatedAssets = operationSummary.outdated > 0;
   const unresolvedFailedJobs = selectUnresolvedPastorFailedJobs(processingJobs);
   const latestFailedJob = unresolvedFailedJobs[0] ?? null;
+  const transcriptFailureDiagnostics = summarizeTranscriptFailureDiagnostics(sermon.transcriptSegments);
+  const transcriptRefreshedAfterFailure = Boolean(
+    latestFailedJob &&
+    sermon.transcript?.updatedAt &&
+    sermon.transcript.updatedAt.getTime() > latestFailedJob.updatedAt.getTime(),
+  );
+  const latestFailurePresentation = latestFailedJob && !isStaleActiveProcessingJob(latestFailedJob)
+    ? buildPastorProcessingFailurePresentation({
+      message: latestFailedJob.errorMessage,
+      transcriptDiagnostics: transcriptFailureDiagnostics,
+      transcriptRefreshedAfterFailure,
+    })
+    : null;
+  const clipQualityGateFailure = latestFailurePresentation?.kind === "CLIP_QUALITY_GATE"
+    ? latestFailurePresentation
+    : null;
+  const latestFailedJobLogTail = latestFailedJob?.logs
+    ?.split("\n")
+    .slice(-12)
+    .join("\n")
+    .trim() || null;
   const failedRecoveryCount = operationSummary.failed + unresolvedFailedJobs.length;
   const needsAttention = failedRecoveryCount > 0 || hasOutdatedAssets;
   const jobStatusByType = processingJobs.reduce<Record<string, string>>((acc, job) => {
@@ -1213,7 +1239,9 @@ export default async function SermonDetailPage({
     staleClipCount: operationSummary.outdated,
     latestFailedStepType: latestFailedJob?.type ?? null,
   });
-  const commandCenterTitle = failedRecoveryCount > 0
+  const commandCenterTitle = clipQualityGateFailure
+    ? clipQualityGateFailure.title
+    : failedRecoveryCount > 0
     ? "Resolve failed item"
     : hasLiveAnalysisWork && activeProcessingStep
     ? activeProcessingStep.label
@@ -1222,7 +1250,9 @@ export default async function SermonDetailPage({
       : clipCounts.suggested > 0 && !hasReadyClips
         ? "Review suggested clips"
     : pastorWorkflow.nextAction;
-  const commandCenterDescription = failedRecoveryCount > 0
+  const commandCenterDescription = clipQualityGateFailure
+    ? clipQualityGateFailure.summary
+    : failedRecoveryCount > 0
     ? `${failedRecoveryCount} failed ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention before this sermon keeps moving. Open Advanced recovery tools when you are ready to retry.`
     : hasLiveAnalysisWork && activeProcessingStep
       ? activeProcessingStep.state === "active"
@@ -1343,7 +1373,9 @@ export default async function SermonDetailPage({
                   : `${operationSummary.outdated} ${operationSummary.outdated === 1 ? "asset" : "assets"} need refresh`}
               </strong>
               <span>
-                {failedRecoveryCount > 0
+                {clipQualityGateFailure
+                  ? clipQualityGateFailure.guidance
+                  : failedRecoveryCount > 0
                   ? "Retry and repair controls stay tucked inside Advanced recovery tools."
                   : "Refresh prepared media before posting stale downloads."}
               </span>
@@ -1352,7 +1384,7 @@ export default async function SermonDetailPage({
           <div className="review-priority-actions">
             {failedRecoveryCount > 0 ? (
               <a href="#troubleshoot-this-sermon" className="button primary">
-                Open recovery tools
+                {clipQualityGateFailure ? "Review transcript recovery" : "Open recovery tools"}
               </a>
             ) : null}
             {failedRecoveryCount === 0 && hasLiveAnalysisWork ? (
@@ -1526,7 +1558,11 @@ export default async function SermonDetailPage({
       </section>
       ) : null}
 
-      <details id="troubleshoot-this-sermon" className="advanced-details troubleshoot-details">
+      <details
+        id="troubleshoot-this-sermon"
+        className="advanced-details troubleshoot-details"
+        open={failedRecoveryCount > 0}
+      >
         <summary>Advanced recovery tools</summary>
         <div className="stack-lg advanced-details-body">
           <section className="card stack-md">
@@ -1594,18 +1630,68 @@ export default async function SermonDetailPage({
                   {isStaleActiveProcessingJob(latestFailedJob) ? "appears stuck." : "failed."}
                 </p>
                 <div className="error-banner stack-sm">
-                  <p>
-                    {isStaleActiveProcessingJob(latestFailedJob)
-                      ? "This step appears to be stuck from an earlier local run. Retry it to continue."
-                      : pastorFriendlyError(latestFailedJob.errorMessage)}
-                  </p>
+                  {isStaleActiveProcessingJob(latestFailedJob) ? (
+                    <p>This step appears to be stuck from an earlier local run. Retry it to continue.</p>
+                  ) : latestFailurePresentation ? (
+                    <>
+                      <strong>{latestFailurePresentation.title}</strong>
+                      <p>{latestFailurePresentation.summary}</p>
+                    </>
+                  ) : null}
                 </div>
+                {latestFailurePresentation?.metrics.length ? (
+                  <div className="troubleshoot-metric-row" aria-label="Failure diagnostic summary">
+                    {latestFailurePresentation.metrics.map((metric) => (
+                      <span key={metric.label}>
+                        {metric.label}: <strong>{metric.value}</strong>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {latestFailurePresentation ? (
+                  <p className="failure-recovery-guidance">{latestFailurePresentation.guidance}</p>
+                ) : null}
                 {unresolvedFailedJobs.length > 1 ? (
                   <p className="muted small">
                     {unresolvedFailedJobs.length - 1} other failed or stuck processing step{unresolvedFailedJobs.length === 2 ? "" : "s"} can be retried after this one.
                   </p>
                 ) : null}
-                <RetryFailedJobButton sermonId={sermon.id} jobId={latestFailedJob.id} />
+                {clipQualityGateFailure && !transcriptRefreshedAfterFailure ? (
+                  <div className="stack-sm failure-recovery-action">
+                    <TranscribeSermonButton
+                      sermonId={sermon.id}
+                      status={sermon.status}
+                      hasAudioFile={hasAudioFile}
+                      buttonLabel="Transcribe sermon again"
+                      force
+                    />
+                    <p className="muted small">After the new transcript finishes, return here and retry clip discovery.</p>
+                  </div>
+                ) : (
+                  <RetryFailedJobButton sermonId={sermon.id} jobId={latestFailedJob.id} />
+                )}
+                {(latestFailedJob.errorMessage || latestFailedJobLogTail) ? (
+                  <details className="processing-technical-details failure-technical-details">
+                    <summary>View technical details</summary>
+                    <div className="stack-sm failure-technical-details-body">
+                      <p className="muted small">
+                        Job reference: <code>{latestFailedJob.id}</code> · Updated {formatDateTime(latestFailedJob.updatedAt)}
+                      </p>
+                      {latestFailedJob.errorMessage ? (
+                        <div>
+                          <strong>Recorded error</strong>
+                          <pre>{latestFailedJob.errorMessage}</pre>
+                        </div>
+                      ) : null}
+                      {latestFailedJobLogTail ? (
+                        <div>
+                          <strong>Latest job notes</strong>
+                          <pre>{latestFailedJobLogTail}</pre>
+                        </div>
+                      ) : null}
+                    </div>
+                  </details>
+                ) : null}
               </div>
             ) : (
               <p className="muted">No failed or stuck sermon steps are currently waiting for a retry.</p>

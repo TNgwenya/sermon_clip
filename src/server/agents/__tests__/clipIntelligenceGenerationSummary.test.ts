@@ -59,6 +59,65 @@ describe("clip intelligence generation summary", () => {
     expect(summary.topClipIds[0]).toBe("ready");
   });
 
+  it("records actionable transcript and threshold diagnostics for a low-volume safety stop", () => {
+    const details = __clipIntelligenceTestUtils.buildClipVolumeGateFailureDetails({
+      readiness: {
+        ready: false,
+        reason: "Transcript coverage has large gaps that make automatic clipping unreliable.",
+        warnings: ["LOW_TRANSCRIPT_COVERAGE"],
+        wordCount: 1_908,
+        meaningfulSegmentCount: 127,
+        durationSeconds: 3_329,
+        coveredSeconds: 982,
+        coverageRatio: 0.295,
+        maxGapSeconds: 950.5,
+        largeGapCount: 6,
+        repeatedSegmentRatio: 0.04,
+        distinctSermonTokenCount: 420,
+        distinctSermonTokenRatio: 0.42,
+        averageSegmentDurationSeconds: 3.62,
+      },
+      transcriptQualityMode: "UNUSABLE",
+      target: {
+        durationSeconds: 3_329,
+        label: "full-sermon",
+        minReviewSuggestions: 20,
+        targetReviewSuggestions: 26,
+        maxReviewSuggestions: 32,
+        batchClipLimit: 4,
+        rangeLabel: "20-32",
+      },
+      reviewableSuggestionCount: 12,
+      existingSuggestionCount: 0,
+      newSuggestionCount: 12,
+      topUpCandidateCount: 4,
+      topUpSavedCount: 4,
+      validationRejectedCount: 10,
+      boundaryRejectedCount: 1,
+      duplicateCount: 29,
+    });
+
+    expect(details.reasonCode).toBe("CLIP_REVIEW_BOARD_BELOW_FLOOR");
+    expect(details.retryableWithoutInputChange).toBe(false);
+    expect(details.transcript).toMatchObject({
+      qualityMode: "UNUSABLE",
+      wordCount: 1_908,
+      coverageRatio: 0.295,
+      largeGapCount: 6,
+      maxGapSeconds: 950.5,
+    });
+    expect(details.volumeTarget).toMatchObject({
+      acceptanceFloor: 14,
+      actual: 12,
+      shortfallToFloor: 2,
+    });
+    expect(details.candidateBreakdown).toMatchObject({
+      validationOrScopeRejected: 10,
+      boundaryRejected: 1,
+      duplicateOrOverlapRemoved: 29,
+    });
+  });
+
   it("counts saved clips as post-ready only when the deeper quality gates agree", () => {
     const summary = __clipIntelligenceTestUtils.buildStructuredGenerationSummary({
       totalCandidatesGenerated: 4,

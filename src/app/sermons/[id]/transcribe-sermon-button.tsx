@@ -13,6 +13,8 @@ type TranscribeSermonButtonProps = {
   sermonId: string;
   status: string;
   hasAudioFile: boolean;
+  buttonLabel?: string;
+  force?: boolean;
 };
 
 const initialState: TranscribeAudioFormState = {
@@ -20,13 +22,21 @@ const initialState: TranscribeAudioFormState = {
   message: "",
 };
 
-function SubmitButton({ status, hasAudioFile }: { status: string; hasAudioFile: boolean }) {
+function SubmitButton({
+  status,
+  hasAudioFile,
+  buttonLabel,
+}: {
+  status: string;
+  hasAudioFile: boolean;
+  buttonLabel: string;
+}) {
   const { pending } = useFormStatus();
   const isTranscribing = pending || status === "TRANSCRIBING";
 
   return (
     <button type="submit" className="button" disabled={isTranscribing || !hasAudioFile}>
-      {isTranscribing ? "Transcribing..." : "Transcribe Sermon"}
+      {isTranscribing ? "Transcribing..." : buttonLabel}
     </button>
   );
 }
@@ -35,6 +45,8 @@ export function TranscribeSermonButton({
   sermonId,
   status,
   hasAudioFile,
+  buttonLabel = "Transcribe Sermon",
+  force = false,
 }: TranscribeSermonButtonProps) {
   const [state, action] = useActionState(transcribeAudioAction, initialState);
   const router = useRouter();
@@ -48,7 +60,8 @@ export function TranscribeSermonButton({
   return (
     <form action={action} className="stack-sm">
       <input type="hidden" name="sermonId" value={sermonId} />
-      <SubmitButton status={status} hasAudioFile={hasAudioFile} />
+      {force ? <input type="hidden" name="force" value="true" /> : null}
+      <SubmitButton status={status} hasAudioFile={hasAudioFile} buttonLabel={buttonLabel} />
       {!hasAudioFile ? (
         <p className="muted">Audio file is missing. Extract or restore audio.mp3 first.</p>
       ) : null}

@@ -16,9 +16,8 @@ It supports:
 - One-click pre-review processing (download, extract, transcribe, generate clips)
 
 ## What this MVP does not do yet
-- Cloud storage or S3 uploads
 - Authentication or user roles
-- Full multi-platform social posting integrations beyond the first YouTube Shorts worker adapter
+- Unattended publishing without a connected platform account, public R2 staging, and a live posting worker
 - Payments or subscriptions
 - Automatic approval of clips
 - Automatic export or automatic subtitle generation
@@ -40,6 +39,7 @@ It supports:
 - Postgres via Prisma
 - FFmpeg
 - yt-dlp
+- Python 3 with the branded-guide PDF dependency (`python3 -m pip install -r requirements-pdf.txt`)
 - OpenAI API key
 
 ## Environment variables
@@ -63,6 +63,7 @@ DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require
 Optional:
 
 SERMON_STORAGE_ROOT=/custom/path/if/you/want
+PYTHON_BIN=/path/to/python3
 OPENAI_CLIP_SELECTION_MODEL=
 OPENAI_CLIP_REPAIR_MODEL=
 OPENAI_SERMON_INTELLIGENCE_MODEL=
@@ -130,7 +131,7 @@ The automation architecture keeps Vercel Hobby lightweight:
 - Neon Free Postgres stores metadata and scheduled post state.
 - Clip video files stay on the Mac in local storage.
 - The Mac worker polls Vercel, claims due posts, uploads from local files, and reports status.
-- YouTube Shorts is the first automatic posting adapter.
+- The posting worker handles verified clip-video adapters plus Facebook and Instagram generated-image publishing.
 
 Run the local worker:
 
@@ -155,9 +156,13 @@ Useful worker settings:
 - `FACEBOOK_PAGE_ID`: Facebook Page id to upload videos to.
 - `FACEBOOK_PAGE_ACCESS_TOKEN`: Page access token for Graph API video publishing.
 - `FACEBOOK_DEFAULT_PUBLISHED`: defaults to `false`, so early tests upload videos as unpublished. Set to `true` only when you are ready for automatic public Page posts.
+- `R2_PUBLIC_BASE_URL`: HTTPS public bucket URL or custom domain used for Meta-fetchable image media.
+- `R2_CONTENT_ASSET_UPLOAD_DISABLED`: optional emergency switch; set to `true` to disable automatic content-image staging.
 
-Automatic YouTube Shorts, TikTok, and Facebook posts can upload directly from Mac-local files. Instagram automatic posting still needs a public video URL or temporary media hosting.
+Automatic YouTube Shorts, TikTok, and Facebook video posts can upload from Mac-local files. Approved generated images can also publish directly to Facebook Pages or professional Instagram accounts: Sermon Clip renders JPEG publishing variants, stages them at the configured public R2 URL, validates the connected Meta permission and live worker, and then publishes a single image or ordered carousel. Facebook remains unpublished by default until `FACEBOOK_DEFAULT_PUBLISHED=true` is deliberately enabled.
 After connecting YouTube in Social Settings, stored OAuth credentials are preferred. `YOUTUBE_REFRESH_TOKEN` is only a legacy fallback; remove or replace it if Google reports that the token was expired or revoked.
+
+The generated-content desk also includes a reusable Design Studio, an operational mixed-content weekly planner at `/weekly-plan`, WhatsApp/Story/HTML-email handoff packs, and branded ministry-guide PDFs. Weekly-plan bulk scheduling remains a reviewed manual handoff by design.
 
 For Neon/Vercel setup, create the Neon database, set `DATABASE_URL` in Vercel and locally, then run `npx prisma db push` once against Neon. To copy existing local SQLite rows into Neon, run:
 

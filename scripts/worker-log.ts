@@ -40,7 +40,56 @@ function timestamp(now = new Date()): string {
 }
 
 function truncate(value: string, maxLength = 180): string {
-  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  if (maxLength <= 3) {
+    return ".".repeat(Math.max(0, maxLength));
+  }
+
+  return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+
+  const code = String((error as { code?: unknown }).code ?? "").trim();
+  return code || undefined;
+}
+
+function errorCause(error: Error): string | undefined {
+  if (error.cause === undefined || error.cause === null) {
+    return undefined;
+  }
+
+  const cause = error.cause;
+  if (cause instanceof Error) {
+    const code = errorCode(cause);
+    return truncate(`${cause.name}${code ? ` [${code}]` : ""}: ${cause.message}`, 360);
+  }
+
+  if (typeof cause === "string") {
+    return truncate(cause, 360);
+  }
+
+  try {
+    return truncate(JSON.stringify(cause), 360);
+  } catch {
+    return truncate(String(cause), 360);
+  }
+}
+
+function shortStack(error: Error): string | undefined {
+  const lines = error.stack
+    ?.split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 5);
+
+  return lines && lines.length > 0 ? truncate(lines.join(" | "), 1_000) : undefined;
 }
 
 function formatValue(value: unknown): string | null {
@@ -152,9 +201,30 @@ export function formatBytes(bytes: number): string {
 
 export function errorFields(error: unknown): LogFields {
   const message = error instanceof Error ? error.message : String(error);
-  const code = typeof error === "object" && error !== null && "code" in error
-    ? String((error as { code?: unknown }).code ?? "") || undefined
-    : undefined;
+  const code = errorCode(error);
 
-  return { error: message, code };
+  return {
+    error: truncate(message, 1_000),
+    name: error instanceof Error ? error.name : typeof error,
+    code,
+    cause: error instanceof Error ? errorCause(error) : undefined,
+    stack: error instanceof Error ? shortStack(error) : undefined,
+  };
+}
+
+/**
+ * Builds one readable, bounded line for persistence in a ProcessingJob log.
+ * Console output remains compact, while the database retains enough context to
+ * correlate a failure with its worker claim and a short stack trace.
+ */
+export function formatDiagnosticLogEntry(
+  message: string,
+  fields: LogFields,
+  maxLength = 2_000,
+): string {
+  const normalizedMaxLength = Number.isFinite(maxLength) && maxLength > 0
+    ? Math.floor(maxLength)
+    : 2_000;
+  const details = compactFields(fields);
+  return truncate(details ? `${message}. ${details}` : message, normalizedMaxLength);
 }

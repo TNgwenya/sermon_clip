@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { validateStatusTransition } from "@/server/status/sermonStatus";
+import { SermonStatusTransitionError, validateStatusTransition } from "@/server/status/sermonStatus";
 
 describe("sermon status transitions", () => {
   it("allows forward transitions", () => {
@@ -12,6 +12,23 @@ describe("sermon status transitions", () => {
     const result = validateStatusTransition("CREATED", "TRANSCRIBED");
     expect(result.valid).toBe(false);
     expect(result.reason).toContain("Invalid status transition");
+  });
+
+  it("carries correlation fields on transition errors", () => {
+    const error = new SermonStatusTransitionError(
+      "Invalid status transition: GENERATING_CLIPS -> TRANSCRIBING.",
+      "sermon-1",
+      "GENERATING_CLIPS",
+      "TRANSCRIBING",
+    );
+
+    expect(error).toMatchObject({
+      name: "SermonStatusTransitionError",
+      code: "INVALID_SERMON_STATUS_TRANSITION",
+      sermonId: "sermon-1",
+      currentStatus: "GENERATING_CLIPS",
+      nextStatus: "TRANSCRIBING",
+    });
   });
 
   it("allows failure transitions from any active state", () => {

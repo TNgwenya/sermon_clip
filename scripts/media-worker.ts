@@ -3,7 +3,12 @@ import os from "node:os";
 import type { ProcessingJob } from "@prisma/client";
 import nextEnv from "@next/env";
 
-import { createWorkerLogger, errorFields, formatDuration } from "./worker-log.ts";
+import {
+  createWorkerLogger,
+  errorFields,
+  formatDiagnosticLogEntry,
+  formatDuration,
+} from "./worker-log.ts";
 
 process.env.WORKER_ENABLED ||= "true";
 const { loadEnvConfig } = nextEnv;
@@ -411,7 +416,11 @@ async function runJob(job: ProcessingJob): Promise<string> {
       const { generateClipSuggestions } = await import("../src/server/agents/clipIntelligenceAgent");
       const { prepareGeneratedClipReviewAssets } = await import("../src/server/agents/clipReviewAssetService");
       const append = shouldAppendGeneratedClips(job);
-      const result = await generateClipSuggestions(sermonId, { force: false, append });
+      const result = await generateClipSuggestions(sermonId, {
+        force: false,
+        append,
+        processingJobId: job.id,
+      });
       const previewResult = await prepareGeneratedClipReviewAssets({ sermonId, force: false });
       const previewSummary = `Preview prep: ${previewResult.prepared} prepared, ${previewResult.skipped} skipped, ${previewResult.failed} failed.`;
       return result.reusedExistingSuggestions
@@ -458,8 +467,18 @@ async function processNextJob(): Promise<void> {
     }
 
     const startedAt = Date.now();
-    logger.info("claimed job", { job: job.id, sermon: job.sermonId, type: job.type });
-    await appendJobLog(job.id, `Claimed and started ${job.type} on ${workerId}.`);
+    logger.info("claimed job", {
+      job: job.id,
+      sermonId: job.sermonId,
+      type: job.type,
+      workerId,
+      attempt: job.attemptCount,
+      maxAttempts: maxWorkerAttempts,
+    });
+    await appendJobLog(
+      job.id,
+      `Claimed and started ${job.type} on ${workerId} for sermon ${job.sermonId}; attempt ${job.attemptCount}/${maxWorkerAttempts}.`,
+    );
     const stopHeartbeat = startJobHeartbeat(job.id);
 
     try {
@@ -473,13 +492,22 @@ async function processNextJob(): Promise<void> {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await markJobFailed(job.id, message);
-      logger.error("job failed", {
+      const durationMs = Date.now() - startedAt;
+      const diagnosticFields = {
         job: job.id,
+        sermonId: job.sermonId,
         type: job.type,
-        duration: formatDuration(Date.now() - startedAt),
-        error: message,
-      });
+        workerId,
+        attempt: job.attemptCount,
+        maxAttempts: maxWorkerAttempts,
+        duration: formatDuration(durationMs),
+        durationMs,
+        ...errorFields(error),
+      };
+      const diagnosticLog = formatDiagnosticLogEntry("Media worker job failed", diagnosticFields);
+
+      logger.error("job failed", diagnosticFields);
+      await markJobFailed(job.id, message, diagnosticLog);
     } finally {
       stopHeartbeat();
     }

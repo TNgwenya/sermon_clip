@@ -1,0 +1,295 @@
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.72fr) minmax(20rem, 1.5fr) minmax(19rem, 1fr);
+  min-height: 44rem;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: #0c0d11;
+}
+
+.rail,
+.inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+  padding: 1.1rem;
+  background: #111218;
+}
+
+.rail { border-right: 1px solid rgba(255, 255, 255, 0.08); }
+.inspector { border-left: 1px solid rgba(255, 255, 255, 0.08); }
+
+.slideList {
+  display: grid;
+  gap: 0.45rem;
+  overflow-y: auto;
+  max-height: 31rem;
+  padding-right: 0.2rem;
+}
+
+.slideButton,
+.activeSlide {
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.68rem;
+  text-align: left;
+  color: #e5e7eb;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+}
+
+.activeSlide {
+  border-color: rgba(45, 212, 191, 0.62);
+  background: rgba(20, 184, 166, 0.1);
+  box-shadow: inset 3px 0 0 #2dd4bf;
+}
+
+.slideButton > span:first-child,
+.activeSlide > span:first-child {
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 6px;
+  color: #99f6e4;
+  background: rgba(20, 184, 166, 0.15);
+  font-weight: 850;
+}
+
+.slideButton > span:last-child,
+.activeSlide > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 0.14rem;
+}
+
+.slideButton strong,
+.activeSlide strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slideButton small,
+.activeSlide small {
+  color: #8f95a3;
+  text-transform: capitalize;
+}
+
+.formatButtons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.formatButtons button,
+.reorderButtons button {
+  min-height: 2.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  color: #d1d5db;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.formatButtons .selectedFormat {
+  border-color: rgba(45, 212, 191, 0.65);
+  color: #99f6e4;
+  background: rgba(20, 184, 166, 0.12);
+}
+
+.fileSummary {
+  display: grid;
+  gap: 0.18rem;
+  margin-top: auto;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.canvasColumn {
+  display: grid;
+  align-content: start;
+  gap: 0.7rem;
+  min-width: 0;
+  padding: clamp(1rem, 2.5vw, 2rem);
+  background:
+    radial-gradient(circle at 50% 20%, rgba(45, 212, 191, 0.08), transparent 38%),
+    #090a0d;
+}
+
+.previewToolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.previewStage {
+  display: grid;
+  place-items: center;
+  min-height: 30rem;
+  padding: clamp(0.75rem, 2vw, 1.5rem);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background-color: #15161b;
+  background-image:
+    linear-gradient(45deg, rgba(255,255,255,.025) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255,255,255,.025) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,.025) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,.025) 75%);
+  background-size: 24px 24px;
+  background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+}
+
+.svgPreview {
+  width: min(100%, 30rem);
+  overflow: hidden;
+  border-radius: 5px;
+  box-shadow: 0 1.2rem 3rem rgba(0, 0, 0, 0.38);
+}
+
+.svgPreview svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.renderedFiles {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 0.7rem;
+}
+
+.renderedFiles summary { cursor: pointer; font-weight: 750; }
+.renderedFiles > div {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.7rem;
+}
+
+.renderedFiles a {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+}
+
+.renderedFiles img {
+  width: 100%;
+  height: 6rem;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #050506;
+}
+
+.renderedFiles span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector > label,
+.inlineFields label {
+  display: grid;
+  gap: 0.38rem;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.inspector input,
+.inspector textarea,
+.inspector select { width: 100%; }
+
+.inlineFields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.7rem;
+}
+
+.reorderButtons {
+  display: grid;
+  gap: 0.38rem;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.reorderButtons > div { display: flex; gap: 0.32rem; }
+.reorderButtons button { min-width: 2.35rem; padding-inline: 0.55rem; }
+
+.evidence {
+  padding: 0.7rem;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.evidence summary { cursor: pointer; font-weight: 750; }
+.evidence p { margin-top: 0.55rem; color: #cbd5e1; line-height: 1.5; }
+
+.templatePicker {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.templatePicker legend {
+  margin-bottom: 0.45rem;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.templatePicker button {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.62rem 0.7rem;
+  text-align: left;
+  color: #e5e7eb;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+}
+
+.templatePicker button span { color: #8f95a3; font-size: 0.72rem; line-height: 1.35; }
+.templatePicker .selectedTemplate {
+  border-color: rgba(45, 212, 191, 0.62);
+  background: rgba(20, 184, 166, 0.1);
+}
+.templatePicker .selectedTemplate strong { color: #99f6e4; }
+
+.saveActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: auto;
+  padding-top: 0.7rem;
+}
+
+@media (max-width: 1100px) {
+  .workspace { grid-template-columns: 14rem minmax(19rem, 1fr); }
+  .inspector {
+    grid-column: 1 / -1;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .workspace { display: block; }
+  .rail,
+  .inspector { border: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+  .slideList { max-height: 16rem; }
+  .previewStage { min-height: 20rem; }
+  .inlineFields { grid-template-columns: 1fr; }
+  .saveActions { grid-template-columns: 1fr; }
+}

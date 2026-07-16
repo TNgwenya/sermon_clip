@@ -1,8 +1,12 @@
 import { stat } from "node:fs/promises";
 import os from "node:os";
 
-import type { AutomationPost, UploadResult } from "./posting-platforms.ts";
-import { AmbiguousPlatformPublishError, uploadPlatformPost } from "./posting-platforms.ts";
+import type { AutomationImageMedia, AutomationPost, UploadResult } from "./posting-platforms.ts";
+import {
+  AmbiguousPlatformPublishError,
+  selectPostImageMedia,
+  uploadPlatformPost,
+} from "./posting-platforms.ts";
 import { uploadPostingMediaToR2, type StagedMedia } from "./posting-media-staging.ts";
 import { createWorkerLogger, errorFields, formatBytes, formatDuration } from "./worker-log.ts";
 
@@ -247,7 +251,97 @@ async function firstExistingFile(candidates: string[]): Promise<{ path: string; 
   throw new Error("No local video file exists for this scheduled post.");
 }
 
+async function prepareImageMedia(post: AutomationPost, mediaItems: AutomationImageMedia[]): Promise<{
+  post: AutomationPost;
+  stagedMedia: StagedMedia[];
+}> {
+  const stagedByFileId = new Map<string, StagedMedia>();
+
+  for (const media of mediaItems) {
+    if (media.publicUrl?.trim()) continue;
+    if (!media.filePath?.trim()) {
+      throw new Error(`Prepared image ${media.fileName} has no public URL or local file to stage.`);
+    }
+    const localImage = await firstExistingFile([media.filePath]);
+    const staged = await uploadPostingMediaToR2({
+      scheduledPostId: post.id,
+      clipId: `${media.assetId}-${media.id}`,
+      videoPath: localImage.path,
+      videoSize: localImage.size,
+      contentType: media.mimeType,
+    });
+    stagedByFileId.set(media.id, staged);
+    logger.success("image staged for Meta publishing", {
+      post: post.id,
+      platform: post.platform,
+      file: media.fileName,
+      size: formatBytes(localImage.size),
+    });
+  }
+
+  if (stagedByFileId.size === 0) {
+    return { post, stagedMedia: [] };
+  }
+
+  return {
+    post: {
+      ...post,
+      contentAssets: post.contentAssets?.map((asset) => ({
+        ...asset,
+        files: asset.files.map((file) => {
+          const staged = stagedByFileId.get(file.id);
+          return staged
+            ? {
+                ...file,
+                objectKey: staged.objectKey,
+                publicUrl: staged.publicUrl,
+              }
+            : file;
+        }),
+      })),
+    },
+    stagedMedia: Array.from(stagedByFileId.values()),
+  };
+}
+
 async function publishPost(post: AutomationPost): Promise<UploadResult> {
+  const imageMedia = selectPostImageMedia(post);
+  if (imageMedia.length > 0) {
+    if (dryRun) {
+      logger.warn("dry-run image publish skipped", {
+        post: post.id,
+        platform: post.platform,
+        images: imageMedia.length,
+      });
+      return {
+        status: "SKIPPED",
+        externalPostId: `dry-run-${post.id}`,
+        finalPrivacyStatus: "dry-run",
+        publishError: "Dry run only. Set POSTING_WORKER_DRY_RUN=false to upload to the platform.",
+      };
+    }
+
+    let stagedMedia: StagedMedia[] = [];
+    try {
+      const prepared = await prepareImageMedia(post, imageMedia);
+      stagedMedia = prepared.stagedMedia;
+      const result = await uploadPlatformPost(prepared.post, "", 0);
+      const firstStaged = stagedMedia[0];
+      return {
+        ...result,
+        mediaObjectKey: result.mediaObjectKey ?? firstStaged?.objectKey,
+        mediaPublicUrl: result.mediaPublicUrl ?? firstStaged?.publicUrl,
+        mediaUploadedAt: result.mediaUploadedAt ?? firstStaged?.uploadedAt,
+      };
+    } catch (error) {
+      const firstStaged = stagedMedia[0];
+      if (error instanceof Error && firstStaged) {
+        (error as PublishErrorWithStagedMedia).stagedMedia = firstStaged;
+      }
+      throw error;
+    }
+  }
+
   const firstClip = post.clips[0];
   if (!firstClip) {
     throw new Error("Scheduled post does not include a clip.");

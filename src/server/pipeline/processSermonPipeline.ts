@@ -123,6 +123,14 @@ function buildFailureSummary(steps: PipelineStepResult[], failedLabel: string, f
   ].join(" ");
 }
 
+function shouldMarkParentJobRunning(input: {
+  suppliedParentJobId: boolean;
+  status: string;
+  attemptCount: number;
+}): boolean {
+  return !input.suppliedParentJobId || input.status !== "RUNNING" || input.attemptCount < 1;
+}
+
 export async function processSermonPipeline(
   sermonId: string,
   options?: ProcessSermonPipelineOptions,
@@ -146,6 +154,8 @@ export async function processSermonPipeline(
           id: true,
           sermonId: true,
           type: true,
+          status: true,
+          attemptCount: true,
         },
       })
     : await createProcessingJob(sermon.id, "PROCESS_SERMON");
@@ -155,7 +165,16 @@ export async function processSermonPipeline(
   const steps: PipelineStepResult[] = [];
   let activeStepLabel = "Download video";
 
-  await markJobRunning(parentJob.id);
+  // The media worker atomically claims PROCESS_SERMON jobs and increments their
+  // attempt count before entering this pipeline. Do not count the same attempt
+  // twice. Directly created or unclaimed parent jobs still transition here.
+  if (shouldMarkParentJobRunning({
+    suppliedParentJobId: Boolean(options?.parentJobId),
+    status: parentJob.status,
+    attemptCount: parentJob.attemptCount,
+  })) {
+    await markJobRunning(parentJob.id);
+  }
   await appendJobLog(parentJob.id, `One-click sermon processing started for ${sermon.title}.`);
   await appendPipelineLog(sermon.id, "One-click sermon processing started.");
 
@@ -231,7 +250,10 @@ export async function processSermonPipeline(
     // Generate sermon intelligence immediately after transcription so clip selection can reuse it.
     if (afterTranscript.transcript?.id) {
       activeStepLabel = "Generate sermon intelligence";
-      const intelligenceResult = await generateSermonIntelligence(sermon.id, { force: options?.force }).catch((err: unknown) => {
+      const intelligenceResult = await generateSermonIntelligence(sermon.id, {
+        force: options?.force,
+        parentJobId: parentJob.id,
+      }).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : "Unknown error";
         return { intelligenceId: sermon.id, status: "FAILED" as const, failureReason: msg };
       });
@@ -318,6 +340,7 @@ export async function processSermonPipeline(
 }
 
 export const __processSermonPipelineTestUtils = {
+  shouldMarkParentJobRunning,
   buildGeneratedClipReviewAssetPlan: (
     clip: Parameters<typeof __clipReviewAssetServiceTestUtils.shouldPreparePreview>[0],
     force?: boolean,

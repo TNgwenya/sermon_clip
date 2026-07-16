@@ -12,7 +12,7 @@ const DEFAULT_CHAT_MODEL_BY_TASK: Record<OpenAIChatTask, string> = {
   clipRepair: "gpt-4o-mini",
   sermonIntelligence: "gpt-4o-mini",
   ministryMoment: "gpt-4o-mini",
-  contentMultiplication: "gpt-4o-mini",
+  contentMultiplication: "gpt-5.4",
   clipQuality: "gpt-4o-mini",
   clipCompleteness: "gpt-4o-mini",
 };

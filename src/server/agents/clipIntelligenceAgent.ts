@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import type { Prisma, ProcessingJob } from "@prisma/client";
 import { ZodError } from "zod";
 
 import { prisma } from "@/lib/prisma";
@@ -95,6 +95,7 @@ type GenerateClipOptions = {
   targetCategory?: string;
   responseOverride?: string;
   repairResponseOverride?: string;
+  processingJobId?: string;
 };
 
 type SermonContext = {
@@ -199,6 +200,8 @@ type TranscriptReadinessResult = {
   averageSegmentDurationSeconds: number;
   meaningfulSegmentCount: number;
 };
+
+const LARGE_TRANSCRIPT_GAP_SECONDS = 45;
 
 type WindowQualityResult = {
   accepted: boolean;
@@ -1034,6 +1037,71 @@ function buildStructuredGenerationSummary(input: {
   };
 }
 
+type ClipTranscriptQualityMode = "READY" | "LOW_RESCUE" | "MANUAL_RESCUE" | "UNUSABLE";
+
+function buildClipVolumeGateFailureDetails(input: {
+  readiness: TranscriptReadinessResult;
+  transcriptQualityMode: ClipTranscriptQualityMode;
+  target: ClipVolumeTarget;
+  reviewableSuggestionCount: number;
+  existingSuggestionCount: number;
+  newSuggestionCount: number;
+  topUpCandidateCount: number;
+  topUpSavedCount: number;
+  validationRejectedCount: number;
+  boundaryRejectedCount: number;
+  duplicateCount: number;
+}) {
+  const acceptanceFloor = resolveClipReviewAcceptanceFloor(input.target.minReviewSuggestions);
+  const transcriptMinutes = input.readiness.durationSeconds / 60;
+
+  return {
+    reasonCode: "CLIP_REVIEW_BOARD_BELOW_FLOOR",
+    retryableWithoutInputChange: false,
+    recommendedAction: "REVIEW_SOURCE_AUDIO_OR_RETRANSCRIBE",
+    transcript: {
+      qualityMode: input.transcriptQualityMode,
+      readyForClipping: input.readiness.ready,
+      reason: input.readiness.reason,
+      warnings: input.readiness.warnings,
+      wordCount: input.readiness.wordCount,
+      meaningfulSegmentCount: input.readiness.meaningfulSegmentCount,
+      durationSeconds: Number(input.readiness.durationSeconds.toFixed(2)),
+      coveredSeconds: Number(input.readiness.coveredSeconds.toFixed(2)),
+      coverageRatio: Number(input.readiness.coverageRatio.toFixed(4)),
+      wordsPerMinute: transcriptMinutes > 0
+        ? Number((input.readiness.wordCount / transcriptMinutes).toFixed(2))
+        : 0,
+      largeGapCount: input.readiness.largeGapCount,
+      maxGapSeconds: Number(input.readiness.maxGapSeconds.toFixed(2)),
+      repeatedSegmentRatio: Number(input.readiness.repeatedSegmentRatio.toFixed(4)),
+      distinctSermonTokenCount: input.readiness.distinctSermonTokenCount,
+      distinctSermonTokenRatio: Number(input.readiness.distinctSermonTokenRatio.toFixed(4)),
+    },
+    volumeTarget: {
+      durationBasisSeconds: Number(input.target.durationSeconds.toFixed(2)),
+      durationLabel: input.target.label,
+      rangeLabel: input.target.rangeLabel,
+      minimum: input.target.minReviewSuggestions,
+      target: input.target.targetReviewSuggestions,
+      maximum: input.target.maxReviewSuggestions,
+      acceptanceFloor,
+      actual: input.reviewableSuggestionCount,
+      shortfallToFloor: Math.max(0, acceptanceFloor - input.reviewableSuggestionCount),
+      shortfallToTargetMinimum: Math.max(0, input.target.minReviewSuggestions - input.reviewableSuggestionCount),
+    },
+    candidateBreakdown: {
+      existing: input.existingSuggestionCount,
+      newDistinct: input.newSuggestionCount,
+      topUpConsidered: input.topUpCandidateCount,
+      topUpAdded: input.topUpSavedCount,
+      validationOrScopeRejected: input.validationRejectedCount,
+      boundaryRejected: input.boundaryRejectedCount,
+      duplicateOrOverlapRemoved: input.duplicateCount,
+    },
+  };
+}
+
 function isAiQuotaError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /\b(429|quota|rate limit|insufficient_quota)\b/i.test(message);
@@ -1296,7 +1364,7 @@ function assessTranscriptReadinessForClipping(segments: TranscriptSegmentRecord[
   const coverageRatio = durationSeconds > 0 ? coveredSeconds / durationSeconds : 0;
   const gaps = ordered.slice(1).map((segment, index) => Math.max(0, segment.startTimeSeconds - ordered[index].endTimeSeconds));
   const maxGapSeconds = gaps.length > 0 ? Math.max(...gaps) : 0;
-  const largeGapCount = gaps.filter((gap) => gap > 60).length;
+  const largeGapCount = gaps.filter((gap) => gap >= LARGE_TRANSCRIPT_GAP_SECONDS).length;
   const repeatRatio = repeatedSegmentRatio(ordered);
   const distinctSermonTokenCount = uniqueSubstanceTokenCount(transcriptText);
   const totalSubstanceTokenCount = sermonSubstanceTokens(transcriptText).length;
@@ -2634,6 +2702,39 @@ function normalizeCandidate<T extends ClipJsonCandidate>(candidate: T): T {
   };
 }
 
+async function resolveClipGenerationJob(sermonId: string, processingJobId?: string): Promise<ProcessingJob> {
+  if (processingJobId) {
+    const claimedJob = await prisma.processingJob.findUnique({ where: { id: processingJobId } });
+    if (!claimedJob || claimedJob.sermonId !== sermonId || claimedJob.type !== "GENERATE_CLIPS") {
+      throw new Error(
+        `Clip generation job ${processingJobId} does not match sermon ${sermonId} and type GENERATE_CLIPS.`,
+      );
+    }
+    if (claimedJob.status !== "PENDING" && claimedJob.status !== "RUNNING") {
+      throw new Error(`Clip generation job ${processingJobId} is already ${claimedJob.status}.`);
+    }
+    return claimedJob;
+  }
+
+  const activeJob = await prisma.processingJob.findFirst({
+    where: {
+      sermonId,
+      type: "GENERATE_CLIPS",
+      status: { in: ["PENDING", "RUNNING"] },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  if (activeJob) {
+    await appendJobLog(
+      activeJob.id,
+      `Duplicate clip-generation execution request ignored. Active job ${activeJob.id} remains the owner for sermon ${sermonId}.`,
+    );
+    throw new Error(`Clip generation is already active in job ${activeJob.id}. Wait for that job to finish before retrying.`);
+  }
+
+  return createProcessingJob(sermonId, "GENERATE_CLIPS");
+}
+
 export async function generateClipSuggestions(
   sermonId: string,
   options?: GenerateClipOptions,
@@ -2653,14 +2754,27 @@ export async function generateClipSuggestions(
     throw new Error(`Sermon ${sermonId} was not found.`);
   }
 
-  const job = await createProcessingJob(sermon.id, "GENERATE_CLIPS");
+  const job = await resolveClipGenerationJob(sermon.id, options?.processingJobId);
+  let failureCode = "CLIP_GENERATION_FAILED";
+  let failureStage = "initialization";
+  let failureRetryable = true;
+  let failureDetails: Record<string, unknown> = {};
 
   try {
-    await markJobRunning(job.id);
-    await appendJobLog(job.id, "Clip suggestion job started.");
+    if (job.status === "PENDING") {
+      await markJobRunning(job.id);
+    } else {
+      await appendJobLog(
+        job.id,
+        `Clip generation attached to claimed job ${job.id}; attempt count was not incremented again.`,
+      );
+    }
+    await appendJobLog(job.id, `Clip suggestion job started. sermonId=${sermon.id} jobId=${job.id}`);
     await appendPipelineLog(sermon.id, "Clip suggestion generation requested.");
+    failureStage = "sermon_status_transition";
     await updateSermonStatus(sermon.id, "GENERATING_CLIPS");
 
+    failureStage = "transcript_loading";
     const segments = await prisma.transcriptSegment.findMany({
       where: { sermonId: sermon.id },
       orderBy: { startTimeSeconds: "asc" },
@@ -2674,6 +2788,8 @@ export async function generateClipSuggestions(
     });
 
     if (segments.length === 0) {
+      failureCode = "TRANSCRIPT_SEGMENTS_MISSING";
+      failureRetryable = false;
       throw new Error("Cannot generate clip suggestions because no transcript segments exist.");
     }
     const clipVolumeTarget = resolveClipVolumeTarget(segmentDuration(segments));
@@ -2777,19 +2893,45 @@ export async function generateClipSuggestions(
         })
       : [];
 
+    failureStage = "transcript_quality_assessment";
     const transcriptReadiness = assessTranscriptReadinessForClipping(segments);
     const transcriptQualityMode = classifyTranscriptQualityForClipGeneration(transcriptReadiness);
+    failureDetails = {
+      transcript: {
+        qualityMode: transcriptQualityMode,
+        readyForClipping: transcriptReadiness.ready,
+        reason: transcriptReadiness.reason,
+        warnings: transcriptReadiness.warnings,
+        wordCount: transcriptReadiness.wordCount,
+        meaningfulSegmentCount: transcriptReadiness.meaningfulSegmentCount,
+        durationSeconds: Number(transcriptReadiness.durationSeconds.toFixed(2)),
+        coveredSeconds: Number(transcriptReadiness.coveredSeconds.toFixed(2)),
+        coverageRatio: Number(transcriptReadiness.coverageRatio.toFixed(4)),
+        largeGapCount: transcriptReadiness.largeGapCount,
+        maxGapSeconds: Number(transcriptReadiness.maxGapSeconds.toFixed(2)),
+      },
+      volumeTarget: {
+        durationBasisSeconds: Number(clipVolumeTarget.durationSeconds.toFixed(2)),
+        rangeLabel: clipVolumeTarget.rangeLabel,
+        minimum: clipVolumeTarget.minReviewSuggestions,
+        target: clipVolumeTarget.targetReviewSuggestions,
+        acceptanceFloor: resolveClipReviewAcceptanceFloor(clipVolumeTarget.minReviewSuggestions),
+      },
+    };
     await appendJobLog(
       job.id,
-      `Transcript clip-generation mode: ${transcriptQualityMode}. ${transcriptReadiness.reason} Words: ${transcriptReadiness.wordCount}, meaningful segments: ${transcriptReadiness.meaningfulSegmentCount}.`,
+      `Transcript clip-generation mode: ${transcriptQualityMode}. ${transcriptReadiness.reason} Words: ${transcriptReadiness.wordCount}, meaningful segments: ${transcriptReadiness.meaningfulSegmentCount}, coverage: ${(transcriptReadiness.coverageRatio * 100).toFixed(1)}%, large gaps: ${transcriptReadiness.largeGapCount}, longest gap: ${transcriptReadiness.maxGapSeconds.toFixed(1)}s.`,
     );
 
+    failureStage = "transcript_window_building";
     const windows = buildRollingWindows(segments, ministryMoments, { sermonLanguage: sermon.language });
     const transcriptRescueCandidates = transcriptQualityMode === "READY"
       ? []
       : buildLowTranscriptTimedFallbackCandidates(segments);
 
     if (windows.length === 0 && transcriptRescueCandidates.length === 0) {
+      failureCode = "TRANSCRIPT_WINDOWS_UNAVAILABLE";
+      failureRetryable = false;
       throw new Error("Unable to build transcript windows suitable for clip generation.");
     }
 
@@ -2814,6 +2956,7 @@ export async function generateClipSuggestions(
     const rejectedReasons: string[] = [];
 
     for (const [index, batch] of batches.entries()) {
+      failureStage = `ai_clip_selection_batch_${index + 1}_of_${batches.length}`;
       await appendJobLog(job.id, `Generating clip suggestions for batch ${index + 1}/${batches.length}.`);
       const batchMinistryMoments = selectPromptMinistryMomentsForWindows(batch, ministryMoments);
       const batchClipLimit = options?.targetCategory ? Math.min(3, MAX_BATCH_CLIPS) : clipVolumeTarget.batchClipLimit;
@@ -2892,6 +3035,7 @@ export async function generateClipSuggestions(
       );
     }
 
+    failureStage = "boundary_alignment_and_deduplication";
     const boundaryAdjusted: EnrichedClipCandidate[] = [];
     const boundaryRejected: string[] = [];
     let boundaryAdjustedCount = 0;
@@ -3048,23 +3192,46 @@ export async function generateClipSuggestions(
       suggestionCount: totalReviewableSuggestions,
       target: clipVolumeTarget,
     });
+    const acceptanceFloor = resolveClipReviewAcceptanceFloor(clipVolumeTarget.minReviewSuggestions);
+    const duplicateCount = overlapDuplicateCount
+      + semanticDuplicateCount
+      + existingOverlapDuplicateCount
+      + topUpDuplicateCount;
 
     if (!options?.targetCategory && belowVolumeTarget && !substantialReviewBoard) {
+      failureCode = "CLIP_REVIEW_BOARD_BELOW_FLOOR";
+      failureStage = "clip_volume_quality_gate";
+      failureRetryable = false;
+      failureDetails = buildClipVolumeGateFailureDetails({
+        readiness: transcriptReadiness,
+        transcriptQualityMode,
+        target: clipVolumeTarget,
+        reviewableSuggestionCount: totalReviewableSuggestions,
+        existingSuggestionCount,
+        newSuggestionCount: dedupedWithBoundaryFields.length,
+        topUpCandidateCount,
+        topUpSavedCount,
+        validationRejectedCount: rejectedReasons.length,
+        boundaryRejectedCount: boundaryRejected.length,
+        duplicateCount,
+      });
       throw new Error([
-        `Clip generation produced ${totalReviewableSuggestions} pastor-review option(s), below the ${clipVolumeTarget.rangeLabel} target minimum of ${clipVolumeTarget.minReviewSuggestions} for this transcript.`,
+        `Clip generation produced ${totalReviewableSuggestions} pastor-review option(s), below the acceptance floor of ${acceptanceFloor} for the ${clipVolumeTarget.rangeLabel} duration target (target minimum ${clipVolumeTarget.minReviewSuggestions}).`,
         appendMode
           ? `${existingSuggestionCount} existing option(s) plus ${dedupedWithBoundaryFields.length} new non-overlapping option(s) were found.`
           : `${dedupedWithBoundaryFields.length} distinct option(s) were found.`,
+        `Transcript mode ${transcriptQualityMode}: ${transcriptReadiness.wordCount} words, ${(transcriptReadiness.coverageRatio * 100).toFixed(1)}% coverage, ${transcriptReadiness.largeGapCount} large gap(s), longest gap ${transcriptReadiness.maxGapSeconds.toFixed(1)}s.`,
         `Top-up considered ${topUpCandidateCount} window candidate(s) and added ${topUpSavedCount}.`,
-        `Rejected ${rejectedReasons.length} validation/scope candidate(s), ${boundaryRejected.length} boundary candidate(s), and removed ${overlapDuplicateCount + semanticDuplicateCount + existingOverlapDuplicateCount + topUpDuplicateCount} duplicate/overlapping candidate(s).`,
+        `Rejected ${rejectedReasons.length} validation/scope candidate(s), ${boundaryRejected.length} boundary candidate(s), and removed ${duplicateCount} duplicate/overlapping candidate(s).`,
         "The job was stopped before replacing/saving the low-count result so the review board does not quietly regress.",
+        "Retrying unchanged audio is unlikely to help; review the source audio/sermon window or create a better transcript first.",
       ].join(" "));
     }
 
     if (!options?.targetCategory && belowVolumeTarget && substantialReviewBoard) {
       await appendJobLog(
         job.id,
-        `Saving ${totalReviewableSuggestions} distinct pastor-review option(s), below the ${clipVolumeTarget.rangeLabel} duration target but above the substantial review-board floor of ${resolveClipReviewAcceptanceFloor(clipVolumeTarget.minReviewSuggestions)}.`,
+        `Saving ${totalReviewableSuggestions} distinct pastor-review option(s), below the ${clipVolumeTarget.rangeLabel} duration target but above the substantial review-board floor of ${acceptanceFloor}.`,
       );
       await appendPipelineLog(
         sermon.id,
@@ -3072,6 +3239,7 @@ export async function generateClipSuggestions(
       );
     }
 
+    failureStage = "clip_candidate_persistence";
     await prisma.$transaction(async (tx) => {
       if (options?.force) {
         await tx.clipCandidate.deleteMany({
@@ -3194,7 +3362,7 @@ export async function generateClipSuggestions(
       `Target duration guidance ${TARGET_MIN_DURATION_SECONDS}-${TARGET_MAX_DURATION_SECONDS}s applied.`,
       `Clip volume target was ${clipVolumeTarget.rangeLabel}; review board has ${totalReviewableSuggestions} option(s).`,
       belowVolumeTarget
-        ? `Below the duration target, but saved because the review board met the substantial quality floor of ${resolveClipReviewAcceptanceFloor(clipVolumeTarget.minReviewSuggestions)}.`
+        ? `Below the duration target, but saved because the review board met the substantial quality floor of ${acceptanceFloor}.`
         : "Clip volume target minimum met.",
       topUpCandidateCount > 0
         ? `Deterministic top-up considered ${topUpCandidateCount} candidate(s) and added ${topUpSavedCount}.`
@@ -3216,7 +3384,15 @@ export async function generateClipSuggestions(
     return { clipCount: dedupedWithBoundaryFields.length, reusedExistingSuggestions: false };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown clip generation error.";
-    await markJobFailed(job.id, message, "Clip generation failed.");
+    await markJobFailed(job.id, message, "Clip generation failed.", {
+      error,
+      code: failureCode,
+      stage: failureStage,
+      retryable: failureRetryable,
+      workerId: job.workerId ?? undefined,
+      sermonStatus: "GENERATING_CLIPS",
+      details: failureDetails,
+    });
 
     try {
       await updateSermonStatus(sermon.id, "FAILED");
@@ -3226,7 +3402,7 @@ export async function generateClipSuggestions(
     }
 
     await appendPipelineLog(sermon.id, `Clip generation failed: ${message}`);
-    throw new Error(message);
+    throw error instanceof Error ? error : new Error(message);
   }
 }
 
@@ -3240,6 +3416,7 @@ export const __clipIntelligenceTestUtils = {
   hasSignificantClipOverlap,
   buildCoverageTopUpClipCandidates,
   buildStructuredGenerationSummary,
+  buildClipVolumeGateFailureDetails,
   selectBestClipCandidates,
   buildHeuristicClipCandidatesFromWindows,
   isAiQuotaError,

@@ -199,7 +199,10 @@ export async function redoClipGenerationFromTranscript(
       import("@/server/agents/clipIntelligenceAgent"),
       import("@/server/agents/clipReviewAssetService"),
     ]);
-    const generationResult = await generateClipSuggestions(sermonId, { force: true });
+    const generationResult = await generateClipSuggestions(sermonId, {
+      force: true,
+      processingJobId: options?.currentJobId,
+    });
     const previewSummary = await prepareGeneratedClipReviewAssets({ sermonId, force: true });
 
     return {

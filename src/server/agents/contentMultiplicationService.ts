@@ -54,6 +54,7 @@ export type OpportunityGenerationOptions = {
   force?: boolean;
   targetType?: PrismaContentOpportunityType;
   quantities?: Partial<Record<PrismaContentOpportunityType, number>>;
+  replaceDefaultQuantities?: boolean;
 };
 
 export type OpportunityGenerationResult = {
@@ -89,6 +90,15 @@ const TYPE_TO_CATEGORY: Record<PrismaContentOpportunityType, ContentOpportunityC
   INVITATION_CONTENT: "PROMOTION",
   ALTAR_CALL_FOLLOW_UP_CONTENT: "PROMOTION",
   EVENT_FOLLOW_UP_CONTENT: "PROMOTION",
+  PLATFORM_CAPTION_PACK: "SOCIAL",
+  ENGAGEMENT_STORY_SET: "ENGAGEMENT",
+  PRAYER_GUIDE: "DEVOTIONAL",
+  DEVOTIONAL_GUIDE: "DEVOTIONAL",
+  SMALL_GROUP_GUIDE: "DISCIPLESHIP",
+  FAMILY_DISCUSSION_GUIDE: "DISCIPLESHIP",
+  YOUTH_DISCUSSION_GUIDE: "DISCIPLESHIP",
+  SERMON_CONTENT_MAP: "RECAP",
+  CONTENT_CALENDAR_PLAN: "PROMOTION",
 };
 
 function shouldPreserveOpportunityDuringRegeneration(opportunity: {
@@ -119,9 +129,11 @@ function shouldReuseExistingOpportunities(existingCount: number, force?: boolean
 
 function buildRequestedQuantities(options?: OpportunityGenerationOptions): Record<PrismaContentOpportunityType, number> {
   const overrides = options?.quantities ?? {};
-  const requested: Record<PrismaContentOpportunityType, number> = {
-    ...DEFAULT_CONTENT_OPPORTUNITY_QUANTITIES,
-  };
+  const requested: Record<PrismaContentOpportunityType, number> = options?.replaceDefaultQuantities
+    ? Object.fromEntries(
+        Object.keys(DEFAULT_CONTENT_OPPORTUNITY_QUANTITIES).map((type) => [type, 0]),
+      ) as Record<PrismaContentOpportunityType, number>
+    : { ...DEFAULT_CONTENT_OPPORTUNITY_QUANTITIES };
 
   for (const [type, qty] of Object.entries(overrides) as Array<[PrismaContentOpportunityType, number]>) {
     requested[type] = Math.max(0, Math.floor(qty));
@@ -147,6 +159,16 @@ function buildSystemPrompt(): string {
     "Support multilingual sermons including South African language mixing (Zulu, Sotho, Xhosa, Tswana, and English mixed with local phrases).",
     "When local-language phrases appear, provide English-friendly wording and translation hints. If uncertain, explicitly note uncertainty.",
     "Keep tone pastor-friendly, faithful to doctrine, and free from exaggeration or clickbait.",
+    "A QUOTE_GRAPHIC must use the pastor's exact or near-verbatim transcript wording. Put the exact evidence in sourceTranscriptExcerpt. Never present an AI-written paraphrase as a pastor quote.",
+    "For CAROUSEL_IDEA, write complete numbered slide copy, keep each slide concise, and include a final reflection or ministry CTA.",
+    "For PLATFORM_CAPTION_PACK, include clearly labelled TikTok, Instagram, Facebook, YouTube Shorts, WhatsApp Status, and WhatsApp Group variants. Include LinkedIn only when grounded in a leadership, work, integrity, stewardship, or resilience theme.",
+    "For ENGAGEMENT_STORY_SET, include one poll with answer choices, one quiz with answer and explanation, one slider, one question-box prompt, and one ministry-response prompt. Do not claim native platform interactivity.",
+    "For DEVOTIONAL_GUIDE, produce five connected days. Every day needs a title, sermon-grounded reflection, Scripture, reflection question, prayer, and action step. Do not pad a sermon into unsupported teaching.",
+    "For PRAYER_GUIDE, produce five sermon-grounded days with Scripture, prayer focus, personal prayer, and action. Clearly distinguish an extracted prayer from a generated prayer.",
+    "For SMALL_GROUP_GUIDE, include an icebreaker, summary, main Scripture, 3-5 discussion questions, personal reflection, group prayer, and weekly challenge.",
+    "FAMILY_DISCUSSION_GUIDE and YOUTH_DISCUSSION_GUIDE are audience adaptations, not new doctrine. Avoid unsafe counselling claims and label broader interpretation through lower confidence and aiReason.",
+    "For SERMON_CONTENT_MAP, identify the main theme, subthemes, best grounded quote, best clip, carousel direction, engagement prompt, devotional, prayer, follow-up, and review warnings.",
+    "For CONTENT_CALENDAR_PLAN, create a seven-day suggested plan that balances formats, avoids repeating the same sermon point, and never implies content is automatically published.",
     "When generating questions, provide concise but meaningful prompts suitable for ministry use.",
     "Ensure the generated set includes useful sermon recaps, captions, quote ideas, reflection questions, small-group questions, and invitation posts when requested.",
     "Use only allowed opportunity categories and opportunity types.",
@@ -258,13 +280,13 @@ async function callOpportunityModel(
     operation: "content_opportunity_generation",
     sermonId: context.id,
     model,
-    temperature: 0.2,
+    reasoningEffort: "high",
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: buildSystemPrompt() },
       { role: "user", content: buildUserPrompt(context, requestedQuantities) },
     ],
-    promptVersion: "content-opportunities-v1",
+    promptVersion: "content-opportunities-v2-roadmap",
     metadata: {
       requestedQuantities,
       transcriptCharacters: context.transcriptFullText.length,
@@ -287,9 +309,9 @@ async function callOpportunityModel(
 
 function curateGeneratedOpportunities(
   generated: ContentOpportunityRecord[],
-  requestedQuantities: Record<PrismaContentOpportunityType, number>,
+  requestedQuantities: Partial<Record<PrismaContentOpportunityType, number>>,
 ): ContentOpportunityRecord[] {
-  const counters: Record<PrismaContentOpportunityType, number> = Object.keys(requestedQuantities)
+  const counters: Record<PrismaContentOpportunityType, number> = Object.keys(DEFAULT_CONTENT_OPPORTUNITY_QUANTITIES)
     .reduce((acc, key) => {
       acc[key as PrismaContentOpportunityType] = 0;
       return acc;
@@ -302,6 +324,10 @@ function curateGeneratedOpportunities(
     const type = item.opportunityType as PrismaContentOpportunityType;
     const requestedCount = requestedQuantities[type] ?? 0;
     if (requestedCount === 0) {
+      continue;
+    }
+
+    if (type === "QUOTE_GRAPHIC" && !item.sourceTranscriptExcerpt?.trim()) {
       continue;
     }
 
@@ -364,6 +390,7 @@ function findRelatedClipId(
 function buildArchiveWhere(
   sermonId: string,
   targetType?: PrismaContentOpportunityType,
+  requestedTypes?: PrismaContentOpportunityType[],
 ): Prisma.ContentOpportunityWhereInput {
   return {
     sermonId,
@@ -375,7 +402,11 @@ function buildArchiveWhere(
     approvedContent: null,
     editedContent: null,
     isManuallyEdited: false,
-    ...(targetType ? { opportunityType: targetType } : {}),
+    ...(targetType
+      ? { opportunityType: targetType }
+      : requestedTypes && requestedTypes.length > 0
+        ? { opportunityType: { in: requestedTypes } }
+        : {}),
   };
 }
 
@@ -522,8 +553,11 @@ export async function generateContentOpportunities(
     };
   }
 
+  const requestedTypes = (Object.entries(requestedQuantities) as Array<[PrismaContentOpportunityType, number]>)
+    .filter(([, quantity]) => quantity > 0)
+    .map(([type]) => type);
   const opportunitiesToArchive = await prisma.contentOpportunity.findMany({
-    where: buildArchiveWhere(sermonId, options?.targetType),
+    where: buildArchiveWhere(sermonId, options?.targetType, requestedTypes),
     select: {
       id: true,
       status: true,

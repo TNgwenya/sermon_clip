@@ -1,8 +1,20 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import crypto from "node:crypto";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const credentialFindFirst = vi.hoisted(() => vi.fn());
+
+vi.mock("@prisma/client", () => ({
+  PrismaClient: class {
+    socialCredential = {
+      findFirst: credentialFindFirst,
+      update: vi.fn(),
+    };
+  },
+}));
 
 import {
   AmbiguousPlatformPublishError,
@@ -15,7 +27,10 @@ import {
   buildYouTubeUploadResult,
   extractHashtags,
   extractHashtagsFromText,
+  selectPostImageMedia,
   selectYouTubeRefreshTokenSources,
+  uploadFacebookImages,
+  uploadInstagramImages,
   uploadPlatformPost,
   type AutomationPost,
 } from "../posting-platforms";
@@ -44,8 +59,66 @@ const basePost: AutomationPost = {
   ],
 };
 
+function imagePost(input: {
+  platform: "Facebook" | "Instagram";
+  assetType?: string;
+  files?: Array<{
+    id: string;
+    fileName: string;
+    mimeType: string;
+    publicUrl: string | null;
+    sortOrder: number;
+  }>;
+}): AutomationPost {
+  return {
+    ...basePost,
+    platform: input.platform,
+    clips: [],
+    contentAssets: [{
+      id: "asset-1",
+      title: "Faith in the waiting",
+      assetType: input.assetType ?? "QUOTE_GRAPHIC",
+      status: "SCHEDULED",
+      caption: "Faithful steps matter.",
+      bodyContent: null,
+      callToAction: "Join us Sunday.",
+      hashtags: ["Faith"],
+      files: (input.files ?? [{
+        id: "image-1",
+        fileName: "portrait.jpg",
+        mimeType: "image/jpeg",
+        publicUrl: "https://media.example.com/portrait.jpg",
+        sortOrder: 0,
+      }]).map((file) => ({
+        ...file,
+        filePath: null,
+        objectKey: null,
+        width: 1080,
+        height: 1350,
+        sizeBytes: "42000",
+        metadata: null,
+      })),
+    }],
+  };
+}
+
+function encryptStoredToken(value: string, secret: string): string {
+  const iv = crypto.randomBytes(12);
+  const key = crypto.createHash("sha256").update(secret).digest();
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+
+  return [
+    "v1",
+    iv.toString("base64url"),
+    cipher.getAuthTag().toString("base64url"),
+    encrypted.toString("base64url"),
+  ].join(":");
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
+  credentialFindFirst.mockReset();
 });
 
 describe("posting platform helpers", () => {
@@ -241,6 +314,259 @@ describe("posting platform helpers", () => {
       description: basePost.caption,
       published: false,
     });
+  });
+
+  it("selects one JPEG publishing variant for graphics and ordered JPEG slides for carousels", () => {
+    const graphic = imagePost({
+      platform: "Instagram",
+      files: [
+        { id: "png-square", fileName: "square.png", mimeType: "image/png", publicUrl: "https://media.example.com/square.png", sortOrder: 0 },
+        { id: "png-portrait", fileName: "portrait.png", mimeType: "image/png", publicUrl: "https://media.example.com/portrait.png", sortOrder: 1 },
+        { id: "jpg-square", fileName: "square.jpg", mimeType: "image/jpeg", publicUrl: "https://media.example.com/square.jpg", sortOrder: 2 },
+        { id: "jpg-portrait", fileName: "portrait.jpg", mimeType: "image/jpeg", publicUrl: "https://media.example.com/portrait.jpg", sortOrder: 3 },
+      ],
+    });
+    const carousel = imagePost({
+      platform: "Instagram",
+      assetType: "CAROUSEL",
+      files: [
+        { id: "png-1", fileName: "carousel/slide-01.png", mimeType: "image/png", publicUrl: "https://media.example.com/slide-01.png", sortOrder: 0 },
+        { id: "png-2", fileName: "carousel/slide-02.png", mimeType: "image/png", publicUrl: "https://media.example.com/slide-02.png", sortOrder: 1 },
+        { id: "jpg-1", fileName: "carousel/slide-01.jpg", mimeType: "image/jpeg", publicUrl: "https://media.example.com/slide-01.jpg", sortOrder: 2 },
+        { id: "jpg-2", fileName: "carousel/slide-02.jpg", mimeType: "image/jpeg", publicUrl: "https://media.example.com/slide-02.jpg", sortOrder: 3 },
+      ],
+    });
+
+    expect(selectPostImageMedia(graphic).map((file) => file.id)).toEqual(["jpg-portrait"]);
+    expect(selectPostImageMedia(carousel).map((file) => file.id)).toEqual(["jpg-1", "jpg-2"]);
+  });
+
+  it("publishes a Facebook Page single image from a public URL", async () => {
+    vi.stubEnv("FACEBOOK_PAGE_ID", "page-123");
+    vi.stubEnv("FACEBOOK_PAGE_ACCESS_TOKEN", "page-token");
+    vi.stubEnv("FACEBOOK_GRAPH_VERSION", "v99.0");
+    vi.stubEnv("FACEBOOK_DEFAULT_PUBLISHED", "true");
+    const requests: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      requests.push([input, init]);
+      return String(input).includes("/me/accounts")
+        ? Response.json({ data: [] })
+        : Response.json({ id: "photo-1", post_id: "page-123_post-1" });
+    };
+
+    const result = await uploadFacebookImages(imagePost({ platform: "Facebook" }), undefined, fetchImpl);
+    const [, init] = requests.at(-1)!;
+    const body = init?.body as FormData;
+
+    expect(String(requests.at(-1)?.[0])).toBe("https://graph.facebook.com/v99.0/page-123/photos");
+    expect(body.get("url")).toBe("https://media.example.com/portrait.jpg");
+    expect(body.get("message")).toBe(basePost.caption);
+    expect(body.get("published")).toBe("true");
+    expect(result).toEqual({
+      status: "POSTED",
+      externalPostId: "page-123_post-1",
+      publishedUrl: "https://www.facebook.com/page-123_post-1",
+      finalPrivacyStatus: "published",
+    });
+  });
+
+  it("does not fall back to Facebook env credentials when the selected account has no stored credential", async () => {
+    vi.stubEnv("FACEBOOK_PAGE_ID", "env-page");
+    vi.stubEnv("FACEBOOK_PAGE_ACCESS_TOKEN", "env-token");
+    credentialFindFirst.mockResolvedValue(null);
+    const fetchImpl = vi.fn<typeof fetch>();
+    const post = {
+      ...imagePost({ platform: "Facebook" }),
+      socialAccountId: "selected-facebook-account",
+    };
+
+    await expect(uploadFacebookImages(post, undefined, fetchImpl))
+      .rejects.toThrow("selected Facebook account does not have a connected credential");
+    expect(credentialFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        provider: "META_FACEBOOK",
+        socialAccountId: "selected-facebook-account",
+      }),
+    }));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("propagates selected Facebook credential lookup errors instead of using env credentials", async () => {
+    vi.stubEnv("FACEBOOK_PAGE_ID", "env-page");
+    vi.stubEnv("FACEBOOK_PAGE_ACCESS_TOKEN", "env-token");
+    credentialFindFirst.mockRejectedValue(new Error("credential database unavailable"));
+    const fetchImpl = vi.fn<typeof fetch>();
+    const post = {
+      ...imagePost({ platform: "Facebook" }),
+      socialAccountId: "selected-facebook-account",
+    };
+
+    await expect(uploadFacebookImages(post, undefined, fetchImpl))
+      .rejects.toThrow("credential database unavailable");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not use Facebook env credentials when the selected stored credential is expired", async () => {
+    const secret = "posting-platform-test-secret";
+    vi.stubEnv("AUTH_SECRET", secret);
+    vi.stubEnv("FACEBOOK_PAGE_ID", "env-page");
+    vi.stubEnv("FACEBOOK_PAGE_ACCESS_TOKEN", "env-token");
+    credentialFindFirst.mockResolvedValue({
+      id: "credential-1",
+      provider: "META_FACEBOOK",
+      externalAccountId: "stored-page",
+      accessTokenCiphertext: encryptStoredToken("stored-token", secret),
+      refreshTokenCiphertext: null,
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+    const fetchImpl = vi.fn<typeof fetch>();
+    const post = {
+      ...imagePost({ platform: "Facebook" }),
+      socialAccountId: "selected-facebook-account",
+    };
+
+    await expect(uploadFacebookImages(post, undefined, fetchImpl))
+      .rejects.toThrow("selected Facebook account credential has expired");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("publishes Facebook multi-image posts by attaching unpublished photo ids", async () => {
+    vi.stubEnv("FACEBOOK_PAGE_ID", "page-123");
+    vi.stubEnv("FACEBOOK_PAGE_ACCESS_TOKEN", "page-token");
+    vi.stubEnv("FACEBOOK_DEFAULT_PUBLISHED", "true");
+    let photoNumber = 0;
+    const requests: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      requests.push([input, init]);
+      const url = String(input);
+      if (url.includes("/me/accounts")) return Response.json({ data: [] });
+      if (url.endsWith("/photos")) return Response.json({ id: `photo-${++photoNumber}` });
+      return Response.json({ id: "page-123_feed-1" });
+    };
+    const post = imagePost({
+      platform: "Facebook",
+      assetType: "CAROUSEL",
+      files: [
+        { id: "slide-1", fileName: "slide-01.jpg", mimeType: "image/jpeg", publicUrl: "https://media.example.com/slide-01.jpg", sortOrder: 0 },
+        { id: "slide-2", fileName: "slide-02.jpg", mimeType: "image/jpeg", publicUrl: "https://media.example.com/slide-02.jpg", sortOrder: 1 },
+      ],
+    });
+
+    const result = await uploadFacebookImages(post, undefined, fetchImpl);
+    const photoRequests = requests.filter(([input]) => String(input).endsWith("/photos"));
+    const feedRequest = requests.find(([input]) => String(input).endsWith("/feed"));
+
+    expect(photoRequests).toHaveLength(2);
+    expect((photoRequests[0]?.[1]?.body as FormData).get("published")).toBe("false");
+    expect(feedRequest).toBeDefined();
+    const feedBody = feedRequest?.[1]?.body as URLSearchParams;
+    expect(feedBody.get("attached_media[0]")).toBe(JSON.stringify({ media_fbid: "photo-1" }));
+    expect(feedBody.get("attached_media[1]")).toBe(JSON.stringify({ media_fbid: "photo-2" }));
+    expect(result.status).toBe("POSTED");
+    expect(result.externalPostId).toBe("page-123_feed-1");
+  });
+
+  it("creates, polls, publishes, and resolves an Instagram single image", async () => {
+    vi.stubEnv("INSTAGRAM_ACCOUNT_ID", "ig-123");
+    vi.stubEnv("INSTAGRAM_ACCESS_TOKEN", "ig-token");
+    vi.stubEnv("INSTAGRAM_GRAPH_VERSION", "v99.0");
+    vi.stubEnv("INSTAGRAM_CONTAINER_POLL_INTERVAL_MS", "0");
+    const requests: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      requests.push([input, init]);
+      const url = String(input);
+      if (init?.method === "POST" && url.endsWith("/media")) return Response.json({ id: "container-1" });
+      if (url.includes("/container-1?")) return Response.json({ status_code: "FINISHED" });
+      if (init?.method === "POST" && url.endsWith("/media_publish")) return Response.json({ id: "ig-media-1" });
+      return Response.json({ permalink: "https://www.instagram.com/p/one/" });
+    };
+
+    const result = await uploadInstagramImages(imagePost({ platform: "Instagram" }), undefined, fetchImpl);
+    const createBody = requests[0]?.[1]?.body as URLSearchParams;
+
+    expect(requests[0]?.[0]).toBe("https://graph.facebook.com/v99.0/ig-123/media");
+    expect(createBody.get("image_url")).toBe("https://media.example.com/portrait.jpg");
+    expect(createBody.get("caption")).toBe(basePost.caption);
+    expect(result).toEqual({
+      status: "POSTED",
+      externalPostId: "ig-media-1",
+      publishedUrl: "https://www.instagram.com/p/one/",
+      finalPrivacyStatus: "published",
+    });
+  });
+
+  it("does not fall back to Instagram env credentials when the selected account has no stored credential", async () => {
+    vi.stubEnv("INSTAGRAM_ACCOUNT_ID", "env-instagram");
+    vi.stubEnv("INSTAGRAM_ACCESS_TOKEN", "env-token");
+    credentialFindFirst.mockResolvedValue(null);
+    const fetchImpl = vi.fn<typeof fetch>();
+    const post = {
+      ...imagePost({ platform: "Instagram" }),
+      socialAccountId: "selected-instagram-account",
+    };
+
+    await expect(uploadInstagramImages(post, undefined, fetchImpl))
+      .rejects.toThrow("selected Instagram account does not have a connected credential");
+    expect(credentialFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        provider: "META_INSTAGRAM",
+        socialAccountId: "selected-instagram-account",
+      }),
+    }));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("creates ordered Instagram child containers and publishes a carousel", async () => {
+    vi.stubEnv("INSTAGRAM_ACCOUNT_ID", "ig-123");
+    vi.stubEnv("INSTAGRAM_ACCESS_TOKEN", "ig-token");
+    vi.stubEnv("INSTAGRAM_CONTAINER_POLL_INTERVAL_MS", "0");
+    let childCount = 0;
+    const createBodies: URLSearchParams[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (init?.method === "POST" && url.endsWith("/media")) {
+        const body = init.body as URLSearchParams;
+        createBodies.push(body);
+        return body.get("media_type") === "CAROUSEL"
+          ? Response.json({ id: "carousel-parent" })
+          : Response.json({ id: `carousel-child-${++childCount}` });
+      }
+      if (url.includes("fields=status_code")) return Response.json({ status_code: "FINISHED" });
+      if (init?.method === "POST" && url.endsWith("/media_publish")) return Response.json({ id: "ig-carousel-1" });
+      return Response.json({ permalink: "https://www.instagram.com/p/carousel/" });
+    };
+    const post = imagePost({
+      platform: "Instagram",
+      assetType: "CAROUSEL",
+      files: [
+        { id: "slide-1", fileName: "slide-01.jpg", mimeType: "image/jpeg", publicUrl: "https://media.example.com/slide-01.jpg", sortOrder: 0 },
+        { id: "slide-2", fileName: "slide-02.jpg", mimeType: "image/jpeg", publicUrl: "https://media.example.com/slide-02.jpg", sortOrder: 1 },
+      ],
+    });
+
+    const result = await uploadInstagramImages(post, undefined, fetchImpl);
+
+    expect(createBodies).toHaveLength(3);
+    expect(createBodies[0]?.get("is_carousel_item")).toBe("true");
+    expect(createBodies[1]?.get("is_carousel_item")).toBe("true");
+    expect(createBodies[2]?.get("media_type")).toBe("CAROUSEL");
+    expect(createBodies[2]?.get("children")).toBe("carousel-child-1,carousel-child-2");
+    expect(result).toMatchObject({ status: "POSTED", externalPostId: "ig-carousel-1" });
+  });
+
+  it("does not retry an Instagram publish whose final response was lost", async () => {
+    vi.stubEnv("INSTAGRAM_ACCOUNT_ID", "ig-123");
+    vi.stubEnv("INSTAGRAM_ACCESS_TOKEN", "ig-token");
+    vi.stubEnv("INSTAGRAM_CONTAINER_POLL_INTERVAL_MS", "0");
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (init?.method === "POST" && url.endsWith("/media")) return Response.json({ id: "container-1" });
+      if (url.includes("fields=status_code")) return Response.json({ status_code: "FINISHED" });
+      throw new TypeError("connection closed");
+    };
+
+    await expect(uploadInstagramImages(imagePost({ platform: "Instagram" }), undefined, fetchImpl))
+      .rejects.toBeInstanceOf(AmbiguousPlatformPublishError);
   });
 
   it("uploads Facebook videos to the configured Page endpoint", async () => {
