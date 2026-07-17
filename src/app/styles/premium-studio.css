@@ -24,41 +24,55 @@
   border-bottom: 1px solid var(--studio-line);
   border-radius: 0;
   background: transparent;
-  padding: 0 0 clamp(1rem, 1.8vw, 1.5rem);
+  padding: 0 0 clamp(0.75rem, 1.2vw, 1rem);
 }
 
 .clip-studio-shell .clip-studio-topbar-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: clamp(1rem, 2.5vw, 2rem);
+  grid-template-columns: minmax(0, 1fr) minmax(19rem, 20rem);
+  gap: clamp(0.85rem, 1.8vw, 1.5rem);
   align-items: start;
 }
 
 .clip-studio-shell .clip-studio-title-block {
   display: grid;
-  gap: 0.8rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "copy status"
+    "checks checks"
+    "warning warning";
+  gap: 0.35rem 1rem;
   min-width: 0;
-  max-width: 64rem;
+  max-width: none;
+}
+
+.clip-studio-shell .clip-studio-title-copy {
+  grid-area: copy;
+  gap: 0.24rem;
+  min-width: 0;
 }
 
 .clip-studio-shell .clip-studio-topbar h1 {
-  max-width: 42rem;
-  font-size: clamp(1.8rem, 2.5vw, 2.7rem);
-  line-height: 1.04;
+  max-width: 46rem;
+  font-size: clamp(1.55rem, 2vw, 2.15rem);
+  line-height: 1.08;
   letter-spacing: -0.025em;
   text-wrap: balance;
 }
 
 .clip-studio-shell .clip-studio-topbar-subtitle {
   color: var(--studio-muted);
-  font-size: 0.98rem;
+  font-size: 0.86rem;
 }
 
 .clip-studio-shell .clip-studio-primary-status {
+  grid-area: status;
   display: flex;
   flex-wrap: wrap;
   gap: 0.65rem;
   align-items: center;
+  justify-content: flex-end;
+  padding-top: 1.15rem;
 }
 
 .clip-studio-shell .clip-studio-primary-status > .small {
@@ -66,7 +80,8 @@
 }
 
 .clip-studio-shell .clip-studio-status-details {
-  width: min(100%, 38rem);
+  grid-area: checks;
+  width: min(100%, 42rem);
   border-top: 1px solid rgba(221, 235, 226, 0.08);
 }
 
@@ -116,7 +131,7 @@
   grid-template-columns: auto;
   gap: 0.7rem;
   justify-items: end;
-  min-width: min(100%, 19rem);
+  min-width: 0;
 }
 
 .clip-studio-shell .clip-studio-context-actions {
@@ -139,7 +154,8 @@
 }
 
 .clip-studio-shell .clip-studio-prepare-control {
-  min-width: min(100%, 19rem);
+  width: 100%;
+  min-width: 0;
   justify-items: stretch;
 }
 
@@ -153,7 +169,7 @@
 
 .clip-studio-shell .clip-studio-ready-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.55rem;
 }
 
@@ -163,10 +179,14 @@
 
 .clip-studio-shell .clip-studio-layout {
   display: grid;
-  grid-template-columns: minmax(250px, 0.62fr) minmax(480px, 1.55fr) minmax(330px, 0.84fr);
-  grid-template-areas: "transcript preview tools";
+  grid-template-columns: minmax(235px, 0.56fr) minmax(440px, 1.48fr) minmax(340px, 0.86fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "transcript preview tools"
+    "transcript timeline timeline";
   gap: clamp(0.85rem, 1.3vw, 1.25rem);
-  align-items: start;
+  align-items: stretch;
+  height: max(680px, calc(100dvh - 11.25rem));
 }
 
 .clip-studio-shell .clip-studio-layout > * {
@@ -175,8 +195,10 @@
 
 .clip-studio-shell .clip-studio-transcript-rail {
   grid-area: transcript;
-  top: 1rem;
-  max-height: calc(100vh - 2rem);
+  position: static;
+  top: auto;
+  height: 100%;
+  max-height: none;
   border-color: var(--studio-line);
   border-radius: 14px;
   background:
@@ -187,9 +209,10 @@
 
 .clip-studio-shell .clip-studio-preview-column {
   grid-area: preview;
-  position: sticky;
-  top: 1rem;
-  max-height: calc(100vh - 2rem);
+  position: static;
+  top: auto;
+  height: 100%;
+  max-height: none;
   overflow: auto;
   padding-right: 0.15rem;
   scrollbar-gutter: stable;
@@ -197,12 +220,19 @@
 
 .clip-studio-shell .clip-studio-main-column {
   grid-area: tools;
-  position: sticky;
-  top: 1rem;
-  max-height: calc(100vh - 2rem);
+  position: static;
+  top: auto;
+  height: 100%;
+  max-height: none;
   overflow: auto;
   padding-right: 0.15rem;
   scrollbar-gutter: stable;
+  container-name: studio-inspector;
+  container-type: inline-size;
+}
+
+.clip-studio-shell .clip-studio-main-column :where(p, dd, label, button, a) {
+  overflow-wrap: anywhere;
 }
 
 .clip-studio-shell .clip-studio-preview-card {
@@ -281,7 +311,42 @@
 }
 
 .clip-studio-shell .clip-studio-bottom-timeline {
+  grid-area: timeline;
+  max-height: clamp(13rem, 26vh, 18rem);
+  overflow: auto;
   border-radius: 14px;
+  scrollbar-gutter: stable;
+}
+
+.clip-studio-shell .clip-studio-media-alert {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid rgba(242, 147, 147, 0.3);
+  border-radius: 12px;
+  background: rgba(242, 147, 147, 0.075);
+  color: #ffd7d7;
+  padding: 0.75rem 0.85rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.clip-studio-shell .clip-studio-media-alert ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.clip-studio-shell .clip-studio-media-alert li {
+  display: grid;
+  grid-template-columns: minmax(5.4rem, auto) minmax(0, 1fr);
+  gap: 0.55rem;
+}
+
+.clip-studio-shell .clip-studio-media-alert li span {
+  color: var(--studio-danger);
+  font-weight: 800;
 }
 
 .clip-studio-shell .clip-studio-workbench {
@@ -529,6 +594,7 @@
 }
 
 .clip-studio-shell .warning-banner {
+  grid-area: warning;
   width: min(100%, 46rem);
   border-color: rgba(239, 196, 126, 0.28);
   background: rgba(239, 196, 126, 0.075);
@@ -552,6 +618,43 @@
   pointer-events: none;
 }
 
+@container studio-inspector (max-width: 430px) {
+  .clip-studio-creator-review-hero,
+  .clip-studio-creator-review-grid,
+  .clip-studio-hook-grid,
+  .clip-studio-broll-grid,
+  .framing-control-grid,
+  .framing-control-grid.compact,
+  .framing-mode-card-grid,
+  .review-edit-grid,
+  .clip-studio-boundary-readout,
+  .clip-studio-caption-cue,
+  .clip-studio-selected-style {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .clip-studio-caption-appearance-grid,
+  .clip-studio-caption-grid,
+  .framing-nudge-row,
+  .framing-nudge-row.compact-two {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .clip-studio-creator-review-hero {
+    justify-items: start;
+  }
+
+  .clip-studio-review-checklist-summary {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .clip-studio-save-strip,
+  .clip-studio-timeline-action-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 1439px) {
   .clip-studio-shell {
     width: 100%;
@@ -560,9 +663,12 @@
 
   .clip-studio-shell .clip-studio-layout {
     grid-template-columns: minmax(420px, 1.15fr) minmax(320px, 0.85fr);
+    grid-template-rows: auto auto auto;
     grid-template-areas:
-      "preview transcript"
-      "tools tools";
+      "preview tools"
+      "timeline timeline"
+      "transcript transcript";
+    height: auto;
   }
 
   .clip-studio-shell .clip-studio-preview-column,
@@ -575,7 +681,19 @@
 
   .clip-studio-shell .clip-studio-transcript-rail {
     position: static;
-    max-height: 680px;
+    height: auto;
+    max-height: 560px;
+  }
+
+  .clip-studio-shell .clip-studio-preview-column,
+  .clip-studio-shell .clip-studio-main-column {
+    height: min(740px, calc(100dvh - 9rem));
+    min-height: 520px;
+    overflow: auto;
+  }
+
+  .clip-studio-shell .clip-studio-bottom-timeline {
+    max-height: 20rem;
   }
 
   .clip-studio-shell .clip-studio-workbench-head {
@@ -585,15 +703,19 @@
 }
 
 @media (max-width: 1279px) {
+  body:has(.clip-studio-shell) .app-rail {
+    display: none;
+  }
+
   .clip-studio-shell {
-    padding-bottom: calc(8rem + var(--mobile-nav-height, 5rem));
+    padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
   }
 
   .clip-studio-shell .clip-studio-mobile-taskbar {
     position: fixed;
     z-index: 90;
     right: 50%;
-    bottom: calc(var(--mobile-nav-height, 5rem) + env(safe-area-inset-bottom) + 0.55rem);
+    bottom: calc(env(safe-area-inset-bottom) + 0.55rem);
     display: grid;
     grid-template-columns: repeat(6, minmax(0, 1fr));
     width: min(calc(100vw - 1rem), 50rem);
@@ -637,11 +759,27 @@
 
 @media (max-width: 880px) {
   .clip-studio-shell {
-    padding: 0.85rem 0.8rem calc(8rem + var(--mobile-nav-height, 5rem));
+    padding: 0.85rem 0.8rem calc(5.5rem + env(safe-area-inset-bottom));
   }
 
   .clip-studio-shell .clip-studio-topbar-row {
     grid-template-columns: minmax(0, 1fr);
+    gap: 0.7rem;
+  }
+
+  .clip-studio-shell .clip-studio-title-block {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "copy"
+      "status"
+      "checks"
+      "warning";
+    gap: 0.35rem;
+  }
+
+  .clip-studio-shell .clip-studio-primary-status {
+    justify-content: flex-start;
+    padding-top: 0;
   }
 
   .clip-studio-shell .clip-studio-topbar-actions {
@@ -679,10 +817,19 @@
 
   .clip-studio-shell .clip-studio-layout {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
     grid-template-areas:
       "preview"
+      "timeline"
       "transcript"
       "tools";
+  }
+
+  .clip-studio-shell .clip-studio-preview-column,
+  .clip-studio-shell .clip-studio-main-column {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
   }
 
   .clip-studio-shell .clip-studio-transcript-rail {
@@ -696,6 +843,10 @@
   .clip-studio-shell .clip-studio-live-frame {
     max-height: 64vh;
   }
+
+  .clip-studio-shell .clip-studio-bottom-timeline {
+    max-height: none;
+  }
 }
 
 @media (max-width: 560px) {
@@ -703,13 +854,14 @@
     width: calc(100vw - 0.7rem);
     gap: 0.1rem;
     border-radius: 13px;
-    padding: 0.22rem;
+    bottom: calc(env(safe-area-inset-bottom) + 0.25rem);
+    padding: 0.18rem;
   }
 
   .clip-studio-shell .clip-studio-mobile-task {
-    min-height: 44px;
+    min-height: 42px;
     border-radius: 8px;
-    font-size: 0.65rem;
+    font-size: 0.61rem;
   }
 
   .clip-studio-shell .clip-studio-creator-review-hero {
@@ -721,17 +873,22 @@
   }
 
   .clip-studio-shell .clip-studio-topbar {
-    border-radius: 14px;
-    padding: 0.9rem;
+    border-radius: 0;
+    padding: 0 0 0.65rem;
   }
 
   .clip-studio-shell .clip-studio-topbar h1 {
-    font-size: clamp(1.5rem, 8vw, 1.9rem);
+    font-size: clamp(1.35rem, 7vw, 1.7rem);
   }
 
   .clip-studio-shell .clip-studio-primary-status {
-    display: grid;
-    justify-items: start;
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .clip-studio-shell .clip-studio-primary-status > .small,
+  .clip-studio-shell .clip-studio-topbar-subtitle {
+    display: none;
   }
 
   .clip-studio-shell .clip-studio-status-details > summary {
@@ -743,7 +900,45 @@
   }
 
   .clip-studio-shell .clip-studio-context-actions {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .clip-studio-shell .clip-studio-context-actions .button {
+    min-height: 40px;
+    padding-inline: 0.55rem;
+    font-size: 0.75rem;
+  }
+
+  .clip-studio-shell .clip-studio-ready-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .clip-studio-shell .clip-studio-ready-actions .button {
+    min-height: 44px;
+    padding-inline: 0.5rem;
+    font-size: 0.72rem;
+    line-height: 1.15;
+  }
+
+  .clip-studio-shell .clip-studio-status-details > summary {
+    min-height: 38px;
+  }
+
+  .clip-studio-shell .warning-banner {
+    display: block;
+    overflow: visible;
+    padding: 0.58rem 0.68rem;
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+
+  .clip-studio-shell .clip-studio-live-frame {
+    max-height: min(48vh, 420px);
+  }
+
+  .clip-studio-shell .clip-studio-bottom-timeline {
+    max-height: 30rem;
+    overflow: auto;
   }
 
   .clip-studio-shell .clip-studio-tabs {

@@ -37,16 +37,16 @@ export function ClipStudioWorkbenchTabs({
   advanced,
 }: ClipStudioWorkbenchTabsProps) {
   const [activeTab, setActiveTab] = useState<StudioTabId>("edit");
-  const [activeMobileTask, setActiveMobileTask] = useState<MobileStudioTaskId>("edit");
+  const [activeMobileTask, setActiveMobileTask] = useState<MobileStudioTaskId>("preview");
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const tabs: StudioTab[] = useMemo(
     () => [
-      { id: "edit", label: "Words", eyebrow: "Trim, captions and post copy", content: edit },
+      { id: "edit", label: "Edit", eyebrow: "Trim, captions and post copy", content: edit },
       { id: "format", label: "Frame", eyebrow: "Format and crop", content: format },
       { id: "branding", label: "Brand", eyebrow: "Church identity", content: branding },
-      { id: "post", label: "Post", eyebrow: "Prepared media and handoff", content: post },
-      { id: "evidence", label: "Why", eyebrow: "Message evidence", content: evidence },
+      { id: "post", label: "Export", eyebrow: "Prepared media and handoff", content: post },
+      { id: "evidence", label: "Insights", eyebrow: "Message evidence", content: evidence },
     ],
     [branding, edit, evidence, format, post],
   );
@@ -54,11 +54,11 @@ export function ClipStudioWorkbenchTabs({
   const activeEyebrow = tabs.find((tab) => tab.id === activeTab)?.eyebrow ?? "Clip tools";
   const mobileTasks: Array<{ id: MobileStudioTaskId; label: string }> = [
     { id: "preview", label: "Preview" },
-    { id: "transcript", label: "Words" },
-    { id: "edit", label: "Words" },
+    { id: "transcript", label: "Transcript" },
+    { id: "edit", label: "Edit" },
     { id: "format", label: "Frame" },
     { id: "branding", label: "Brand" },
-    { id: "post", label: "Post" },
+    { id: "post", label: "Export" },
   ];
 
   function selectTab(index: number) {

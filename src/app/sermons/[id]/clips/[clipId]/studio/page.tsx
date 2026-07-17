@@ -518,6 +518,13 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   const latestExportRecords = exportHistoryWithFileState;
   const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
   const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
+  const studioMediaIssues = [
+    clip.renderError ? { label: "Render", message: clip.renderError } : null,
+    clip.captionGenerationError ? { label: "Captions", message: clip.captionGenerationError } : null,
+    clip.captionBurnError ? { label: "Caption burn", message: clip.captionBurnError } : null,
+    clip.overlayRenderError ? { label: "Branding", message: clip.overlayRenderError } : null,
+    clip.exportError ? { label: "Export", message: clip.exportError } : null,
+  ].filter((issue): issue is { label: string; message: string } => Boolean(issue));
 
   return (
     <ClipStudioPreviewProvider
@@ -532,7 +539,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
         <header className="clip-studio-topbar" aria-labelledby="clip-studio-title">
           <div className="clip-studio-topbar-row">
             <div className="clip-studio-title-block">
-              <div className="stack-sm">
+              <div className="clip-studio-title-copy stack-sm">
                 <p className="kicker">Clip Studio · Message-safe editing</p>
                 <h1 id="clip-studio-title">{clip.title}</h1>
                 <p className="muted clip-studio-topbar-subtitle">
@@ -577,7 +584,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
 
               {transcriptReviewRequired ? (
                 <p className="warning-banner">
-                  Review the local-language wording before preparing this clip. Saving captions does not confirm transcript accuracy; use the explicit transcript check in Review before export or posting.
+                  Review the local-language wording before preparing. Saving captions does not confirm transcript accuracy—approve it in Review before export.
                 </p>
               ) : null}
             </div>
@@ -603,44 +610,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
           </div>
         </header>
 
-      <div className="clip-studio-layout">
-        <ClipStudioTranscriptPanel
-          transcriptSegments={studioTranscriptSegments}
-          clipStartSeconds={clip.startTimeSeconds}
-          clipEndSeconds={clip.endTimeSeconds}
-          clipDurationSeconds={clip.durationSeconds}
-          captionCues={onVideoCaptionCues}
-          speechCleanup={speechCleanupSettings}
-          momentType={clip.ministryMoment?.momentType ?? clip.clipType ?? null}
-          momentTitle={clip.ministryMoment?.title ?? null}
-          smartClipCategory={clip.smartClipCategory}
-        />
-
-        <aside className="clip-studio-preview-column stack-md">
-          <ClipStudioLivePreview
-            hasPreview={hasPreview}
-            previewSrc={previewSrc}
-            sourcePreviewSrc={sourceVideoPreviewAvailable ? `/api/sermons/${sermon.id}/source-preview` : null}
-            unavailableDescription={
-              localMediaAvailable || hasRemotePreview
-                ? undefined
-                : "No remote preview is available yet. Keep the Mac media worker running to render and upload this clip preview."
-            }
-            renderLabel={renderStatusLabel(renderStatus)}
-            renderTone={renderStatus === "COMPLETED" ? "success" : renderStatus === "FAILED" ? "danger" : "neutral"}
-            durationLabel={timing.durationLabel}
-            timingLabel={`${timing.startLabel} - ${timing.endLabel}`}
-            riskLabel={`${clip.riskLevel} risk`}
-            riskClassName={`risk-${clip.riskLevel.toLowerCase()}`}
-          />
-
-          {clip.renderError ? <p className="status-help">Render issue: {clip.renderError}</p> : null}
-          {clip.captionGenerationError ? <p className="status-help">Caption issue: {clip.captionGenerationError}</p> : null}
-          {clip.captionBurnError ? <p className="status-help">Caption burn issue: {clip.captionBurnError}</p> : null}
-          {clip.overlayRenderError ? <p className="status-help">Branding issue: {clip.overlayRenderError}</p> : null}
-          {clip.exportError ? <p className="status-help">Export issue: {clip.exportError}</p> : null}
-
-          <ClipStudioTimeline
+        <div className="clip-studio-layout">
+          <ClipStudioTranscriptPanel
             transcriptSegments={studioTranscriptSegments}
             clipStartSeconds={clip.startTimeSeconds}
             clipEndSeconds={clip.endTimeSeconds}
@@ -651,10 +622,42 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             momentTitle={clip.ministryMoment?.title ?? null}
             smartClipCategory={clip.smartClipCategory}
           />
-        </aside>
 
-        <div className="clip-studio-main-column stack-md">
-          <ClipStudioWorkbenchTabs
+          <aside className="clip-studio-preview-column stack-md">
+            <ClipStudioLivePreview
+              hasPreview={hasPreview}
+              previewSrc={previewSrc}
+              sourcePreviewSrc={sourceVideoPreviewAvailable ? `/api/sermons/${sermon.id}/source-preview` : null}
+              unavailableDescription={
+                localMediaAvailable || hasRemotePreview
+                  ? undefined
+                  : "No remote preview is available yet. Keep the Mac media worker running to render and upload this clip preview."
+              }
+              renderLabel={renderStatusLabel(renderStatus)}
+              renderTone={renderStatus === "COMPLETED" ? "success" : renderStatus === "FAILED" ? "danger" : "neutral"}
+              durationLabel={timing.durationLabel}
+              timingLabel={`${timing.startLabel} - ${timing.endLabel}`}
+              riskLabel={`${clip.riskLevel} risk`}
+              riskClassName={`risk-${clip.riskLevel.toLowerCase()}`}
+            />
+
+            {studioMediaIssues.length > 0 ? (
+              <aside className="clip-studio-media-alert" aria-label="Media preparation issues">
+                <strong>Media needs attention</strong>
+                <ul>
+                  {studioMediaIssues.map((issue) => (
+                    <li key={issue.label}>
+                      <span>{issue.label}</span>
+                      {issue.message}
+                    </li>
+                  ))}
+                </ul>
+              </aside>
+            ) : null}
+          </aside>
+
+          <div className="clip-studio-main-column stack-md">
+            <ClipStudioWorkbenchTabs
             edit={
               <ClipStudioEditor
                 initialStartTimeSeconds={clip.startTimeSeconds}
@@ -929,9 +932,21 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 </dl>
               </section>
             }
+            />
+          </div>
+
+          <ClipStudioTimeline
+            transcriptSegments={studioTranscriptSegments}
+            clipStartSeconds={clip.startTimeSeconds}
+            clipEndSeconds={clip.endTimeSeconds}
+            clipDurationSeconds={clip.durationSeconds}
+            captionCues={onVideoCaptionCues}
+            speechCleanup={speechCleanupSettings}
+            momentType={clip.ministryMoment?.momentType ?? clip.clipType ?? null}
+            momentTitle={clip.ministryMoment?.title ?? null}
+            smartClipCategory={clip.smartClipCategory}
           />
         </div>
-      </div>
       </main>
     </ClipStudioPreviewProvider>
   );
