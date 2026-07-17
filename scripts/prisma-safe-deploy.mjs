@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { loadEnvFile } from "node:process";
 
-import nextEnv from "@next/env";
 import { PrismaClient } from "@prisma/client";
 
 import {
@@ -9,8 +9,7 @@ import {
   withDatabaseConnectionRetry,
 } from "./prisma-deploy-retry.mjs";
 
-const { loadEnvConfig } = nextEnv;
-loadEnvConfig(process.cwd());
+loadEnvFile(".env");
 
 const prisma = new PrismaClient();
 const BASELINE_MARKER_TABLE = '"_sermon_clip_baseline_state"';
