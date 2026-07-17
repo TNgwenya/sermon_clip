@@ -330,12 +330,15 @@ async function loadContext(sermonId: string): Promise<SermonContextPayload | nul
   };
 }
 
-async function parseMomentResponse(context: SermonContextPayload): Promise<MinistryMomentRecord[]> {
+async function parseMomentResponse(
+  context: SermonContextPayload,
+  options?: { bypassCache?: boolean },
+): Promise<MinistryMomentRecord[]> {
   const transcriptPrompt = buildUserPrompt(context);
   const model = resolveOpenAIChatModel("ministryMoment");
   const reasoningEffort = resolveOpenAIReasoningEffort("ministryMoment", model);
 
-  const response = await createLoggedChatCompletion({
+  return createLoggedChatCompletion({
     operation: "ministry_moment_detection",
     sermonId: context.id,
     model,
@@ -352,21 +355,46 @@ async function parseMomentResponse(context: SermonContextPayload): Promise<Minis
       language: context.language,
     },
     missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before detecting ministry moments.",
+    bypassCache: options?.bypassCache,
+    validateResponse: (response) => {
+      const rawContent = response.choices[0]?.message?.content ?? "";
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawContent);
+      } catch {
+        throw new Error(`AI returned invalid JSON: ${rawContent.slice(0, 200)}`);
+      }
+      return ministryMomentResponseSchema.parse(normalizeMinistryMomentResponsePayload(parsed)).moments;
+    },
   });
-
-  const rawContent = response.choices[0]?.message?.content ?? "";
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawContent);
-  } catch {
-    throw new Error(`AI returned invalid JSON: ${rawContent.slice(0, 200)}`);
-  }
-
-  return ministryMomentResponseSchema.parse(normalizeMinistryMomentResponsePayload(parsed)).moments;
 }
 
 export function shouldReuseExistingMoments(momentCount: number, force?: boolean): boolean {
   return momentCount > 0 && !force;
+}
+
+export async function persistMinistryMoments(
+  sermonId: string,
+  transcriptFullText: string,
+  moments: MinistryMomentRecord[],
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.ministryMoment.deleteMany({
+      where: {
+        sermonId,
+        isAiGenerated: true,
+        isManuallyAdjusted: false,
+      },
+    });
+
+    if (moments.length > 0) {
+      await tx.ministryMoment.createMany({
+        data: moments.map((moment) =>
+          buildMinistryMomentCreateInput(sermonId, transcriptFullText, moment),
+        ),
+      });
+    }
+  });
 }
 
 export async function generateMinistryMoments(
@@ -386,28 +414,13 @@ export async function generateMinistryMoments(
     return { momentCount: existingMomentCount, reusedExistingMoments: true };
   }
 
-  const moments = await parseMomentResponse(context);
+  const moments = await parseMomentResponse(context, { bypassCache: options?.force });
+  await persistMinistryMoments(sermonId, context.transcriptFullText, moments);
 
   if (moments.length === 0) {
     await appendPipelineLog(sermonId, "Ministry moment detection returned no moments.");
     return { momentCount: 0, reusedExistingMoments: false };
   }
-
-  await prisma.$transaction(async (tx) => {
-    await tx.ministryMoment.deleteMany({
-      where: {
-        sermonId,
-        isAiGenerated: true,
-        isManuallyAdjusted: false,
-      },
-    });
-
-    await tx.ministryMoment.createMany({
-      data: moments.map((moment) =>
-        buildMinistryMomentCreateInput(sermonId, context.transcriptFullText, moment),
-      ),
-    });
-  });
 
   await appendPipelineLog(sermonId, `Detected ${moments.length} ministry moment(s).`);
   return { momentCount: moments.length, reusedExistingMoments: false };

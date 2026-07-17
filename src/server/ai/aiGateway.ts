@@ -1,8 +1,17 @@
 import { getOpenAiClient } from "@/server/ai/openaiClient";
-import { recordAiInvocation, type AiInvocationUsage } from "@/server/ai/aiInvocationLogger";
+import {
+  buildAiRequestHash,
+  recordAiInvocation,
+  type AiInvocationUsage,
+} from "@/server/ai/aiInvocationLogger";
 import type { OpenAIReasoningEffort } from "@/server/ai/modelConfig";
+import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import type { ChatCompletion } from "openai/resources/chat/completions";
+import type {
+  Response,
+  ResponseCreateParamsNonStreaming,
+} from "openai/resources/responses/responses";
 
 type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -25,6 +34,7 @@ type LoggedChatCompletionInput = {
   promptVersion?: string | null;
   metadata?: Prisma.InputJsonValue;
   missingKeyMessage?: string;
+  bypassCache?: boolean;
 };
 
 type ValidatedLoggedChatCompletionInput<T> = LoggedChatCompletionInput & {
@@ -33,7 +43,9 @@ type ValidatedLoggedChatCompletionInput<T> = LoggedChatCompletionInput & {
 
 const DEFAULT_CHAT_MAX_ATTEMPTS = 3;
 const DEFAULT_CHAT_RETRY_BASE_DELAY_MS = 1_500;
+const DEFAULT_VALIDATED_RESPONSE_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
 const RETRYABLE_STATUS_CODES = new Set([408, 409, 429, 500, 502, 503, 504]);
+const inFlightRequests = new Map<string, Promise<unknown>>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -85,12 +97,116 @@ function resolvePositiveIntegerEnv(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
-function usageFromCompletion(completion: { usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null }): AiInvocationUsage {
+function usageFromResponse(response: Response): AiInvocationUsage {
   return {
-    inputTokens: completion.usage?.prompt_tokens ?? null,
-    outputTokens: completion.usage?.completion_tokens ?? null,
-    totalTokens: completion.usage?.total_tokens ?? null,
+    inputTokens: response.usage?.input_tokens ?? null,
+    cachedInputTokens: response.usage?.input_tokens_details?.cached_tokens ?? null,
+    outputTokens: response.usage?.output_tokens ?? null,
+    reasoningTokens: response.usage?.output_tokens_details?.reasoning_tokens ?? null,
+    totalTokens: response.usage?.total_tokens ?? null,
   };
+}
+
+function asChatCompletion(response: Response): ChatCompletion {
+  return {
+    id: response.id,
+    object: "chat.completion",
+    created: response.created_at,
+    model: response.model,
+    choices: [{
+      index: 0,
+      finish_reason: response.status === "completed" ? "stop" : "length",
+      logprobs: null,
+      message: {
+        role: "assistant",
+        content: response.output_text,
+        refusal: null,
+      },
+    }],
+    usage: response.usage ? {
+      prompt_tokens: response.usage.input_tokens,
+      completion_tokens: response.usage.output_tokens,
+      total_tokens: response.usage.total_tokens,
+    } : undefined,
+  } as ChatCompletion;
+}
+
+function cachedChatCompletion(model: string, responseText: string): ChatCompletion {
+  return {
+    id: "validated-response-cache",
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [{
+      index: 0,
+      finish_reason: "stop",
+      logprobs: null,
+      message: { role: "assistant", content: responseText, refusal: null },
+    }],
+  } as ChatCompletion;
+}
+
+function mergeMetadata(
+  metadata: Prisma.InputJsonValue | undefined,
+  extra: Record<string, string | number | boolean | null>,
+): Prisma.InputJsonValue {
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    return { ...metadata, ...extra };
+  }
+  return { ...extra, ...(metadata === undefined ? {} : { context: metadata }) };
+}
+
+function isValidatedCacheEnabled(input: LoggedChatCompletionInput | ValidatedLoggedChatCompletionInput<unknown>): boolean {
+  return (
+    "validateResponse" in input &&
+    Boolean(input.promptVersion) &&
+    !input.bypassCache &&
+    process.env.OPENAI_VALIDATED_RESPONSE_CACHE_ENABLED?.trim().toLowerCase() !== "false"
+  );
+}
+
+async function readValidatedResponseCache(requestHash: string): Promise<string | null> {
+  try {
+    const cached = await prisma.aiResponseCache.findUnique({ where: { requestHash } });
+    if (!cached) return null;
+    if (cached.expiresAt <= new Date()) {
+      await prisma.aiResponseCache.delete({ where: { requestHash } });
+      return null;
+    }
+    return cached.responseText;
+  } catch (error) {
+    console.warn(`AI validated response cache read skipped: ${errorMessage(error)}`);
+    return null;
+  }
+}
+
+async function writeValidatedResponseCache(input: {
+  requestHash: string;
+  operation: string;
+  model: string;
+  promptVersion?: string | null;
+  responseText: string;
+}): Promise<void> {
+  const ttlSeconds = resolvePositiveIntegerEnv(
+    "OPENAI_VALIDATED_RESPONSE_CACHE_TTL_SECONDS",
+    DEFAULT_VALIDATED_RESPONSE_CACHE_TTL_SECONDS,
+  );
+  try {
+    await prisma.aiResponseCache.upsert({
+      where: { requestHash: input.requestHash },
+      create: {
+        ...input,
+        promptVersion: input.promptVersion ?? null,
+        expiresAt: new Date(Date.now() + (ttlSeconds * 1000)),
+      },
+      update: {
+        responseText: input.responseText,
+        expiresAt: new Date(Date.now() + (ttlSeconds * 1000)),
+      },
+    });
+  } catch (error) {
+    console.warn(`AI validated response cache write skipped: ${errorMessage(error)}`);
+  }
 }
 
 function withFailureStageMetadata(
@@ -139,54 +255,123 @@ export function createLoggedChatCompletion(input: LoggedChatCompletionInput): Pr
 export async function createLoggedChatCompletion<T>(
   input: LoggedChatCompletionInput | ValidatedLoggedChatCompletionInput<T>,
 ): Promise<ChatCompletion | T> {
-  const startedAt = Date.now();
-  const request = {
+  const request: ResponseCreateParamsNonStreaming = {
     model: input.model,
-    // GPT-5 reasoning requests do not accept sampling controls such as
-    // temperature. Keep legacy model behavior when no reasoning level applies.
     temperature: input.reasoningEffort ? undefined : input.temperature,
-    reasoning_effort: input.reasoningEffort,
-    response_format: input.response_format,
-    messages: input.messages,
+    reasoning: input.reasoningEffort ? { effort: input.reasoningEffort } : undefined,
+    text: input.response_format ? { format: input.response_format } : undefined,
+    input: input.messages,
+    prompt_cache_key: `${input.operation}:${input.promptVersion ?? "unversioned"}`,
+    store: false,
+    stream: false,
   };
-  let completion: ChatCompletion | null = null;
+  const requestHash = buildAiRequestHash(request);
+  const cacheEnabled = isValidatedCacheEnabled(input);
 
+  const activeRequest = inFlightRequests.get(requestHash);
+  if (activeRequest) {
+    return activeRequest as Promise<T | ChatCompletion>;
+  }
+
+  const execution = (async (): Promise<ChatCompletion | T> => {
+    const startedAt = Date.now();
+    let response: Response | null = null;
+    let completion: ChatCompletion | null = null;
+    let providerRequestCount = 0;
+
+    if (cacheEnabled && "validateResponse" in input) {
+      const cachedResponseText = await readValidatedResponseCache(requestHash);
+      if (cachedResponseText !== null) {
+        const cachedCompletion = cachedChatCompletion(input.model, cachedResponseText);
+        try {
+          const cachedResult = await input.validateResponse(cachedCompletion);
+          await recordAiInvocation({
+            sermonId: input.sermonId,
+            clipCandidateId: input.clipCandidateId,
+            operation: input.operation,
+            model: input.model,
+            promptVersion: input.promptVersion,
+            requestHash,
+            status: "SUCCEEDED",
+            providerRequestCount: 0,
+            cacheHit: true,
+            latencyMs: Date.now() - startedAt,
+            metadata: mergeMetadata(input.metadata, { validatedResponseCacheHit: true }),
+          });
+          return cachedResult;
+        } catch {
+          try {
+            await prisma.aiResponseCache.delete({ where: { requestHash } });
+          } catch {
+            // A stale or incompatible cache entry should never block a live request.
+          }
+        }
+      }
+    }
+
+    try {
+      const client = getOpenAiClient(input.missingKeyMessage);
+      response = await runWithRetry(() => {
+        providerRequestCount += 1;
+        return client.responses.create(request);
+      });
+      completion = asChatCompletion(response);
+      const result = "validateResponse" in input
+        ? await input.validateResponse(completion)
+        : completion;
+
+      if (cacheEnabled) {
+        await writeValidatedResponseCache({
+          requestHash,
+          operation: input.operation,
+          model: input.model,
+          promptVersion: input.promptVersion,
+          responseText: response.output_text,
+        });
+      }
+
+      await recordAiInvocation({
+        sermonId: input.sermonId,
+        clipCandidateId: input.clipCandidateId,
+        operation: input.operation,
+        model: input.model,
+        promptVersion: input.promptVersion,
+        request,
+        status: "SUCCEEDED",
+        usage: usageFromResponse(response),
+        providerRequestCount,
+        cacheHit: false,
+        latencyMs: Date.now() - startedAt,
+        metadata: input.metadata,
+      });
+      return result;
+    } catch (error) {
+      await recordAiInvocation({
+        sermonId: input.sermonId,
+        clipCandidateId: input.clipCandidateId,
+        operation: input.operation,
+        model: input.model,
+        promptVersion: input.promptVersion,
+        request,
+        status: "FAILED",
+        usage: response ? usageFromResponse(response) : undefined,
+        providerRequestCount,
+        cacheHit: false,
+        latencyMs: Date.now() - startedAt,
+        errorMessage: errorMessage(error),
+        metadata: withFailureStageMetadata(
+          input.metadata,
+          completion ? "response_validation" : "provider_request",
+        ),
+      });
+      throw error;
+    }
+  })();
+
+  inFlightRequests.set(requestHash, execution);
   try {
-    const client = getOpenAiClient(input.missingKeyMessage);
-    completion = await runWithRetry(() => client.chat.completions.create(request));
-    const result = "validateResponse" in input
-      ? await input.validateResponse(completion)
-      : completion;
-    await recordAiInvocation({
-      sermonId: input.sermonId,
-      clipCandidateId: input.clipCandidateId,
-      operation: input.operation,
-      model: input.model,
-      promptVersion: input.promptVersion,
-      request,
-      status: "SUCCEEDED",
-      usage: usageFromCompletion(completion),
-      latencyMs: Date.now() - startedAt,
-      metadata: input.metadata,
-    });
-    return result;
-  } catch (error) {
-    await recordAiInvocation({
-      sermonId: input.sermonId,
-      clipCandidateId: input.clipCandidateId,
-      operation: input.operation,
-      model: input.model,
-      promptVersion: input.promptVersion,
-      request,
-      status: "FAILED",
-      usage: completion ? usageFromCompletion(completion) : undefined,
-      latencyMs: Date.now() - startedAt,
-      errorMessage: errorMessage(error),
-      metadata: withFailureStageMetadata(
-        input.metadata,
-        completion ? "response_validation" : "provider_request",
-      ),
-    });
-    throw error;
+    return await execution;
+  } finally {
+    inFlightRequests.delete(requestHash);
   }
 }

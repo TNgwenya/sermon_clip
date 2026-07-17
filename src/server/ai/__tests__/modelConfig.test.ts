@@ -11,8 +11,8 @@ afterEach(() => {
   process.env = { ...ORIGINAL_ENV };
 });
 
-describe("OpenAI premium model configuration", () => {
-  it("uses the flagship quality model and high reasoning by default", () => {
+describe("OpenAI workload model configuration", () => {
+  it("uses the balanced model and medium reasoning for clip selection", () => {
     delete process.env.OPENAI_CHAT_MODEL;
     delete process.env.OPENAI_REASONING_EFFORT;
     delete process.env.OPENAI_CLIP_SELECTION_MODEL;
@@ -20,8 +20,20 @@ describe("OpenAI premium model configuration", () => {
 
     const model = resolveOpenAIChatModel("clipSelection");
 
-    expect(model).toBe("gpt-5.6-sol");
-    expect(resolveOpenAIReasoningEffort("clipSelection", model)).toBe("high");
+    expect(model).toBe("gpt-5.6-terra");
+    expect(resolveOpenAIReasoningEffort("clipSelection", model)).toBe("medium");
+  });
+
+  it("uses the high-volume model and low reasoning for routine structured tasks", () => {
+    delete process.env.OPENAI_CHAT_MODEL;
+    delete process.env.OPENAI_REASONING_EFFORT;
+    delete process.env.OPENAI_CONTENT_MULTIPLICATION_MODEL;
+    delete process.env.OPENAI_CONTENT_MULTIPLICATION_MODEL_REASONING_EFFORT;
+
+    const model = resolveOpenAIChatModel("contentMultiplication");
+
+    expect(model).toBe("gpt-5.6-luna");
+    expect(resolveOpenAIReasoningEffort("contentMultiplication", model)).toBe("low");
   });
 
   it("preserves lower-cost legacy overrides without sending unsupported reasoning fields", () => {

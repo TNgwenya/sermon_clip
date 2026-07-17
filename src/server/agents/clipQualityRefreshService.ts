@@ -77,7 +77,10 @@ export type RefreshableClip = {
 };
 
 type ClipQualityRefreshDependencies = {
-  reviewCandidates: (candidates: ClipQualityCandidateInput[], options?: { rawResponseOverride?: string }) => Promise<Array<ClipQualityReviewedCandidate<ClipQualityCandidateInput>>>;
+  reviewCandidates: (
+    candidates: ClipQualityCandidateInput[],
+    options?: { rawResponseOverride?: string; bypassCache?: boolean; sermonId?: string },
+  ) => Promise<Array<ClipQualityReviewedCandidate<ClipQualityCandidateInput>>>;
   refreshVisualQuality: typeof refreshClipVisualQuality;
   refreshTracking: typeof refreshVideoSubjectTracking;
   scoreProfessionalQuality: typeof scoreProfessionalClipQuality;
@@ -219,6 +222,9 @@ function toQualityInput(clip: RefreshableClip): ClipQualityCandidateInput {
     boundaryQuality: clip.boundaryQuality,
     boundaryAdjustmentReason: clip.boundaryAdjustmentReason,
     visualReadinessScore: clip.visualReadinessScore,
+    completenessScore: clip.completenessScore,
+    completenessAction: clip.completenessAction,
+    completenessWarnings: normalizeStringArray(clip.completenessWarnings),
   };
 }
 
@@ -245,6 +251,11 @@ export async function refreshClipQualityRecords(input: {
   let clipsRefreshed = 0;
   let clipsSkipped = 0;
   let fallbackReviews = 0;
+  const prepared: Array<{
+    clip: RefreshableClip;
+    qualityInput: ClipQualityCandidateInput;
+    visualRefresh: Awaited<ReturnType<typeof refreshClipVisualQuality>>;
+  }> = [];
 
   for (const clip of input.clips) {
     if (!shouldRefreshClipQuality(clip, mode)) {
@@ -261,44 +272,92 @@ export async function refreshClipQualityRecords(input: {
     try {
       await maybeRefreshTracking(clip, dependencies);
       const visualRefresh = await dependencies.refreshVisualQuality(clip.id);
-      const qualityInput = {
-        ...toQualityInput(clip),
-        visualReadinessScore: visualRefresh?.visualReadinessScore ?? clip.visualReadinessScore,
-      };
-      const [reviewed] = await dependencies.reviewCandidates([qualityInput]);
-      if (!reviewed) {
-        throw new Error("Quality review did not return a result for this clip.");
-      }
-
-      const professional = dependencies.scoreProfessionalQuality({
-        ...reviewed,
-        transcriptSafetyStatus: clip.transcriptSafetyStatus,
-        visualReadinessScore: visualRefresh?.visualReadinessScore ?? reviewed.visualReadinessScore,
-        visualConfidenceScore: visualRefresh?.visualReadinessScore ?? undefined,
-        visualQualityScore: visualRefresh?.visualQualityScore ?? undefined,
-        qualityWarnings: visualRefresh?.qualityWarnings ?? normalizeStringArray(clip.qualityWarnings),
-        renderStatus: clip.renderStatus,
-        captionData: clip.captionData,
-        audioQualityScore: clip.audioQualityScore,
-        averageLoudness: clip.averageLoudness,
-        peakLoudness: clip.peakLoudness,
-        silenceAtBeginningSeconds: clip.silenceAtBeginningSeconds,
-        silenceAtEndSeconds: clip.silenceAtEndSeconds,
-        audioWarnings: normalizeStringArray(clip.audioWarnings),
-        completenessScore: clip.completenessScore,
-        completenessAction: clip.completenessAction,
-        completenessWarnings: normalizeStringArray(clip.completenessWarnings),
+      prepared.push({
+        clip,
+        visualRefresh,
+        qualityInput: {
+          ...toQualityInput(clip),
+          visualReadinessScore: visualRefresh?.visualReadinessScore ?? clip.visualReadinessScore,
+        },
       });
-
-      await dependencies.updateClipQuality(clip.id, reviewed, professional);
-      if (reviewed.qualityReviewSource === "FALLBACK") {
-        fallbackReviews += 1;
-      }
-
-      clipsRefreshed += 1;
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Unknown quality refresh error.";
       failures.push({ clipId: clip.id, reason });
+    }
+  }
+
+  const reviewBatchSize = 8;
+  for (let batchStart = 0; batchStart < prepared.length; batchStart += reviewBatchSize) {
+    const batch = prepared.slice(batchStart, batchStart + reviewBatchSize);
+    let reviewedBatch: Array<ClipQualityReviewedCandidate<ClipQualityCandidateInput> | undefined>;
+    const individuallyFailedIndexes = new Set<number>();
+    try {
+      reviewedBatch = await dependencies.reviewCandidates(
+        batch.map((entry) => entry.qualityInput),
+        { bypassCache: mode === "force", sermonId: batch[0]?.clip.sermonId },
+      );
+    } catch (error) {
+      // A malformed candidate should not block the rest of a batch. Retry only
+      // this failed batch one-by-one to isolate the bad item.
+      reviewedBatch = [];
+      for (const [index, entry] of batch.entries()) {
+        try {
+          const [reviewed] = await dependencies.reviewCandidates(
+            [entry.qualityInput],
+            { bypassCache: mode === "force", sermonId: entry.clip.sermonId },
+          );
+          reviewedBatch.push(reviewed);
+        } catch (individualError) {
+          individuallyFailedIndexes.add(index);
+          const reason = individualError instanceof Error
+            ? individualError.message
+            : error instanceof Error ? error.message : "Unknown quality review error.";
+          failures.push({ clipId: entry.clip.id, reason });
+          reviewedBatch.push(undefined);
+        }
+      }
+    }
+
+    for (const [index, entry] of batch.entries()) {
+      const reviewed = reviewedBatch[index];
+      if (!reviewed) {
+        if (!individuallyFailedIndexes.has(index)) {
+          failures.push({ clipId: entry.clip.id, reason: "Quality review did not return a result for this clip." });
+        }
+        continue;
+      }
+
+      try {
+        const { clip, visualRefresh } = entry;
+        const professional = dependencies.scoreProfessionalQuality({
+          ...reviewed,
+          transcriptSafetyStatus: clip.transcriptSafetyStatus,
+          visualReadinessScore: visualRefresh?.visualReadinessScore ?? reviewed.visualReadinessScore,
+          visualConfidenceScore: visualRefresh?.visualReadinessScore ?? undefined,
+          visualQualityScore: visualRefresh?.visualQualityScore ?? undefined,
+          qualityWarnings: visualRefresh?.qualityWarnings ?? normalizeStringArray(clip.qualityWarnings),
+          renderStatus: clip.renderStatus,
+          captionData: clip.captionData,
+          audioQualityScore: clip.audioQualityScore,
+          averageLoudness: clip.averageLoudness,
+          peakLoudness: clip.peakLoudness,
+          silenceAtBeginningSeconds: clip.silenceAtBeginningSeconds,
+          silenceAtEndSeconds: clip.silenceAtEndSeconds,
+          audioWarnings: normalizeStringArray(clip.audioWarnings),
+          completenessScore: clip.completenessScore,
+          completenessAction: clip.completenessAction,
+          completenessWarnings: normalizeStringArray(clip.completenessWarnings),
+        });
+
+        await dependencies.updateClipQuality(clip.id, reviewed, professional);
+        if (reviewed.qualityReviewSource === "FALLBACK") {
+          fallbackReviews += 1;
+        }
+        clipsRefreshed += 1;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "Unknown quality persistence error.";
+        failures.push({ clipId: entry.clip.id, reason });
+      }
     }
   }
 

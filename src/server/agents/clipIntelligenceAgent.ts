@@ -144,6 +144,8 @@ const WINDOW_STEP_SECONDS = 60;
 const MIN_WINDOW_SECONDS = 30;
 const MAX_WINDOW_SECONDS = 90;
 const BATCH_SIZE = 4;
+const DEFAULT_AI_PROMPT_WINDOW_LIMIT = 24;
+const MAX_AI_PROMPT_WINDOW_LIMIT = 64;
 const MAX_BATCH_CLIPS = 4;
 const WINDOW_TARGET_DURATIONS_SECONDS = [40, 60, 90] as const;
 const SEMANTIC_ANCHOR_MIN_SPACING_SECONDS = 24;
@@ -2137,6 +2139,16 @@ type ValidatedClipBatch = {
   rejectedReasons: string[];
 };
 
+class ClipSelectionResponseValidationError extends Error {
+  constructor(
+    readonly rawResponse: string,
+    readonly validationError: unknown,
+  ) {
+    super(formatClipParseError(validationError));
+    this.name = "ClipSelectionResponseValidationError";
+  }
+}
+
 type ClipCandidateRuntimeMetadata = {
   canonicalizationWarnings?: string[] | null;
   responseFormat?: "INDEXED" | "LEGACY_TIMESTAMPS";
@@ -2345,6 +2357,14 @@ function chunkWindows(windows: ClipWindow[]): ClipWindow[][] {
   return batches;
 }
 
+function resolveAiPromptWindowLimit(): number {
+  const configured = Number(process.env.OPENAI_CLIP_SELECTION_MAX_WINDOWS);
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_AI_PROMPT_WINDOW_LIMIT;
+  }
+  return Math.min(MAX_AI_PROMPT_WINDOW_LIMIT, Math.max(4, Math.floor(configured)));
+}
+
 function extractJsonObject(rawResponse: string): string {
   const trimmed = rawResponse.trim();
   if (!trimmed) {
@@ -2436,6 +2456,7 @@ async function callClipModel(
       volumeTarget?: ClipVolumeTarget;
     };
     requestedCount?: number;
+    bypassCache?: boolean;
   },
 ): Promise<ValidatedClipBatch> {
   const systemPrompt = buildClipSelectionSystemPrompt();
@@ -2446,33 +2467,50 @@ async function callClipModel(
     options?.context,
   );
 
-  const rawResponse = options?.rawResponseOverride ?? (await (async () => {
+  let rawResponse = options?.rawResponseOverride ?? "";
+  let initialValidationError: unknown;
+  if (options?.rawResponseOverride === undefined) {
     const model = resolveOpenAIChatModel("clipSelection");
     const reasoningEffort = resolveOpenAIReasoningEffort("clipSelection", model);
-    const completion = await createLoggedChatCompletion({
-      operation: "clip_selection",
-      sermonId: sermon.id,
-      model,
-      reasoningEffort,
-      response_format: { type: "json_object" },
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      promptVersion: "clip-selection-v1",
-      metadata: {
-        batchWindowCount: batch.length,
-        requestedCount: options?.requestedCount ?? MAX_BATCH_CLIPS,
-        transcriptCharacters: batch.reduce((total, window) => total + window.transcriptText.length, 0),
-      },
-      missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before generating clips.",
-    });
-
-    return completion.choices[0]?.message?.content ?? "";
-  })());
+    try {
+      rawResponse = await createLoggedChatCompletion({
+        operation: "clip_selection",
+        sermonId: sermon.id,
+        model,
+        reasoningEffort,
+        response_format: { type: "json_object" },
+        temperature: 0.2,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        promptVersion: "clip-selection-v1",
+        metadata: {
+          batchWindowCount: batch.length,
+          requestedCount: options?.requestedCount ?? MAX_BATCH_CLIPS,
+          transcriptCharacters: batch.reduce((total, window) => total + window.transcriptText.length, 0),
+        },
+        missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before generating clips.",
+        bypassCache: options?.bypassCache,
+        validateResponse: (completion) => {
+          const content = completion.choices[0]?.message?.content ?? "";
+          try {
+            tryParseClipResponse(content);
+            return content;
+          } catch (error) {
+            throw new ClipSelectionResponseValidationError(content, error);
+          }
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof ClipSelectionResponseValidationError)) throw error;
+      rawResponse = error.rawResponse;
+      initialValidationError = error.validationError;
+    }
+  }
 
   try {
+    if (initialValidationError) throw initialValidationError;
     const candidates = tryParseClipResponse(rawResponse);
     return {
       candidates,
@@ -2837,10 +2875,16 @@ export async function generateClipSuggestions(
       `Clip volume target for ${transcriptAwareVolumeTarget.usesSpokenCoverage ? "usable spoken transcript coverage" : "transcript duration"}: ${clipVolumeTarget.rangeLabel} pastor-review options (target ${clipVolumeTarget.targetReviewSuggestions}; effective ${transcriptAwareVolumeTarget.effectiveDurationSeconds.toFixed(1)}s of ${transcriptAwareVolumeTarget.sourceDurationSeconds.toFixed(1)}s timeline).`,
     );
 
-    const momentsCount = await prisma.ministryMoment.count({ where: { sermonId: sermon.id, isAiGenerated: true } });
-    if (momentsCount === 0 || options?.force) {
+    const [momentsCount, intelligenceStatus] = await Promise.all([
+      prisma.ministryMoment.count({ where: { sermonId: sermon.id, isAiGenerated: true } }),
+      prisma.sermonIntelligence.findUnique({
+        where: { sermonId: sermon.id },
+        select: { status: true },
+      }),
+    ]);
+    if (momentsCount === 0 && intelligenceStatus?.status !== "COMPLETED") {
       try {
-        const momentResult = await generateMinistryMoments(sermon.id, { force: options?.force });
+        const momentResult = await generateMinistryMoments(sermon.id);
         await appendJobLog(job.id, `Ministry moments ${momentResult.reusedExistingMoments ? "reused" : "refreshed"}: ${momentResult.momentCount}.`);
       } catch (momentError) {
         const momentMessage = momentError instanceof Error ? momentError.message : "Unknown ministry moment error.";
@@ -2990,7 +3034,14 @@ export async function generateClipSuggestions(
       language: sermon.language,
     };
 
-    const batches = chunkWindows(windows);
+    const aiPromptWindows = windows.slice(0, resolveAiPromptWindowLimit());
+    if (aiPromptWindows.length < windows.length) {
+      await appendJobLog(
+        job.id,
+        `Pre-ranked ${windows.length} viable transcript windows and sent the strongest ${aiPromptWindows.length} to AI; remaining windows stay available for deterministic coverage top-up.`,
+      );
+    }
+    const batches = chunkWindows(aiPromptWindows);
     const collected: ClipJsonCandidateWithRuntimeMetadata[] = [];
     let repairUsedCount = 0;
     const rejectedReasons: string[] = [];
@@ -3004,6 +3055,7 @@ export async function generateClipSuggestions(
         rawResponseOverride: index === 0 ? options?.responseOverride : undefined,
         repairResponseOverride: index === 0 ? options?.repairResponseOverride : undefined,
         requestedCount: batchClipLimit,
+        bypassCache: options?.force,
         context: clipContext
           ? {
               intelligence: {
@@ -3470,6 +3522,7 @@ export const __clipIntelligenceTestUtils = {
   assessTranscriptReadinessForClipping,
   resolveTranscriptAwareClipVolumeTarget,
   rankClipWindowsForSelection,
+  resolveAiPromptWindowLimit,
   assessClipWindowQuality,
   isReviewOnlyTranscriptUsableForClipGeneration,
   classifyTranscriptQualityForClipGeneration,

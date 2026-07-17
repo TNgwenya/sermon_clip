@@ -927,25 +927,30 @@ model ClipArtifact {
 }
 
 model AiInvocation {
-  id                  String             @id @default(cuid())
-  sermonId            String?
-  clipCandidateId     String?
-  provider            String             @default("openai")
-  operation           String
-  model               String
-  promptVersion       String?
-  requestHash         String?
-  status              AiInvocationStatus
-  inputTokens         Int?
-  outputTokens        Int?
-  totalTokens         Int?
-  estimatedCostMicros BigInt?
-  latencyMs           Int?
-  errorMessage        String?
-  metadataJson        Json?
-  createdAt           DateTime           @default(now())
-  sermon              Sermon?            @relation(fields: [sermonId], references: [id], onDelete: SetNull)
-  clipCandidate       ClipCandidate?     @relation(fields: [clipCandidateId], references: [id], onDelete: SetNull)
+  id                   String             @id @default(cuid())
+  sermonId             String?
+  clipCandidateId      String?
+  provider             String             @default("openai")
+  operation            String
+  model                String
+  promptVersion        String?
+  requestHash          String?
+  status               AiInvocationStatus
+  inputTokens          Int?
+  cachedInputTokens    Int?
+  outputTokens         Int?
+  reasoningTokens      Int?
+  totalTokens          Int?
+  estimatedCostMicros  BigInt?
+  providerRequestCount Int                @default(0)
+  cacheHit             Boolean            @default(false)
+  audioDurationSeconds Float?
+  latencyMs            Int?
+  errorMessage         String?
+  metadataJson         Json?
+  createdAt            DateTime           @default(now())
+  sermon               Sermon?            @relation(fields: [sermonId], references: [id], onDelete: SetNull)
+  clipCandidate        ClipCandidate?     @relation(fields: [clipCandidateId], references: [id], onDelete: SetNull)
 
   @@index([sermonId])
   @@index([clipCandidateId])
@@ -953,6 +958,22 @@ model AiInvocation {
   @@index([model])
   @@index([status])
   @@index([createdAt])
+}
+
+model AiResponseCache {
+  id            String   @id @default(cuid())
+  requestHash   String   @unique
+  operation     String
+  model         String
+  promptVersion String?
+  responseText  String
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([operation])
+  @@index([model])
+  @@index([expiresAt])
 }
 
 // ─── Sermon Intelligence Foundation ───────────────────────────────────────────

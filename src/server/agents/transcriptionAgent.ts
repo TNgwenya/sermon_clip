@@ -323,8 +323,8 @@ function transcriptionConfigurationKey(): string {
     process.env.OPENAI_TRANSCRIPTION_MODEL?.trim() || "whisper-1",
     process.env.OPENAI_TRANSCRIPTION_ACCURACY_MODEL?.trim() || "gpt-4o-transcribe",
     process.env.OPENAI_TRANSCRIPTION_DIARIZATION_MODEL?.trim() || "gpt-4o-transcribe-diarize",
-    process.env.OPENAI_TRANSCRIPTION_HYBRID_ENABLED?.trim().toLowerCase() || "true",
-    process.env.OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED?.trim().toLowerCase() || "true",
+    process.env.OPENAI_TRANSCRIPTION_HYBRID_ENABLED?.trim().toLowerCase() || "auto",
+    process.env.OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED?.trim().toLowerCase() || "false",
     process.env.OPENAI_TRANSCRIPTION_GLOSSARY?.trim() || "",
   ].join("|");
 }
@@ -1862,8 +1862,10 @@ async function transcribeAudioWithChunking(
 
       chunkTranscript = validateNormalizedTranscript(
         await transcribeAudioWithOpenAI(chunkPath, {
+          sermonId,
           language: languageHint?.openAiLanguage,
           prompt: buildChunkTranscriptionPrompt(languageHint, previousTranscriptTail),
+          audioDurationSeconds: durationSeconds,
           onRetry: buildOpenAITranscriptionRetryLogger(
             sermonId,
             `chunk ${index + 1}/${existingChunkFiles.length}`,
@@ -2079,8 +2081,10 @@ export async function transcribeSermonAudio(
 	          )
 	        : offsetTranscriptTimeline(
 	            await transcribeAudioWithOpenAI(transcriptionInput.audioPath, {
+	              sermonId: sermon.id,
 	              language: languageHint?.openAiLanguage,
 	              prompt: languageHint?.prompt,
+	              audioDurationSeconds: manualTranscriptionWindow?.durationSeconds ?? audioReadiness.durationSeconds,
 	              onRetry: buildOpenAITranscriptionRetryLogger(sermon.id, transcriptionInput.description),
 	            }),
 	            transcriptionInput.timelineOffsetSeconds,
@@ -2137,8 +2141,10 @@ export async function transcribeSermonAudio(
 	              )
 	            : offsetTranscriptTimeline(
 	                await transcribeAudioWithOpenAI(enhancedAudioPath, {
+	                  sermonId: sermon.id,
 	                  language: languageHint?.openAiLanguage,
 	                  prompt: languageHint?.prompt,
+	                  audioDurationSeconds: manualTranscriptionWindow?.durationSeconds ?? audioReadiness.durationSeconds,
 	                  onRetry: buildOpenAITranscriptionRetryLogger(
 	                    sermon.id,
 	                    `speech-enhanced ${transcriptionInput.description}`,

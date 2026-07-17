@@ -190,6 +190,7 @@ function buildUserPrompt(
   const keyTakeaways = Array.isArray(context.intelligence?.keyTakeaways)
     ? context.intelligence?.keyTakeaways.filter((item): item is string => typeof item === "string")
     : [];
+  const groundingEvidence = buildGroundingEvidence(context);
 
   const sections = [
     `Sermon title: ${context.title}`,
@@ -233,11 +234,44 @@ function buildUserPrompt(
           .join("\n")
       : "None",
     "",
-    "Transcript:",
-    context.transcriptFullText,
+    "Transcript-grounded evidence excerpts:",
+    groundingEvidence,
   ].filter(Boolean);
 
   return sections.join("\n");
+}
+
+function normalizeEvidenceText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function buildGroundingEvidence(context: OpportunitySourceContext): string {
+  const evidence = [
+    ...context.ministryMoments.map((moment) => moment.transcriptExcerpt ?? ""),
+    ...context.smartClips.map((clip) => clip.transcriptText),
+  ]
+    .map(normalizeEvidenceText)
+    .filter(Boolean);
+  const uniqueEvidence = Array.from(new Set(evidence));
+  if (uniqueEvidence.length > 0) {
+    return uniqueEvidence
+      .slice(0, 24)
+      .map((excerpt, index) => `[Evidence ${index + 1}] ${excerpt.slice(0, 1_200)}`)
+      .join("\n")
+      .slice(0, 18_000);
+  }
+
+  // New sermons may not have clips or moments yet. Preserve broad coverage
+  // without resending the entire transcript by sampling its opening, middle,
+  // and closing regions.
+  const transcript = normalizeEvidenceText(context.transcriptFullText);
+  const excerptLength = 4_000;
+  const middleStart = Math.max(0, Math.floor((transcript.length - excerptLength) / 2));
+  return [
+    `[Opening] ${transcript.slice(0, excerptLength)}`,
+    `[Middle] ${transcript.slice(middleStart, middleStart + excerptLength)}`,
+    `[Closing] ${transcript.slice(-excerptLength)}`,
+  ].join("\n");
 }
 
 function buildLanguageHintSummary(item: ContentOpportunityRecord): string | null {
@@ -273,11 +307,12 @@ function buildLanguageHintSummary(item: ContentOpportunityRecord): string | null
 async function callOpportunityModel(
   context: OpportunitySourceContext,
   requestedQuantities: Record<PrismaContentOpportunityType, number>,
+  options?: { bypassCache?: boolean },
 ): Promise<ContentOpportunityRecord[]> {
   const model = resolveOpenAIChatModel("contentMultiplication");
   const reasoningEffort = resolveOpenAIReasoningEffort("contentMultiplication", model);
 
-  const completion = await createLoggedChatCompletion({
+  return createLoggedChatCompletion({
     operation: "content_opportunity_generation",
     sermonId: context.id,
     model,
@@ -287,25 +322,26 @@ async function callOpportunityModel(
       { role: "system", content: buildSystemPrompt() },
       { role: "user", content: buildUserPrompt(context, requestedQuantities) },
     ],
-    promptVersion: "content-opportunities-v2-roadmap",
+    promptVersion: "content-opportunities-v3-grounded-excerpts",
     metadata: {
       requestedQuantities,
-      transcriptCharacters: context.transcriptFullText.length,
+      sourceTranscriptCharacters: context.transcriptFullText.length,
+      promptEvidenceCharacters: buildGroundingEvidence(context).length,
       language: context.language,
     },
     missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before generating content opportunities.",
+    bypassCache: options?.bypassCache,
+    validateResponse: (completion) => {
+      const raw = completion.choices[0]?.message?.content ?? "";
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new Error(`AI returned invalid JSON: ${raw.slice(0, 200)}`);
+      }
+      return contentOpportunityResponseSchema.parse(parsed).opportunities;
+    },
   });
-
-  const raw = completion.choices[0]?.message?.content ?? "";
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error(`AI returned invalid JSON: ${raw.slice(0, 200)}`);
-  }
-
-  return contentOpportunityResponseSchema.parse(parsed).opportunities;
 }
 
 function curateGeneratedOpportunities(
@@ -542,7 +578,9 @@ export async function generateContentOpportunities(
   }
 
   const requestedQuantities = buildRequestedQuantities(options);
-  const generated = await callOpportunityModel(context, requestedQuantities);
+  const generated = await callOpportunityModel(context, requestedQuantities, {
+    bypassCache: options?.force,
+  });
   const curated = curateGeneratedOpportunities(generated, requestedQuantities);
 
   if (curated.length === 0) {
@@ -632,6 +670,8 @@ export async function regenerateContentOpportunities(
 
 export const __contentMultiplicationTestUtils = {
   TYPE_TO_CATEGORY,
+  buildGroundingEvidence,
+  buildUserPrompt,
   buildRequestedQuantities,
   curateGeneratedOpportunities,
   shouldReuseExistingOpportunities,

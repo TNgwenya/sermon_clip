@@ -801,7 +801,7 @@ async function callCompletenessModel(
 
   const model = resolveOpenAIChatModel("clipCompleteness");
   const reasoningEffort = resolveOpenAIReasoningEffort("clipCompleteness", model);
-  const completion = await createLoggedChatCompletion({
+  return createLoggedChatCompletion({
     operation: "clip_completeness_review",
     model,
     reasoningEffort,
@@ -818,9 +818,10 @@ async function callCompletenessModel(
       transcriptCharacters: entries.reduce((total, entry) => total + entry.candidate.transcriptText.length, 0),
     },
     missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before reviewing clip completeness.",
+    validateResponse: (completion) => parseAiResponse(
+      completion.choices[0]?.message?.content ?? "",
+    ),
   });
-
-  return parseAiResponse(completion.choices[0]?.message?.content ?? "");
 }
 
 export function mergeCompletenessEvidence<T extends ClipCompletenessCandidateInput>(input: {
@@ -944,9 +945,25 @@ export async function reviewClipCompletenessCandidates<T extends ClipCompletenes
     return fallbackCandidates;
   }
 
+  const shouldEscalateToAi = (candidate: T, fallback: ClipCompletenessReviewedCandidate<T>): boolean => (
+    options?.rawResponseOverride !== undefined ||
+    candidate.boundaryQuality !== "GOOD" ||
+    candidate.riskLevel !== "LOW" ||
+    candidate.contextWarning ||
+    candidate.score < 8 ||
+    fallback.completenessAction !== "KEEP_AS_IS" ||
+    structuralWarnings(fallback.completenessWarnings).length > 0
+  );
+  const entries = candidates
+    .map((candidate, originalIndex) => ({ candidate, originalIndex }))
+    .filter(({ candidate, originalIndex }) => shouldEscalateToAi(candidate, fallbackCandidates[originalIndex]));
+
+  if (entries.length === 0) {
+    return fallbackCandidates;
+  }
+
   try {
     const aiReviews: AiCompletenessReview[] = [];
-    const entries = candidates.map((candidate, originalIndex) => ({ candidate, originalIndex }));
     for (let index = 0; index < entries.length; index += batchSize) {
       const batch = entries.slice(index, index + batchSize);
       const override = Array.isArray(options?.rawResponseOverride)
@@ -963,12 +980,10 @@ export async function reviewClipCompletenessCandidates<T extends ClipCompletenes
     }));
   } catch (error) {
     const fallbackReason = formatValidationError(error);
-    return candidates.map((candidate) => applyFallbackCompleteness({
-      candidate,
-      segments,
-      maxDurationSeconds,
-      fallbackReason,
-    }));
+    const escalatedIndexes = new Set(entries.map((entry) => entry.originalIndex));
+    return candidates.map((candidate, index) => escalatedIndexes.has(index)
+      ? applyFallbackCompleteness({ candidate, segments, maxDurationSeconds, fallbackReason })
+      : fallbackCandidates[index]);
   }
 }
 

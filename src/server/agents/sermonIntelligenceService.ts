@@ -15,7 +15,7 @@ import {
   resolveProcessingJob,
 } from "@/server/agents/processing";
 import { appendPipelineLog } from "@/server/agents/storage";
-import { generateMinistryMoments } from "@/server/agents/ministryMomentService";
+import { persistMinistryMoments } from "@/server/agents/ministryMomentService";
 import { refreshSubjectSpeakerTracking } from "@/server/agents/subjectSpeakerTrackingService";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -54,7 +54,9 @@ function buildIntelligenceSystemPrompt(): string {
     "For scriptures: distinguish between passages that were read aloud (READ), quoted from memory (QUOTED), briefly referenced by name (REFERENCED), or only implied without citation (IMPLIED).",
     `For topics: use only values from this list: ${MINISTRY_TOPICS.join(", ")}.`,
     "For structure sections: identify the logical flow of the sermon.",
-    "Timestamps are optional — only include them if the transcript contains time markers.",
+    "Also detect ministry moments during this same analysis so the transcript is not processed by a second AI call.",
+    "For ministry moments, use the provided transcript timestamps. Set timestamps to null rather than guessing when evidence is unclear.",
+    "Timestamps are optional for structure sections — only include them when supported by transcript markers.",
     "Confidence scores must be between 0.0 and 1.0.",
     "Return structured JSON only. Do not include markdown. Do not include commentary outside JSON.",
     "Exact JSON shape required:",
@@ -84,6 +86,7 @@ function buildIntelligenceUserPrompt(sermon: SermonContext, transcriptText: stri
 async function callIntelligenceAI(
   sermon: SermonContext,
   transcriptText: string,
+  options?: { bypassCache?: boolean },
 ): Promise<AiSermonIntelligence> {
   const model = resolveOpenAIChatModel("sermonIntelligence");
   const reasoningEffort = resolveOpenAIReasoningEffort("sermonIntelligence", model);
@@ -98,12 +101,13 @@ async function callIntelligenceAI(
       { role: "system", content: buildIntelligenceSystemPrompt() },
       { role: "user", content: buildIntelligenceUserPrompt(sermon, transcriptText) },
     ],
-    promptVersion: "sermon-intelligence-v1",
+    promptVersion: "sermon-intelligence-v2-with-ministry-moments",
     metadata: {
       transcriptCharacters: transcriptText.length,
       language: sermon.language,
     },
     missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before generating intelligence.",
+    bypassCache: options?.bypassCache,
     validateResponse: (response) => parseSermonIntelligenceResponse(
       response.choices[0]?.message?.content ?? "",
     ),
@@ -245,6 +249,10 @@ export async function generateSermonIntelligence(
       transcript: {
         select: { fullText: true },
       },
+      transcriptSegments: {
+        select: { startTimeSeconds: true, endTimeSeconds: true, text: true },
+        orderBy: { startTimeSeconds: "asc" },
+      },
       intelligence: {
         select: { id: true, status: true },
       },
@@ -297,18 +305,29 @@ export async function generateSermonIntelligence(
   await appendPipelineLog(sermonId, "Sermon intelligence generation started.");
 
   try {
-    const intelligence = await callIntelligenceAI(sermon, sermon.transcript.fullText);
+    const timestampedTranscript = sermon.transcriptSegments.length > 0
+      ? sermon.transcriptSegments
+          .map((segment) => `[${segment.startTimeSeconds.toFixed(1)} - ${segment.endTimeSeconds.toFixed(1)}] ${segment.text.trim()}`)
+          .join("\n")
+      : sermon.transcript.fullText;
+    const intelligence = await callIntelligenceAI(sermon, timestampedTranscript, {
+      bypassCache: options?.force,
+    });
     const intelligenceId = await persistIntelligence(sermonId, intelligence);
 
     try {
-      const momentResult = await generateMinistryMoments(sermonId, { force: options?.force });
+      await persistMinistryMoments(
+        sermonId,
+        sermon.transcript.fullText,
+        intelligence.ministryMoments,
+      );
       await appendPipelineLog(
         sermonId,
-        `Ministry moments refreshed: ${momentResult.momentCount} detected${momentResult.reusedExistingMoments ? " (reused existing)" : ""}.`,
+        `Ministry moments refreshed from the shared sermon analysis: ${intelligence.ministryMoments.length} detected.`,
       );
     } catch (momentError) {
-      const momentReason = momentError instanceof Error ? momentError.message : "Unknown ministry moment error.";
-      await appendPipelineLog(sermonId, `Ministry moment detection failed: ${momentReason}`);
+      const momentReason = momentError instanceof Error ? momentError.message : "Unknown ministry moment persistence error.";
+      await appendPipelineLog(sermonId, `Ministry moment persistence failed: ${momentReason}`);
     }
 
     try {

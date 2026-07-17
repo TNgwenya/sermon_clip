@@ -76,6 +76,49 @@ describe("content opportunity schema", () => {
 });
 
 describe("content multiplication service utils", () => {
+  it("uses bounded clip and ministry evidence instead of the full transcript", () => {
+    const fullTranscript = `opening ${"full-transcript-only ".repeat(2_000)} closing`;
+    const context = {
+      id: "sermon-1",
+      title: "Faith in the Storm",
+      speakerName: "Pastor Test",
+      churchName: "Test Church",
+      language: "English",
+      sermonDate: null,
+      transcriptFullText: fullTranscript,
+      intelligence: null,
+      scriptures: [],
+      topics: [],
+      structureSections: [],
+      ministryMoments: [{
+        id: "moment-1",
+        momentType: "FAITH_DECLARATION",
+        title: "Stand in faith",
+        description: "A declaration of trust.",
+        transcriptExcerpt: "God is faithful in every storm.",
+        suggestedAudience: null,
+        suggestedUsage: null,
+      }],
+      smartClips: [{
+        id: "clip-1",
+        title: "Faith in the storm",
+        smartClipCategory: "FAITH_DECLARATION",
+        transcriptText: "We can trust God even when the wind is strong.",
+      }],
+    };
+
+    const evidence = __contentMultiplicationTestUtils.buildGroundingEvidence(context);
+    const prompt = __contentMultiplicationTestUtils.buildUserPrompt(
+      context,
+      __contentMultiplicationTestUtils.buildRequestedQuantities({ targetType: "QUOTE_GRAPHIC" }),
+    );
+
+    expect(evidence).toContain("God is faithful in every storm.");
+    expect(evidence).toContain("We can trust God even when the wind is strong.");
+    expect(prompt).not.toContain("full-transcript-only");
+    expect(prompt.length).toBeLessThan(fullTranscript.length / 10);
+  });
+
   it("builds requested quantities with targeted type", () => {
     const requested = __contentMultiplicationTestUtils.buildRequestedQuantities({
       targetType: "SERMON_SUMMARY",

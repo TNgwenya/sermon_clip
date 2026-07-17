@@ -597,15 +597,21 @@ function buildUserPrompt(candidates: ClipQualityCandidateInput[]): string {
   ].join("\n\n");
 }
 
-async function callQualityModel(candidates: ClipQualityCandidateInput[], rawResponseOverride?: string): Promise<AiQualityReview[]> {
+async function callQualityModel(
+  candidates: ClipQualityCandidateInput[],
+  rawResponseOverride?: string,
+  bypassCache?: boolean,
+  sermonId?: string,
+): Promise<AiQualityReview[]> {
   if (rawResponseOverride !== undefined) {
     return parseQualityResponse(rawResponseOverride);
   }
 
   const model = resolveOpenAIChatModel("clipQuality");
   const reasoningEffort = resolveOpenAIReasoningEffort("clipQuality", model);
-  const completion = await createLoggedChatCompletion({
+  return createLoggedChatCompletion({
     operation: "clip_quality_review",
+    sermonId,
     model,
     reasoningEffort,
     response_format: { type: "json_object" },
@@ -620,34 +626,74 @@ async function callQualityModel(candidates: ClipQualityCandidateInput[], rawResp
       transcriptCharacters: candidates.reduce((total, candidate) => total + candidate.transcriptText.length, 0),
     },
     missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before reviewing clip quality.",
+    bypassCache,
+    validateResponse: (completion) => parseQualityResponse(
+      completion.choices[0]?.message?.content ?? "",
+    ),
   });
-
-  return parseQualityResponse(completion.choices[0]?.message?.content ?? "");
 }
 
 export async function reviewClipQualityCandidates<T extends ClipQualityCandidateInput>(
   candidates: T[],
-  options?: { rawResponseOverride?: string },
+  options?: { rawResponseOverride?: string; bypassCache?: boolean; sermonId?: string },
 ): Promise<Array<ClipQualityReviewedCandidate<T>>> {
   if (candidates.length === 0) {
     return [];
   }
 
+  const shouldEscalateToAi = (candidate: T): boolean => {
+    if (options?.rawResponseOverride !== undefined) return true;
+    const clearlyUnsafe = (
+      candidate.riskLevel === "HIGH" ||
+      candidate.boundaryQuality === "BAD" ||
+      candidate.completenessAction === "REJECT_INCOMPLETE" ||
+      candidate.score < 4.5
+    );
+    const clearlyReady = (
+      candidate.riskLevel === "LOW" &&
+      !candidate.contextWarning &&
+      candidate.boundaryQuality === "GOOD" &&
+      candidate.score >= 8.5 &&
+      candidate.completenessAction === "KEEP_AS_IS" &&
+      (candidate.completenessScore ?? 0) >= 8
+    );
+    return !clearlyUnsafe && !clearlyReady;
+  };
+  const aiEntries = candidates
+    .map((candidate, originalIndex) => ({ candidate, originalIndex }))
+    .filter(({ candidate }) => shouldEscalateToAi(candidate));
+  const escalatedIndexes = new Set(aiEntries.map((entry) => entry.originalIndex));
+
   let aiReviewsByIndex = new Map<number, AiQualityReview>();
   let fallbackReason: string | undefined;
 
-  try {
-    const aiReviews = await callQualityModel(candidates, options?.rawResponseOverride);
-    aiReviewsByIndex = new Map(aiReviews.map((review) => [review.candidateIndex, review]));
-  } catch (error) {
-    fallbackReason = formatValidationError(error);
+  if (aiEntries.length > 0) {
+    try {
+      const aiReviews = await callQualityModel(
+        aiEntries.map((entry) => entry.candidate),
+        options?.rawResponseOverride,
+        options?.bypassCache,
+        options?.sermonId,
+      );
+      aiReviewsByIndex = new Map(aiReviews.flatMap((review) => {
+        const originalIndex = aiEntries[review.candidateIndex]?.originalIndex;
+        return originalIndex === undefined ? [] : [[originalIndex, review] as const];
+      }));
+    } catch (error) {
+      fallbackReason = formatValidationError(error);
+    }
   }
 
   return candidates.map((candidate, index) => {
     const aiReview = aiReviewsByIndex.get(index);
     const quality = aiReview
       ? mergeAiReview(candidate, aiReview)
-      : buildFallbackReview(candidate, fallbackReason ?? "AI review did not return this candidate.");
+      : buildFallbackReview(
+          candidate,
+          escalatedIndexes.has(index)
+            ? fallbackReason ?? "AI review did not return this candidate."
+            : "Deterministic quality evidence was decisive, so no AI review was needed.",
+        );
 
     return {
       ...candidate,

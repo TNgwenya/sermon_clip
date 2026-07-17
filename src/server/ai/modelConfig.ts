@@ -7,22 +7,26 @@ export type OpenAIChatTask =
   | "clipQuality"
   | "clipCompleteness";
 
-// Keep this aligned with the installed Chat Completions SDK. GPT-5.6 `max`
-// reasoning is currently a Responses API capability; this app uses Chat
-// Completions and intentionally defaults to `high`.
 export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
-const DEFAULT_PREMIUM_CHAT_MODEL = "gpt-5.6-sol";
-const DEFAULT_PREMIUM_REASONING_EFFORT: OpenAIReasoningEffort = "high";
-
 const DEFAULT_CHAT_MODEL_BY_TASK: Record<OpenAIChatTask, string> = {
-  clipSelection: DEFAULT_PREMIUM_CHAT_MODEL,
-  clipRepair: DEFAULT_PREMIUM_CHAT_MODEL,
-  sermonIntelligence: DEFAULT_PREMIUM_CHAT_MODEL,
-  ministryMoment: DEFAULT_PREMIUM_CHAT_MODEL,
-  contentMultiplication: DEFAULT_PREMIUM_CHAT_MODEL,
-  clipQuality: DEFAULT_PREMIUM_CHAT_MODEL,
-  clipCompleteness: DEFAULT_PREMIUM_CHAT_MODEL,
+  clipSelection: "gpt-5.6-terra",
+  clipRepair: "gpt-5.6-luna",
+  sermonIntelligence: "gpt-5.6-terra",
+  ministryMoment: "gpt-5.6-luna",
+  contentMultiplication: "gpt-5.6-luna",
+  clipQuality: "gpt-5.6-luna",
+  clipCompleteness: "gpt-5.6-luna",
+};
+
+const DEFAULT_REASONING_EFFORT_BY_TASK: Record<OpenAIChatTask, OpenAIReasoningEffort> = {
+  clipSelection: "medium",
+  clipRepair: "low",
+  sermonIntelligence: "medium",
+  ministryMoment: "low",
+  contentMultiplication: "low",
+  clipQuality: "low",
+  clipCompleteness: "low",
 };
 
 const ENV_BY_TASK: Record<OpenAIChatTask, string> = {
@@ -86,5 +90,5 @@ export function resolveOpenAIReasoningEffort(
     return globalOverride;
   }
 
-  return DEFAULT_PREMIUM_REASONING_EFFORT;
+  return DEFAULT_REASONING_EFFORT_BY_TASK[task];
 }

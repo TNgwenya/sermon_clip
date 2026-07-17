@@ -212,6 +212,30 @@ describe("aiSermonIntelligenceSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts ministry moments in the shared sermon analysis response", () => {
+    const result = aiSermonIntelligenceSchema.safeParse({
+      ...makeValidPayload(),
+      ministryMoments: [{
+        momentType: "PRAYER_MOMENT",
+        title: "Prayer for courage",
+        description: "The pastor leads the church in prayer.",
+        startTimeSeconds: 120,
+        endTimeSeconds: 165,
+        confidenceScore: 0.9,
+        transcriptExcerpt: "Lord, give us courage to obey you.",
+        whyDetected: "The timestamped transcript contains a direct congregational prayer.",
+        suggestedAudience: "People needing courage",
+        suggestedUsage: "Prayer clip",
+        clipCategory: "Best Prayer Clip",
+      }],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.ministryMoments).toHaveLength(1);
+    }
+  });
+
   it("parses a valid response body", () => {
     expect(parseSermonIntelligenceResponse(JSON.stringify(makeValidPayload()))).toMatchObject({
       title: "Walking in Faith",

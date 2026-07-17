@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ministryMomentSchema } from "@/server/ai/ministryMomentSchema";
 
 import {
   formatInvalidJsonDiagnostics,
@@ -184,6 +185,7 @@ export const aiSermonIntelligenceSchema = z.object({
   scriptures: z.array(aiScriptureRefSchema).max(30),
   structureSections: z.array(aiStructureSectionSchema).max(20),
   topics: z.array(aiTopicTagSchema).min(1).max(10),
+  ministryMoments: z.array(ministryMomentSchema).max(30).default([]),
 });
 
 export function parseSermonIntelligenceResponse(rawContent: string): AiSermonIntelligence {
@@ -245,6 +247,21 @@ export const INTELLIGENCE_JSON_SHAPE = `{
       "topic": "faith",
       "confidenceScore": 0.9,
       "evidence": "The sermon repeatedly emphasized trusting God..."
+    }
+  ],
+  "ministryMoments": [
+    {
+      "momentType": "PRAYER_MOMENT",
+      "title": "Prayer for the congregation",
+      "description": "A brief description of the ministry moment",
+      "startTimeSeconds": 0,
+      "endTimeSeconds": 45,
+      "confidenceScore": 0.93,
+      "transcriptExcerpt": "Let's pray together...",
+      "whyDetected": "The preacher explicitly led the congregation in prayer",
+      "suggestedAudience": "People needing prayer support",
+      "suggestedUsage": "Use as a short prayer clip",
+      "clipCategory": "Best Prayer Clip"
     }
   ]
 }`;

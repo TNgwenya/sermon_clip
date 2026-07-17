@@ -28,6 +28,7 @@ export type NormalizedTranscript = {
 };
 
 export type OpenAITranscriptionOptions = {
+  sermonId?: string;
   language?: string;
   prompt?: string;
   model?: string;
@@ -35,6 +36,7 @@ export type OpenAITranscriptionOptions = {
   diarizationModel?: string;
   hybrid?: boolean;
   diarization?: boolean;
+  audioDurationSeconds?: number;
   onRetry?: (info: OpenAITranscriptionRetryInfo) => void | Promise<void>;
 };
 
@@ -316,12 +318,38 @@ function countWords(text: string): number {
     .length;
 }
 
-function resolveBooleanEnv(name: string, fallback: boolean): boolean {
+type OptionalPassMode = "always" | "auto" | "never";
+
+function resolveOptionalPassMode(name: string, fallback: OptionalPassMode): OptionalPassMode {
   const configured = process.env[name]?.trim().toLowerCase();
   if (!configured) return fallback;
-  if (["1", "true", "yes", "on"].includes(configured)) return true;
-  if (["0", "false", "no", "off"].includes(configured)) return false;
+  if (["1", "true", "yes", "on", "always"].includes(configured)) return "always";
+  if (["0", "false", "no", "off", "never"].includes(configured)) return "never";
+  if (configured === "auto") return "auto";
   return fallback;
+}
+
+function shouldRunAccuracyPass(transcript: NormalizedTranscript): boolean {
+  const confidences = transcript.segments
+    .map((segment) => segment.confidence)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const averageConfidence = confidences.length > 0
+    ? confidences.reduce((sum, value) => sum + value, 0) / confidences.length
+    : null;
+  const lowConfidenceRatio = confidences.length > 0
+    ? confidences.filter((value) => value < 0.55).length / confidences.length
+    : 0;
+  const language = transcript.language?.trim().toLowerCase();
+  const isEnglish = language === "en" || language === "english";
+
+  return (
+    transcript.words === undefined ||
+    transcript.words.length < MIN_WORDS_FOR_WORD_TIMED_SEGMENTS ||
+    confidences.length < Math.max(3, Math.floor(transcript.segments.length * 0.5)) ||
+    (averageConfidence !== null && averageConfidence < 0.68) ||
+    lowConfidenceRatio >= 0.15 ||
+    Boolean(language && !isEnglish)
+  );
 }
 
 function normalizeAlignmentToken(text: string): string {
@@ -697,23 +725,28 @@ export async function transcribeAudioWithOpenAI(
   const model = resolveOpenAITranscriptionModel(options?.model);
   assertTimestampedTranscriptionModel(model);
   const startedAt = Date.now();
+  let providerRequestCount = 0;
 
   let response;
   try {
     response = await runTranscriptionRequestWithRetry(
-      () => client.audio.transcriptions.create({
-        model,
-        file: createReadStream(audioPath),
-        response_format: "verbose_json",
-        timestamp_granularities: ["segment", "word"],
-        ...(options?.language ? { language: options.language } : {}),
-        ...(options?.prompt ? { prompt: options.prompt } : {}),
-      }),
+      () => {
+        providerRequestCount += 1;
+        return client.audio.transcriptions.create({
+          model,
+          file: createReadStream(audioPath),
+          response_format: "verbose_json",
+          timestamp_granularities: ["segment", "word"],
+          ...(options?.language ? { language: options.language } : {}),
+          ...(options?.prompt ? { prompt: options.prompt } : {}),
+        });
+      },
       { onRetry: options?.onRetry },
     );
   } catch (error) {
     await recordAiInvocation({
       operation: "transcription",
+      sermonId: options?.sermonId,
       model,
       status: "FAILED",
       latencyMs: Date.now() - startedAt,
@@ -724,6 +757,8 @@ export async function transcribeAudioWithOpenAI(
         responseFormat: "verbose_json",
         timestampGranularities: ["segment", "word"],
       },
+      audioDurationSeconds: options?.audioDurationSeconds,
+      providerRequestCount,
     });
     throw error;
   }
@@ -740,6 +775,7 @@ export async function transcribeAudioWithOpenAI(
 
   await recordAiInvocation({
     operation: "transcription",
+    sermonId: options?.sermonId,
     model,
     status: "SUCCEEDED",
     latencyMs: Date.now() - startedAt,
@@ -753,6 +789,8 @@ export async function transcribeAudioWithOpenAI(
       wordTimestampCount: wordTimestamps.length,
       textCharacters: fullText.length,
     },
+    audioDurationSeconds: options?.audioDurationSeconds,
+    providerRequestCount,
   });
 
   const timingTranscript: NormalizedTranscript = {
@@ -765,8 +803,14 @@ export async function transcribeAudioWithOpenAI(
     raw: response,
   };
 
-  const hybridEnabled = options?.hybrid ?? resolveBooleanEnv("OPENAI_TRANSCRIPTION_HYBRID_ENABLED", true);
-  const diarizationEnabled = options?.diarization ?? resolveBooleanEnv("OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED", true);
+  const hybridMode = options?.hybrid === undefined
+    ? resolveOptionalPassMode("OPENAI_TRANSCRIPTION_HYBRID_ENABLED", "auto")
+    : options.hybrid ? "always" : "never";
+  const diarizationMode = options?.diarization === undefined
+    ? resolveOptionalPassMode("OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED", "never")
+    : options.diarization ? "always" : "never";
+  const hybridEnabled = hybridMode === "always" || (hybridMode === "auto" && shouldRunAccuracyPass(timingTranscript));
+  const diarizationEnabled = diarizationMode === "always";
   if (!hybridEnabled && !diarizationEnabled) {
     return timingTranscript;
   }
@@ -778,6 +822,8 @@ export async function transcribeAudioWithOpenAI(
         model: accuracyModel,
         language: options?.language,
         prompt: options?.prompt,
+        sermonId: options?.sermonId,
+        audioDurationSeconds: options?.audioDurationSeconds,
         onRetry: options?.onRetry,
       })
     : Promise.resolve(null);
@@ -785,6 +831,8 @@ export async function transcribeAudioWithOpenAI(
     ? transcribeSpeakerSegments(audioPath, {
         model: diarizationModel,
         language: options?.language,
+        sermonId: options?.sermonId,
+        audioDurationSeconds: options?.audioDurationSeconds,
         onRetry: options?.onRetry,
       })
     : Promise.resolve(null);
@@ -834,41 +882,51 @@ export async function transcribeAudioWithOpenAI(
 
 async function transcribeHighAccuracyText(
   audioPath: string,
-  options: Pick<OpenAITranscriptionOptions, "language" | "prompt" | "onRetry"> & { model: string },
+  options: Pick<OpenAITranscriptionOptions, "sermonId" | "language" | "prompt" | "onRetry" | "audioDurationSeconds"> & { model: string },
 ): Promise<HighAccuracyTranscript> {
   const client = getOpenAiClient("OPENAI_API_KEY is missing. Add it to your environment before transcribing.");
   const startedAt = Date.now();
+  let providerRequestCount = 0;
   try {
     const response = await runTranscriptionRequestWithRetry(
-      () => client.audio.transcriptions.create({
-        model: options.model,
-        file: createReadStream(audioPath),
-        response_format: "json",
-        include: ["logprobs"],
-        temperature: 0,
-        ...(options.language ? { language: options.language } : {}),
-        ...(options.prompt ? { prompt: options.prompt } : {}),
-      }),
+      () => {
+        providerRequestCount += 1;
+        return client.audio.transcriptions.create({
+          model: options.model,
+          file: createReadStream(audioPath),
+          response_format: "json",
+          include: ["logprobs"],
+          temperature: 0,
+          ...(options.language ? { language: options.language } : {}),
+          ...(options.prompt ? { prompt: options.prompt } : {}),
+        });
+      },
       { onRetry: options.onRetry },
     );
     const fullText = response.text.trim();
     const confidence = deriveHighAccuracyConfidence(response.logprobs);
     await recordAiInvocation({
       operation: "transcription_accuracy",
+      sermonId: options.sermonId,
       model: options.model,
       status: "SUCCEEDED",
       latencyMs: Date.now() - startedAt,
       metadata: { textCharacters: fullText.length, confidence: confidence ?? null, promptProvided: Boolean(options.prompt) },
+      audioDurationSeconds: options.audioDurationSeconds,
+      providerRequestCount,
     });
     return { fullText, model: options.model, confidence, raw: response };
   } catch (error) {
     await recordAiInvocation({
       operation: "transcription_accuracy",
+      sermonId: options.sermonId,
       model: options.model,
       status: "FAILED",
       latencyMs: Date.now() - startedAt,
       errorMessage: getErrorMessage(error),
       metadata: { promptProvided: Boolean(options.prompt) },
+      audioDurationSeconds: options.audioDurationSeconds,
+      providerRequestCount,
     });
     throw error;
   }
@@ -876,19 +934,23 @@ async function transcribeHighAccuracyText(
 
 async function transcribeSpeakerSegments(
   audioPath: string,
-  options: Pick<OpenAITranscriptionOptions, "language" | "onRetry"> & { model: string },
+  options: Pick<OpenAITranscriptionOptions, "sermonId" | "language" | "onRetry" | "audioDurationSeconds"> & { model: string },
 ): Promise<{ segments: NormalizedTranscriptSegment[]; raw: unknown }> {
   const client = getOpenAiClient("OPENAI_API_KEY is missing. Add it to your environment before transcribing.");
   const startedAt = Date.now();
+  let providerRequestCount = 0;
   try {
     const response = await runTranscriptionRequestWithRetry(
-      () => client.audio.transcriptions.create({
-        model: options.model,
-        file: createReadStream(audioPath),
-        response_format: "diarized_json",
-        chunking_strategy: "auto",
-        ...(options.language ? { language: options.language } : {}),
-      }),
+      () => {
+        providerRequestCount += 1;
+        return client.audio.transcriptions.create({
+          model: options.model,
+          file: createReadStream(audioPath),
+          response_format: "diarized_json",
+          chunking_strategy: "auto",
+          ...(options.language ? { language: options.language } : {}),
+        });
+      },
       { onRetry: options.onRetry },
     );
     const speakerSegments = normalizePrimarySpeakerLabel(
@@ -896,19 +958,25 @@ async function transcribeSpeakerSegments(
     );
     await recordAiInvocation({
       operation: "transcription_diarization",
+      sermonId: options.sermonId,
       model: options.model,
       status: "SUCCEEDED",
       latencyMs: Date.now() - startedAt,
       metadata: { segmentCount: speakerSegments.length },
+      audioDurationSeconds: options.audioDurationSeconds,
+      providerRequestCount,
     });
     return { segments: speakerSegments, raw: response };
   } catch (error) {
     await recordAiInvocation({
       operation: "transcription_diarization",
+      sermonId: options.sermonId,
       model: options.model,
       status: "FAILED",
       latencyMs: Date.now() - startedAt,
       errorMessage: getErrorMessage(error),
+      audioDurationSeconds: options.audioDurationSeconds,
+      providerRequestCount,
     });
     throw error;
   }
@@ -927,4 +995,5 @@ export const __openAITranscriptionProviderTestUtils = {
   runTranscriptionRequestWithRetry,
   wordsToTranscriptSegments,
   selectBestTimestampedSegments,
+  shouldRunAccuracyPass,
 };

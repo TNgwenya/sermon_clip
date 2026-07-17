@@ -1,46 +1,50 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  createCompletion: vi.fn(),
+  createResponse: vi.fn(),
   recordAiInvocation: vi.fn(),
+  findCachedResponse: vi.fn(),
+  upsertCachedResponse: vi.fn(),
+  deleteCachedResponse: vi.fn(),
 }));
 
 vi.mock("@/server/ai/openaiClient", () => ({
   getOpenAiClient: () => ({
-    chat: {
-      completions: {
-        create: mocks.createCompletion,
-      },
+    responses: {
+      create: mocks.createResponse,
     },
   }),
 }));
 
 vi.mock("@/server/ai/aiInvocationLogger", () => ({
   recordAiInvocation: mocks.recordAiInvocation,
+  buildAiRequestHash: (value: unknown) => JSON.stringify(value),
+}));
+
+vi.mock("@/lib/prisma", () => ({
+  prisma: {
+    aiResponseCache: {
+      findUnique: mocks.findCachedResponse,
+      upsert: mocks.upsertCachedResponse,
+      delete: mocks.deleteCachedResponse,
+    },
+  },
 }));
 
 import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
 
-const completion = {
-  id: "completion-1",
-  object: "chat.completion",
-  created: 1,
+const response = {
+  id: "response-1",
+  object: "response",
+  created_at: 1,
   model: "gpt-test",
-  choices: [
-    {
-      index: 0,
-      finish_reason: "stop",
-      logprobs: null,
-      message: {
-        role: "assistant",
-        content: "{\"sectionType\":\"OFFERING\"}",
-        refusal: null,
-      },
-    },
-  ],
+  status: "completed",
+  output_text: "{\"sectionType\":\"OFFERING\"}",
   usage: {
-    prompt_tokens: 21,
-    completion_tokens: 8,
+    input_tokens: 21,
+    input_tokens_details: { cached_tokens: 5 },
+    output_tokens: 8,
+    output_tokens_details: { reasoning_tokens: 3 },
     total_tokens: 29,
   },
 };
@@ -57,13 +61,19 @@ function baseInput() {
 
 describe("createLoggedChatCompletion response validation", () => {
   beforeEach(() => {
-    mocks.createCompletion.mockReset();
+    mocks.createResponse.mockReset();
     mocks.recordAiInvocation.mockReset();
     mocks.recordAiInvocation.mockResolvedValue(undefined);
+    mocks.findCachedResponse.mockReset();
+    mocks.findCachedResponse.mockResolvedValue(null);
+    mocks.upsertCachedResponse.mockReset();
+    mocks.upsertCachedResponse.mockResolvedValue(undefined);
+    mocks.deleteCachedResponse.mockReset();
+    mocks.deleteCachedResponse.mockResolvedValue(undefined);
   });
 
   it("records FAILED, not SUCCEEDED, when post-response validation fails", async () => {
-    mocks.createCompletion.mockResolvedValue(completion);
+    mocks.createResponse.mockResolvedValue(response);
     const diagnostic = "AI response validation failed: structureSections[0].sectionType: invalid_value; received=\"OFFERING\"; expected=[\"INTRODUCTION\", \"OTHER\"]";
 
     await expect(createLoggedChatCompletion({
@@ -81,7 +91,9 @@ describe("createLoggedChatCompletion response validation", () => {
       errorMessage: diagnostic,
       usage: {
         inputTokens: 21,
+        cachedInputTokens: 5,
         outputTokens: 8,
+        reasoningTokens: 3,
         totalTokens: 29,
       },
       metadata: {
@@ -93,7 +105,7 @@ describe("createLoggedChatCompletion response validation", () => {
   });
 
   it("records SUCCEEDED only after validation returns a value", async () => {
-    mocks.createCompletion.mockResolvedValue(completion);
+    mocks.createResponse.mockResolvedValue(response);
 
     const result = await createLoggedChatCompletion({
       ...baseInput(),
@@ -111,7 +123,7 @@ describe("createLoggedChatCompletion response validation", () => {
   });
 
   it("omits temperature when a GPT reasoning effort is configured", async () => {
-    mocks.createCompletion.mockResolvedValue(completion);
+    mocks.createResponse.mockResolvedValue(response);
 
     await createLoggedChatCompletion({
       ...baseInput(),
@@ -120,10 +132,60 @@ describe("createLoggedChatCompletion response validation", () => {
       reasoningEffort: "high",
     });
 
-    expect(mocks.createCompletion).toHaveBeenCalledWith(expect.objectContaining({
+    expect(mocks.createResponse).toHaveBeenCalledWith(expect.objectContaining({
       model: "gpt-5.6-sol",
       temperature: undefined,
-      reasoning_effort: "high",
+      reasoning: { effort: "high" },
+      store: false,
     }));
+  });
+
+  it("reuses a validated cached result without making a provider request", async () => {
+    mocks.findCachedResponse.mockResolvedValue({
+      responseText: "{\"sectionType\":\"INTRODUCTION\"}",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    const result = await createLoggedChatCompletion({
+      ...baseInput(),
+      promptVersion: "sermon-intelligence-v2",
+      validateResponse: (cachedCompletion) => JSON.parse(
+        cachedCompletion.choices[0]?.message?.content ?? "{}",
+      ) as { sectionType: string },
+    });
+
+    expect(result).toEqual({ sectionType: "INTRODUCTION" });
+    expect(mocks.createResponse).not.toHaveBeenCalled();
+    expect(mocks.recordAiInvocation).toHaveBeenCalledWith(expect.objectContaining({
+      status: "SUCCEEDED",
+      cacheHit: true,
+      providerRequestCount: 0,
+    }));
+  });
+
+  it("coalesces concurrent identical requests into one provider call", async () => {
+    mocks.createResponse.mockResolvedValue({
+      ...response,
+      output_text: "{\"sectionType\":\"INTRODUCTION\"}",
+    });
+    const input = {
+      ...baseInput(),
+      promptVersion: "sermon-intelligence-v2",
+      validateResponse: (completion: Awaited<ReturnType<typeof createLoggedChatCompletion>>) => JSON.parse(
+        "choices" in completion
+          ? completion.choices[0]?.message?.content ?? "{}"
+          : "{}",
+      ) as { sectionType: string },
+    };
+
+    const [first, second] = await Promise.all([
+      createLoggedChatCompletion(input),
+      createLoggedChatCompletion(input),
+    ]);
+
+    expect(first).toEqual({ sectionType: "INTRODUCTION" });
+    expect(second).toEqual(first);
+    expect(mocks.createResponse).toHaveBeenCalledTimes(1);
+    expect(mocks.recordAiInvocation).toHaveBeenCalledTimes(1);
   });
 });

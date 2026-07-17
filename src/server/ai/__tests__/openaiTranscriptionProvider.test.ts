@@ -77,6 +77,54 @@ describe("openai transcription provider", () => {
     expect(() => assertTimestampedTranscriptionModel("gpt-4o-transcribe")).toThrow(/segment timestamps/);
   });
 
+  it("skips the accuracy pass for a well-timestamped, high-confidence English transcript", () => {
+    expect(__openAITranscriptionProviderTestUtils.shouldRunAccuracyPass({
+      provider: "openai",
+      model: "whisper-1",
+      language: "en",
+      fullText: "A clear sermon transcript with reliable timing.",
+      raw: {},
+      words: Array.from({ length: 30 }, (_, index) => ({
+        startTimeSeconds: index,
+        endTimeSeconds: index + 0.5,
+        text: `word${index}`,
+      })),
+      segments: Array.from({ length: 6 }, (_, index) => ({
+        startTimeSeconds: index * 5,
+        endTimeSeconds: (index + 1) * 5,
+        text: `Clear segment ${index}.`,
+        confidence: 0.82,
+      })),
+    })).toBe(false);
+  });
+
+  it("escalates low-confidence or non-English transcripts to the accuracy pass", () => {
+    const base = {
+      provider: "openai" as const,
+      model: "whisper-1",
+      fullText: "Transcript text",
+      raw: {},
+      words: Array.from({ length: 30 }, (_, index) => ({
+        startTimeSeconds: index,
+        endTimeSeconds: index + 0.5,
+        text: `word${index}`,
+      })),
+      segments: Array.from({ length: 6 }, (_, index) => ({
+        startTimeSeconds: index * 5,
+        endTimeSeconds: (index + 1) * 5,
+        text: `Segment ${index}.`,
+        confidence: 0.5,
+      })),
+    };
+
+    expect(__openAITranscriptionProviderTestUtils.shouldRunAccuracyPass({ ...base, language: "en" })).toBe(true);
+    expect(__openAITranscriptionProviderTestUtils.shouldRunAccuracyPass({
+      ...base,
+      language: "zu",
+      segments: base.segments.map((segment) => ({ ...segment, confidence: 0.85 })),
+    })).toBe(true);
+  });
+
   it("treats transient transcription API failures as retryable", () => {
     expect(
       __openAITranscriptionProviderTestUtils.isRetryableOpenAITranscriptionError(

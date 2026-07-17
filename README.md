@@ -48,14 +48,17 @@ OPENAI_API_KEY=your_key_here
 OPENAI_TRANSCRIPTION_MODEL=whisper-1
 OPENAI_TRANSCRIPTION_ACCURACY_MODEL=gpt-4o-transcribe
 OPENAI_TRANSCRIPTION_DIARIZATION_MODEL=gpt-4o-transcribe-diarize
-OPENAI_TRANSCRIPTION_HYBRID_ENABLED=true
-OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED=true
+OPENAI_TRANSCRIPTION_HYBRID_ENABLED=auto
+OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED=false
 OPENAI_TRANSCRIPTION_SPEECH_ENHANCEMENT_ENABLED=false
 OPENAI_TRANSCRIPTION_GLOSSARY=
 OPENAI_CHAT_MODEL=
-OPENAI_REASONING_EFFORT=high
+OPENAI_REASONING_EFFORT=
 OPENAI_CHAT_MAX_ATTEMPTS=3
 OPENAI_CHAT_RETRY_BASE_DELAY_MS=1500
+OPENAI_VALIDATED_RESPONSE_CACHE_ENABLED=true
+OPENAI_VALIDATED_RESPONSE_CACHE_TTL_SECONDS=2592000
+OPENAI_CLIP_SELECTION_MAX_WINDOWS=24
 OPENAI_TRANSCRIPTION_MAX_ATTEMPTS=4
 OPENAI_TRANSCRIPTION_RETRY_BASE_DELAY_MS=2000
 DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require
@@ -111,8 +114,8 @@ FACEBOOK_GRAPH_VERSION=v23.0
 FACEBOOK_DEFAULT_PUBLISHED=false
 POSTING_WORKER_DRY_RUN=true
 
-`OPENAI_TRANSCRIPTION_MODEL` stays on `whisper-1` to provide word timestamps. By default, the pipeline also runs `gpt-4o-transcribe` for higher-accuracy wording, aligns that text back onto the Whisper timeline, and runs `gpt-4o-transcribe-diarize` to label the dominant preacher and secondary speakers. Set either feature flag to `false` to reduce transcription cost. `OPENAI_TRANSCRIPTION_GLOSSARY` accepts comma-, semicolon-, or newline-separated names, scripture terms, places, and local-language spellings. The older FFmpeg speech-enhancement retry is disabled by default because production samples consistently performed worse; it can be re-enabled explicitly for controlled evaluation.
-Chat-based AI calls go through the shared AI gateway. Quality-critical sermon tasks default to `gpt-5.6-sol` with `high` reasoning. Use `OPENAI_CHAT_MODEL` and `OPENAI_REASONING_EFFORT` as global overrides, or task-specific variables when clip selection, sermon intelligence, ministry moments, content opportunities, quality review, or completeness review need different cost/quality tradeoffs. AI calls are logged as `AiInvocation` records with request hashes, model names, latency, token counts when available, and failure status; raw prompts are not stored by default.
+`OPENAI_TRANSCRIPTION_MODEL` stays on `whisper-1` to provide word timestamps. The higher-accuracy `gpt-4o-transcribe` pass now defaults to `auto` and runs only when timing, confidence, or language evidence indicates that Whisper wording needs help. Diarization defaults off; set `OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED=true` when speaker labels are required. `OPENAI_TRANSCRIPTION_GLOSSARY` accepts comma-, semicolon-, or newline-separated names, scripture terms, places, and local-language spellings. The older FFmpeg speech-enhancement retry is disabled by default because production samples consistently performed worse; it can be re-enabled explicitly for controlled evaluation.
+Text AI calls go through the shared Responses API gateway. Clip selection and sermon intelligence default to `gpt-5.6-terra` with `medium` reasoning; routine structured extraction and review tasks default to `gpt-5.6-luna` with `low` reasoning. Use `OPENAI_CHAT_MODEL` and `OPENAI_REASONING_EFFORT` as global overrides, or the task-specific variables for measured exceptions. Validated structured results are cached by model, prompt version, options, and input hash; duplicate in-flight requests are coalesced. `OPENAI_CLIP_SELECTION_MAX_WINDOWS` limits premium semantic review after deterministic pre-ranking while preserving remaining windows for local coverage top-up. AI calls record provider attempt counts, cache hits, cached input tokens, reasoning tokens, audio duration, latency, and estimated text cost; raw prompts are not stored.
 `MEDIA_WORKER_HEARTBEAT_SECONDS`, `MEDIA_WORKER_STALE_JOB_MINUTES`, and `MEDIA_WORKER_MAX_ATTEMPTS` control media job leases. A stale `RUNNING` job can be reclaimed by another local worker, then marked failed after the configured claim limit.
 `POSTING_WORKER_DRY_RUN` defaults to true unless explicitly set to `false`, so the worker can be tested without posting.
 Social Settings OAuth links use the current app host for callback URLs. Register the exact local and live callback URLs with each provider, for example `http://localhost:3000/api/oauth/youtube/callback` and `https://your-vercel-app.vercel.app/api/oauth/youtube/callback`. Keep `WORKER_API_BASE_URL` pointed at the app the worker should poll; it does not need to match the OAuth callback host.

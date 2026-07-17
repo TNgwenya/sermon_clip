@@ -213,6 +213,23 @@ describe("clip quality refresh service", () => {
 
     expect(result.clipsRefreshed).toBe(1);
     expect(deps.reviewCandidates).toHaveBeenCalledTimes(1);
+    expect(deps.reviewCandidates).toHaveBeenCalledWith(
+      expect.any(Array),
+      { bypassCache: true, sermonId: "sermon-1" },
+    );
+  });
+
+  it("reviews clips in bounded batches instead of one AI request per clip", async () => {
+    const deps = dependencies();
+    const clips = Array.from({ length: 9 }, (_, index) => clip({ id: `clip-${index}` }));
+
+    const result = await refreshClipQualityRecords({ clips, dependencies: deps });
+
+    expect(result.clipsRefreshed).toBe(9);
+    expect(deps.reviewCandidates).toHaveBeenCalledTimes(2);
+    const reviewMock = vi.mocked(deps.reviewCandidates);
+    expect(reviewMock.mock.calls[0][0]).toHaveLength(8);
+    expect(reviewMock.mock.calls[1][0]).toHaveLength(1);
   });
 
   it("preserves pastor clip status by only updating quality fields", async () => {
@@ -282,7 +299,7 @@ describe("clip quality refresh service", () => {
 
     expect(deps.reviewCandidates).toHaveBeenCalledWith([
       expect.objectContaining({ visualReadinessScore: 4.2 }),
-    ]);
+    ], { bypassCache: false, sermonId: "sermon-1" });
     expect(deps.scoreProfessionalQuality).toHaveBeenCalledWith(expect.objectContaining({
       visualReadinessScore: 4.2,
       visualConfidenceScore: 4.2,
@@ -294,7 +311,7 @@ describe("clip quality refresh service", () => {
   it("handles partial failures without blocking other clips", async () => {
     const deps = dependencies({
       reviewCandidates: vi.fn(async <T extends ClipQualityCandidateInput>(candidates: T[]) => {
-        if (candidates[0]?.title === "Broken") {
+        if (candidates.some((candidate) => candidate.title === "Broken")) {
           throw new Error("Review failed for this clip.");
         }
         return candidates.map((candidate) => ({ ...candidate, ...reviewedQuality }) as ClipQualityReviewedCandidate<T>);
