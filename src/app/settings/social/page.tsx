@@ -3,12 +3,8 @@ import { headers } from "next/headers";
 
 import { SectionCard, StatusBadge } from "@/components/ui";
 import {
-  buildMetaOAuthUrl,
   buildOAuthRedirectUri,
   buildRequestBaseUrl,
-  buildThreadsOAuthUrl,
-  buildTikTokOAuthUrl,
-  buildYouTubeOAuthUrl,
   listSocialAnalyticsConnectors,
 } from "@/lib/socialAnalyticsConnectors";
 
@@ -62,6 +58,8 @@ function oauthFailureMessage(provider: string | undefined, reason: string | unde
       return `${label} could not be reached from this server during token exchange. Try again, or check server network access.`;
     case "oauth_exchange_failed":
       return `${label} OAuth token exchange failed. Check the server log for the provider error, then retry Connect.`;
+    case "invalid_oauth_state":
+      return `${label} connection expired or could not be verified. Start Connect again from this page.`;
     default:
       return `${label} OAuth failed: ${reason ?? "unknown error"}.`;
   }
@@ -122,33 +120,17 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
   const metaAppId = process.env.META_APP_ID?.trim();
   const tiktokClientKey = process.env.TIKTOK_CLIENT_KEY?.trim();
   const threadsAppId = process.env.THREADS_APP_ID?.trim();
-  const youtubeAuthHref = youtubeClientId
-    ? buildYouTubeOAuthUrl({
-        clientId: youtubeClientId,
-        redirectUri: redirectUris.youtube,
-        state: "sermon-clip-growth-youtube",
-      })
+  const youtubeAuthHref = youtubeClientId && process.env.YOUTUBE_CLIENT_SECRET?.trim()
+    ? "/api/oauth/youtube/start"
     : null;
-  const metaAuthHref = metaAppId
-    ? buildMetaOAuthUrl({
-        appId: metaAppId,
-        redirectUri: redirectUris.meta,
-        state: "sermon-clip-growth-meta",
-      })
+  const metaAuthHref = metaAppId && process.env.META_APP_SECRET?.trim()
+    ? "/api/oauth/meta/start"
     : null;
-  const tiktokAuthHref = tiktokClientKey
-    ? buildTikTokOAuthUrl({
-        clientKey: tiktokClientKey,
-        redirectUri: redirectUris.tiktok,
-        state: "sermon-clip-growth-tiktok",
-      })
+  const tiktokAuthHref = tiktokClientKey && process.env.TIKTOK_CLIENT_SECRET?.trim()
+    ? "/api/oauth/tiktok/start"
     : null;
-  const threadsAuthHref = threadsAppId
-    ? buildThreadsOAuthUrl({
-        appId: threadsAppId,
-        redirectUri: redirectUris.threads,
-        state: "sermon-clip-growth-threads",
-      })
+  const threadsAuthHref = threadsAppId && process.env.THREADS_APP_SECRET?.trim()
+    ? "/api/oauth/threads/start"
     : null;
   const banner = oauthBanner(params);
   const connectorByPlatform = new Map(connectors.map((connector) => [connector.platform, connector]));

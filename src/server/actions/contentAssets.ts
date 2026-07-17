@@ -1,5 +1,9 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
+
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
@@ -22,7 +26,10 @@ import {
   renderApprovedNonVideoAssets,
   toContentAssetFilePersistenceInput,
 } from "@/server/contentAssets/nonVideoAssetRenderer";
-import { uploadContentAssetFileToR2 } from "@/server/contentAssets/contentAssetPublicStorage";
+import {
+  uploadContentAssetFilesWhenConfigured,
+  uploadContentAssetFileToR2,
+} from "@/server/contentAssets/contentAssetPublicStorage";
 
 const contentPublishingPlatformSchema = z.enum(["TIKTOK", "INSTAGRAM", "YOUTUBE_SHORTS", "FACEBOOK"]);
 const contentAssetTypeSchema = z.enum(CONTENT_ASSET_TYPES);
@@ -206,6 +213,7 @@ export async function prepareContentOpportunityForPublishingAction(
     const shouldRenderGraphics = opportunity
       ? ["QUOTE_GRAPHIC", "SCRIPTURE_GRAPHIC", "CAROUSEL_IDEA"].includes(opportunity.opportunityType)
       : false;
+    const contentAssetId = existingAsset?.id ?? randomUUID();
     const renderedFiles = shouldRenderGraphics && opportunity
       ? await (async () => {
           const branding = await getBrandingSettings();
@@ -224,10 +232,49 @@ export async function prepareContentOpportunityForPublishingAction(
               secondaryColor: branding.secondaryBrandColor,
               fontFamily: branding.defaultFontFamily,
             },
+          }, {
+            // An isolated attempt keeps a failed rerender from overwriting the
+            // local fallback files of the currently publishable asset version.
+            ...(process.env.VERCEL
+              ? { outputRoot: path.join(os.tmpdir(), "sermon-clip-content-assets", parsed.data.sermonId) }
+              : {}),
+            storageKey: `render-${contentAssetId}-${randomUUID()}`,
           });
-          return rendered.files.map(toContentAssetFilePersistenceInput);
+          return rendered.files.map((file) => ({
+            id: randomUUID(),
+            ...toContentAssetFilePersistenceInput(file),
+          }));
         })()
       : [];
+
+    let persistedFiles = renderedFiles;
+    if (renderedFiles.length > 0) {
+      try {
+        const uploadedByFileId = await uploadContentAssetFilesWhenConfigured({
+          contentAssetId,
+          files: renderedFiles.map((file) => ({
+            id: file.id,
+            fileName: file.fileName,
+            filePath: file.filePath,
+            mimeType: file.mimeType,
+          })),
+        });
+        persistedFiles = renderedFiles.map((file) => {
+          const uploaded = uploadedByFileId.get(file.id);
+          return uploaded
+            ? {
+                ...file,
+                objectKey: uploaded.objectKey,
+                publicUrl: uploaded.publicUrl,
+                sizeBytes: BigInt(uploaded.sizeBytes),
+              }
+            : file;
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "The media upload failed.";
+        throw new Error(`Durable media storage failed, so this content was not marked ready. ${detail}`);
+      }
+    }
 
     const contentAsset = existingAsset
       ? await prisma.contentAsset.update({
@@ -238,17 +285,22 @@ export async function prepareContentOpportunityForPublishingAction(
               ? {
                   files: {
                     deleteMany: {},
-                    create: renderedFiles,
+                    create: persistedFiles,
                   },
                 }
-              : {}),
+              : {
+                  // Composer changes invalidate any previously generated PDF
+                  // or other derived files until they are generated again.
+                  files: { deleteMany: {} },
+                }),
           },
           select: { id: true },
         })
       : await prisma.contentAsset.create({
           data: {
+            id: contentAssetId,
             ...data,
-            ...(renderedFiles.length > 0 ? { files: { create: renderedFiles } } : {}),
+            ...(persistedFiles.length > 0 ? { files: { create: persistedFiles } } : {}),
           },
           select: { id: true },
         });

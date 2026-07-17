@@ -109,4 +109,21 @@ describe("createLoggedChatCompletion response validation", () => {
       metadata: { language: "English and Zulu" },
     }));
   });
+
+  it("omits temperature when a GPT reasoning effort is configured", async () => {
+    mocks.createCompletion.mockResolvedValue(completion);
+
+    await createLoggedChatCompletion({
+      ...baseInput(),
+      model: "gpt-5.6-sol",
+      temperature: 0.2,
+      reasoningEffort: "high",
+    });
+
+    expect(mocks.createCompletion).toHaveBeenCalledWith(expect.objectContaining({
+      model: "gpt-5.6-sol",
+      temperature: undefined,
+      reasoning_effort: "high",
+    }));
+  });
 });

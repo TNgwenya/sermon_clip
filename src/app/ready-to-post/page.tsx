@@ -19,6 +19,7 @@ import { getPublishingServiceHealth } from "@/lib/publishingServiceHealth";
 import { parseClipCoverFrameSelection } from "@/lib/clipCoverFrame";
 import { extractCaptionPackage } from "@/lib/clipStudio";
 import { normalizeContentHashtags } from "@/lib/contentPublishing";
+import { isEditoriallyPostReady } from "@/app/ready-to-post/readiness-display";
 
 export const dynamic = "force-dynamic";
 
@@ -450,6 +451,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
   const reviewSermonId = sermonId ?? focusedClip?.sermon.id ?? clips[0]?.sermon.id ?? approvedWaitingClips[0]?.sermon.id ?? null;
   const reviewHref = reviewSermonId ? `/sermons/${reviewSermonId}/review` : "/sermons";
   const downloadableClipCount = clips.filter((clip) => clip.mediaReady).length;
+  const editoriallyPostReadyClipCount = clips.filter(isEditoriallyPostReady).length;
   const blockedReadyClips = clips.filter((clip) => !clip.mediaReady);
   const blockedReadyClipCount = blockedReadyClips.length;
   const firstBlockedClip = blockedReadyClips[0] ?? null;
@@ -464,7 +466,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
     <main className="ready-page-shell premium-ready-page stack-lg">
       <header className="ready-publishing-header premium-ready-header">
         <div className="ready-title-block">
-          <p className="kicker">Ready to post</p>
+          <p className="kicker">Publishing desk</p>
           <h1>Prepare your next post</h1>
           <p className="muted">
             {focusedContentAsset
@@ -482,7 +484,8 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
             </div>
           ) : null}
           <div className="ready-quick-stats" aria-label="Prepared publishing summary">
-            <span className="ready-stat-ready"><strong>{downloadableClipCount}</strong> ready</span>
+            <span><strong>{downloadableClipCount}</strong> media prepared</span>
+            <span className="ready-stat-ready"><strong>{editoriallyPostReadyClipCount}</strong> post-ready</span>
             {contentAssets.length > 0 ? <span><strong>{contentAssets.length}</strong> generated post{contentAssets.length === 1 ? "" : "s"}</span> : null}
             {preparingClipCount > 0 ? (
               <span><strong>{preparingClipCount}</strong> preparing</span>
@@ -497,7 +500,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           </div>
         </div>
         <nav className="ready-publishing-nav" aria-label="Ready to post actions">
-          {scopeIsActive ? <Link href="/ready-to-post" className="button tertiary">All ready content</Link> : null}
+          {scopeIsActive ? <Link href="/ready-to-post" className="button tertiary">All prepared content</Link> : null}
           {!controlPanelMode && downloadableClipCount > 0 ? (
             <a href={downloadAllHref} className="button secondary">
               {blockedReadyClipCount > 0 ? "Download ready clips" : "Download all"}
@@ -526,7 +529,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         </ol>
 
         <nav className="premium-ready-view-nav" aria-label="Publishing desk sections">
-          <a href="#ready-clips">Ready clips</a>
+          <a href="#ready-clips">Prepared clips</a>
           <a href="#generated-content-assets">Generated content</a>
           <a href="#posting-calendar">Mixed calendar</a>
           <a href="#publishing-support">Publishing history</a>

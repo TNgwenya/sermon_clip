@@ -340,6 +340,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     transcriptSegments,
   } = props;
   const focusedLineRef = useRef<HTMLButtonElement | null>(null);
+  const transcriptListRef = useRef<HTMLDivElement | null>(null);
   const [focusedSegmentId, setFocusedSegmentId] = useState(() =>
     getInitialFocusedSegmentId(transcriptSegments, clipStartSeconds, clipEndSeconds),
   );
@@ -388,7 +389,24 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
   );
 
   useEffect(() => {
-    focusedLineRef.current?.scrollIntoView({ block: "nearest" });
+    const list = transcriptListRef.current;
+    const line = focusedLineRef.current;
+    if (
+      window.matchMedia("(max-width: 760px)").matches
+      || !list
+      || !line
+      || list.scrollHeight <= list.clientHeight + 1
+    ) {
+      return;
+    }
+
+    const listRect = list.getBoundingClientRect();
+    const lineRect = line.getBoundingClientRect();
+    if (lineRect.top < listRect.top) {
+      list.scrollTop -= listRect.top - lineRect.top;
+    } else if (lineRect.bottom > listRect.bottom) {
+      list.scrollTop += lineRect.bottom - listRect.bottom;
+    }
   }, [focusedSegment?.id]);
 
   function previewSegment(segment: TranscriptSegment) {
@@ -534,7 +552,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
         </div>
       ) : null}
 
-      <div className="clip-studio-transcript-list" aria-label="Clip transcript lines">
+      <div ref={transcriptListRef} className="clip-studio-transcript-list" aria-label="Clip transcript lines">
         {transcriptSegments.length > 0 ? (
           transcriptSegments.map((segment, index) => {
             const isSelected = selectedSegmentIds.has(segment.id);

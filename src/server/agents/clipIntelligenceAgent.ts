@@ -49,7 +49,7 @@ import {
 } from "@/lib/clipVolumeTargets";
 import { type MinistryMomentRecord as PromptMinistryMomentRecord } from "@/server/ai/ministryMomentSchema";
 import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
-import { resolveOpenAIChatModel } from "@/server/ai/modelConfig";
+import { resolveOpenAIChatModel, resolveOpenAIReasoningEffort } from "@/server/ai/modelConfig";
 import { appendPipelineLog } from "@/server/agents/storage";
 import { updateSermonStatus } from "@/server/status/sermonStatus";
 import { refreshVideoSubjectTracking } from "@/server/agents/videoSubjectTrackingService";
@@ -201,6 +201,13 @@ type TranscriptReadinessResult = {
   meaningfulSegmentCount: number;
 };
 
+type TranscriptAwareClipVolumeTarget = {
+  target: ClipVolumeTarget;
+  sourceDurationSeconds: number;
+  effectiveDurationSeconds: number;
+  usesSpokenCoverage: boolean;
+};
+
 const LARGE_TRANSCRIPT_GAP_SECONDS = 45;
 
 type WindowQualityResult = {
@@ -328,6 +335,28 @@ function segmentTranscriptText(segments: TranscriptSegmentRecord[]): string {
 function segmentDuration(segments: TranscriptSegmentRecord[]): number {
   if (segments.length === 0) return 0;
   return Number((segments[segments.length - 1].endTimeSeconds - segments[0].startTimeSeconds).toFixed(2));
+}
+
+/**
+ * A recording can contain long stretches of silence, a paused livestream, or
+ * an otherwise missing transcription window. Clip volume should reflect the
+ * amount of spoken sermon material available for review, not empty container
+ * runtime. Keep the full timeline as a diagnostic so a pastor can still see
+ * when a source needs attention.
+ */
+function resolveTranscriptAwareClipVolumeTarget(readiness: Pick<TranscriptReadinessResult, "durationSeconds" | "coveredSeconds">): TranscriptAwareClipVolumeTarget {
+  const sourceDurationSeconds = Math.max(0, readiness.durationSeconds);
+  const coveredSeconds = Math.max(0, readiness.coveredSeconds);
+  const effectiveDurationSeconds = coveredSeconds > 0
+    ? Math.min(sourceDurationSeconds, coveredSeconds)
+    : sourceDurationSeconds;
+
+  return {
+    target: resolveClipVolumeTarget(effectiveDurationSeconds),
+    sourceDurationSeconds,
+    effectiveDurationSeconds,
+    usesSpokenCoverage: coveredSeconds > 0 && effectiveDurationSeconds < sourceDurationSeconds,
+  };
 }
 
 function normalizedSegmentSignature(text: string): string {
@@ -1080,6 +1109,10 @@ function buildClipVolumeGateFailureDetails(input: {
     },
     volumeTarget: {
       durationBasisSeconds: Number(input.target.durationSeconds.toFixed(2)),
+      durationSource: input.target.durationSeconds < input.readiness.durationSeconds
+        ? "spoken_transcript_coverage"
+        : "transcript_timeline",
+      sourceDurationSeconds: Number(input.readiness.durationSeconds.toFixed(2)),
       durationLabel: input.target.label,
       rangeLabel: input.target.rangeLabel,
       minimum: input.target.minReviewSuggestions,
@@ -2415,10 +2448,12 @@ async function callClipModel(
 
   const rawResponse = options?.rawResponseOverride ?? (await (async () => {
     const model = resolveOpenAIChatModel("clipSelection");
+    const reasoningEffort = resolveOpenAIReasoningEffort("clipSelection", model);
     const completion = await createLoggedChatCompletion({
       operation: "clip_selection",
       sermonId: sermon.id,
       model,
+      reasoningEffort,
       response_format: { type: "json_object" },
       temperature: 0.2,
       messages: [
@@ -2448,10 +2483,12 @@ async function callClipModel(
     const validationError = formatClipParseError(error);
     const repaired = options?.repairResponseOverride ?? (await (async () => {
       const model = resolveOpenAIChatModel("clipRepair");
+      const reasoningEffort = resolveOpenAIReasoningEffort("clipRepair", model);
       const repairCompletion = await createLoggedChatCompletion({
         operation: "clip_selection_repair",
         sermonId: sermon.id,
         model,
+        reasoningEffort,
         response_format: { type: "json_object" },
         temperature: 0,
         messages: [
@@ -2792,10 +2829,12 @@ export async function generateClipSuggestions(
       failureRetryable = false;
       throw new Error("Cannot generate clip suggestions because no transcript segments exist.");
     }
-    const clipVolumeTarget = resolveClipVolumeTarget(segmentDuration(segments));
+    const transcriptReadiness = assessTranscriptReadinessForClipping(segments);
+    const transcriptAwareVolumeTarget = resolveTranscriptAwareClipVolumeTarget(transcriptReadiness);
+    const clipVolumeTarget = transcriptAwareVolumeTarget.target;
     await appendJobLog(
       job.id,
-      `Clip volume target for transcript duration: ${clipVolumeTarget.rangeLabel} pastor-review options (target ${clipVolumeTarget.targetReviewSuggestions}).`,
+      `Clip volume target for ${transcriptAwareVolumeTarget.usesSpokenCoverage ? "usable spoken transcript coverage" : "transcript duration"}: ${clipVolumeTarget.rangeLabel} pastor-review options (target ${clipVolumeTarget.targetReviewSuggestions}; effective ${transcriptAwareVolumeTarget.effectiveDurationSeconds.toFixed(1)}s of ${transcriptAwareVolumeTarget.sourceDurationSeconds.toFixed(1)}s timeline).`,
     );
 
     const momentsCount = await prisma.ministryMoment.count({ where: { sermonId: sermon.id, isAiGenerated: true } });
@@ -2894,7 +2933,6 @@ export async function generateClipSuggestions(
       : [];
 
     failureStage = "transcript_quality_assessment";
-    const transcriptReadiness = assessTranscriptReadinessForClipping(segments);
     const transcriptQualityMode = classifyTranscriptQualityForClipGeneration(transcriptReadiness);
     failureDetails = {
       transcript: {
@@ -2912,6 +2950,8 @@ export async function generateClipSuggestions(
       },
       volumeTarget: {
         durationBasisSeconds: Number(clipVolumeTarget.durationSeconds.toFixed(2)),
+        durationSource: transcriptAwareVolumeTarget.usesSpokenCoverage ? "spoken_transcript_coverage" : "transcript_timeline",
+        sourceDurationSeconds: Number(transcriptAwareVolumeTarget.sourceDurationSeconds.toFixed(2)),
         rangeLabel: clipVolumeTarget.rangeLabel,
         minimum: clipVolumeTarget.minReviewSuggestions,
         target: clipVolumeTarget.targetReviewSuggestions,
@@ -3428,6 +3468,7 @@ export const __clipIntelligenceTestUtils = {
   selectStrongReviewOnlyClipCandidates,
   selectBoundaryReviewClipCandidates,
   assessTranscriptReadinessForClipping,
+  resolveTranscriptAwareClipVolumeTarget,
   rankClipWindowsForSelection,
   assessClipWindowQuality,
   isReviewOnlyTranscriptUsableForClipGeneration,

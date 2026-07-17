@@ -118,6 +118,37 @@ describe("clip intelligence generation summary", () => {
     });
   });
 
+  it("sets clip volume from usable spoken coverage rather than silent container runtime", () => {
+    const result = __clipIntelligenceTestUtils.resolveTranscriptAwareClipVolumeTarget({
+      durationSeconds: 3_329,
+      coveredSeconds: 982,
+    });
+
+    expect(result).toMatchObject({
+      sourceDurationSeconds: 3_329,
+      effectiveDurationSeconds: 982,
+      usesSpokenCoverage: true,
+    });
+    expect(result.target).toMatchObject({
+      rangeLabel: "8-20",
+      minReviewSuggestions: 8,
+      targetReviewSuggestions: 14,
+    });
+  });
+
+  it("uses the timeline duration when transcript coverage is unavailable", () => {
+    const result = __clipIntelligenceTestUtils.resolveTranscriptAwareClipVolumeTarget({
+      durationSeconds: 3_329,
+      coveredSeconds: 0,
+    });
+
+    expect(result).toMatchObject({
+      effectiveDurationSeconds: 3_329,
+      usesSpokenCoverage: false,
+    });
+    expect(result.target.rangeLabel).toBe("20-32");
+  });
+
   it("counts saved clips as post-ready only when the deeper quality gates agree", () => {
     const summary = __clipIntelligenceTestUtils.buildStructuredGenerationSummary({
       totalCandidatesGenerated: 4,

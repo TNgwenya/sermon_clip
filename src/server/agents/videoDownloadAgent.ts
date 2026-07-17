@@ -4,10 +4,10 @@ import { rename, unlink } from "node:fs/promises";
 import { prisma } from "@/lib/prisma";
 import {
   appendJobLog,
-  createProcessingJob,
+  ensureProcessingJobRunning,
   markJobFailed,
-  markJobRunning,
   markJobSucceeded,
+  resolveProcessingJob,
 } from "@/server/agents/processing";
 import {
   appendPipelineLog,
@@ -20,6 +20,7 @@ import { updateSermonStatus } from "@/server/status/sermonStatus";
 type DownloadOptions = {
   force?: boolean;
   ytDlpPath?: string;
+  processingJobId?: string;
 };
 
 type SourceDownloadQualityMode = "FAST" | "BALANCED" | "BEST";
@@ -299,10 +300,10 @@ export async function downloadSermonVideo(
   }
   await ensureSermonFolders(sermon.id, sermon.title);
   const sourceVideoPath = getSourceVideoPath(sermon.id);
-  const job = await createProcessingJob(sermon.id, "DOWNLOAD_VIDEO");
+  const job = await resolveProcessingJob(sermon.id, "DOWNLOAD_VIDEO", options?.processingJobId);
 
   try {
-    await markJobRunning(job.id);
+    await ensureProcessingJobRunning(job);
     await appendJobLog(job.id, "Download job started.");
     await appendPipelineLog(sermon.id, "Download video requested.");
     await updateSermonStatus(sermon.id, "DOWNLOADING");

@@ -37,6 +37,7 @@ enum ProcessingJobType {
   GENERATE_SUBTITLES
   BURN_SUBTITLES
   PROCESS_SERMON
+  GENERATE_INTELLIGENCE
   RENDER_OVERLAY
   QUALITY_REFRESH
 }
@@ -1334,6 +1335,7 @@ model ScheduledPostContentAsset {
 
 model SocialMetricSnapshot {
   id                         String                 @id @default(cuid())
+  dedupeKey                  String?                @unique
   socialAccountId            String?
   platform                   String
   platformPostId             String?

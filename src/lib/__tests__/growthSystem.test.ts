@@ -92,6 +92,7 @@ function buildAccount(overrides: Partial<SocialAccount> = {}): SocialAccount {
     externalAccountId: null,
     externalPlatform: null,
     profileUrl: null,
+    credentialReady: false,
     createdAt: new Date().toISOString(),
     ...overrides,
   };

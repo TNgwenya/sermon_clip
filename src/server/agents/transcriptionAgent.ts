@@ -6,10 +6,10 @@ import type { SermonStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   appendJobLog,
-  createProcessingJob,
+  ensureProcessingJobRunning,
   markJobFailed,
-  markJobRunning,
   markJobSucceeded,
+  resolveProcessingJob,
 } from "@/server/agents/processing";
 import { assessTranscriptQualityForClipping, type TranscriptQualityAssessment } from "@/server/agents/transcriptQuality";
 import {
@@ -37,6 +37,7 @@ import { invalidateTranscriptDerivedClipWork } from "@/server/agents/transcriptC
 
 type TranscribeOptions = {
   force?: boolean;
+  processingJobId?: string;
 };
 
 const TRANSCRIBED_OR_LATER_STATUSES: ReadonlySet<SermonStatus> = new Set([
@@ -1947,10 +1948,10 @@ export async function transcribeSermonAudio(
 
   const audioPath = getAudioPath(sermon.id);
   const transcriptJsonPath = getTranscriptJsonPath(sermon.id);
-  const job = await createProcessingJob(sermon.id, "TRANSCRIBE_AUDIO");
+  const job = await resolveProcessingJob(sermon.id, "TRANSCRIBE_AUDIO", options?.processingJobId);
 
   try {
-    await markJobRunning(job.id);
+    await ensureProcessingJobRunning(job);
     await appendJobLog(job.id, "Transcription job started.");
     await appendPipelineLog(sermon.id, "Transcription requested.");
 

@@ -54,6 +54,17 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "Choose a future time for automatic posting." }, { status: 400 });
   }
 
+  if (automationMode === "AUTOMATIC") {
+    const multiAccountPlatform = platforms.find((platform) => (
+      (socialAccountIdsByPlatform[platform]?.length ?? 0) > 1
+    ));
+    if (multiAccountPlatform) {
+      return NextResponse.json({
+        error: `Choose one ${multiAccountPlatform} account per automatic draft. Create another draft for a second account.`,
+      }, { status: 400 });
+    }
+  }
+
   const readyClips = await prisma.clipCandidate.findMany({
     where: {
       id: { in: clipIds },
@@ -101,11 +112,11 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   if (automationMode === "AUTOMATIC") {
-    const zernioPlatforms = platforms.filter((platform) => platform === "TikTok" || platform === "Instagram");
+    const zernioPlatforms = platforms.filter((platform) => platform === "Instagram");
     if (zernioPlatforms.length > 0) {
       const zernioAccounts = await prisma.socialAccount.findMany({
         where: {
-          platform: { in: zernioPlatforms.map((platform) => platform === "TikTok" ? "TIKTOK" : "INSTAGRAM") },
+          platform: "INSTAGRAM",
           status: "CONNECTED",
           externalProvider: "zernio",
           externalAccountId: { not: null },
@@ -115,8 +126,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       });
       const connectedPlatforms = new Set(zernioAccounts.map((account) => `${account.platform}:${account.externalPlatform?.toLowerCase()}`));
       const missingPlatforms = zernioPlatforms.filter((platform) => {
-        const dbPlatform = platform === "TikTok" ? "TIKTOK" : "INSTAGRAM";
-        return !connectedPlatforms.has(`${dbPlatform}:${platform.toLowerCase()}`);
+        return !connectedPlatforms.has(`INSTAGRAM:${platform.toLowerCase()}`);
       });
 
       if (missingPlatforms.length > 0) {
@@ -127,9 +137,8 @@ export async function POST(request: Request): Promise<NextResponse> {
 
       const zernioAccountKeys = new Set(zernioAccounts.map((account) => `${account.platform}:${account.externalPlatform?.toLowerCase()}:${account.id}`));
       const invalidSelectedPlatforms = zernioPlatforms.filter((platform) => {
-        const dbPlatform = platform === "TikTok" ? "TIKTOK" : "INSTAGRAM";
         return (socialAccountIdsByPlatform[platform] ?? []).some((accountId) => (
-          !zernioAccountKeys.has(`${dbPlatform}:${platform.toLowerCase()}:${accountId}`)
+          !zernioAccountKeys.has(`INSTAGRAM:${platform.toLowerCase()}:${accountId}`)
         ));
       });
 

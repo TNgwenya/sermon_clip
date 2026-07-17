@@ -11,6 +11,15 @@ export type PublishedContentAssetFile = {
   sizeBytes: number;
 };
 
+export type LocalContentAssetFileForUpload = {
+  id: string;
+  fileName: string;
+  filePath: string;
+  mimeType: string;
+};
+
+const MAX_PUBLIC_CONTENT_ASSET_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+
 let client: S3Client | null = null;
 
 function envValue(name: string): string {
@@ -61,6 +70,21 @@ export function isContentAssetPublicStorageConfigured(): boolean {
   );
 }
 
+export function isContentAssetDurableStorageRequired(): boolean {
+  return Boolean(process.env.VERCEL)
+    || process.env.CONTENT_ASSET_DURABLE_STORAGE_REQUIRED === "true"
+    || (
+      process.env.R2_CONTENT_ASSET_UPLOAD_DISABLED !== "true"
+      && [
+        "R2_ACCOUNT_ID",
+        "R2_ACCESS_KEY_ID",
+        "R2_SECRET_ACCESS_KEY",
+        "R2_BUCKET",
+        "R2_PUBLIC_BASE_URL",
+      ].some((name) => Boolean(envValue(name)))
+    );
+}
+
 export function buildContentAssetObjectKey(input: {
   contentAssetId: string;
   fileId: string;
@@ -81,6 +105,54 @@ export function buildContentAssetPublicUrl(objectKey: string): string {
     throw new Error("R2_PUBLIC_BASE_URL must be an HTTPS public bucket URL or custom domain.");
   }
   return `${baseUrl}/${objectKey.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+export function isTrustedContentAssetPublicUrl(value: string | null | undefined): boolean {
+  const publicBaseUrl = envValue("R2_PUBLIC_BASE_URL");
+  const candidateValue = value?.trim() ?? "";
+  if (!publicBaseUrl || !candidateValue) return false;
+
+  try {
+    const base = new URL(publicBaseUrl.endsWith("/") ? publicBaseUrl : `${publicBaseUrl}/`);
+    const candidate = new URL(candidateValue);
+    if (base.protocol !== "https:" || candidate.protocol !== "https:" || candidate.origin !== base.origin) {
+      return false;
+    }
+    const basePath = base.pathname.replace(/\/+$/, "");
+    return candidate.pathname.startsWith(`${basePath}/content-assets/`);
+  } catch {
+    return false;
+  }
+}
+
+export async function readContentAssetPublicFile(
+  publicUrl: string,
+  maxBytes = MAX_PUBLIC_CONTENT_ASSET_DOWNLOAD_BYTES,
+): Promise<Buffer> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new Error("The public content-asset download limit is invalid.");
+  }
+  if (!isTrustedContentAssetPublicUrl(publicUrl)) {
+    throw new Error("The content-asset public URL is not part of the configured media bucket.");
+  }
+
+  const response = await fetch(publicUrl, {
+    cache: "no-store",
+    redirect: "error",
+  });
+  if (!response.ok) {
+    throw new Error(`Public content-asset download failed with HTTP ${response.status}.`);
+  }
+  const advertisedSize = Number(response.headers.get("content-length"));
+  if (Number.isFinite(advertisedSize) && advertisedSize > maxBytes) {
+    throw new Error("The public content-asset file is too large to download safely.");
+  }
+
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.byteLength > maxBytes) {
+    throw new Error("The public content-asset file is too large to download safely.");
+  }
+  return bytes;
 }
 
 export async function uploadContentAssetFileToR2(input: {
@@ -111,4 +183,33 @@ export async function uploadContentAssetFileToR2(input: {
     uploadedAt: new Date(),
     sizeBytes: fileStat.size,
   };
+}
+
+export async function uploadContentAssetFilesWhenConfigured(input: {
+  contentAssetId: string;
+  files: LocalContentAssetFileForUpload[];
+}): Promise<Map<string, PublishedContentAssetFile>> {
+  if (input.files.length === 0) {
+    return new Map();
+  }
+  if (!isContentAssetPublicStorageConfigured()) {
+    if (isContentAssetDurableStorageRequired()) {
+      throw new Error(
+        "Durable content-asset storage is required in this deployment. Configure R2 before preparing generated media.",
+      );
+    }
+    return new Map();
+  }
+
+  const uploads = await Promise.all(input.files.map(async (file) => ({
+    fileId: file.id,
+    uploaded: await uploadContentAssetFileToR2({
+      contentAssetId: input.contentAssetId,
+      fileId: file.id,
+      fileName: file.fileName,
+      filePath: file.filePath,
+      mimeType: file.mimeType,
+    }),
+  })));
+  return new Map(uploads.map(({ fileId, uploaded }) => [fileId, uploaded]));
 }

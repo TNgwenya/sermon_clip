@@ -288,6 +288,7 @@ export async function fetchInstagramAccountMetrics(input: {
 
   const sinceTime = new Date(`${input.since}T00:00:00.000Z`).getTime();
   const untilTime = new Date(`${input.until}T23:59:59.999Z`).getTime();
+  const observedAt = new Date();
 
   return (payload.data ?? [])
     .filter((media) => {
@@ -311,7 +312,7 @@ export async function fetchInstagramAccountMetrics(input: {
         platform: "Instagram",
         externalAccountId: input.instagramAccountId,
         accountName: input.accountName,
-        capturedAt: media.timestamp ? new Date(media.timestamp) : new Date(),
+        capturedAt: observedAt,
         views,
         reach,
         impressions,
@@ -324,6 +325,7 @@ export async function fetchInstagramAccountMetrics(input: {
           instagramAccountId: input.instagramAccountId,
           mediaId: media.id,
           permalink: media.permalink,
+          publishedAt: media.timestamp,
           insights,
         },
       };

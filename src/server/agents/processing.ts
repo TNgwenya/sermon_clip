@@ -37,17 +37,92 @@ export type SerializedProcessingError = {
   cause?: SerializedProcessingError;
 };
 
+export class ActiveProcessingJobError extends Error {
+  readonly code = "PROCESSING_JOB_ALREADY_ACTIVE";
+  readonly existingJobId: string;
+  readonly sermonId: string;
+  readonly jobType: ProcessingJobType;
+  readonly activeStatus: ProcessingJob["status"];
+
+  constructor(job: ProcessingJob) {
+    super(`A ${job.type} job is already ${job.status.toLowerCase()} for this sermon.`);
+    this.name = "ActiveProcessingJobError";
+    this.existingJobId = job.id;
+    this.sermonId = job.sermonId;
+    this.jobType = job.type;
+    this.activeStatus = job.status;
+  }
+}
+
+export type ProcessingJobExecution = "INLINE" | "QUEUED";
+
 export async function createProcessingJob(
   sermonId: string,
   type: ProcessingJobType,
+  options: { execution?: ProcessingJobExecution } = {},
 ): Promise<ProcessingJob> {
-  return retryProcessingJobDbWrite(() => prisma.processingJob.create({
-    data: {
-      sermonId,
-      type,
-      status: "PENDING",
-    },
-  }));
+  const queued = options.execution === "QUEUED";
+  const now = new Date();
+  try {
+    return await retryProcessingJobDbWrite(() => prisma.processingJob.create({
+      data: {
+        sermonId,
+        type,
+        status: queued ? "PENDING" : "RUNNING",
+        ...(queued
+          ? {}
+          : {
+              workerId: `inline:${process.pid}`,
+              startedAt: now,
+              heartbeatAt: now,
+              attemptCount: 1,
+            }),
+      },
+    }));
+  } catch (error) {
+    // A PostgreSQL partial unique index guarantees that concurrent clicks or
+    // workers cannot create two active jobs for the same sermon step. The
+    // losing caller must not receive the winner's job: it would then mutate
+    // another worker's state and perform the same expensive work twice.
+    if (errorCode(error) === "P2002") {
+      const existing = await prisma.processingJob.findFirst({
+        where: {
+          sermonId,
+          type,
+          status: { in: ["PENDING", "RUNNING"] },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      if (existing) {
+        throw new ActiveProcessingJobError(existing);
+      }
+    }
+
+    throw error;
+  }
+}
+
+export async function resolveProcessingJob(
+  sermonId: string,
+  type: ProcessingJobType,
+  processingJobId?: string,
+): Promise<ProcessingJob> {
+  if (!processingJobId) return createProcessingJob(sermonId, type);
+
+  const job = await prisma.processingJob.findUnique({ where: { id: processingJobId } });
+  if (!job || job.sermonId !== sermonId || job.type !== type) {
+    throw new Error(`Processing job ${processingJobId} does not match sermon ${sermonId} and type ${type}.`);
+  }
+  if (job.status !== "PENDING" && job.status !== "RUNNING") {
+    throw new Error(`Processing job ${processingJobId} is already ${job.status}.`);
+  }
+  return job;
+}
+
+export async function ensureProcessingJobRunning(job: ProcessingJob): Promise<void> {
+  if (job.status !== "RUNNING" || job.attemptCount < 1) {
+    await markJobRunning(job.id);
+  }
 }
 
 function timestampedMessage(message: string): string {
@@ -192,8 +267,14 @@ export async function appendJobLog(jobId: string, message: string): Promise<void
 }
 
 export async function markJobRunning(jobId: string, workerId?: string): Promise<void> {
-  await retryProcessingJobDbWrite(() => prisma.processingJob.update({
-    where: { id: jobId },
+  await retryProcessingJobDbWrite(() => prisma.processingJob.updateMany({
+    where: {
+      id: jobId,
+      OR: [
+        { status: { not: "RUNNING" } },
+        { attemptCount: { lt: 1 } },
+      ],
+    },
     data: {
       status: "RUNNING",
       startedAt: new Date(),

@@ -31,6 +31,7 @@ import {
   unregisterSermonStorageFolder,
 } from "@/server/agents/storage";
 import {
+  ActiveProcessingJobError,
   appendJobLog,
   createProcessingJob,
   markJobFailed,
@@ -192,6 +193,12 @@ function generateClipSuggestions(
   return import("@/server/agents/clipIntelligenceAgent").then((module) => module.generateClipSuggestions(...args));
 }
 
+function generateSermonIntelligence(
+  ...args: Parameters<typeof import("@/server/agents/sermonIntelligenceService").generateSermonIntelligence>
+): ReturnType<typeof import("@/server/agents/sermonIntelligenceService").generateSermonIntelligence> {
+  return import("@/server/agents/sermonIntelligenceService").then((module) => module.generateSermonIntelligence(...args));
+}
+
 function mediaFileIsUsable(
   ...args: Parameters<typeof import("@/server/media/fileGuards").mediaFileIsUsable>
 ): ReturnType<typeof import("@/server/media/fileGuards").mediaFileIsUsable> {
@@ -314,8 +321,15 @@ async function queueSermonProcessingJob(
     return { id: existing.id, reusedExisting: true };
   }
 
-  const job = await createProcessingJob(sermonId, type);
-  return { id: job.id, reusedExisting: false };
+  try {
+    const job = await createProcessingJob(sermonId, type, { execution: "QUEUED" });
+    return { id: job.id, reusedExisting: false };
+  } catch (error) {
+    if (error instanceof ActiveProcessingJobError) {
+      return { id: error.existingJobId, reusedExisting: true };
+    }
+    throw error;
+  }
 }
 
 async function queueSermonMediaAssetJobs(
@@ -373,6 +387,8 @@ function processingJobTypeLabel(type: ProcessingJobType): string {
       return "Caption burn";
     case "PROCESS_SERMON":
       return "Sermon processing";
+    case "GENERATE_INTELLIGENCE":
+      return "Sermon intelligence";
     case "RENDER_OVERLAY":
       return "Overlay render";
     case "QUALITY_REFRESH":
@@ -2235,6 +2251,11 @@ async function retryFailedProcessingJobTarget(
     await prepareGeneratedClipPreviews({ sermonId, force: true });
   } else if (job.type === "PROCESS_SERMON") {
     await processSermonPipeline(sermonId);
+  } else if (job.type === "GENERATE_INTELLIGENCE") {
+    const result = await generateSermonIntelligence(sermonId, { force: true });
+    if (result.status !== "COMPLETED") {
+      throw new Error(result.failureReason ?? "Sermon intelligence retry failed.");
+    }
   } else if (job.type === "EXPORT_CLIPS") {
     const summary = await renderApprovedClipsForSermon(sermonId, { force: true });
     if (summary.attempted === 0 && summary.failed === 0) {
@@ -3278,8 +3299,11 @@ export async function startSermonClipQualityRefreshJobAction(input: {
     };
   }
 
-  const job = await createProcessingJob(sermonId, "QUALITY_REFRESH");
-  if (!canRunLocalMediaProcessing()) {
+  const runLocally = canRunLocalMediaProcessing();
+  const job = await createProcessingJob(sermonId, "QUALITY_REFRESH", {
+    execution: runLocally ? "INLINE" : "QUEUED",
+  });
+  if (!runLocally) {
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath(`/sermons/${sermonId}/review`);
 

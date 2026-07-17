@@ -61,7 +61,7 @@ export function ReadyQueueLiveRefresh({ status, intervalMs = 8000 }: ReadyQueueL
       <details className="queue-live-panel queue-live-disclosure is-paused">
         <summary>
           <span>Check queue status</span>
-          <span className="muted small">{status.readyCount} ready · last checked {checkedAtLabel}</span>
+          <span className="muted small">{status.readyCount} media prepared · last checked {checkedAtLabel}</span>
         </summary>
         <div className="queue-live-details">
           <div className="stack-sm">

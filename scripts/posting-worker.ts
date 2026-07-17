@@ -4,6 +4,7 @@ import os from "node:os";
 import type { AutomationImageMedia, AutomationPost, UploadResult } from "./posting-platforms.ts";
 import {
   AmbiguousPlatformPublishError,
+  postingRequiresPublicMedia,
   selectPostImageMedia,
   uploadPlatformPost,
 } from "./posting-platforms.ts";
@@ -18,6 +19,13 @@ const dueCheckIntervalMs = Number(process.env.POSTING_WORKER_DUE_CHECK_SECONDS ?
 const heartbeatIntervalMs = Number(process.env.POSTING_WORKER_HEARTBEAT_SECONDS ?? 30) * 1000;
 const dryRun = process.env.POSTING_WORKER_DRY_RUN !== "false";
 const upcomingWindowMinutes = Number(process.env.POSTING_WORKER_UPCOMING_WINDOW_MINUTES ?? 10080);
+const configuredTikTokProvider = process.env.TIKTOK_POSTING_PROVIDER?.trim().toLowerCase();
+const tiktokProviderMode = configuredTikTokProvider === "zernio" || configuredTikTokProvider === "direct"
+  ? configuredTikTokProvider
+  : "account";
+const tiktokDirectPrivacy = process.env.TIKTOK_DEFAULT_PRIVACY_LEVEL?.trim() || "SELF_ONLY";
+const tiktokZernioPrivacy = process.env.ZERNIO_TIKTOK_PRIVACY_LEVEL?.trim() || null;
+const tiktokDirectEnabled = process.env.TIKTOK_DIRECT_POST_EXPERIMENTAL === "true";
 const seenCompletions = new Set<string>();
 const dryRunObservedPosts = new Set<string>();
 const activeLeasePostIds = new Set<string>();
@@ -110,7 +118,16 @@ async function sendHeartbeat(): Promise<void> {
           youtubePrivacy: process.env.YOUTUBE_DEFAULT_PRIVACY_STATUS?.trim() || "private",
           youtubeApiVerified: process.env.YOUTUBE_API_VERIFIED === "true",
           facebookPublishesImmediately: process.env.FACEBOOK_DEFAULT_PUBLISHED === "true",
-          tiktokPrivacy: process.env.ZERNIO_TIKTOK_PRIVACY_LEVEL?.trim() || null,
+          tiktokProviderMode,
+          tiktokDirectEnabled,
+          tiktokDirectConfigured: Boolean(process.env.TIKTOK_ACCESS_TOKEN?.trim()),
+          tiktokOAuthClientConfigured: Boolean(
+            process.env.TIKTOK_CLIENT_KEY?.trim()
+            && process.env.TIKTOK_CLIENT_SECRET?.trim()
+          ),
+          tiktokDirectPrivacy,
+          tiktokZernioPrivacy,
+          tiktokPrivacy: tiktokProviderMode === "zernio" ? tiktokZernioPrivacy : tiktokDirectPrivacy,
         },
       }),
     });
@@ -373,8 +390,7 @@ async function publishPost(post: AutomationPost): Promise<UploadResult> {
   }
 
   try {
-    const zernioPlatform = post.platform === "TikTok" || post.platform === "Instagram";
-    if (zernioPlatform && !stagedMedia) {
+    if (postingRequiresPublicMedia(post) && !stagedMedia) {
       stagedMedia = await uploadPostingMediaToR2({
         scheduledPostId: post.id,
         clipId: firstClip.id,

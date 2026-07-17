@@ -16,6 +16,7 @@ export type SocialAccount = {
   externalAccountId: string | null;
   externalPlatform: string | null;
   profileUrl: string | null;
+  credentialReady: boolean;
   createdAt: string;
 };
 
@@ -43,6 +44,7 @@ function toSocialAccount(input: {
   externalAccountId: string | null;
   externalPlatform: string | null;
   profileUrl: string | null;
+  credentialReady?: boolean;
   createdAt: Date;
 }): SocialAccount {
   return {
@@ -55,6 +57,7 @@ function toSocialAccount(input: {
     externalAccountId: input.externalAccountId,
     externalPlatform: input.externalPlatform,
     profileUrl: input.profileUrl,
+    credentialReady: input.credentialReady === true,
     createdAt: input.createdAt.toISOString(),
   };
 }
@@ -77,9 +80,28 @@ export async function listSocialAccounts(): Promise<SocialAccount[]> {
   const accounts = await prisma.socialAccount.findMany({
     orderBy: { createdAt: "desc" },
     take: 100,
+    include: {
+      credentials: {
+        where: { status: "CONNECTED" },
+        select: { provider: true },
+      },
+    },
   });
 
-  return accounts.map(toSocialAccount);
+  return accounts.map((account) => {
+    const expectedProvider = account.platform === "YOUTUBE_SHORTS"
+      ? "YOUTUBE"
+      : account.platform === "FACEBOOK"
+        ? "META_FACEBOOK"
+        : account.platform === "TIKTOK"
+          ? "TIKTOK"
+          : "META_INSTAGRAM";
+    return toSocialAccount({
+      ...account,
+      credentialReady: account.credentials.some((credential) => credential.provider === expectedProvider)
+        && (account.platform !== "TIKTOK" || process.env.TIKTOK_DIRECT_POST_EXPERIMENTAL === "true"),
+    });
+  });
 }
 
 export async function createSocialAccount(input: {

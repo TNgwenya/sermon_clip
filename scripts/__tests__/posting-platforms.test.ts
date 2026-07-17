@@ -6,12 +6,13 @@ import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const credentialFindFirst = vi.hoisted(() => vi.fn());
+const credentialUpdate = vi.hoisted(() => vi.fn());
 
 vi.mock("@prisma/client", () => ({
   PrismaClient: class {
     socialCredential = {
       findFirst: credentialFindFirst,
-      update: vi.fn(),
+      update: credentialUpdate,
     };
   },
 }));
@@ -29,6 +30,8 @@ import {
   extractHashtagsFromText,
   selectPostImageMedia,
   selectYouTubeRefreshTokenSources,
+  resolveTikTokPostingProvider,
+  postingRequiresPublicMedia,
   uploadFacebookImages,
   uploadInstagramImages,
   uploadPlatformPost,
@@ -119,6 +122,7 @@ function encryptStoredToken(value: string, secret: string): string {
 afterEach(() => {
   vi.unstubAllEnvs();
   credentialFindFirst.mockReset();
+  credentialUpdate.mockReset();
 });
 
 describe("posting platform helpers", () => {
@@ -695,7 +699,153 @@ describe("posting platform helpers", () => {
       .rejects.toThrow("A public R2 media URL is required");
   });
 
+  it("uses TikTok Direct Post for a directly connected account", async () => {
+    vi.stubEnv("TIKTOK_POSTING_PROVIDER", "direct");
+    vi.stubEnv("TIKTOK_DIRECT_POST_EXPERIMENTAL", "true");
+    vi.stubEnv("TIKTOK_ACCESS_TOKEN", "direct-token");
+    const tempDir = await mkdtemp(join(tmpdir(), "sermon-clip-tiktok-direct-"));
+    const videoPath = join(tempDir, "clip.mp4");
+    await writeFile(videoPath, Buffer.from("video"));
+    const capturedRequests: Array<[input: RequestInfo | URL, init?: RequestInit]> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      capturedRequests.push([input, init]);
+      if (String(input).includes("/video/init/")) {
+        return Response.json({
+          data: {
+            publish_id: "direct-publish-1",
+            upload_url: "https://upload.example.com/direct-publish-1",
+          },
+        });
+      }
+      return new Response(null, { status: 200 });
+    };
+
+    try {
+      const result = await uploadPlatformPost(basePost, videoPath, 5, fetchImpl);
+
+      expect(capturedRequests[0]?.[0]).toBe("https://open.tiktokapis.com/v2/post/publish/video/init/");
+      expect(capturedRequests[1]?.[0]).toBe("https://upload.example.com/direct-publish-1");
+      expect(result).toMatchObject({
+        status: "PRIVATE_ONLY_UNVERIFIED",
+        externalPostId: "direct-publish-1",
+        publishError: expect.stringContaining("processing"),
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes a selected TikTok credential when its expiry is unknown", async () => {
+    const secret = "posting-platform-test-secret";
+    vi.stubEnv("AUTH_SECRET", secret);
+    vi.stubEnv("TIKTOK_POSTING_PROVIDER", "direct");
+    vi.stubEnv("TIKTOK_DIRECT_POST_EXPERIMENTAL", "true");
+    vi.stubEnv("TIKTOK_CLIENT_KEY", "client-key");
+    vi.stubEnv("TIKTOK_CLIENT_SECRET", "client-secret");
+    credentialFindFirst.mockResolvedValue({
+      id: "credential-1",
+      provider: "TIKTOK",
+      externalAccountId: "creator-1",
+      accessTokenCiphertext: encryptStoredToken("stale-token", secret),
+      refreshTokenCiphertext: encryptStoredToken("refresh-token", secret),
+      expiresAt: null,
+    });
+    credentialUpdate.mockResolvedValue(undefined);
+    const tempDir = await mkdtemp(join(tmpdir(), "sermon-clip-tiktok-refresh-"));
+    const videoPath = join(tempDir, "clip.mp4");
+    await writeFile(videoPath, Buffer.from("video"));
+    const capturedRequests: Array<[input: RequestInfo | URL, init?: RequestInit]> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      capturedRequests.push([input, init]);
+      const url = String(input);
+      if (url.endsWith("/oauth/token/")) {
+        return Response.json({
+          access_token: "fresh-token",
+          refresh_token: "fresh-refresh-token",
+          token_type: "Bearer",
+          expires_in: 3600,
+        });
+      }
+      if (url.includes("/video/init/")) {
+        return Response.json({
+          data: {
+            publish_id: "refreshed-publish-1",
+            upload_url: "https://upload.example.com/refreshed-publish-1",
+          },
+        });
+      }
+      return new Response(null, { status: 200 });
+    };
+
+    try {
+      await uploadPlatformPost({
+        ...basePost,
+        socialAccountId: "selected-direct-account",
+      }, videoPath, 5, fetchImpl);
+
+      const refreshRequest = capturedRequests[0];
+      expect(refreshRequest?.[0]).toBe("https://open.tiktokapis.com/v2/oauth/token/");
+      expect(refreshRequest?.[1]?.body).toBeInstanceOf(URLSearchParams);
+      const initRequest = capturedRequests[1];
+      expect(new Headers(initRequest?.[1]?.headers).get("authorization")).toBe("Bearer fresh-token");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a retryable TikTok chunk response as ambiguous", async () => {
+    vi.stubEnv("TIKTOK_POSTING_PROVIDER", "direct");
+    vi.stubEnv("TIKTOK_DIRECT_POST_EXPERIMENTAL", "true");
+    vi.stubEnv("TIKTOK_ACCESS_TOKEN", "direct-token");
+    const tempDir = await mkdtemp(join(tmpdir(), "sermon-clip-tiktok-ambiguous-"));
+    const videoPath = join(tempDir, "clip.mp4");
+    await writeFile(videoPath, Buffer.from("video"));
+    const fetchImpl: typeof fetch = async (input) => String(input).includes("/video/init/")
+      ? Response.json({
+        data: {
+          publish_id: "ambiguous-publish-1",
+          upload_url: "https://upload.example.com/ambiguous-publish-1",
+        },
+      })
+      : Response.json({ error: { message: "Temporarily unavailable" } }, { status: 503 });
+
+    try {
+      await expect(uploadPlatformPost(basePost, videoPath, 5, fetchImpl))
+        .rejects.toBeInstanceOf(AmbiguousPlatformPublishError);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a lost TikTok chunk response as ambiguous", async () => {
+    vi.stubEnv("TIKTOK_POSTING_PROVIDER", "direct");
+    vi.stubEnv("TIKTOK_DIRECT_POST_EXPERIMENTAL", "true");
+    vi.stubEnv("TIKTOK_ACCESS_TOKEN", "direct-token");
+    const tempDir = await mkdtemp(join(tmpdir(), "sermon-clip-tiktok-lost-response-"));
+    const videoPath = join(tempDir, "clip.mp4");
+    await writeFile(videoPath, Buffer.from("video"));
+    const fetchImpl: typeof fetch = async (input) => {
+      if (String(input).includes("/video/init/")) {
+        return Response.json({
+          data: {
+            publish_id: "lost-response-publish-1",
+            upload_url: "https://upload.example.com/lost-response-publish-1",
+          },
+        });
+      }
+      throw new TypeError("connection closed");
+    };
+
+    try {
+      await expect(uploadPlatformPost(basePost, videoPath, 5, fetchImpl))
+        .rejects.toBeInstanceOf(AmbiguousPlatformPublishError);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("posts TikTok videos through Zernio", async () => {
+    vi.stubEnv("TIKTOK_POSTING_PROVIDER", "direct");
     vi.stubEnv("ZERNIO_API_KEY", "zernio-key");
     const capturedRequests: Array<[input: RequestInfo | URL, init?: RequestInit]> = [];
     const fetchImpl: typeof fetch = async (input, init) => {
@@ -730,6 +880,45 @@ describe("posting platform helpers", () => {
       publishedUrl: "https://www.tiktok.com/@church/video/1",
       finalPrivacyStatus: "published",
     });
+  });
+
+  it("never falls back to a legacy TikTok token for an explicitly selected account", async () => {
+    vi.stubEnv("TIKTOK_POSTING_PROVIDER", "direct");
+    vi.stubEnv("TIKTOK_DIRECT_POST_EXPERIMENTAL", "true");
+    vi.stubEnv("TIKTOK_ACCESS_TOKEN", "unrelated-env-token");
+    credentialFindFirst.mockResolvedValue(null);
+
+    await expect(uploadPlatformPost({
+      ...basePost,
+      socialAccountId: "selected-direct-account",
+    }, "/tmp/clip.mp4", 25)).rejects.toThrow("selected TikTok account does not have a connected credential");
+  });
+
+  it("makes an explicitly selected TikTok account provider authoritative", () => {
+    expect(resolveTikTokPostingProvider({
+      ...basePost,
+      socialAccountId: "zernio-account",
+      socialAccountExternalProvider: "zernio",
+    }, "direct")).toBe("zernio");
+    expect(resolveTikTokPostingProvider({
+      ...basePost,
+      socialAccountId: "direct-account",
+      socialAccountExternalProvider: null,
+    }, "zernio")).toBe("direct");
+  });
+
+  it("stages public media only for Zernio-backed video publishers", () => {
+    expect(postingRequiresPublicMedia({
+      ...basePost,
+      socialAccountId: "direct-account",
+      socialAccountExternalProvider: null,
+    })).toBe(false);
+    expect(postingRequiresPublicMedia({
+      ...basePost,
+      socialAccountId: "zernio-account",
+      socialAccountExternalProvider: "zernio",
+    })).toBe(true);
+    expect(postingRequiresPublicMedia({ ...basePost, platform: "Instagram" })).toBe(true);
   });
 
   it("keeps accepted Zernio posts in verification until publication is confirmed", async () => {

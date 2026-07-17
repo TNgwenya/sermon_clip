@@ -11,6 +11,15 @@ function unauthorized(): NextResponse {
   });
 }
 
+function missingProductionConfiguration(): NextResponse {
+  return new NextResponse("Service temporarily unavailable.", {
+    status: 503,
+    headers: {
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 function isAuthorized(request: NextRequest, password: string): boolean {
   const authorization = request.headers.get("authorization") ?? "";
   if (!authorization.toLowerCase().startsWith("basic ")) {
@@ -32,7 +41,13 @@ export function proxy(request: NextRequest): NextResponse {
   const localBypass = process.env.ALLOW_LOCAL_ADMIN_BYPASS === "true"
     && process.env.NODE_ENV !== "production";
 
-  if (!password || localBypass) {
+  if (!password) {
+    return process.env.NODE_ENV === "production"
+      ? missingProductionConfiguration()
+      : NextResponse.next();
+  }
+
+  if (localBypass) {
     return NextResponse.next();
   }
 

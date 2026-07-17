@@ -7,7 +7,7 @@ import {
   type MinistryMomentRecord,
 } from "@/server/ai/ministryMomentSchema";
 import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
-import { resolveOpenAIChatModel } from "@/server/ai/modelConfig";
+import { resolveOpenAIChatModel, resolveOpenAIReasoningEffort } from "@/server/ai/modelConfig";
 import { appendPipelineLog } from "@/server/agents/storage";
 import {
   applyInferredSermonWindowToSegments,
@@ -333,11 +333,13 @@ async function loadContext(sermonId: string): Promise<SermonContextPayload | nul
 async function parseMomentResponse(context: SermonContextPayload): Promise<MinistryMomentRecord[]> {
   const transcriptPrompt = buildUserPrompt(context);
   const model = resolveOpenAIChatModel("ministryMoment");
+  const reasoningEffort = resolveOpenAIReasoningEffort("ministryMoment", model);
 
   const response = await createLoggedChatCompletion({
     operation: "ministry_moment_detection",
     sermonId: context.id,
     model,
+    reasoningEffort,
     temperature: 0.2,
     response_format: { type: "json_object" },
     messages: [

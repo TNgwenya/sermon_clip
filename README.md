@@ -39,7 +39,6 @@ It supports:
 - Postgres via Prisma
 - FFmpeg
 - yt-dlp
-- Python 3 with the branded-guide PDF dependency (`python3 -m pip install -r requirements-pdf.txt`)
 - OpenAI API key
 
 ## Environment variables
@@ -54,23 +53,39 @@ OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED=true
 OPENAI_TRANSCRIPTION_SPEECH_ENHANCEMENT_ENABLED=false
 OPENAI_TRANSCRIPTION_GLOSSARY=
 OPENAI_CHAT_MODEL=
+OPENAI_REASONING_EFFORT=high
 OPENAI_CHAT_MAX_ATTEMPTS=3
 OPENAI_CHAT_RETRY_BASE_DELAY_MS=1500
 OPENAI_TRANSCRIPTION_MAX_ATTEMPTS=4
 OPENAI_TRANSCRIPTION_RETRY_BASE_DELAY_MS=2000
 DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require
 
+The browser smoke suite deliberately uses an isolated local PostgreSQL database instead of the app's configured database. Create `sermon_clip_codex_test`, apply the current schema, and run the suite with:
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sermon_clip_codex_test npx prisma db push
+npm run test:e2e
+```
+
+Set `PLAYWRIGHT_DATABASE_URL` when your local test database uses different credentials. Set `PLAYWRIGHT_BASE_URL` to smoke-test an already deployed app without starting the local server.
+
 Optional:
 
 SERMON_STORAGE_ROOT=/custom/path/if/you/want
-PYTHON_BIN=/path/to/python3
 OPENAI_CLIP_SELECTION_MODEL=
+OPENAI_CLIP_SELECTION_MODEL_REASONING_EFFORT=
 OPENAI_CLIP_REPAIR_MODEL=
+OPENAI_CLIP_REPAIR_MODEL_REASONING_EFFORT=
 OPENAI_SERMON_INTELLIGENCE_MODEL=
+OPENAI_SERMON_INTELLIGENCE_MODEL_REASONING_EFFORT=
 OPENAI_MINISTRY_MOMENT_MODEL=
+OPENAI_MINISTRY_MOMENT_MODEL_REASONING_EFFORT=
 OPENAI_CONTENT_MULTIPLICATION_MODEL=
+OPENAI_CONTENT_MULTIPLICATION_MODEL_REASONING_EFFORT=
 OPENAI_CLIP_QUALITY_MODEL=
+OPENAI_CLIP_QUALITY_MODEL_REASONING_EFFORT=
 OPENAI_CLIP_COMPLETENESS_MODEL=
+OPENAI_CLIP_COMPLETENESS_MODEL_REASONING_EFFORT=
 WORKER_API_TOKEN=shared_worker_secret
 WORKER_API_BASE_URL=https://your-vercel-app.vercel.app
 MEDIA_WORKER_POLL_SECONDS=15
@@ -97,7 +112,7 @@ FACEBOOK_DEFAULT_PUBLISHED=false
 POSTING_WORKER_DRY_RUN=true
 
 `OPENAI_TRANSCRIPTION_MODEL` stays on `whisper-1` to provide word timestamps. By default, the pipeline also runs `gpt-4o-transcribe` for higher-accuracy wording, aligns that text back onto the Whisper timeline, and runs `gpt-4o-transcribe-diarize` to label the dominant preacher and secondary speakers. Set either feature flag to `false` to reduce transcription cost. `OPENAI_TRANSCRIPTION_GLOSSARY` accepts comma-, semicolon-, or newline-separated names, scripture terms, places, and local-language spellings. The older FFmpeg speech-enhancement retry is disabled by default because production samples consistently performed worse; it can be re-enabled explicitly for controlled evaluation.
-Chat-based AI calls go through the shared AI gateway. Use `OPENAI_CHAT_MODEL` as a global override, or task-specific model variables when clip selection, sermon intelligence, ministry moments, content opportunities, quality review, or completeness review need different cost/quality tradeoffs. AI calls are logged as `AiInvocation` records with request hashes, model names, latency, token counts when available, and failure status; raw prompts are not stored by default.
+Chat-based AI calls go through the shared AI gateway. Quality-critical sermon tasks default to `gpt-5.6-sol` with `high` reasoning. Use `OPENAI_CHAT_MODEL` and `OPENAI_REASONING_EFFORT` as global overrides, or task-specific variables when clip selection, sermon intelligence, ministry moments, content opportunities, quality review, or completeness review need different cost/quality tradeoffs. AI calls are logged as `AiInvocation` records with request hashes, model names, latency, token counts when available, and failure status; raw prompts are not stored by default.
 `MEDIA_WORKER_HEARTBEAT_SECONDS`, `MEDIA_WORKER_STALE_JOB_MINUTES`, and `MEDIA_WORKER_MAX_ATTEMPTS` control media job leases. A stale `RUNNING` job can be reclaimed by another local worker, then marked failed after the configured claim limit.
 `POSTING_WORKER_DRY_RUN` defaults to true unless explicitly set to `false`, so the worker can be tested without posting.
 Social Settings OAuth links use the current app host for callback URLs. Register the exact local and live callback URLs with each provider, for example `http://localhost:3000/api/oauth/youtube/callback` and `https://your-vercel-app.vercel.app/api/oauth/youtube/callback`. Keep `WORKER_API_BASE_URL` pointed at the app the worker should poll; it does not need to match the OAuth callback host.
@@ -151,7 +166,9 @@ Useful worker settings:
 - `POSTING_WORKER_DUE_CHECK_SECONDS`: defaults to `30`.
 - `POSTING_WORKER_UPCOMING_WINDOW_MINUTES`: defaults to `10080` (7 days).
 - `POSTING_WORKER_DRY_RUN`: defaults to dry-run unless set to `false`.
-- `TIKTOK_ACCESS_TOKEN`: enables automatic TikTok Direct Post uploads from the Mac worker. The token must include TikTok's `video.publish` permission.
+- `TIKTOK_POSTING_PROVIDER`: defaults to `zernio` for reviewed automatic publishing. `direct` is accepted only for explicit development testing.
+- `TIKTOK_DIRECT_POST_EXPERIMENTAL`: keep `false` in production. Direct Post remains gated until Sermon Clip implements TikTok's required live creator-info, manual privacy/interaction choices, commercial-content disclosure, music consent, and status experience.
+- `TIKTOK_ACCESS_TOKEN`: experimental fallback for Direct Post testing when no stored TikTok OAuth account is selected. The token must include TikTok's `video.publish` permission.
 - `TIKTOK_DEFAULT_PRIVACY_LEVEL`: defaults to `SELF_ONLY` so early tests do not publish publicly.
 - `FACEBOOK_PAGE_ID`: Facebook Page id to upload videos to.
 - `FACEBOOK_PAGE_ACCESS_TOKEN`: Page access token for Graph API video publishing.
@@ -159,18 +176,18 @@ Useful worker settings:
 - `R2_PUBLIC_BASE_URL`: HTTPS public bucket URL or custom domain used for Meta-fetchable image media.
 - `R2_CONTENT_ASSET_UPLOAD_DISABLED`: optional emergency switch; set to `true` to disable automatic content-image staging.
 
-Automatic YouTube Shorts, TikTok, and Facebook video posts can upload from Mac-local files. Approved generated images can also publish directly to Facebook Pages or professional Instagram accounts: Sermon Clip renders JPEG publishing variants, stages them at the configured public R2 URL, validates the connected Meta permission and live worker, and then publishes a single image or ordered carousel. Facebook remains unpublished by default until `FACEBOOK_DEFAULT_PUBLISHED=true` is deliberately enabled.
+Automatic YouTube Shorts, Zernio-backed TikTok, and Facebook video posts can upload from Mac-local files. A selected account is authoritative, so Sermon Clip never falls back to another account's token. TikTok Direct Post code is retained behind `TIKTOK_DIRECT_POST_EXPERIMENTAL=true` for controlled development only; use Zernio or a reviewed manual handoff in production until the required TikTok review experience is complete. Approved generated images can also publish directly to Facebook Pages or professional Instagram accounts: Sermon Clip renders JPEG publishing variants, stages them at the configured public R2 URL, validates the connected Meta permission and live worker, and then publishes a single image or ordered carousel. Facebook remains unpublished by default until `FACEBOOK_DEFAULT_PUBLISHED=true` is deliberately enabled.
 After connecting YouTube in Social Settings, stored OAuth credentials are preferred. `YOUTUBE_REFRESH_TOKEN` is only a legacy fallback; remove or replace it if Google reports that the token was expired or revoked.
 
 The generated-content desk also includes a reusable Design Studio, an operational mixed-content weekly planner at `/weekly-plan`, WhatsApp/Story/HTML-email handoff packs, and branded ministry-guide PDFs. Weekly-plan bulk scheduling remains a reviewed manual handoff by design.
 
-For Neon/Vercel setup, create the Neon database, set `DATABASE_URL` in Vercel and locally, then run `npx prisma db push` once against Neon. To copy existing local SQLite rows into Neon, run:
+For Neon/Vercel setup, create the Neon database and set `DATABASE_URL` in Vercel and locally. Vercel uses `npm run deploy:build`, which safely baselines an empty database from the current PostgreSQL schema and uses `prisma migrate deploy` for databases that already have migration history. To copy existing local SQLite rows into Neon, run:
 
 ```bash
 SQLITE_DATABASE_PATH=prisma/dev.db npm run import:sqlite-to-postgres
 ```
 
-The older migration folders were created for the original SQLite MVP, so use `db push` or create a Postgres baseline before relying on `prisma migrate deploy`.
+The older migration folders were created for the original SQLite MVP. Do not replace the configured Vercel build command with raw `prisma migrate deploy`; use `npm run prisma:deploy:safe` so a fresh database is baselined before normal migrations continue.
 
 ## Full MVP 2 workflow
 1. Create sermon record from the dashboard.

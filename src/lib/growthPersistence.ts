@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { socialMetricDedupeKey } from "@/lib/socialMetricIdentity";
 
 export type PersistenceResult<T> = {
   available: boolean;
@@ -155,13 +156,33 @@ function average(values: Array<number | null>): number | null {
   return Number((realValues.reduce((sum, value) => sum + value, 0) / realValues.length).toFixed(1));
 }
 
+export function historicalMetricIdentity(snapshot: {
+  id: string;
+  dedupeKey: string | null;
+  source: string;
+  platform: string;
+  socialAccountId: string | null;
+  platformPostId: string | null;
+  capturedAt: Date;
+}): string {
+  if (snapshot.dedupeKey) return snapshot.dedupeKey;
+  if (snapshot.source !== "API") return `snapshot:${snapshot.id}`;
+  return socialMetricDedupeKey(snapshot);
+}
+
 export async function listHistoricalPerformanceBaselines(): Promise<PersistenceResult<HistoricalPerformanceBaseline>> {
   try {
     const snapshots = await prisma.socialMetricSnapshot.findMany({
       orderBy: { capturedAt: "desc" },
       take: 250,
       select: {
+        id: true,
+        dedupeKey: true,
+        socialAccountId: true,
         platform: true,
+        platformPostId: true,
+        source: true,
+        capturedAt: true,
         reach: true,
         views: true,
         engagementRate: true,
@@ -169,8 +190,16 @@ export async function listHistoricalPerformanceBaselines(): Promise<PersistenceR
         watchTimeSeconds: true,
       },
     });
+    const latestSnapshotByIdentity = new Map<string, (typeof snapshots)[number]>();
+    for (const snapshot of snapshots) {
+      const identity = historicalMetricIdentity(snapshot);
+      if (!latestSnapshotByIdentity.has(identity)) {
+        latestSnapshotByIdentity.set(identity, snapshot);
+      }
+    }
+    const dedupedSnapshots = [...latestSnapshotByIdentity.values()];
     const grouped = new Map<string, typeof snapshots>();
-    snapshots.forEach((snapshot) => {
+    dedupedSnapshots.forEach((snapshot) => {
       grouped.set(snapshot.platform, [...(grouped.get(snapshot.platform) ?? []), snapshot]);
     });
 

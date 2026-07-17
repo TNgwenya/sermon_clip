@@ -7,6 +7,10 @@ import { getContentAsset } from "@/lib/contentAssets";
 import { slugifyExportName } from "@/lib/exportNaming";
 import { createZipArchive } from "@/lib/zipArchive";
 import { getSermonStoragePath } from "@/server/agents/storage";
+import {
+  isTrustedContentAssetPublicUrl,
+  readContentAssetPublicFile,
+} from "@/server/contentAssets/contentAssetPublicStorage";
 
 function isPathInside(parentPath: string, childPath: string): boolean {
   const parent = path.resolve(parentPath);
@@ -31,9 +35,15 @@ export async function GET(
   const remoteFiles: string[] = [];
 
   for (const file of asset.files) {
-    if (file.filePath && isPathInside(sermonRoot, file.filePath)) {
+    const remoteData = isTrustedContentAssetPublicUrl(file.publicUrl)
+      ? await readContentAssetPublicFile(file.publicUrl!).catch(() => null)
+      : null;
+    if (remoteData) {
+      entries.push({ name: `media/${file.fileName}`, data: remoteData });
+    } else if (file.filePath && isPathInside(sermonRoot, file.filePath)) {
       const data = await readFile(file.filePath).catch(() => null);
       if (data) entries.push({ name: `media/${file.fileName}`, data });
+      else if (file.publicUrl) remoteFiles.push(`${file.fileName}: ${file.publicUrl}`);
     } else if (file.publicUrl) {
       remoteFiles.push(`${file.fileName}: ${file.publicUrl}`);
     }

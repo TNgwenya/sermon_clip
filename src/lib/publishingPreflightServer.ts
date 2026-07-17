@@ -58,6 +58,8 @@ export async function runPublishingPreflight(input: {
             provider: true,
             accessTokenCiphertext: true,
             refreshTokenCiphertext: true,
+            scopesJson: true,
+            expiresAt: true,
           },
         },
       },
@@ -87,36 +89,6 @@ export async function runPublishingPreflight(input: {
     outputPath: null,
     transcriptReviewRequired: false,
   }));
-  const accounts: PublishingPreflightAccount[] = accountRecords.map((account) => {
-    const expectedCredentialProvider = account.platform === "YOUTUBE_SHORTS"
-      ? "YOUTUBE"
-      : account.platform === "FACEBOOK"
-        ? "META_FACEBOOK"
-        : account.platform === "TIKTOK"
-          ? "TIKTOK"
-          : "META_INSTAGRAM";
-
-    return {
-      id: account.id,
-      platform: fromPrismaPostingPlatform(account.platform),
-      status: account.status,
-      externalProvider: account.externalProvider,
-      externalAccountId: account.externalAccountId,
-      externalPlatform: account.externalPlatform,
-      credentialReady: account.credentials.some((credential) => {
-        if (credential.provider !== expectedCredentialProvider) {
-          return false;
-        }
-        if (expectedCredentialProvider === "YOUTUBE") {
-          return Boolean(credential.refreshTokenCiphertext);
-        }
-        if (expectedCredentialProvider === "META_FACEBOOK") {
-          return Boolean(credential.accessTokenCiphertext);
-        }
-        return true;
-      }),
-    };
-  });
   const workerCapabilities = serviceHealth.capabilities;
   const capabilities: PublishingServerCapabilities = workerCapabilities ?? {
     zernioConfigured: false,
@@ -126,8 +98,73 @@ export async function runPublishingPreflight(input: {
     youtubePrivacy: "private",
     youtubeApiVerified: false,
     facebookPublishesImmediately: false,
+    tiktokProviderMode: "account",
+    tiktokDirectEnabled: false,
+    tiktokDirectConfigured: false,
+    tiktokOAuthClientConfigured: false,
+    tiktokDirectPrivacy: "SELF_ONLY",
+    tiktokZernioPrivacy: null,
     tiktokPrivacy: null,
   };
+  const accounts: PublishingPreflightAccount[] = accountRecords.map((account) => {
+    const expectedCredentialProvider = account.platform === "YOUTUBE_SHORTS"
+      ? "YOUTUBE"
+      : account.platform === "FACEBOOK"
+        ? "META_FACEBOOK"
+        : account.platform === "TIKTOK"
+          ? "TIKTOK"
+          : "META_INSTAGRAM";
+
+    const matchingCredential = account.credentials.find((credential) => (
+      credential.provider === expectedCredentialProvider
+    ));
+    let credentialReady = false;
+    let credentialIssue: string | null = null;
+    if (matchingCredential) {
+      if (expectedCredentialProvider === "YOUTUBE") {
+        credentialReady = Boolean(matchingCredential.refreshTokenCiphertext);
+      } else if (expectedCredentialProvider === "META_FACEBOOK") {
+        credentialReady = Boolean(matchingCredential.accessTokenCiphertext);
+      } else if (expectedCredentialProvider === "TIKTOK") {
+        const scopes = Array.isArray(matchingCredential.scopesJson)
+          ? matchingCredential.scopesJson.filter((scope): scope is string => typeof scope === "string")
+          : typeof matchingCredential.scopesJson === "string"
+            ? matchingCredential.scopesJson.split(/[\s,]+/)
+            : [];
+        const hasPublishScope = scopes.includes("video.publish");
+        const accessTokenReady = Boolean(matchingCredential.accessTokenCiphertext);
+        const unexpired = Boolean(
+          matchingCredential.expiresAt
+          && matchingCredential.expiresAt.getTime() > Date.now() + 60_000,
+        );
+        const refreshReady = Boolean(
+          matchingCredential.refreshTokenCiphertext
+          && capabilities.tiktokOAuthClientConfigured,
+        );
+        credentialReady = accessTokenReady && hasPublishScope && (unexpired || refreshReady);
+        credentialIssue = !hasPublishScope
+          ? "The selected TikTok account is missing the video.publish permission. Reconnect it before scheduling."
+          : !accessTokenReady
+            ? "The selected TikTok account has no usable access token. Reconnect it before scheduling."
+            : !unexpired && !refreshReady
+              ? "The selected TikTok token is expired or unverified and cannot be refreshed by this worker. Reconnect it or configure the TikTok OAuth client."
+              : null;
+      } else {
+        credentialReady = Boolean(matchingCredential.accessTokenCiphertext);
+      }
+    }
+
+    return {
+      id: account.id,
+      platform: fromPrismaPostingPlatform(account.platform),
+      status: account.status,
+      externalProvider: account.externalProvider,
+      externalAccountId: account.externalAccountId,
+      externalPlatform: account.externalPlatform,
+      credentialReady,
+      credentialIssue,
+    };
+  });
 
   return buildPublishingPreflight({
     automationMode: input.automationMode,

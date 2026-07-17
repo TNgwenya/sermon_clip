@@ -773,6 +773,7 @@ export function buildTikTokInitBody(post: AutomationPost, videoSize: number): {
 
 async function uploadTikTokChunks(
   uploadUrl: string,
+  publishId: string,
   videoPath: string,
   videoSize: number,
   chunkSize: number,
@@ -793,7 +794,21 @@ async function uploadTikTokChunks(
       body: createReadStream(videoPath, { start, end }),
       duplex: "half",
     } as unknown as RequestInit & { duplex: "half" };
-    const response = await fetchImpl(uploadUrl, uploadRequest);
+    let response: Response;
+    try {
+      response = await fetchImpl(uploadUrl, uploadRequest);
+    } catch (error) {
+      throw new AmbiguousPlatformPublishError(
+        `TikTok may have accepted upload bytes for ${publishId}, but the response was lost. Check TikTok before retrying this post.`,
+        { cause: error },
+      );
+    }
+
+    if (isAmbiguousUploadResponse(response.status)) {
+      throw new AmbiguousPlatformPublishError(
+        `TikTok upload state for ${publishId} is uncertain after HTTP ${response.status}. Check TikTok before retrying this post.`,
+      );
+    }
 
     if (!response.ok) {
       const data = await response.json().catch(() => null);
@@ -812,7 +827,7 @@ async function refreshTikTokCredential(
   const clientSecret = process.env.TIKTOK_CLIENT_SECRET?.trim();
 
   if (!clientKey || !clientSecret || !credential.refreshToken) {
-    return credential.accessToken;
+    throw new Error("The selected TikTok token is expiring and cannot be refreshed. Configure the TikTok OAuth client and reconnect the account.");
   }
 
   const response = await fetchImpl("https://open.tiktokapis.com/v2/oauth/token/", {
@@ -855,7 +870,7 @@ async function getTikTokAccessToken(
   credential: StoredPostingCredential,
   fetchImpl: FetchLike,
 ): Promise<string> {
-  return isExpiringSoon(credential.expiresAt)
+  return !credential.expiresAt || isExpiringSoon(credential.expiresAt)
     ? refreshTikTokCredential(credential, fetchImpl)
     : credential.accessToken;
 }
@@ -866,10 +881,19 @@ export async function uploadTikTokVideo(
   videoSize: number,
   fetchImpl: FetchLike = fetch,
 ): Promise<UploadResult> {
+  if (process.env.TIKTOK_DIRECT_POST_EXPERIMENTAL !== "true") {
+    throw new Error(
+      "Direct TikTok posting is disabled until the required creator-info and consent review is implemented. Use Zernio or a manual handoff.",
+    );
+  }
   const envToken = process.env.TIKTOK_ACCESS_TOKEN?.trim();
-  const storedCredential = post.socialAccountId || !envToken
+  const hasExplicitAccount = Boolean(post.socialAccountId);
+  const storedCredential = hasExplicitAccount || !envToken
     ? await getStoredPostingCredential(STORED_CREDENTIAL_PROVIDERS.TikTok, post.socialAccountId)
     : null;
+  if (hasExplicitAccount && !storedCredential) {
+    throw new Error("The selected TikTok account does not have a connected credential. Reconnect it in Social settings before publishing.");
+  }
   const token = storedCredential
     ? await getTikTokAccessToken(storedCredential, fetchImpl)
     : envToken;
@@ -895,13 +919,29 @@ export async function uploadTikTokVideo(
     throw new Error(initData?.error?.message ?? "Could not start TikTok direct post upload.");
   }
 
-  await uploadTikTokChunks(uploadUrl, videoPath, videoSize, initBody.source_info.chunk_size, fetchImpl);
+  await uploadTikTokChunks(uploadUrl, publishId, videoPath, videoSize, initBody.source_info.chunk_size, fetchImpl);
 
   return {
-    status: "POSTED",
+    status: "PRIVATE_ONLY_UNVERIFIED",
     externalPostId: publishId,
     finalPrivacyStatus: initBody.post_info.privacy_level,
+    publishError: "TikTok accepted the upload and is processing it. Confirm publication in TikTok before treating this post as live.",
   };
+}
+
+export function resolveTikTokPostingProvider(
+  post: AutomationPost,
+  configuredProvider = process.env.TIKTOK_POSTING_PROVIDER?.trim().toLowerCase(),
+): "direct" | "zernio" {
+  if (post.socialAccountId || post.socialAccountExternalProvider) {
+    return post.socialAccountExternalProvider === "zernio" ? "zernio" : "direct";
+  }
+  return configuredProvider === "zernio" ? "zernio" : "direct";
+}
+
+export function postingRequiresPublicMedia(post: AutomationPost): boolean {
+  return post.platform === "Instagram"
+    || (post.platform === "TikTok" && resolveTikTokPostingProvider(post) === "zernio");
 }
 
 type ResolvedMetaCredential = {
@@ -1428,7 +1468,9 @@ export async function uploadPlatformPost(
     case "YouTube Shorts":
       return uploadYouTubeShort(post, videoPath, videoSize, fetchImpl);
     case "TikTok":
-      return uploadZernioVideo(post, videoPath, videoSize, fetchImpl);
+      return resolveTikTokPostingProvider(post) === "zernio"
+        ? uploadZernioVideo(post, videoPath, videoSize, fetchImpl)
+        : uploadTikTokVideo(post, videoPath, videoSize, fetchImpl);
     case "Facebook":
       return uploadFacebookVideo(post, videoPath, videoSize, fetchImpl);
     case "Instagram":

@@ -6,13 +6,13 @@ import {
   type AiSermonIntelligence,
 } from "@/server/ai/sermonIntelligenceSchema";
 import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
-import { resolveOpenAIChatModel } from "@/server/ai/modelConfig";
+import { resolveOpenAIChatModel, resolveOpenAIReasoningEffort } from "@/server/ai/modelConfig";
 import {
   appendJobLog,
-  createProcessingJob,
+  ensureProcessingJobRunning,
   markJobFailed,
-  markJobRunning,
   markJobSucceeded,
+  resolveProcessingJob,
 } from "@/server/agents/processing";
 import { appendPipelineLog } from "@/server/agents/storage";
 import { generateMinistryMoments } from "@/server/agents/ministryMomentService";
@@ -32,6 +32,7 @@ type SermonContext = {
 export type GenerateIntelligenceOptions = {
   force?: boolean;
   parentJobId?: string;
+  processingJobId?: string;
 };
 
 export type IntelligenceResult = {
@@ -85,11 +86,13 @@ async function callIntelligenceAI(
   transcriptText: string,
 ): Promise<AiSermonIntelligence> {
   const model = resolveOpenAIChatModel("sermonIntelligence");
+  const reasoningEffort = resolveOpenAIReasoningEffort("sermonIntelligence", model);
 
   return createLoggedChatCompletion({
     operation: "sermon_intelligence",
     sermonId: sermon.id,
     model,
+    reasoningEffort,
     temperature: 0.2,
     messages: [
       { role: "system", content: buildIntelligenceSystemPrompt() },
@@ -270,7 +273,11 @@ export async function generateSermonIntelligence(
     update: { status: "PROCESSING", failureReason: null },
   });
 
-  const job = await createProcessingJob(sermonId, "PROCESS_SERMON");
+  const job = await resolveProcessingJob(
+    sermonId,
+    "GENERATE_INTELLIGENCE",
+    options?.processingJobId,
+  );
   if (options?.parentJobId) {
     await prisma.processingJob.update({
       where: { id: job.id },
@@ -282,7 +289,7 @@ export async function generateSermonIntelligence(
       },
     });
   }
-  await markJobRunning(job.id);
+  await ensureProcessingJobRunning(job);
   await appendJobLog(
     job.id,
     `Generating sermon intelligence for ${sermon.title}. sermonId=${sermonId} jobId=${job.id}${options?.parentJobId ? ` parentJobId=${options.parentJobId}` : ""}`,

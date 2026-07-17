@@ -12,7 +12,7 @@ import {
 } from "@/server/agents/clipBoundaryRefinement";
 import { analyzeClipCoherence } from "@/server/agents/clipCoherenceAnalysis";
 import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
-import { resolveOpenAIChatModel } from "@/server/ai/modelConfig";
+import { resolveOpenAIChatModel, resolveOpenAIReasoningEffort } from "@/server/ai/modelConfig";
 
 export const CLIP_COMPLETENESS_ACTIONS = [
   "KEEP_AS_IS",
@@ -800,9 +800,11 @@ async function callCompletenessModel(
   }
 
   const model = resolveOpenAIChatModel("clipCompleteness");
+  const reasoningEffort = resolveOpenAIReasoningEffort("clipCompleteness", model);
   const completion = await createLoggedChatCompletion({
     operation: "clip_completeness_review",
     model,
+    reasoningEffort,
     response_format: { type: "json_object" },
     temperature: 0.1,
     messages: [

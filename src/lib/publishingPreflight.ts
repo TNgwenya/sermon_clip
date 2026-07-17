@@ -29,6 +29,7 @@ export type PublishingPreflightAccount = {
   externalAccountId: string | null;
   externalPlatform: string | null;
   credentialReady: boolean;
+  credentialIssue?: string | null;
 };
 
 export type PublishingPreflightClip = {
@@ -49,6 +50,12 @@ export type PublishingServerCapabilities = {
   youtubePrivacy: string;
   youtubeApiVerified: boolean;
   facebookPublishesImmediately: boolean;
+  tiktokProviderMode: "direct" | "zernio" | "account";
+  tiktokDirectEnabled: boolean;
+  tiktokDirectConfigured: boolean;
+  tiktokOAuthClientConfigured: boolean;
+  tiktokDirectPrivacy: string;
+  tiktokZernioPrivacy: string | null;
   tiktokPrivacy: string | null;
 };
 
@@ -82,6 +89,27 @@ function selectedAccountsForPlatform(input: {
     : available;
 }
 
+function validZernioAccount(
+  account: PublishingPreflightAccount,
+  platform: PostingPlatform,
+): boolean {
+  return account.externalProvider === "zernio"
+    && Boolean(account.externalAccountId)
+    && account.externalPlatform?.toLowerCase() === platform.toLowerCase();
+}
+
+function resolveTikTokProvider(input: {
+  capabilities: PublishingServerCapabilities;
+  accounts: PublishingPreflightAccount[];
+}): "direct" | "zernio" {
+  if (input.accounts.length > 0) {
+    return input.accounts.some((account) => validZernioAccount(account, "TikTok"))
+      ? "zernio"
+      : "direct";
+  }
+  return input.capabilities.tiktokProviderMode === "zernio" ? "zernio" : "direct";
+}
+
 function buildConnectionChecks(input: {
   automationMode: PostingAutomationMode;
   platforms: PostingPlatform[];
@@ -105,16 +133,76 @@ function buildConnectionChecks(input: {
       accounts: input.accounts,
       selectedAccountIdsByPlatform: input.selectedAccountIdsByPlatform,
     });
-    const hasExplicitAccountSelection = (input.selectedAccountIdsByPlatform?.[platform]?.length ?? 0) > 0;
-    const zernioAccount = accounts.find((account) => (
-      account.externalProvider === "zernio"
-      && Boolean(account.externalAccountId)
-      && account.externalPlatform?.toLowerCase() === platform.toLowerCase()
-    ));
-    const credentialAccount = accounts.find((account) => account.credentialReady);
+    const selectedAccountIds = new Set(input.selectedAccountIdsByPlatform?.[platform] ?? []);
+    const hasExplicitAccountSelection = selectedAccountIds.size > 0;
+    if (hasExplicitAccountSelection && accounts.length !== selectedAccountIds.size) {
+      return [makeCheck(
+        `connection:${platform}`,
+        `${platform} publishing connection`,
+        "BLOCKED",
+        `One or more selected ${platform} accounts are unavailable or need reconnection.`,
+        { platform },
+      )];
+    }
+    const zernioAccounts = accounts.filter((account) => validZernioAccount(account, platform));
+    const credentialAccounts = accounts.filter((account) => account.credentialReady);
 
-    if (platform === "TikTok" || platform === "Instagram") {
-      const ready = Boolean(zernioAccount && input.capabilities.zernioConfigured);
+    if (platform === "TikTok") {
+      const directAccounts = accounts.filter((account) => !validZernioAccount(account, platform));
+      if (zernioAccounts.length > 0 && directAccounts.length > 0) {
+        return [makeCheck(
+          `connection:${platform}`,
+          "TikTok publishing connection",
+          "BLOCKED",
+          "Choose either one direct TikTok account or one Zernio TikTok account per automatic draft.",
+          { platform },
+        )];
+      }
+      const provider = resolveTikTokProvider({ capabilities: input.capabilities, accounts });
+      const storedDirectReady = directAccounts.length > 0
+        && directAccounts.every((account) => account.credentialReady)
+        && input.capabilities.tiktokOAuthClientConfigured
+        && input.capabilities.tiktokDirectEnabled;
+      const directReady = hasExplicitAccountSelection
+        ? storedDirectReady
+        : storedDirectReady || (
+            input.capabilities.tiktokDirectEnabled
+            && input.capabilities.tiktokDirectConfigured
+          );
+      const ready = provider === "zernio"
+        ? zernioAccounts.length > 0
+          && zernioAccounts.length === accounts.length
+          && input.capabilities.zernioConfigured
+        : directReady;
+      const credentialIssue = directAccounts.find((account) => !account.credentialReady)?.credentialIssue;
+      const summary = provider === "zernio"
+        ? ready
+          ? "The selected Zernio TikTok channel and publishing service are ready."
+          : "Connect and sync a Zernio TikTok channel before automatic publishing."
+        : ready
+          ? storedDirectReady
+            ? "The selected TikTok OAuth account and worker OAuth client are ready for direct posting."
+            : "The worker's direct TikTok publisher is configured."
+          : credentialIssue
+            ? credentialIssue
+            : !input.capabilities.tiktokDirectEnabled
+              ? "Direct TikTok posting is disabled until the required creator-info, privacy, disclosure, and consent review is implemented. Use Zernio or a manual handoff."
+            : directAccounts.length > 0
+              ? "The selected TikTok account is missing a valid video.publish credential or the worker OAuth client configuration."
+            : "Connect TikTok directly or configure the worker's direct TikTok publisher.";
+      return [makeCheck(
+        `connection:${platform}`,
+        "TikTok publishing connection",
+        ready ? "PASS" : "BLOCKED",
+        summary,
+        { platform },
+      )];
+    }
+
+    if (platform === "Instagram") {
+      const ready = zernioAccounts.length > 0
+        && (!hasExplicitAccountSelection || zernioAccounts.length === accounts.length)
+        && input.capabilities.zernioConfigured;
       return [makeCheck(
         `connection:${platform}`,
         `${platform} publishing connection`,
@@ -127,7 +215,9 @@ function buildConnectionChecks(input: {
     }
 
     if (platform === "YouTube Shorts") {
-      const storedCredentialReady = Boolean(credentialAccount && input.capabilities.youtubeOAuthClientConfigured);
+      const storedCredentialReady = credentialAccounts.length > 0
+        && (!hasExplicitAccountSelection || credentialAccounts.length === accounts.length)
+        && input.capabilities.youtubeOAuthClientConfigured;
       const ready = storedCredentialReady || (!hasExplicitAccountSelection && input.capabilities.youtubeConfigured);
       return [makeCheck(
         `connection:${platform}`,
@@ -135,20 +225,22 @@ function buildConnectionChecks(input: {
         ready ? "PASS" : "BLOCKED",
         ready
           ? storedCredentialReady ? "A connected YouTube OAuth credential and worker OAuth client are ready." : "The server-managed YouTube OAuth publisher is configured."
-          : credentialAccount
+          : accounts.length > 0
             ? "The connected YouTube channel is missing the worker OAuth client configuration."
             : "Connect YouTube or configure the server-managed YouTube publisher before automatic publishing.",
         { platform },
       )];
     }
 
-    const ready = Boolean(credentialAccount || (!hasExplicitAccountSelection && input.capabilities.facebookConfigured));
+    const storedCredentialReady = credentialAccounts.length > 0
+      && (!hasExplicitAccountSelection || credentialAccounts.length === accounts.length);
+    const ready = storedCredentialReady || (!hasExplicitAccountSelection && input.capabilities.facebookConfigured);
     return [makeCheck(
       `connection:${platform}`,
       "Facebook publishing connection",
       ready ? "PASS" : "BLOCKED",
       ready
-        ? credentialAccount ? "A connected Meta Facebook Page credential is ready." : "The server-managed Meta Facebook publisher is configured."
+        ? storedCredentialReady ? "The selected Meta Facebook Page credential is ready." : "The server-managed Meta Facebook publisher is configured."
         : "Connect a Facebook Page or configure the server-managed Facebook publisher before automatic publishing.",
       { platform },
     )];
@@ -232,6 +324,8 @@ function buildClipChecks(input: {
 function buildPrivacyChecks(input: {
   automationMode: PostingAutomationMode;
   platforms: PostingPlatform[];
+  accounts: PublishingPreflightAccount[];
+  selectedAccountIdsByPlatform?: Partial<Record<PostingPlatform, string[]>>;
   capabilities: PublishingServerCapabilities;
 }): PublishingPreflightCheck[] {
   return input.platforms.map((platform) => {
@@ -273,13 +367,23 @@ function buildPrivacyChecks(input: {
     }
 
     if (platform === "TikTok") {
+      const accounts = selectedAccountsForPlatform({
+        platform,
+        accounts: input.accounts,
+        selectedAccountIdsByPlatform: input.selectedAccountIdsByPlatform,
+      });
+      const provider = resolveTikTokProvider({ capabilities: input.capabilities, accounts });
+      const privacy = provider === "zernio"
+        ? input.capabilities.tiktokZernioPrivacy
+        : input.capabilities.tiktokDirectPrivacy;
+      const publiclyVisible = privacy?.toUpperCase().includes("PUBLIC") === true;
       return makeCheck(
         `privacy:${platform}`,
         "TikTok visibility",
-        input.capabilities.tiktokPrivacy ? "PASS" : "WARNING",
-        input.capabilities.tiktokPrivacy
-          ? `The Zernio publisher will request ${input.capabilities.tiktokPrivacy} visibility.`
-          : "TikTok visibility will use the connected channel's provider default; confirm it after publishing.",
+        publiclyVisible ? "PASS" : "WARNING",
+        privacy
+          ? `The ${provider === "zernio" ? "Zernio" : "direct TikTok"} publisher will request ${privacy} visibility.`
+          : `${provider === "zernio" ? "Zernio" : "Direct TikTok"} visibility is not explicit; confirm it after publishing.`,
         { platform },
       );
     }

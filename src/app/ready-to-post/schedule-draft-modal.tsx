@@ -84,7 +84,9 @@ function hasSyncedZernioAccount(accounts: SocialAccount[], platform: PostingPlat
 
 function buildAutomaticPlatforms(accounts: SocialAccount[]): Set<PostingPlatform> {
   return new Set<PostingPlatform>([
-    ...(hasSyncedZernioAccount(accounts, "TikTok") ? ["TikTok" as const] : []),
+    ...(accounts.some((account) => account.platform === "TikTok" && isAutomaticPublishingAccount(account))
+      ? ["TikTok" as const]
+      : []),
     ...(hasSyncedZernioAccount(accounts, "Instagram") ? ["Instagram" as const] : []),
     "YouTube Shorts",
     "Facebook",
@@ -99,7 +101,15 @@ function buildDefaultAccountSelections(accounts: SocialAccount[]): AccountSelect
 }
 
 function isAutomaticPublishingAccount(account: SocialAccount): boolean {
-  if (account.platform !== "TikTok" && account.platform !== "Instagram") {
+  if (account.platform === "TikTok") {
+    return account.credentialReady || (
+      account.externalProvider === "zernio"
+      && Boolean(account.externalAccountId)
+      && account.externalPlatform?.toLowerCase() === "tiktok"
+    );
+  }
+
+  if (account.platform !== "Instagram") {
     return true;
   }
 
@@ -109,10 +119,11 @@ function isAutomaticPublishingAccount(account: SocialAccount): boolean {
 }
 
 function isVerifiedAutomaticPublishingAccount(account: SocialAccount): boolean {
-  return account.status === "CONNECTED"
-    && Boolean(account.externalProvider)
-    && Boolean(account.externalAccountId)
-    && (account.externalProvider !== "zernio" || isAutomaticPublishingAccount(account));
+  if (account.status !== "CONNECTED") return false;
+  if (account.platform === "TikTok" || account.platform === "Instagram") {
+    return isAutomaticPublishingAccount(account);
+  }
+  return account.credentialReady || Boolean(account.externalProvider && account.externalAccountId);
 }
 
 function buildPlatformHint(input: {
@@ -279,9 +290,11 @@ export function ScheduleDraftModal({
     setPreflight(null);
     setSelectedSocialAccountIdsByPlatform((current) => {
       const currentIds = resolvedSocialAccountIdsByPlatform[platform] ?? [];
-      const nextIds = currentIds.includes(accountId)
-        ? currentIds.filter((item) => item !== accountId)
-        : [...currentIds, accountId];
+      const nextIds = automationMode === "AUTOMATIC"
+        ? currentIds.includes(accountId) ? [] : [accountId]
+        : currentIds.includes(accountId)
+          ? currentIds.filter((item) => item !== accountId)
+          : [...currentIds, accountId];
 
       return {
         ...current,

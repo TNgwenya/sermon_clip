@@ -2,9 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   revalidatePath: vi.fn(),
+  uploadContentAssetFilesWhenConfigured: vi.fn(),
   uploadContentAssetFileToR2: vi.fn(),
   contentAssetFindUnique: vi.fn(),
   contentAssetFindFirst: vi.fn(),
+  contentAssetCreate: vi.fn(),
+  contentOpportunityFindFirst: vi.fn(),
   socialAccountFindUnique: vi.fn(),
   duplicateFindFirst: vi.fn(),
   contentAssetFileUpdate: vi.fn(),
@@ -12,11 +15,39 @@ const mocks = vi.hoisted(() => ({
   contentAssetUpdate: vi.fn(),
   transaction: vi.fn(),
   getPublishingServiceHealth: vi.fn(),
+  getBrandingSettings: vi.fn(),
+  renderApprovedNonVideoAssets: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
 vi.mock("@/server/contentAssets/contentAssetPublicStorage", () => ({
+  uploadContentAssetFilesWhenConfigured: mocks.uploadContentAssetFilesWhenConfigured,
   uploadContentAssetFileToR2: mocks.uploadContentAssetFileToR2,
+}));
+vi.mock("@/server/branding/settings", () => ({
+  getBrandingSettings: mocks.getBrandingSettings,
+}));
+vi.mock("@/server/contentAssets/nonVideoAssetRenderer", () => ({
+  renderApprovedNonVideoAssets: mocks.renderApprovedNonVideoAssets,
+  toContentAssetFilePersistenceInput: (file: {
+    name: string;
+    mime: string;
+    path: string;
+    width: number;
+    height: number;
+    size: number;
+    order: number;
+    metadata: unknown;
+  }) => ({
+    fileName: file.name,
+    mimeType: file.mime,
+    filePath: file.path,
+    width: file.width,
+    height: file.height,
+    sizeBytes: BigInt(file.size),
+    sortOrder: file.order,
+    metadataJson: file.metadata,
+  }),
 }));
 vi.mock("@/lib/publishingServiceHealth", () => ({
   getPublishingServiceHealth: mocks.getPublishingServiceHealth,
@@ -26,7 +57,11 @@ vi.mock("@/lib/prisma", () => ({
     contentAsset: {
       findUnique: mocks.contentAssetFindUnique,
       findFirst: mocks.contentAssetFindFirst,
+      create: mocks.contentAssetCreate,
       update: mocks.contentAssetUpdate,
+    },
+    contentOpportunity: {
+      findFirst: mocks.contentOpportunityFindFirst,
     },
     socialAccount: {
       findUnique: mocks.socialAccountFindUnique,
@@ -110,6 +145,35 @@ beforeEach(() => {
     uploadedAt: new Date("2099-07-19T00:00:00.000Z"),
     sizeBytes: 42_000,
   });
+  mocks.uploadContentAssetFilesWhenConfigured.mockResolvedValue(new Map());
+  mocks.getBrandingSettings.mockResolvedValue({
+    churchName: "Local Church",
+    primaryBrandColor: "#0F766E",
+    secondaryBrandColor: "#1D4ED8",
+    defaultFontFamily: "Arial",
+  });
+  mocks.renderApprovedNonVideoAssets.mockResolvedValue({
+    outputDirectory: "/tmp/content-assets/render-attempt",
+    preflight: { ready: true, diagnostics: [], plannedFiles: [] },
+    files: [{
+      path: "/tmp/content-assets/render-attempt/portrait.jpg",
+      name: "portrait.jpg",
+      mime: "image/jpeg",
+      width: 1080,
+      height: 1350,
+      size: 42_000,
+      order: 0,
+      metadata: {
+        variant: "PORTRAIT",
+        opportunityId: "opportunity-1",
+        opportunityType: "QUOTE_GRAPHIC",
+        sourceStatus: "APPROVED",
+        publishingFormat: "JPEG",
+        templateId: "quote-classic",
+      },
+    }],
+  });
+  mocks.contentAssetCreate.mockResolvedValue({ id: "asset-1" });
   mocks.contentAssetFileUpdate.mockResolvedValue({});
   mocks.scheduledPostCreate.mockResolvedValue({ id: "scheduled-1" });
   mocks.contentAssetUpdate.mockResolvedValue({});
@@ -222,4 +286,79 @@ describe("content asset composer lifecycle locks", () => {
       expect(mocks.contentAssetUpdate).not.toHaveBeenCalled();
     },
   );
+
+  it("does not expose a new graphic as ready when required durable storage fails", async () => {
+    mocks.contentOpportunityFindFirst.mockResolvedValue({
+      id: "opportunity-1",
+      opportunityType: "QUOTE_GRAPHIC",
+      status: "APPROVED",
+      sourceTranscriptExcerpt: "Faithful steps matter.",
+      suggestedPlatform: "INSTAGRAM",
+      relatedScripture: "Proverbs 3:5",
+      aiReason: "Direct sermon quote",
+    });
+    mocks.contentAssetFindFirst.mockResolvedValue(null);
+    mocks.uploadContentAssetFilesWhenConfigured.mockRejectedValue(new Error("R2 unavailable"));
+
+    const result = await prepareContentOpportunityForPublishingAction({
+      sermonId: "sermon-1",
+      opportunityId: "opportunity-1",
+      platform: "INSTAGRAM",
+      title: "Faithful steps",
+      bodyContent: "Faithful steps matter.",
+      caption: "Faithful steps matter.",
+    });
+
+    expect(result).toMatchObject({ success: false });
+    expect(result.message).toContain("not marked ready");
+    expect(mocks.contentAssetCreate).not.toHaveBeenCalled();
+    expect(mocks.contentAssetUpdate).not.toHaveBeenCalled();
+  });
+
+  it("persists durable object fields before exposing a rendered graphic as ready", async () => {
+    mocks.contentOpportunityFindFirst.mockResolvedValue({
+      id: "opportunity-1",
+      opportunityType: "QUOTE_GRAPHIC",
+      status: "APPROVED",
+      sourceTranscriptExcerpt: "Faithful steps matter.",
+      suggestedPlatform: "INSTAGRAM",
+      relatedScripture: "Proverbs 3:5",
+      aiReason: "Direct sermon quote",
+    });
+    mocks.contentAssetFindFirst.mockResolvedValue(null);
+    mocks.uploadContentAssetFilesWhenConfigured.mockImplementation(async (input: {
+      files: Array<{ id: string }>;
+    }) => new Map([[input.files[0].id, {
+      objectKey: `content-assets/asset-1/publishing/${input.files[0].id}.jpg`,
+      publicUrl: `https://media.example.com/content-assets/asset-1/publishing/${input.files[0].id}.jpg`,
+      uploadedAt: new Date("2026-07-16T10:00:00.000Z"),
+      sizeBytes: 42_000,
+    }]]));
+
+    const result = await prepareContentOpportunityForPublishingAction({
+      sermonId: "sermon-1",
+      opportunityId: "opportunity-1",
+      platform: "INSTAGRAM",
+      title: "Faithful steps",
+      bodyContent: "Faithful steps matter.",
+      caption: "Faithful steps matter.",
+    });
+
+    expect(result).toMatchObject({ success: true, contentAssetId: "asset-1" });
+    expect(mocks.contentAssetCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        status: "READY",
+        files: {
+          create: [expect.objectContaining({
+            objectKey: expect.stringContaining("content-assets/asset-1/publishing/"),
+            publicUrl: expect.stringContaining("https://media.example.com/content-assets/asset-1/publishing/"),
+          })],
+        },
+      }),
+      select: { id: true },
+    });
+    expect(mocks.uploadContentAssetFilesWhenConfigured.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.contentAssetCreate.mock.invocationCallOrder[0],
+    );
+  });
 });

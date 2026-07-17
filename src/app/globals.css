@@ -130,6 +130,15 @@
   line-height: 1.35;
 }
 
+.clip-studio-transcript-line > small.status-pill {
+  grid-column: 2;
+  justify-self: start;
+  width: max-content;
+  max-width: 100%;
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
 .clip-studio-transcript-line:hover,
 .clip-studio-transcript-line:focus-visible {
   border-color: rgba(117, 217, 184, 0.5);

@@ -34,6 +34,10 @@ import {
   listSavedGrowthRecommendations,
 } from "@/lib/growthPersistence";
 import { listSocialAnalyticsConnectors } from "@/lib/socialAnalyticsConnectors";
+import {
+  canShowCalibratedForecast,
+  findMeasuredBaseline,
+} from "@/app/growth/growth-display";
 
 export const dynamic = "force-dynamic";
 
@@ -378,6 +382,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
     scheduledPosts,
     sermons,
     savedCampaignResult,
+    credentialBackedAccountRecords,
     savedRecommendationResult,
     predictionReportResult,
     historicalBaselineResult,
@@ -463,6 +468,25 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
       [],
     ),
     listSavedGrowthCampaigns(),
+    safeLoad(
+      "Connected social accounts",
+      prisma.socialAccount.findMany({
+        where: {
+          status: "CONNECTED",
+          OR: [
+            { credentials: { some: { status: "CONNECTED" } } },
+            {
+              AND: [
+                { externalProvider: { not: null } },
+                { externalAccountId: { not: null } },
+              ],
+            },
+          ],
+        },
+        select: { id: true },
+      }),
+      [],
+    ),
     listSavedGrowthRecommendations(),
     listPredictionReports(),
     listHistoricalPerformanceBaselines(),
@@ -471,8 +495,10 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
   const connectors = await listSocialAnalyticsConnectors();
 
   const clips: GrowthClipInput[] = clipRecords;
-  const platformSnapshots = buildPlatformSnapshots({ accounts, scheduledPosts, clips });
-  const recommendations = buildGrowthRecommendations({ clips, scheduledPosts, accounts, limit: 4 });
+  const credentialBackedAccountIds = new Set(credentialBackedAccountRecords.map((account) => account.id));
+  const connectedAccounts = accounts.filter((account) => credentialBackedAccountIds.has(account.id));
+  const platformSnapshots = buildPlatformSnapshots({ accounts: connectedAccounts, scheduledPosts, clips });
+  const recommendations = buildGrowthRecommendations({ clips, scheduledPosts, accounts: connectedAccounts, limit: 4 });
   const bestClips = [...clips]
     .sort((a, b) => getClipGrowthScore(b) - getClipGrowthScore(a))
     .slice(0, 5);
@@ -556,6 +582,12 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
             <div className="growth-recommendation-list">
               {recommendations.slice(0, 1).map((recommendation) => {
                 const isLowConfidence = recommendation.prediction.confidence === "Low";
+                const canShowPreciseForecast = canShowCalibratedForecast({
+                  confidence: recommendation.prediction.confidence,
+                  platforms: recommendation.platforms,
+                  baselines: historicalBaselineResult.items,
+                  calibratedFromHistory: false,
+                });
 
                 return (
                 <article key={recommendation.id} className="growth-recommendation-card">
@@ -615,14 +647,25 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
                     </div>
                     <div className="growth-copy-box">
                       <p className="kicker">Forecast</p>
-                      <p>
-                        {formatNumber(recommendation.prediction.reachLow)}-{formatNumber(recommendation.prediction.reachHigh)} reach · {" "}
-                        {formatPercent(recommendation.prediction.engagementRate)} engagement
-                      </p>
-                      <p className="muted small">
-                        {recommendation.prediction.followerGrowthLow}-{recommendation.prediction.followerGrowthHigh} followers · {" "}
-                        {recommendation.prediction.expectedWatchTimeSeconds}s expected watch time
-                      </p>
+                      {canShowPreciseForecast ? (
+                        <>
+                          <p>
+                            {formatNumber(recommendation.prediction.reachLow)}-{formatNumber(recommendation.prediction.reachHigh)} reach · {" "}
+                            {formatPercent(recommendation.prediction.engagementRate)} engagement
+                          </p>
+                          <p className="muted small">
+                            {recommendation.prediction.followerGrowthLow}-{recommendation.prediction.followerGrowthHigh} followers · {" "}
+                            {recommendation.prediction.expectedWatchTimeSeconds}s expected watch time
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p>Directional recommendation only</p>
+                          <p className="muted small">
+                            Exact reach and follower forecasts stay hidden because this directional model is not yet calibrated from matched channel history.
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
 
@@ -705,7 +748,9 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
 
           <SectionCard title="Channels">
             <div className="growth-platform-list">
-              {platformSnapshots.map((snapshot) => (
+              {platformSnapshots.map((snapshot) => {
+                const measuredBaseline = findMeasuredBaseline(snapshot.platform, historicalBaselineResult.items);
+                return (
                 <details key={snapshot.platform} className="growth-platform-row compact">
                   <summary className="growth-platform-summary">
                     <span className="growth-channel-name">
@@ -716,14 +761,19 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
                     </span>
                     <span className="growth-channel-metrics">
                       <span>{snapshot.plannedPosts} planned</span>
-                      <span>{formatNumber(snapshot.estimatedReach)} reach</span>
-                      <span>{formatPercent(snapshot.estimatedEngagementRate)}</span>
+                      {measuredBaseline ? (
+                        <>
+                          <span>{measuredBaseline.averageReach === null ? "Reach not measured" : `${formatNumber(measuredBaseline.averageReach)} avg reach`}</span>
+                          <span>{measuredBaseline.averageEngagementRate === null ? "Engagement not measured" : `${formatPercent(measuredBaseline.averageEngagementRate)} avg engagement`}</span>
+                        </>
+                      ) : <span>Performance baseline waiting</span>}
                     </span>
                   </summary>
                   <p className="muted small">{snapshot.connectedLabel}</p>
                   <p className="muted small">{snapshot.nextMove}</p>
                 </details>
-              ))}
+                );
+              })}
             </div>
           </SectionCard>
 
@@ -754,10 +804,10 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
       </section>
 
       <section className="dashboard-command-strip growth-signal-strip" aria-label="Social growth summary">
-        <StatCard label="Connected platforms" value={`${connectedCount}/7`} detail="Tracked channels" tone="success" />
+        <StatCard label="Connected platforms" value={`${connectedCount}/7`} detail="Credential-backed channels" tone={connectedCount > 0 ? "success" : "warning"} />
         <StatCard label="Planned posts" value={plannedCount} detail="Upcoming" tone="accent" />
         <StatCard label="Published posts" value={postedCount} detail="Posted" />
-        <StatCard label="Growth-ready clips" value={clips.length} detail="Assets" tone="warning" />
+        <StatCard label="Candidate clips" value={clips.length} detail="Approved or exported" tone="warning" />
       </section>
 
       <details className="growth-disclosure-card growth-analytics-disclosure">
@@ -916,7 +966,14 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
           <EmptyState title="No predictions recorded yet" description="Create a draft from a growth recommendation to record the first forecast." />
         ) : (
           <div className="growth-prediction-grid">
-            {predictionReportResult.items.map((report) => (
+            {predictionReportResult.items.map((report) => {
+              const canShowPreciseForecast = canShowCalibratedForecast({
+                confidence: report.confidence,
+                platforms: [report.platform],
+                baselines: historicalBaselineResult.items,
+                calibratedFromHistory: false,
+              });
+              return (
               <article key={report.id} className="growth-prediction-card">
                 <div className="stack-sm">
                   <div className="clip-badge-row">
@@ -927,11 +984,17 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
                   <h3>{report.scheduledPost?.title ?? "Forecasted post"}</h3>
                   <p className="muted small">{report.scheduledPost?.postingSlot ?? "No posting slot"}</p>
                 </div>
-                <div className="growth-platform-metrics">
-                  <span>{formatNumber(report.predictedReachLow)}-{formatNumber(report.predictedReachHigh)} reach</span>
-                  <span>{formatPercent(report.predictedEngagementRate)} engagement</span>
-                  <span>{formatNumber(report.predictedWatchTimeSeconds)}s watch</span>
-                </div>
+                {canShowPreciseForecast ? (
+                  <div className="growth-platform-metrics">
+                    <span>{formatNumber(report.predictedReachLow)}-{formatNumber(report.predictedReachHigh)} reach</span>
+                    <span>{formatPercent(report.predictedEngagementRate)} engagement</span>
+                    <span>{formatNumber(report.predictedWatchTimeSeconds)}s watch</span>
+                  </div>
+                ) : (
+                  <p className="growth-confidence-note is-low">
+                    Numerical forecast hidden because this directional model is not yet calibrated from matched channel history.
+                  </p>
+                )}
                 {report.latestResult ? (
                   <div className="growth-copy-box">
                     <p className="kicker">Latest actual</p>
@@ -940,9 +1003,13 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
                       {" · "}
                       {report.latestResult.actualEngagementRate === null ? "No engagement" : formatPercent(report.latestResult.actualEngagementRate)}
                     </p>
-                    <p className="muted small">
-                      Reach error {report.latestResult.reachErrorPercent ?? "n/a"}% · Engagement delta {report.latestResult.engagementErrorPercent ?? "n/a"} pts
-                    </p>
+                    {canShowPreciseForecast ? (
+                      <p className="muted small">
+                        Reach error {report.latestResult.reachErrorPercent ?? "n/a"}% · Engagement delta {report.latestResult.engagementErrorPercent ?? "n/a"} pts
+                      </p>
+                    ) : (
+                      <p className="muted small">Actual results are saved; forecast-error scoring will appear after the evidence threshold is met.</p>
+                    )}
                   </div>
                 ) : (
                   <form action={recordPredictionActuals} className="growth-actuals-form">
@@ -967,7 +1034,8 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
                   </form>
                 )}
               </article>
-            ))}
+              );
+            })}
           </div>
         )}
       </SectionCard>

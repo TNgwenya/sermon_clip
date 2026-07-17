@@ -73,7 +73,7 @@ async function queueSmartClipGeneration(sermonId: string): Promise<void> {
   });
 
   if (!existing) {
-    await createProcessingJob(sermonId, "GENERATE_CLIPS");
+    await createProcessingJob(sermonId, "GENERATE_CLIPS", { execution: "QUEUED" });
   }
 }
 

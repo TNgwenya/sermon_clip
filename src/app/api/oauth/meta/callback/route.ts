@@ -6,13 +6,16 @@ import {
   exchangeMetaLongLivedToken,
   storeMetaPageCredentials,
 } from "@/server/integrations/metaAnalytics";
+import { clearOAuthStateCookie, validateOAuthCallbackState } from "@/server/integrations/oauthState";
 
 export const dynamic = "force-dynamic";
 
 function redirectToSettings(request: Request, params: Record<string, string>): NextResponse {
   const url = new URL("/settings/social", request.url);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-  return NextResponse.redirect(url);
+  const response = NextResponse.redirect(url);
+  clearOAuthStateCookie(response, "meta");
+  return response;
 }
 
 function requiredEnv(name: string): string {
@@ -28,6 +31,11 @@ export async function GET(request: Request): Promise<NextResponse> {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const error = url.searchParams.get("error");
+  const state = url.searchParams.get("state");
+
+  if (!validateOAuthCallbackState(request, "meta", state)) {
+    return redirectToSettings(request, { oauth: "failed", provider: "meta", reason: "invalid_oauth_state" });
+  }
 
   if (error) {
     return redirectToSettings(request, { oauth: "failed", provider: "meta", reason: error });

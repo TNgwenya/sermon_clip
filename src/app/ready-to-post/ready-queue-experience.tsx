@@ -29,6 +29,7 @@ import {
 import type { ManualPublishingStatus, RestorablePublishingStatus, ScheduledPost } from "@/lib/scheduledPosts";
 import type { SocialAccount } from "@/lib/socialAccounts";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
+import { isEditoriallyPostReady } from "@/app/ready-to-post/readiness-display";
 
 export type ReadyQueueClip = {
   id: string;
@@ -602,6 +603,14 @@ function getScheduledPostGroupKey(post: ScheduledPost): string {
 }
 
 function getQualityLabel(clip: ReadyQueueClip): ClipQualityLabel | null {
+  if (clip.postReadyStatus === "POST_READY") {
+    return "POST_READY";
+  }
+
+  if (clip.postReadyStatus === "NEEDS_EDITING") {
+    return "NEEDS_EDITING";
+  }
+
   if (
     clip.qualityLabel === "POST_READY"
     || clip.qualityLabel === "GOOD_NEEDS_REVIEW"
@@ -609,14 +618,6 @@ function getQualityLabel(clip: ReadyQueueClip): ClipQualityLabel | null {
     || clip.qualityLabel === "REJECT"
   ) {
     return clip.qualityLabel;
-  }
-
-  if (clip.postReadyStatus === "POST_READY") {
-    return "POST_READY";
-  }
-
-  if (clip.postReadyStatus === "NEEDS_EDITING") {
-    return "NEEDS_EDITING";
   }
 
   return null;
@@ -889,8 +890,8 @@ export function ReadyQueueExperience({
     })
     : null;
   const selectedQualityLabel = selectedClip ? getQualityLabel(selectedClip) : null;
-  const selectedNeedsEditorialReview = selectedQualityLabel !== "POST_READY";
   const selectedQualityIssues = selectedClip ? buildReadinessIssues(selectedClip) : [];
+  const selectedNeedsEditorialReview = selectedClip ? !isEditoriallyPostReady(selectedClip) : true;
   const selectedQualitySummary = selectedClip
     ? sanitizePastorFacingQualityText(selectedClip.qualitySummary) ??
       sanitizePastorFacingQualityText(selectedClip.pastorFriendlyReason) ??

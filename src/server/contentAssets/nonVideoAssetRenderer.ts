@@ -152,6 +152,8 @@ export type ContentAssetFilePersistenceInput = {
 export type RenderApprovedNonVideoAssetsOptions = {
   /** Override the deterministic sermon content-assets directory, primarily for tests. */
   outputRoot?: string;
+  /** Use an isolated directory for this render attempt without changing opportunity metadata. */
+  storageKey?: string;
   /** Defaults to all four social image variants for non-carousel content. */
   variants?: NonVideoRasterVariant[];
 };
@@ -460,15 +462,16 @@ export function getNonVideoAssetOutputDirectory(
   sermonId: string,
   opportunityId: string,
   outputRoot?: string,
+  storageKey = opportunityId,
 ): string {
-  if (!isSafePathSegment(sermonId) || !isSafePathSegment(opportunityId)) {
+  if (!isSafePathSegment(sermonId) || !isSafePathSegment(opportunityId) || !isSafePathSegment(storageKey)) {
     throw new Error("Invalid sermon or content opportunity ID for asset storage.");
   }
 
   const contentAssetsRoot = outputRoot
     ? path.resolve(outputRoot)
     : path.join(getSermonStoragePath(sermonId), "content-assets");
-  return path.join(contentAssetsRoot, opportunityId);
+  return path.join(contentAssetsRoot, storageKey);
 }
 
 /** Maps renderer output directly into a nested ContentAssetFile create payload. */
@@ -504,6 +507,7 @@ export async function renderApprovedNonVideoAssets(
     input.sermonId,
     input.opportunityId,
     options.outputRoot,
+    options.storageKey,
   );
   const sharp = await getSharp();
   const files: RenderedContentAssetFile[] = [];

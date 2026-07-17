@@ -3,24 +3,36 @@ import { describe, expect, it } from "vitest";
 import { __processSermonPipelineTestUtils } from "@/server/pipeline/processSermonPipeline";
 
 describe("process sermon pipeline review asset preparation", () => {
+  it("reports premium output failures as a partial pipeline failure", () => {
+    const PartialFailure = __processSermonPipelineTestUtils.PipelinePartialCompletionError;
+    const failure = new PartialFailure([
+      { label: "Transcribe audio", status: "SUCCEEDED", message: "Audio transcribed." },
+      { label: "Generate clip suggestions", status: "SUCCEEDED", message: "Generated clips." },
+      { label: "Generate content opportunities", status: "FAILED", message: "Provider unavailable." },
+    ]);
+
+    expect(failure.code).toBe("PIPELINE_PARTIAL_FAILURE");
+    expect(failure.summary).toContain("premium outputs need attention");
+    expect(failure.failedSteps).toEqual([
+      { label: "Generate content opportunities", status: "FAILED", message: "Provider unavailable." },
+    ]);
+  });
+
   it("does not increment an already-claimed parent job attempt a second time", () => {
     expect(__processSermonPipelineTestUtils.shouldMarkParentJobRunning({
-      suppliedParentJobId: true,
+      status: "RUNNING",
+      attemptCount: 0,
+    })).toBe(true);
+
+    expect(__processSermonPipelineTestUtils.shouldMarkParentJobRunning({
+      status: "PENDING",
+      attemptCount: 0,
+    })).toBe(true);
+
+    expect(__processSermonPipelineTestUtils.shouldMarkParentJobRunning({
       status: "RUNNING",
       attemptCount: 1,
     })).toBe(false);
-
-    expect(__processSermonPipelineTestUtils.shouldMarkParentJobRunning({
-      suppliedParentJobId: true,
-      status: "PENDING",
-      attemptCount: 0,
-    })).toBe(true);
-
-    expect(__processSermonPipelineTestUtils.shouldMarkParentJobRunning({
-      suppliedParentJobId: false,
-      status: "PENDING",
-      attemptCount: 0,
-    })).toBe(true);
   });
 
   it("renders suggested clip previews before pastor review", () => {

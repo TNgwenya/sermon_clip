@@ -31,11 +31,15 @@ import {
   buildContentAssetObjectKey,
   buildContentAssetPublicUrl,
   isContentAssetPublicStorageConfigured,
+  isTrustedContentAssetPublicUrl,
+  readContentAssetPublicFile,
+  uploadContentAssetFilesWhenConfigured,
   uploadContentAssetFileToR2,
 } from "@/server/contentAssets/contentAssetPublicStorage";
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   s3Mock.send.mockClear();
 });
 
@@ -101,5 +105,104 @@ describe("content asset public storage", () => {
       filePath: "/tmp/missing.jpg",
       mimeType: "image/jpeg",
     })).rejects.toThrow("Public R2 media storage is not configured");
+  });
+
+  it("uploads every prepared file when durable storage is configured", async () => {
+    configureR2();
+    const directory = await mkdtemp(path.join(tmpdir(), "content-asset-r2-batch-"));
+    const portraitPath = path.join(directory, "portrait.jpg");
+    const squarePath = path.join(directory, "square.png");
+    await Promise.all([
+      writeFile(portraitPath, Buffer.from("portrait-data")),
+      writeFile(squarePath, Buffer.from("square-data")),
+    ]);
+
+    try {
+      const uploaded = await uploadContentAssetFilesWhenConfigured({
+        contentAssetId: "asset-1",
+        files: [
+          { id: "portrait-1", fileName: "portrait.jpg", filePath: portraitPath, mimeType: "image/jpeg" },
+          { id: "square-1", fileName: "square.png", filePath: squarePath, mimeType: "image/png" },
+        ],
+      });
+
+      expect(uploaded.get("portrait-1")?.publicUrl).toContain("/content-assets/asset-1/publishing/portrait-1.jpg");
+      expect(uploaded.get("square-1")?.publicUrl).toContain("/content-assets/asset-1/publishing/square-1.png");
+      expect(s3Mock.send).toHaveBeenCalledTimes(2);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps local-only preparation offline when durable storage is intentionally disabled", async () => {
+    configureR2();
+    vi.stubEnv("R2_CONTENT_ASSET_UPLOAD_DISABLED", "true");
+
+    const uploaded = await uploadContentAssetFilesWhenConfigured({
+      contentAssetId: "asset-1",
+      files: [{
+        id: "file-1",
+        fileName: "missing.jpg",
+        filePath: "/tmp/does-not-exist.jpg",
+        mimeType: "image/jpeg",
+      }],
+    });
+
+    expect(uploaded.size).toBe(0);
+    expect(s3Mock.send).not.toHaveBeenCalled();
+  });
+
+  it("refuses ephemeral-only generated media in a Vercel deployment", async () => {
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("R2_CONTENT_ASSET_UPLOAD_DISABLED", "true");
+
+    await expect(uploadContentAssetFilesWhenConfigured({
+      contentAssetId: "asset-1",
+      files: [{
+        id: "file-1",
+        fileName: "portrait.jpg",
+        filePath: "/tmp/portrait.jpg",
+        mimeType: "image/jpeg",
+      }],
+    })).rejects.toThrow("Durable content-asset storage is required");
+    expect(s3Mock.send).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when an intended R2 configuration is incomplete", async () => {
+    vi.stubEnv("R2_BUCKET", "sermon-clip-exports");
+
+    await expect(uploadContentAssetFilesWhenConfigured({
+      contentAssetId: "asset-1",
+      files: [{
+        id: "file-1",
+        fileName: "portrait.jpg",
+        filePath: "/tmp/portrait.jpg",
+        mimeType: "image/jpeg",
+      }],
+    })).rejects.toThrow("Durable content-asset storage is required");
+    expect(s3Mock.send).not.toHaveBeenCalled();
+  });
+
+  it("downloads only trusted public content-asset URLs with a bounded response", async () => {
+    configureR2();
+    const fetchMock = vi.fn(async () => new Response(Buffer.from("durable-image"), {
+      status: 200,
+      headers: { "content-length": "13" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const publicUrl = "https://media.example.com/content-assets/asset-1/publishing/file-1.jpg";
+
+    expect(isTrustedContentAssetPublicUrl(publicUrl)).toBe(true);
+    await expect(readContentAssetPublicFile(publicUrl)).resolves.toEqual(Buffer.from("durable-image"));
+    expect(fetchMock).toHaveBeenCalledWith(publicUrl, {
+      cache: "no-store",
+      redirect: "error",
+    });
+
+    expect(isTrustedContentAssetPublicUrl("https://attacker.example/content-assets/file.jpg")).toBe(false);
+    await expect(readContentAssetPublicFile("https://attacker.example/content-assets/file.jpg")).rejects.toThrow(
+      "not part of the configured media bucket",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

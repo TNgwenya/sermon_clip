@@ -10,6 +10,12 @@ const capabilities: PublishingServerCapabilities = {
   youtubePrivacy: "private",
   youtubeApiVerified: false,
   facebookPublishesImmediately: false,
+  tiktokProviderMode: "account",
+  tiktokDirectEnabled: true,
+  tiktokDirectConfigured: false,
+  tiktokOAuthClientConfigured: true,
+  tiktokDirectPrivacy: "SELF_ONLY",
+  tiktokZernioPrivacy: "PUBLIC_TO_EVERYONE",
   tiktokPrivacy: "PUBLIC_TO_EVERYONE",
 };
 
@@ -53,6 +59,107 @@ describe("publishing preflight", () => {
       expect.objectContaining({ id: "format:clip-1", status: "PASS" }),
       expect.objectContaining({ id: "duration:clip-1:TikTok", status: "PASS" }),
     ]));
+  });
+
+  it("passes a connected TikTok OAuth account through the direct publisher", () => {
+    const packet = buildPublishingPreflight({
+      automationMode: "AUTOMATIC",
+      platforms: ["TikTok"],
+      clips: [readyClip],
+      accounts: [{
+        id: "direct-tiktok-1",
+        platform: "TikTok",
+        status: "CONNECTED",
+        externalProvider: null,
+        externalAccountId: null,
+        externalPlatform: null,
+        credentialReady: true,
+      }],
+      selectedAccountIdsByPlatform: { TikTok: ["direct-tiktok-1"] },
+      capabilities: {
+        ...capabilities,
+        tiktokProviderMode: "direct",
+      },
+      serviceHealth: liveService,
+    });
+
+    expect(packet.canSchedule).toBe(true);
+    expect(packet.checks).toContainEqual(expect.objectContaining({
+      id: "connection:TikTok",
+      status: "PASS",
+      summary: expect.stringContaining("direct posting"),
+    }));
+    expect(packet.checks).toContainEqual(expect.objectContaining({
+      id: "privacy:TikTok",
+      status: "WARNING",
+      summary: expect.stringContaining("SELF_ONLY"),
+    }));
+  });
+
+  it("blocks mixed-quality multi-account selections instead of passing on one valid account", () => {
+    const packet = buildPublishingPreflight({
+      automationMode: "AUTOMATIC",
+      platforms: ["TikTok"],
+      clips: [readyClip],
+      accounts: [
+        {
+          id: "direct-ready",
+          platform: "TikTok",
+          status: "CONNECTED",
+          externalProvider: null,
+          externalAccountId: null,
+          externalPlatform: null,
+          credentialReady: true,
+        },
+        {
+          id: "direct-expired",
+          platform: "TikTok",
+          status: "CONNECTED",
+          externalProvider: null,
+          externalAccountId: null,
+          externalPlatform: null,
+          credentialReady: false,
+          credentialIssue: "The second token is expired.",
+        },
+      ],
+      selectedAccountIdsByPlatform: { TikTok: ["direct-ready", "direct-expired"] },
+      capabilities: { ...capabilities, tiktokProviderMode: "direct" },
+      serviceHealth: liveService,
+    });
+
+    expect(packet.canSchedule).toBe(false);
+    expect(packet.checks).toContainEqual(expect.objectContaining({
+      id: "connection:TikTok",
+      status: "BLOCKED",
+      summary: "The second token is expired.",
+    }));
+  });
+
+  it("keeps experimental direct TikTok unavailable when the worker safety flag is off", () => {
+    const packet = buildPublishingPreflight({
+      automationMode: "AUTOMATIC",
+      platforms: ["TikTok"],
+      clips: [readyClip],
+      accounts: [{
+        id: "direct-tiktok-1",
+        platform: "TikTok",
+        status: "CONNECTED",
+        externalProvider: null,
+        externalAccountId: null,
+        externalPlatform: null,
+        credentialReady: true,
+      }],
+      selectedAccountIdsByPlatform: { TikTok: ["direct-tiktok-1"] },
+      capabilities: { ...capabilities, tiktokProviderMode: "direct", tiktokDirectEnabled: false },
+      serviceHealth: liveService,
+    });
+
+    expect(packet.canSchedule).toBe(false);
+    expect(packet.checks).toContainEqual(expect.objectContaining({
+      id: "connection:TikTok",
+      status: "BLOCKED",
+      summary: expect.stringContaining("disabled"),
+    }));
   });
 
   it("blocks unavailable media, transcript review, missing connection, and unsupported Instagram duration", () => {

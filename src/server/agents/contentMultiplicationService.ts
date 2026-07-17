@@ -13,7 +13,7 @@ import {
   type ContentOpportunityType,
 } from "@/server/ai/contentOpportunitySchema";
 import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
-import { resolveOpenAIChatModel } from "@/server/ai/modelConfig";
+import { resolveOpenAIChatModel, resolveOpenAIReasoningEffort } from "@/server/ai/modelConfig";
 
 type SermonContext = {
   id: string;
@@ -275,12 +275,13 @@ async function callOpportunityModel(
   requestedQuantities: Record<PrismaContentOpportunityType, number>,
 ): Promise<ContentOpportunityRecord[]> {
   const model = resolveOpenAIChatModel("contentMultiplication");
+  const reasoningEffort = resolveOpenAIReasoningEffort("contentMultiplication", model);
 
   const completion = await createLoggedChatCompletion({
     operation: "content_opportunity_generation",
     sermonId: context.id,
     model,
-    reasoningEffort: "high",
+    reasoningEffort,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: buildSystemPrompt() },

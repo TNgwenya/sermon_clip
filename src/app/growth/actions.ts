@@ -20,6 +20,7 @@ import { resolveReadyMedia } from "@/lib/readyMedia";
 import { listScheduledPosts } from "@/lib/scheduledPosts";
 import { listSocialAccounts } from "@/lib/socialAccounts";
 import { calculatePercentError } from "@/lib/growthPersistence";
+import { socialMetricDedupeKey } from "@/lib/socialMetricIdentity";
 import {
   fetchInstagramAccountMetrics,
   fetchFacebookPageDailyMetrics,
@@ -30,6 +31,7 @@ import {
   markCredentialSyncSuccess,
   upsertSocialCredential,
 } from "@/server/integrations/socialCredentials";
+import { upsertSocialMetricSnapshots } from "@/server/integrations/socialMetricPersistence";
 import {
   fetchThreadsPostMetrics,
 } from "@/server/integrations/threadsAnalytics";
@@ -782,8 +784,14 @@ export async function syncYouTubeAnalytics() {
             channelId: credential.externalAccountId,
           });
 
-          await prisma.socialMetricSnapshot.createMany({
-            data: metrics.map((metric) => ({
+          await upsertSocialMetricSnapshots(metrics.map((metric) => ({
+              dedupeKey: socialMetricDedupeKey({
+                source: "API",
+                platform: "YouTube",
+                socialAccountId: credential.socialAccountId,
+                externalAccountId: credential.externalAccountId,
+                capturedAt: new Date(`${metric.date}T00:00:00.000Z`),
+              }),
               socialAccountId: credential.socialAccountId,
               platform: "YouTube",
               views: metric.views,
@@ -800,8 +808,7 @@ export async function syncYouTubeAnalytics() {
               }),
               source: "API",
               capturedAt: new Date(`${metric.date}T00:00:00.000Z`),
-            })),
-          });
+            })));
           await markCredentialSyncSuccess(credential.id);
         } catch (credentialError) {
           await markCredentialSyncError(credential.id, credentialError);
@@ -809,14 +816,20 @@ export async function syncYouTubeAnalytics() {
         }
       }
     } else {
+      const youtubeConfig = getYouTubeAnalyticsConfigFromEnv();
       const metrics = await fetchYouTubeDailyAnalytics({
-        config: getYouTubeAnalyticsConfigFromEnv(),
+        config: youtubeConfig,
         startDate,
         endDate,
       });
 
-      await prisma.socialMetricSnapshot.createMany({
-        data: metrics.map((metric) => ({
+      await upsertSocialMetricSnapshots(metrics.map((metric) => ({
+          dedupeKey: socialMetricDedupeKey({
+            source: "API",
+            platform: "YouTube",
+            externalAccountId: youtubeConfig.channelId,
+            capturedAt: new Date(`${metric.date}T00:00:00.000Z`),
+          }),
           platform: "YouTube",
           views: metric.views,
           watchTimeSeconds: metric.watchTimeSeconds,
@@ -828,8 +841,7 @@ export async function syncYouTubeAnalytics() {
           rawMetrics: asJson(metric.raw),
           source: "API",
           capturedAt: new Date(`${metric.date}T00:00:00.000Z`),
-        })),
-      });
+        })));
     }
   } catch (error) {
     console.warn("Unable to sync YouTube analytics.", error);
@@ -867,8 +879,14 @@ export async function syncMetaAnalytics() {
           since,
           until,
         });
-        await prisma.socialMetricSnapshot.createMany({
-          data: metrics.map((metric) => ({
+        await upsertSocialMetricSnapshots(metrics.map((metric) => ({
+            dedupeKey: socialMetricDedupeKey({
+              source: "API",
+              platform: metric.platform,
+              socialAccountId: credential.socialAccountId,
+              externalAccountId: credential.externalAccountId,
+              capturedAt: metric.capturedAt,
+            }),
             socialAccountId: credential.socialAccountId,
             platform: metric.platform,
             followers: metric.followers,
@@ -880,8 +898,7 @@ export async function syncMetaAnalytics() {
             rawMetrics: asJson(metric.raw),
             source: "API",
             capturedAt: metric.capturedAt,
-          })),
-        });
+          })));
         await markCredentialSyncSuccess(credential.id);
       } catch (credentialError) {
         await markCredentialSyncError(credential.id, credentialError);
@@ -898,8 +915,15 @@ export async function syncMetaAnalytics() {
           since,
           until,
         });
-        await prisma.socialMetricSnapshot.createMany({
-          data: metrics.map((metric) => ({
+        await upsertSocialMetricSnapshots(metrics.map((metric) => ({
+            dedupeKey: socialMetricDedupeKey({
+              source: "API",
+              platform: metric.platform,
+              socialAccountId: credential.socialAccountId,
+              externalAccountId: credential.externalAccountId,
+              platformPostId: typeof metric.raw.mediaId === "string" ? metric.raw.mediaId : null,
+              capturedAt: metric.capturedAt,
+            }),
             socialAccountId: credential.socialAccountId,
             platform: metric.platform,
             platformPostId: typeof metric.raw.mediaId === "string" ? metric.raw.mediaId : undefined,
@@ -915,8 +939,7 @@ export async function syncMetaAnalytics() {
             rawMetrics: asJson(metric.raw),
             source: "API",
             capturedAt: metric.capturedAt,
-          })),
-        });
+          })));
         await markCredentialSyncSuccess(credential.id);
       } catch (credentialError) {
         await markCredentialSyncError(credential.id, credentialError);
@@ -967,8 +990,15 @@ export async function syncTikTokAnalytics() {
         }
 
         const metrics = await fetchTikTokVideoMetrics({ accessToken });
-        await prisma.socialMetricSnapshot.createMany({
-          data: metrics.map((metric) => ({
+        await upsertSocialMetricSnapshots(metrics.map((metric) => ({
+            dedupeKey: socialMetricDedupeKey({
+              source: "API",
+              platform: "TikTok",
+              socialAccountId: credential.socialAccountId,
+              externalAccountId: credential.externalAccountId,
+              platformPostId: metric.platformPostId,
+              capturedAt: metric.capturedAt,
+            }),
             socialAccountId: credential.socialAccountId,
             platform: "TikTok",
             platformPostId: metric.platformPostId,
@@ -981,8 +1011,7 @@ export async function syncTikTokAnalytics() {
             rawMetrics: asJson(metric.raw),
             source: "API",
             capturedAt: metric.capturedAt,
-          })),
-        });
+          })));
         await markCredentialSyncSuccess(credential.id);
       } catch (credentialError) {
         await markCredentialSyncError(credential.id, credentialError);
@@ -1008,8 +1037,16 @@ export async function syncThreadsAnalytics() {
     for (const credential of credentials) {
       try {
         const metrics = await fetchThreadsPostMetrics({ accessToken: credential.accessToken });
-        await prisma.socialMetricSnapshot.createMany({
-          data: metrics.map((metric) => ({
+        await upsertSocialMetricSnapshots(metrics.map((metric) => ({
+            dedupeKey: socialMetricDedupeKey({
+              source: "API",
+              platform: "Threads",
+              socialAccountId: credential.socialAccountId,
+              externalAccountId: credential.externalAccountId,
+              platformPostId: metric.platformPostId,
+              capturedAt: metric.capturedAt,
+            }),
+            socialAccountId: credential.socialAccountId,
             platform: "Threads",
             platformPostId: metric.platformPostId,
             postUrl: metric.postUrl,
@@ -1024,8 +1061,7 @@ export async function syncThreadsAnalytics() {
             }),
             source: "API",
             capturedAt: metric.capturedAt,
-          })),
-        });
+          })));
         await markCredentialSyncSuccess(credential.id);
       } catch (credentialError) {
         await markCredentialSyncError(credential.id, credentialError);

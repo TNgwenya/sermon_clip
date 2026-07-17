@@ -1,5 +1,6 @@
 import { getOpenAiClient } from "@/server/ai/openaiClient";
 import { recordAiInvocation, type AiInvocationUsage } from "@/server/ai/aiInvocationLogger";
+import type { OpenAIReasoningEffort } from "@/server/ai/modelConfig";
 import type { Prisma } from "@prisma/client";
 import type { ChatCompletion } from "openai/resources/chat/completions";
 
@@ -17,7 +18,7 @@ type LoggedChatCompletionInput = {
   model: string;
   messages: ChatMessage[];
   temperature?: number;
-  reasoningEffort?: "low" | "medium" | "high";
+  reasoningEffort?: OpenAIReasoningEffort;
   response_format?: JsonObjectResponseFormat;
   sermonId?: string | null;
   clipCandidateId?: string | null;
@@ -141,7 +142,9 @@ export async function createLoggedChatCompletion<T>(
   const startedAt = Date.now();
   const request = {
     model: input.model,
-    temperature: input.temperature,
+    // GPT-5 reasoning requests do not accept sampling controls such as
+    // temperature. Keep legacy model behavior when no reasoning level applies.
+    temperature: input.reasoningEffort ? undefined : input.temperature,
     reasoning_effort: input.reasoningEffort,
     response_format: input.response_format,
     messages: input.messages,

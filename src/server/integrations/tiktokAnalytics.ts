@@ -207,6 +207,7 @@ export async function fetchTikTokVideoMetrics(input: {
     throw new Error(payload.error?.message || "Unable to fetch TikTok video analytics.");
   }
 
+  const observedAt = new Date();
   return (payload.data?.videos ?? []).map((video) => {
     const interactions = (video.like_count ?? 0) + (video.comment_count ?? 0) + (video.share_count ?? 0);
     const engagementRate = video.view_count && interactions
@@ -216,7 +217,7 @@ export async function fetchTikTokVideoMetrics(input: {
     return {
       platformPostId: video.id,
       postUrl: video.share_url,
-      capturedAt: video.create_time ? new Date(video.create_time * 1000) : new Date(),
+      capturedAt: observedAt,
       views: video.view_count,
       likes: video.like_count,
       comments: video.comment_count,

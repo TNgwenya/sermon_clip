@@ -17,6 +17,7 @@ import { getDataConsistencySummary, getOperationalMetrics } from "@/server/workf
 import { HealthRecoveryPanel } from "@/app/health/health-recovery-panel";
 import { buildWorkspaceHealthIssueBreakdown } from "@/lib/healthRecovery";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+import { getPublishingServiceHealth } from "@/lib/publishingServiceHealth";
 
 export const dynamic = "force-dynamic";
 
@@ -209,34 +210,73 @@ async function getHealthThumbnailReadiness(): Promise<ClipThumbnailReadiness> {
 }
 
 export default async function HealthPage() {
-  const [checks, consistency, thumbnailReadiness, operationalMetrics] = await Promise.all([
+  const [environmentChecks, consistency, thumbnailReadiness, operationalMetrics, publishingServiceHealth] = await Promise.all([
     runHealthChecks(),
     getDataConsistencySummary(),
     getHealthThumbnailReadiness(),
     getOperationalMetrics(),
+    getPublishingServiceHealth(),
   ]);
+  const publishingWorkerCheck: HealthCheckResult = publishingServiceHealth.status === "ONLINE"
+    ? {
+      name: "Automatic publishing worker",
+      status: "OK",
+      message: publishingServiceHealth.dryRun
+        ? "The publishing worker is checking in and is safely running in test mode."
+        : "The publishing worker is online and checking the posting queue.",
+    }
+    : publishingServiceHealth.status === "STALE"
+      ? {
+        name: "Automatic publishing worker",
+        status: "Missing",
+        message: `The publishing worker is stale${publishingServiceHealth.ageSeconds === null ? "" : `; its last signal was ${Math.max(1, Math.round(publishingServiceHealth.ageSeconds / 60))} minutes ago`}. Scheduled automatic posts will remain queued.`,
+        fix: "Run npm run worker:posting and confirm a fresh heartbeat before relying on automatic publishing.",
+      }
+      : {
+        name: "Automatic publishing worker",
+        status: "Missing",
+        message: "No publishing worker heartbeat has been recorded. Scheduled automatic posts will remain queued.",
+        fix: "Run npm run worker:posting and confirm a heartbeat before relying on automatic publishing.",
+      };
+  const operationalWorkflowCheck: HealthCheckResult = operationalMetrics.failedOperations > 0
+    ? {
+      name: "Processing and media jobs",
+      status: "Failed",
+      message: `${operationalMetrics.failedProcessingJobs} failed processing ${operationalMetrics.failedProcessingJobs === 1 ? "job" : "jobs"} and ${operationalMetrics.failedClipAssets} failed media ${operationalMetrics.failedClipAssets === 1 ? "asset" : "assets"} need review.`,
+      fix: "Use Recommended Recovery below to retry or repair the affected work.",
+    }
+    : {
+      name: "Processing and media jobs",
+      status: "OK",
+      message: "No unresolved processing-job or prepared-media failures were detected.",
+    };
+  const checks = [...environmentChecks, publishingWorkerCheck, operationalWorkflowCheck];
   const okCount = checks.filter((check) => check.status === "OK").length;
   const healthBreakdown = buildWorkspaceHealthIssueBreakdown({
-    failedHealthChecks: checks.length - okCount,
+    failedHealthChecks:
+      environmentChecks.filter((check) => check.status !== "OK").length
+      + (publishingWorkerCheck.status === "OK" ? 0 : 1),
     missingReadyFiles: consistency.issueCount,
     failedOperations: operationalMetrics.failedOperations,
     outdatedAssets: operationalMetrics.outdatedAssets,
     missingPosters: thumbnailReadiness.missingPosterCount,
     failedPosters: thumbnailReadiness.failedPosterCount,
   });
-  const canProcessSermons = healthBreakdown.environmentBlockers === 0;
+  const canProcessSermons = environmentChecks.every((check) => check.status === "OK");
   const postingNeedsRecovery =
     healthBreakdown.postingBlockers +
     healthBreakdown.retryableFailures +
-    healthBreakdown.assetRegeneration > 0;
+    healthBreakdown.assetRegeneration > 0
+    || publishingServiceHealth.status !== "ONLINE";
+  const workspaceNeedsAttention = healthBreakdown.actionRequired > 0;
 
   return (
     <main className="secondary-media-shell stack-lg">
       <header className="page-header stack-sm">
         <p className="kicker">Workspace Readiness</p>
-        <h1>Make sure sermon clips can be prepared</h1>
+        <h1>{workspaceNeedsAttention ? "Workspace needs attention" : "Sermon Clip is operational"}</h1>
         <p className="muted">
-          A local readiness check for video tools, storage, AI settings, and clip media. {okCount}/{checks.length} environment checks are healthy.
+          Video tools, storage, AI, clip media, and the publishing worker are checked together. {okCount}/{checks.length} system checks are passing; {healthBreakdown.actionRequired} issue{healthBreakdown.actionRequired === 1 ? "" : "s"} currently require action.
         </p>
         <div className="page-header-actions">
           <Link href="/" className="button secondary">Dashboard</Link>
@@ -245,10 +285,25 @@ export default async function HealthPage() {
         </div>
       </header>
 
+      {workspaceNeedsAttention ? (
+        <div className="error-banner stack-sm" role="status">
+          <strong>The workspace is not fully healthy yet.</strong>
+          <span>
+            {operationalMetrics.failedProcessingJobs > 0
+              ? `${operationalMetrics.failedProcessingJobs} failed processing ${operationalMetrics.failedProcessingJobs === 1 ? "job needs" : "jobs need"} review. `
+              : ""}
+            {publishingServiceHealth.status !== "ONLINE"
+              ? "Automatic publishing is paused until the posting worker sends a fresh heartbeat."
+              : "Review the recovery items below."}
+          </span>
+        </div>
+      ) : null}
+
       <section className="secondary-command-strip">
         <article>
-          <span className="muted small">Healthy checks</span>
-          <strong>{okCount}/{checks.length}</strong>
+          <span className="muted small">Overall workspace</span>
+          <strong>{workspaceNeedsAttention ? "Needs attention" : "Ready"}</strong>
+          <span className="muted small">{okCount}/{checks.length} system checks passing</span>
         </article>
         <article>
           <span className="muted small">New sermons</span>
@@ -258,7 +313,11 @@ export default async function HealthPage() {
         <article>
           <span className="muted small">Posting recovery</span>
           <strong>{postingNeedsRecovery ? healthBreakdown.actionRequired : "Ready"}</strong>
-          <span className="muted small">{operationalMetrics.failedClipAssets} failed media asset(s)</span>
+          <span className="muted small">
+            {publishingServiceHealth.status === "ONLINE"
+              ? `${operationalMetrics.failedClipAssets} failed media asset(s)`
+              : "Publishing worker offline or stale"}
+          </span>
         </article>
         <article>
           <span className="muted small">Failed jobs needing retry</span>
@@ -273,7 +332,7 @@ export default async function HealthPage() {
       </section>
 
       <section className="card stack-sm">
-        <h2>Can Sermon Clip Prepare Videos?</h2>
+        <h2>System checks</h2>
         <ul className="jobs-list">
           {checks.map((check) => (
             <li key={check.name} className="stack-sm">

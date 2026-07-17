@@ -286,7 +286,8 @@ async function claimNextJob(): Promise<ProcessingJob | null> {
     where: {
       attemptCount: { lt: maxWorkerAttempts },
       OR: [
-        { status: "PENDING" },
+        { status: "PENDING", workerId: null },
+        { status: "PENDING", workerId: { startsWith: "inline:" }, updatedAt: { lt: cutoff } },
         staleRunningJobWhere(cutoff),
       ],
     },
@@ -304,7 +305,8 @@ async function claimNextJob(): Promise<ProcessingJob | null> {
       id: next.id,
       attemptCount: { lt: maxWorkerAttempts },
       OR: [
-        { status: "PENDING" },
+        { status: "PENDING", workerId: null },
+        { status: "PENDING", workerId: { startsWith: "inline:" }, updatedAt: { lt: cutoff } },
         staleRunningJobWhere(cutoff),
       ],
     },
@@ -390,18 +392,29 @@ async function runJob(job: ProcessingJob): Promise<string> {
     }
     case "DOWNLOAD_VIDEO": {
       const { downloadSermonVideo } = await import("../src/server/agents/videoDownloadAgent");
-      const result = await downloadSermonVideo(sermonId, { force: false });
+      const result = await downloadSermonVideo(sermonId, { force: false, processingJobId: job.id });
       return result.reusedExistingFile ? "Existing source video reused." : "Source video downloaded.";
     }
     case "EXTRACT_AUDIO": {
       const { extractSermonAudio } = await import("../src/server/agents/audioExtractionAgent");
-      const result = await extractSermonAudio(sermonId, { force: false });
+      const result = await extractSermonAudio(sermonId, { force: false, processingJobId: job.id });
       return result.reusedExistingFile ? "Existing audio reused." : "Audio extracted.";
     }
     case "TRANSCRIBE_AUDIO": {
       const { transcribeSermonAudio } = await import("../src/server/agents/transcriptionAgent");
-      const result = await transcribeSermonAudio(sermonId, { force: false });
+      const result = await transcribeSermonAudio(sermonId, { force: false, processingJobId: job.id });
       return result.reusedExistingTranscript ? "Existing transcript reused." : "Audio transcribed.";
+    }
+    case "GENERATE_INTELLIGENCE": {
+      const { generateSermonIntelligence } = await import("../src/server/agents/sermonIntelligenceService");
+      const result = await generateSermonIntelligence(sermonId, {
+        force: true,
+        processingJobId: job.id,
+      });
+      if (result.status !== "COMPLETED") {
+        throw new Error(result.failureReason ?? "Sermon intelligence generation failed.");
+      }
+      return "Sermon intelligence generated.";
     }
     case "GENERATE_CLIPS": {
       if (shouldRedoGeneratedClips(job)) {

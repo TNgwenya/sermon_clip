@@ -12,6 +12,12 @@ export type PublishingWorkerCapabilities = {
   youtubePrivacy: string;
   youtubeApiVerified: boolean;
   facebookPublishesImmediately: boolean;
+  tiktokProviderMode: "direct" | "zernio" | "account";
+  tiktokDirectEnabled: boolean;
+  tiktokDirectConfigured: boolean;
+  tiktokOAuthClientConfigured: boolean;
+  tiktokDirectPrivacy: string;
+  tiktokZernioPrivacy: string | null;
   tiktokPrivacy: string | null;
 };
 
@@ -99,6 +105,18 @@ function normalizeWorkerCapabilities(value: unknown): PublishingWorkerCapabiliti
   }
 
   const record = capabilities as Record<string, unknown>;
+  const providerMode = record.tiktokProviderMode === "direct" || record.tiktokProviderMode === "zernio"
+    ? record.tiktokProviderMode
+    : "account";
+  const legacyPrivacy = typeof record.tiktokPrivacy === "string" && record.tiktokPrivacy.trim()
+    ? record.tiktokPrivacy.trim()
+    : null;
+  const directPrivacy = typeof record.tiktokDirectPrivacy === "string" && record.tiktokDirectPrivacy.trim()
+    ? record.tiktokDirectPrivacy.trim()
+    : providerMode === "direct" ? legacyPrivacy ?? "SELF_ONLY" : "SELF_ONLY";
+  const zernioPrivacy = typeof record.tiktokZernioPrivacy === "string" && record.tiktokZernioPrivacy.trim()
+    ? record.tiktokZernioPrivacy.trim()
+    : providerMode === "zernio" ? legacyPrivacy : null;
   return {
     zernioConfigured: record.zernioConfigured === true,
     youtubeConfigured: record.youtubeConfigured === true,
@@ -109,9 +127,13 @@ function normalizeWorkerCapabilities(value: unknown): PublishingWorkerCapabiliti
       : "private",
     youtubeApiVerified: record.youtubeApiVerified === true,
     facebookPublishesImmediately: record.facebookPublishesImmediately === true,
-    tiktokPrivacy: typeof record.tiktokPrivacy === "string" && record.tiktokPrivacy.trim()
-      ? record.tiktokPrivacy.trim()
-      : null,
+    tiktokProviderMode: providerMode,
+    tiktokDirectEnabled: record.tiktokDirectEnabled === true,
+    tiktokDirectConfigured: record.tiktokDirectConfigured === true,
+    tiktokOAuthClientConfigured: record.tiktokOAuthClientConfigured === true,
+    tiktokDirectPrivacy: directPrivacy,
+    tiktokZernioPrivacy: zernioPrivacy,
+    tiktokPrivacy: providerMode === "zernio" ? zernioPrivacy : directPrivacy,
   };
 }
 

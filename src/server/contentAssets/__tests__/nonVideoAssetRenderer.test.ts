@@ -118,6 +118,19 @@ describe("approved non-video asset renderer", () => {
     });
   });
 
+  it("can isolate a render attempt without changing the source opportunity metadata", async () => {
+    const root = await makeTemporaryRoot();
+    const result = await renderApprovedNonVideoAssets(approvedInput(), {
+      outputRoot: root,
+      storageKey: "asset-1-attempt-2",
+      variants: ["PORTRAIT"],
+    });
+
+    expect(result.outputDirectory).toBe(path.join(root, "asset-1-attempt-2"));
+    expect(result.files).toHaveLength(2);
+    expect(result.files[0].metadata.opportunityId).toBe("opportunity-1");
+  });
+
   it("blocks draft content and never falls back to unapproved body copy", async () => {
     const root = await makeTemporaryRoot();
     const input = approvedInput({ status: "NEEDS_REVIEW", approvedContent: null });

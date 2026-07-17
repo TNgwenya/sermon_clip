@@ -156,6 +156,7 @@ export async function fetchThreadsPostMetrics(input: {
     throw new Error(payload.error?.message || "Unable to fetch Threads insights.");
   }
 
+  const observedAt = new Date();
   return (payload.data ?? []).map((post) => {
     const insight = (name: string): number | undefined => {
       const raw = post.insights?.data?.find((item) => item.name === name)?.values?.at(-1)?.value;
@@ -175,7 +176,7 @@ export async function fetchThreadsPostMetrics(input: {
     return {
       platformPostId: post.id,
       postUrl: post.permalink,
-      capturedAt: post.timestamp ? new Date(post.timestamp) : new Date(),
+      capturedAt: observedAt,
       views,
       likes,
       comments: replies,

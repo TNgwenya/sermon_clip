@@ -26,6 +26,18 @@ export async function POST(request: Request): Promise<NextResponse> {
         : "private",
       youtubeApiVerified: body.capabilities.youtubeApiVerified === true,
       facebookPublishesImmediately: body.capabilities.facebookPublishesImmediately === true,
+      tiktokProviderMode: ["direct", "zernio", "account"].includes(body.capabilities.tiktokProviderMode)
+        ? body.capabilities.tiktokProviderMode
+        : "account",
+      tiktokDirectEnabled: body.capabilities.tiktokDirectEnabled === true,
+      tiktokDirectConfigured: body.capabilities.tiktokDirectConfigured === true,
+      tiktokOAuthClientConfigured: body.capabilities.tiktokOAuthClientConfigured === true,
+      tiktokDirectPrivacy: typeof body.capabilities.tiktokDirectPrivacy === "string" && body.capabilities.tiktokDirectPrivacy.trim()
+        ? body.capabilities.tiktokDirectPrivacy.trim().slice(0, 80)
+        : "SELF_ONLY",
+      tiktokZernioPrivacy: typeof body.capabilities.tiktokZernioPrivacy === "string" && body.capabilities.tiktokZernioPrivacy.trim()
+        ? body.capabilities.tiktokZernioPrivacy.trim().slice(0, 80)
+        : null,
       tiktokPrivacy: typeof body.capabilities.tiktokPrivacy === "string" && body.capabilities.tiktokPrivacy.trim()
         ? body.capabilities.tiktokPrivacy.trim().slice(0, 80)
         : null,
@@ -38,6 +50,12 @@ export async function POST(request: Request): Promise<NextResponse> {
       youtubePrivacy: "private",
       youtubeApiVerified: false,
       facebookPublishesImmediately: false,
+      tiktokProviderMode: "account",
+      tiktokDirectEnabled: false,
+      tiktokDirectConfigured: false,
+      tiktokOAuthClientConfigured: false,
+      tiktokDirectPrivacy: "SELF_ONLY",
+      tiktokZernioPrivacy: null,
       tiktokPrivacy: null,
     };
 

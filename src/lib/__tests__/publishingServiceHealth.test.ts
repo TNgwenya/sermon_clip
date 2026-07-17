@@ -30,6 +30,36 @@ describe("publishing service health", () => {
     });
   });
 
+  it("normalizes provider-aware TikTok worker capabilities", () => {
+    const health = summarizePublishingServiceHealth({
+      heartbeat: {
+        workerId: "posting-1",
+        dryRun: false,
+        heartbeatAt: new Date("2026-07-09T19:59:30.000Z"),
+        detailsJson: {
+          capabilities: {
+            tiktokProviderMode: "direct",
+            tiktokDirectEnabled: true,
+            tiktokDirectConfigured: true,
+            tiktokOAuthClientConfigured: true,
+            tiktokDirectPrivacy: "SELF_ONLY",
+          },
+        },
+      },
+      now,
+      staleAfterMs: 120_000,
+    });
+
+    expect(health.capabilities).toMatchObject({
+      tiktokProviderMode: "direct",
+      tiktokDirectEnabled: true,
+      tiktokDirectConfigured: true,
+      tiktokOAuthClientConfigured: true,
+      tiktokDirectPrivacy: "SELF_ONLY",
+      tiktokPrivacy: "SELF_ONLY",
+    });
+  });
+
   it("keeps test mode visible even while the service is healthy", () => {
     const health = summarizePublishingServiceHealth({
       heartbeat: {

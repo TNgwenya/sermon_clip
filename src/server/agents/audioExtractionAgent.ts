@@ -3,10 +3,10 @@ import { spawn } from "node:child_process";
 import { prisma } from "@/lib/prisma";
 import {
   appendJobLog,
-  createProcessingJob,
+  ensureProcessingJobRunning,
   markJobFailed,
-  markJobRunning,
   markJobSucceeded,
+  resolveProcessingJob,
 } from "@/server/agents/processing";
 import {
   appendPipelineLog,
@@ -21,6 +21,7 @@ import { updateSermonStatus } from "@/server/status/sermonStatus";
 type ExtractOptions = {
   force?: boolean;
   ffmpegPath?: string;
+  processingJobId?: string;
 };
 
 function commandFor(binaryPath?: string): string {
@@ -116,10 +117,10 @@ export async function extractSermonAudio(
 
   const sourceVideoPath = getSourceVideoPath(sermon.id);
   const audioPath = getAudioPath(sermon.id);
-  const job = await createProcessingJob(sermon.id, "EXTRACT_AUDIO");
+  const job = await resolveProcessingJob(sermon.id, "EXTRACT_AUDIO", options?.processingJobId);
 
   try {
-    await markJobRunning(job.id);
+    await ensureProcessingJobRunning(job);
     await appendJobLog(job.id, "Audio extraction job started.");
     await appendPipelineLog(sermon.id, "Audio extraction requested.");
 

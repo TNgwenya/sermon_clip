@@ -47,6 +47,26 @@ type PipelineResult = {
   summary: string;
 };
 
+class PipelinePartialCompletionError extends Error {
+  readonly code = "PIPELINE_PARTIAL_FAILURE";
+  readonly summary: string;
+  readonly failedSteps: PipelineStepResult[];
+
+  constructor(steps: PipelineStepResult[]) {
+    const failedSteps = steps.filter((step) => step.status === "FAILED");
+    const failedLabels = failedSteps.map((step) => step.label);
+    const summary = [
+      "Core sermon processing completed, but premium outputs need attention.",
+      `Failed: ${failedLabels.join(", ")}.`,
+      "The completed transcript and clips were preserved; retry only the failed steps.",
+    ].join(" ");
+    super(summary);
+    this.name = "PipelinePartialCompletionError";
+    this.summary = summary;
+    this.failedSteps = failedSteps;
+  }
+}
+
 const SERMON_STATUS_ORDER: SermonStatus[] = [
   "CREATED",
   "DOWNLOADING",
@@ -124,11 +144,10 @@ function buildFailureSummary(steps: PipelineStepResult[], failedLabel: string, f
 }
 
 function shouldMarkParentJobRunning(input: {
-  suppliedParentJobId: boolean;
   status: string;
   attemptCount: number;
 }): boolean {
-  return !input.suppliedParentJobId || input.status !== "RUNNING" || input.attemptCount < 1;
+  return input.status !== "RUNNING" || input.attemptCount < 1;
 }
 
 export async function processSermonPipeline(
@@ -169,7 +188,6 @@ export async function processSermonPipeline(
   // attempt count before entering this pipeline. Do not count the same attempt
   // twice. Directly created or unclaimed parent jobs still transition here.
   if (shouldMarkParentJobRunning({
-    suppliedParentJobId: Boolean(options?.parentJobId),
     status: parentJob.status,
     attemptCount: parentJob.attemptCount,
   })) {
@@ -260,7 +278,7 @@ export async function processSermonPipeline(
 
       steps.push({
         label: "Generate sermon intelligence",
-        status: intelligenceResult.status === "COMPLETED" ? "SUCCEEDED" : "SKIPPED",
+        status: intelligenceResult.status === "COMPLETED" ? "SUCCEEDED" : "FAILED",
         message: intelligenceResult.status === "COMPLETED"
           ? "Sermon intelligence generated."
           : `Intelligence generation skipped or failed: ${intelligenceResult.failureReason ?? "unknown"}.`,
@@ -286,7 +304,7 @@ export async function processSermonPipeline(
     const previewResult = await prepareGeneratedClipReviewAssets({ sermonId: sermon.id, force: options?.force });
     steps.push({
       label: "Prepare generated clip review assets",
-      status: previewResult.failed === 0 ? "SUCCEEDED" : "SKIPPED",
+      status: previewResult.failed === 0 ? "SUCCEEDED" : "FAILED",
       message: `Prepared ${previewResult.prepared} preview video asset(s); ${previewResult.skipped} already ready or in progress; ${previewResult.failed} failed. Caption files are created after approval.`,
     });
     await appendJobLog(
@@ -309,11 +327,15 @@ export async function processSermonPipeline(
       const message = contentError instanceof Error ? contentError.message : "Unknown content opportunity generation error.";
       steps.push({
         label: "Generate content opportunities",
-        status: "SKIPPED",
-        message: `Skipped due to error: ${message}`,
+        status: "FAILED",
+        message: `Failed: ${message}`,
       });
       await appendJobLog(parentJob.id, `Generate content opportunities skipped: ${message}`);
       await appendPipelineLog(sermon.id, `Content opportunities generation skipped: ${message}`);
+    }
+
+    if (steps.some((step) => step.status === "FAILED")) {
+      throw new PipelinePartialCompletionError(steps);
     }
 
     const summary = buildSummary(steps);
@@ -330,17 +352,37 @@ export async function processSermonPipeline(
   } catch (error) {
     const failureMessage = error instanceof Error ? error.message : "Unknown sermon processing error.";
     const failedLabel = activeStepLabel;
-    const summary = buildFailureSummary(steps, failedLabel, failureMessage);
+    const partialFailure = error instanceof PipelinePartialCompletionError ? error : null;
+    const summary = partialFailure?.summary ?? buildFailureSummary(steps, failedLabel, failureMessage);
+    const statusAtFailure = partialFailure
+      ? "CLIPS_GENERATED"
+      : (await loadSermon(sermon.id))?.status;
 
-    await markJobFailed(parentJob.id, failureMessage, summary);
+    await markJobFailed(parentJob.id, failureMessage, summary, {
+      error,
+      code: partialFailure?.code ?? "PROCESS_SERMON_PIPELINE_FAILED",
+      stage: partialFailure ? "premium_output_completion" : failedLabel,
+      retryable: true,
+      sermonStatus: statusAtFailure,
+      details: partialFailure
+        ? {
+            completedCoreProcessing: true,
+            failedSteps: partialFailure.failedSteps.map((step) => ({
+              label: step.label,
+              message: step.message,
+            })),
+          }
+        : undefined,
+    });
     await appendPipelineLog(sermon.id, summary);
 
-    throw new Error(`Pipeline stopped at ${failedLabel}: ${failureMessage}`);
+    throw partialFailure ?? new Error(`Pipeline stopped at ${failedLabel}: ${failureMessage}`);
   }
 }
 
 export const __processSermonPipelineTestUtils = {
   shouldMarkParentJobRunning,
+  PipelinePartialCompletionError,
   buildGeneratedClipReviewAssetPlan: (
     clip: Parameters<typeof __clipReviewAssetServiceTestUtils.shouldPreparePreview>[0],
     force?: boolean,

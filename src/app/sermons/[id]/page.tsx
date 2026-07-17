@@ -1342,11 +1342,15 @@ export default async function SermonDetailPage({
       detail: hasExportedClips ? "Ready-to-post files are available for download." : "Prepare at least one approved clip.",
     },
     {
-      label: "No unresolved failures",
+      label: "No unresolved work",
       ready: !needsAttention,
       detail: needsAttention
-        ? `There are ${operationSummary.failed} item(s) that need attention and ${operationSummary.outdated} clip(s) needing a refresh.`
-        : "No clips currently need attention.",
+        ? failedRecoveryCount > 0 && operationSummary.outdated > 0
+          ? `${failedRecoveryCount} failed ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention, and ${operationSummary.outdated} prepared ${operationSummary.outdated === 1 ? "asset needs" : "assets need"} a refresh.`
+          : failedRecoveryCount > 0
+            ? `${failedRecoveryCount} failed ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention.`
+            : `${operationSummary.outdated} prepared ${operationSummary.outdated === 1 ? "asset needs" : "assets need"} a refresh.`
+        : "No failed or stale clip work is currently unresolved.",
     },
   ];
 
