@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 
-import { loadEnvConfig } from "@next/env";
+import nextEnv from "@next/env";
 import { PrismaClient } from "@prisma/client";
 
 import {
@@ -9,6 +9,7 @@ import {
   withDatabaseConnectionRetry,
 } from "./prisma-deploy-retry.mjs";
 
+const { loadEnvConfig } = nextEnv;
 loadEnvConfig(process.cwd());
 
 const prisma = new PrismaClient();
