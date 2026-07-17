@@ -2,7 +2,11 @@ import { access } from "node:fs/promises";
 
 import type { ClipExportFormat } from "@prisma/client";
 
-import type { ClipBrandingConfig, WatermarkPosition } from "@/lib/clipBranding";
+import {
+  resolveBrandBackgroundOpacity,
+  type ClipBrandingConfig,
+  type WatermarkPosition,
+} from "@/lib/clipBranding";
 import { getSharp } from "@/server/agents/sharpClient";
 
 export type BrandingOverlayContext = {
@@ -56,12 +60,7 @@ function buildBrandBackgroundNode(config: ClipBrandingConfig, width: number, hei
     return null;
   }
 
-  const opacity =
-    config.backgroundStyle === "SOLID_BRAND"
-      ? 0.16
-      : config.backgroundStyle === "BLURRED_TINT"
-        ? 0.12
-        : 0.09;
+  const opacity = resolveBrandBackgroundOpacity(config.backgroundStyle);
 
   return `<rect x="0" y="0" width="${width}" height="${height}" fill="${themeColor}" fill-opacity="${opacity}" />`;
 }

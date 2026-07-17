@@ -187,6 +187,7 @@ export async function createGrowthRecommendationDraft(formData: FormData) {
       exportFormat: true,
       exportStatus: true,
       exportFreshness: true,
+      captionData: true,
       status: true,
       exportedFilePath: true,
       exportPath: true,

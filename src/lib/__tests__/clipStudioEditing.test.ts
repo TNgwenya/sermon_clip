@@ -5,7 +5,9 @@ import {
   buildSrtFromEditableCues,
   buildTimedCaptionCuesFromTranscriptSegments,
   hashtagsToEditorInput,
+  mergeCaptionCueTextOverrides,
   parseHashtagEditorInput,
+  resolveClipStudioInitialCaptionCues,
   validateCaptionCuesFromTranscript,
   validateEditableCaptionCues,
   validateClipStudioTiming,
@@ -267,6 +269,105 @@ describe("buildEditableCaptionCuesFromTranscriptSegments", () => {
     expect(cues).toEqual([
       { index: 1, startSeconds: 4, endSeconds: 6, text: "Inside clip" },
     ]);
+  });
+});
+
+describe("resolveClipStudioInitialCaptionCues", () => {
+  const transcriptCues = [
+    { index: 1, startSeconds: 0, endSeconds: 15, text: "Transcript wording" },
+    { index: 2, startSeconds: 15, endSeconds: 30, text: "Transcript ending" },
+  ];
+
+  it("preserves valid saved manual caption cues instead of rebuilding their text", () => {
+    const result = resolveClipStudioInitialCaptionCues({
+      savedCues: [
+        { index: 9, startSeconds: 0, endSeconds: 15, text: "  Human-reviewed wording  " },
+        { index: 10, startSeconds: 15, endSeconds: 30, text: "Human-reviewed ending" },
+      ],
+      transcriptCues,
+      clipDurationSeconds: 30,
+      savedCuesManuallyEdited: true,
+    });
+
+    expect(result).toEqual([
+      { index: 1, startSeconds: 0, endSeconds: 15, text: "Human-reviewed wording" },
+      { index: 2, startSeconds: 15, endSeconds: 30, text: "Human-reviewed ending" },
+    ]);
+  });
+
+  it("falls back to transcript cues when saved manual cues are invalid", () => {
+    const result = resolveClipStudioInitialCaptionCues({
+      savedCues: [
+        { index: 1, startSeconds: 0, endSeconds: 40, text: "Out of range" },
+      ],
+      transcriptCues,
+      clipDurationSeconds: 30,
+      savedCuesManuallyEdited: true,
+    });
+
+    expect(result).toEqual(transcriptCues);
+  });
+
+  it("continues to prefer transcript cues when saved cues were not manually edited", () => {
+    const result = resolveClipStudioInitialCaptionCues({
+      savedCues: [
+        { index: 1, startSeconds: 0, endSeconds: 30, text: "Older generated caption" },
+      ],
+      transcriptCues,
+      clipDurationSeconds: 30,
+      savedCuesManuallyEdited: false,
+    });
+
+    expect(result).toEqual(transcriptCues);
+  });
+});
+
+describe("mergeCaptionCueTextOverrides", () => {
+  const fullTranscriptCues = [
+    { index: 1, startSeconds: 0, endSeconds: 10, text: "Opening source words" },
+    { index: 2, startSeconds: 10, endSeconds: 20, text: "Middle source words" },
+    { index: 3, startSeconds: 20, endSeconds: 30, text: "Newly expanded source words" },
+  ];
+
+  it("keeps the full server cue range while applying matching client text overrides", () => {
+    const result = mergeCaptionCueTextOverrides({
+      baseCues: fullTranscriptCues,
+      textOverrideCues: [
+        { index: 1, startSeconds: 0, endSeconds: 10, text: "Human-reviewed opening" },
+        { index: 2, startSeconds: 10, endSeconds: 20, text: "Middle source words" },
+      ],
+    });
+
+    expect(result).toEqual([
+      { index: 1, startSeconds: 0, endSeconds: 10, text: "Human-reviewed opening" },
+      { index: 2, startSeconds: 10, endSeconds: 20, text: "Middle source words" },
+      { index: 3, startSeconds: 20, endSeconds: 30, text: "Newly expanded source words" },
+    ]);
+  });
+
+  it("treats a matching blank override as an intentional caption-line removal", () => {
+    const result = mergeCaptionCueTextOverrides({
+      baseCues: fullTranscriptCues,
+      textOverrideCues: [
+        { index: 1, startSeconds: 10.02, endSeconds: 20.02, text: "   " },
+      ],
+    });
+
+    expect(result).toEqual([
+      { index: 1, startSeconds: 0, endSeconds: 10, text: "Opening source words" },
+      { index: 2, startSeconds: 20, endSeconds: 30, text: "Newly expanded source words" },
+    ]);
+  });
+
+  it("ignores unmatched client cues so they cannot replace expanded server captions", () => {
+    const result = mergeCaptionCueTextOverrides({
+      baseCues: fullTranscriptCues,
+      textOverrideCues: [
+        { index: 1, startSeconds: 40, endSeconds: 45, text: "Unrelated old cue" },
+      ],
+    });
+
+    expect(result).toEqual(fullTranscriptCues);
   });
 });
 

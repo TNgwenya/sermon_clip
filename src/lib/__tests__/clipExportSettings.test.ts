@@ -8,6 +8,7 @@ import {
   isValidFramingMode,
   isValidPlatformPreset,
   mapPlatformPresetToFormat,
+  orderExportFormatsForCanonicalPrimary,
   resolveExportHistory,
   resolveExportSettings,
   summarizeExportSettings,
@@ -55,6 +56,22 @@ describe("format validation", () => {
 
   it("rejects unsupported format", () => {
     expect(isValidExportFormat("PANORAMA_21_9")).toBe(false);
+  });
+});
+
+describe("canonical primary export ordering", () => {
+  it("moves the primary format to the end of a multi-format run", () => {
+    expect(orderExportFormatsForCanonicalPrimary(
+      ["VERTICAL_9_16", "HORIZONTAL_16_9", "SQUARE_1_1"],
+      "VERTICAL_9_16",
+    )).toEqual(["HORIZONTAL_16_9", "SQUARE_1_1", "VERTICAL_9_16"]);
+  });
+
+  it("preserves a targeted non-primary retry while removing duplicates", () => {
+    expect(orderExportFormatsForCanonicalPrimary(
+      ["HORIZONTAL_16_9", "HORIZONTAL_16_9"],
+      "VERTICAL_9_16",
+    )).toEqual(["HORIZONTAL_16_9"]);
   });
 });
 

@@ -107,7 +107,7 @@ export function ClipStudioBranding({
       <div className="stack-md">
         <div className="clip-studio-effect-note">
           <StatusBadge tone="success">Preview updated</StatusBadge>
-          <p>Branding choices update the preview immediately. Prepare for Posting renders these layers.</p>
+          <p>Branding choices update immediately. Save Draft keeps them; Prepare renders them into the final video.</p>
         </div>
 
         <p className="muted small">

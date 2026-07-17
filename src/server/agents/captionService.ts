@@ -360,6 +360,38 @@ function hasManualCaptionCues(captionData: unknown): boolean {
   return record["manuallyEdited"] === true && Array.isArray(cues) && cues.length > 0;
 }
 
+function extractManualCaptionCues(captionData: unknown): CaptionCue[] {
+  if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
+    return [];
+  }
+
+  const cues = (captionData as Record<string, unknown>)["cues"];
+  if (!Array.isArray(cues)) {
+    return [];
+  }
+
+  return cues.flatMap((cue, index) => {
+    if (!cue || typeof cue !== "object" || Array.isArray(cue)) {
+      return [];
+    }
+
+    const record = cue as Record<string, unknown>;
+    const startSeconds = Number(record["startSeconds"]);
+    const endSeconds = Number(record["endSeconds"]);
+    const text = typeof record["text"] === "string" ? normalizeCaptionText(record["text"]) : "";
+    if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || endSeconds <= startSeconds || !text) {
+      return [];
+    }
+
+    return [{
+      index: index + 1,
+      startSeconds,
+      endSeconds,
+      text,
+    }];
+  });
+}
+
 function shouldPreserveManualCaptionCues(
   clip: Pick<ClipForCaption, "captionData" | "subtitlesGenerated" | "captionStatus" | "captionFreshness">,
   options: CaptionGenerationOptions | undefined,
@@ -397,6 +429,40 @@ async function writeCaptionFileAtomically(srtPath: string, srtContent: string): 
   if (!(await fileHasBytes(srtPath))) {
     throw new Error("Caption generation produced an empty subtitle file.");
   }
+}
+
+async function materializeManualCaptionCues(
+  clip: ClipForCaption,
+  jobId: string,
+): Promise<{ srtPath: string; cueCount: number }> {
+  const cues = extractManualCaptionCues(clip.captionData);
+  const durationSeconds = resolveClipDurationSeconds(clip);
+  const timingValidation = validateCaptionCueTiming(cues, durationSeconds);
+  if (cues.length === 0 || !timingValidation.isValid) {
+    throw new Error(
+      timingValidation.reasons[0]
+        ?? "Saved Clip Studio captions could not be materialized for the media worker.",
+    );
+  }
+
+  await ensureSermonFolders(clip.sermonId);
+  const srtPath = getClipSrtPath(clip.sermonId, clip.id);
+  await writeCaptionFileAtomically(srtPath, buildSrtFromCues(cues));
+  await prisma.clipCandidate.update({
+    where: { id: clip.id },
+    data: {
+      captionStatus: "GENERATED",
+      subtitleFilePath: srtPath,
+      srtPath,
+      subtitlesGenerated: true,
+      captionGenerationError: null,
+    },
+  });
+  await markCaptionAssetCompleted(clip.id, false);
+  await appendJobLog(jobId, `Materialized ${cues.length} saved Clip Studio caption cue(s) for ${clip.id}.`);
+  await appendPipelineLog(clip.sermonId, `Saved Clip Studio captions materialized for media worker clip ${clip.id}.`);
+
+  return { srtPath, cueCount: cues.length };
 }
 
 async function loadClipForCaption(clipId: string): Promise<ClipForCaption> {
@@ -794,8 +860,16 @@ export async function generateCaptionsForApprovedClips(
     }
 
     if (shouldPreserveManualCaptionCues(currentClip, options)) {
-      reused += 1;
-      await appendJobLog(job.id, `Caption generation preserved manual Clip Studio cues for ${clip.id}.`);
+      try {
+        await materializeManualCaptionCues(currentClip, job.id);
+        reused += 1;
+        await appendJobLog(job.id, `Caption generation preserved manual Clip Studio cues for ${clip.id}.`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Saved Clip Studio captions could not be materialized.";
+        errors.push({ clipId: clip.id, reason: message });
+        await markCaptionGenerationFailed(clip.id, message);
+        await appendJobLog(job.id, `Manual Clip Studio caption materialization failed for ${clip.id}: ${message}`);
+      }
       continue;
     }
 
@@ -853,6 +927,7 @@ export const __captionServiceTestUtils = {
   validateCaptionGenerationEligibility,
   shouldReuseExistingCaptionAsset,
   hasManualCaptionCues,
+  extractManualCaptionCues,
   shouldPreserveManualCaptionCues,
   fileHasBytes,
   writeCaptionFileAtomically,

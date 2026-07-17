@@ -52,6 +52,12 @@ export type HookOverlayConfig = {
   bold: boolean;
 };
 
+export type HookOverlayVisibilityResult = {
+  hookOverlay: HookOverlayConfig;
+  error: string | null;
+  wasClamped: boolean;
+};
+
 export type BrollCardConfig = {
   id: string;
   enabled: boolean;
@@ -351,6 +357,93 @@ export function extractHookOverlayConfig(
     animation: animation === "fade" || animation === "pan-in" || animation === "pop" || animation === "none" ? animation : "fade",
     size: size === "small" || size === "medium" || size === "large" ? size : "medium",
     bold: typeof hookOverlay?.["bold"] === "boolean" ? hookOverlay["bold"] : true,
+  };
+}
+
+export function normalizeHookOverlayForClipDuration(
+  input: {
+    enabled: boolean;
+    text: string;
+    position: string;
+    startSeconds: number;
+    durationSeconds: number;
+    animation: string;
+    size: string;
+    bold: boolean;
+  },
+  clipDurationSeconds: number | null,
+): HookOverlayVisibilityResult {
+  const position: HookOverlayPosition =
+    input.position === "top" || input.position === "center" || input.position === "lower"
+      ? input.position
+      : "top";
+  const animation: HookOverlayAnimation =
+    input.animation === "fade" || input.animation === "pan-in" || input.animation === "pop" || input.animation === "none"
+      ? input.animation
+      : "fade";
+  const size: HookOverlaySize =
+    input.size === "small" || input.size === "medium" || input.size === "large"
+      ? input.size
+      : "medium";
+  const rawStartSeconds = Number.isFinite(input.startSeconds) ? input.startSeconds : 0;
+  const rawDurationSeconds = Number.isFinite(input.durationSeconds) ? input.durationSeconds : 6;
+  const normalizedStartSeconds = Math.max(0, rawStartSeconds);
+  const normalizedDurationSeconds = Math.min(20, Math.max(1, rawDurationSeconds));
+  const normalizedBase: HookOverlayConfig = {
+    enabled: Boolean(input.enabled),
+    text: String(input.text ?? "").trim(),
+    position,
+    startSeconds: normalizedStartSeconds,
+    durationSeconds: normalizedDurationSeconds,
+    animation,
+    size,
+    bold: Boolean(input.bold),
+  };
+
+  if (!normalizedBase.enabled) {
+    return {
+      hookOverlay: normalizedBase,
+      error: null,
+      wasClamped:
+        normalizedStartSeconds !== input.startSeconds ||
+        normalizedDurationSeconds !== input.durationSeconds,
+    };
+  }
+
+  if (clipDurationSeconds === null || !Number.isFinite(clipDurationSeconds) || clipDurationSeconds <= 0) {
+    return {
+      hookOverlay: normalizedBase,
+      error: "Set a valid clip duration before enabling the hook overlay.",
+      wasClamped: false,
+    };
+  }
+
+  const minimumVisibleSeconds = Math.min(1, clipDurationSeconds);
+  const maxStartSeconds = Math.max(0, clipDurationSeconds - minimumVisibleSeconds);
+  const startSeconds = Math.min(normalizedStartSeconds, maxStartSeconds);
+  const remainingSeconds = Math.max(0, clipDurationSeconds - startSeconds);
+  const durationSeconds = Math.min(normalizedDurationSeconds, remainingSeconds);
+
+  if (durationSeconds <= 0) {
+    return {
+      hookOverlay: normalizedBase,
+      error: "Hook timing must include a visible interval inside the current clip.",
+      wasClamped: false,
+    };
+  }
+
+  const hookOverlay = {
+    ...normalizedBase,
+    startSeconds: Number(startSeconds.toFixed(3)),
+    durationSeconds: Number(durationSeconds.toFixed(3)),
+  };
+
+  return {
+    hookOverlay,
+    error: null,
+    wasClamped:
+      hookOverlay.startSeconds !== input.startSeconds ||
+      hookOverlay.durationSeconds !== input.durationSeconds,
   };
 }
 

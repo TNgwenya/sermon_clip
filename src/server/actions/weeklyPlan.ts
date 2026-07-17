@@ -200,6 +200,7 @@ export async function bulkScheduleWeeklyPlanAction(
         exportFormat: true,
         exportStatus: true,
         exportFreshness: true,
+        captionData: true,
         exportedFilePath: true,
         exportPath: true,
         overlayVideoPath: true,

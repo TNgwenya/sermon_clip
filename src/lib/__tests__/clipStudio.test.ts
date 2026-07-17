@@ -21,6 +21,7 @@ import {
   formatTranscriptExcerpt,
   hasCaptionPackage,
   normalizeBrollLayerConfig,
+  normalizeHookOverlayForClipDuration,
   renderStatusLabel,
 } from "@/lib/clipStudio";
 
@@ -328,6 +329,90 @@ describe("Studio on-video caption settings", () => {
       size: "large",
       bold: false,
     });
+  });
+
+  it("clamps an enabled hook into a visible interval at the end of the clip", () => {
+    const result = normalizeHookOverlayForClipDuration({
+      enabled: true,
+      text: "Stay with this",
+      position: "top",
+      startSeconds: 90,
+      durationSeconds: 8,
+      animation: "fade",
+      size: "medium",
+      bold: true,
+    }, 30);
+
+    expect(result.error).toBeNull();
+    expect(result.wasClamped).toBe(true);
+    expect(result.hookOverlay.startSeconds).toBe(29);
+    expect(result.hookOverlay.durationSeconds).toBe(1);
+  });
+
+  it("shortens hook duration to the remaining visible clip interval", () => {
+    const result = normalizeHookOverlayForClipDuration({
+      enabled: true,
+      text: "Closing thought",
+      position: "center",
+      startSeconds: 26,
+      durationSeconds: 10,
+      animation: "pop",
+      size: "large",
+      bold: false,
+    }, 30);
+
+    expect(result.error).toBeNull();
+    expect(result.wasClamped).toBe(true);
+    expect(result.hookOverlay.startSeconds).toBe(26);
+    expect(result.hookOverlay.durationSeconds).toBe(4);
+  });
+
+  it("keeps an already visible hook unchanged", () => {
+    const result = normalizeHookOverlayForClipDuration({
+      enabled: true,
+      text: "Opening thought",
+      position: "top",
+      startSeconds: 1,
+      durationSeconds: 6,
+      animation: "pan-in",
+      size: "small",
+      bold: true,
+    }, 30);
+
+    expect(result.error).toBeNull();
+    expect(result.wasClamped).toBe(false);
+    expect(result.hookOverlay).toMatchObject({ startSeconds: 1, durationSeconds: 6 });
+  });
+
+  it("returns a clear error when an enabled hook has no valid clip interval", () => {
+    const result = normalizeHookOverlayForClipDuration({
+      enabled: true,
+      text: "Opening thought",
+      position: "top",
+      startSeconds: 0,
+      durationSeconds: 6,
+      animation: "fade",
+      size: "medium",
+      bold: true,
+    }, 0);
+
+    expect(result.error).toBe("Set a valid clip duration before enabling the hook overlay.");
+  });
+
+  it("does not block a disabled hook when clip timing is unavailable", () => {
+    const result = normalizeHookOverlayForClipDuration({
+      enabled: false,
+      text: "Saved for later",
+      position: "top",
+      startSeconds: 90,
+      durationSeconds: 6,
+      animation: "fade",
+      size: "medium",
+      bold: true,
+    }, null);
+
+    expect(result.error).toBeNull();
+    expect(result.hookOverlay.enabled).toBe(false);
   });
 
   it("defaults speech cleanup to detection-only and does not auto-remove silence", () => {

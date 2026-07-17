@@ -39,6 +39,7 @@ import {
   type CaptionMaxLines,
   type CaptionPosition,
   type HookOverlayConfig,
+  normalizeHookOverlayForClipDuration,
   type SpeechCleanupIntensity,
   type SpeechCleanupSettings,
 } from "@/lib/clipStudio";
@@ -124,6 +125,7 @@ type CreatorReviewAction =
   | "enable-captions"
   | "tighten-captions"
   | "add-hook"
+  | "fix-hook-timing"
   | "move-hook"
   | "add-broll"
   | "enable-audio"
@@ -1635,6 +1637,19 @@ export function ClipStudioEditor({
       return;
     }
 
+    if (action === "fix-hook-timing") {
+      if (hookOverlayVisibility.error) {
+        setStatusSuccess(false);
+        setStatusMessage(hookOverlayVisibility.error);
+        return;
+      }
+
+      setHookOverlay(hookOverlayVisibility.hookOverlay);
+      setStatusSuccess(true);
+      setStatusMessage("Hook timing fitted inside the current clip.");
+      return;
+    }
+
     if (action === "move-hook") {
       setHookOverlay((current) => ({
         ...current,
@@ -1869,6 +1884,15 @@ export function ClipStudioEditor({
     hookOverlay.enabled && applyCaptionsToClip && hookOverlay.position === "lower"
       ? "Hook and captions can compete in the lower safe area. Move the hook higher before preparing."
       : null;
+  const hookOverlayVisibility = useMemo(
+    () => normalizeHookOverlayForClipDuration(hookOverlay, timingPreview.durationSeconds),
+    [hookOverlay, timingPreview.durationSeconds],
+  );
+  const hookTimingWarning = hookOverlay.enabled
+    ? hookOverlayVisibility.error ?? (hookOverlayVisibility.wasClamped
+      ? "Hook timing extends beyond this clip. Fit it inside the visible interval before preparing."
+      : null)
+    : null;
   const canUndoDraft = draftHistory.past.length > 0;
   const canRedoDraft = draftHistory.future.length > 0;
   const creatorReview = useMemo(() => {
@@ -1966,6 +1990,22 @@ export function ClipStudioEditor({
         detail: "The opening has no hook overlay.",
         action: "add-hook",
         actionLabel: "Add hook",
+      });
+    } else if (hookOverlayVisibility.error) {
+      items.push({
+        id: "hook",
+        label: "Hook",
+        status: "needs-work",
+        detail: hookOverlayVisibility.error,
+      });
+    } else if (hookOverlayVisibility.wasClamped) {
+      items.push({
+        id: "hook",
+        label: "Hook",
+        status: "warning",
+        detail: "The hook timing extends beyond the visible clip interval.",
+        action: "fix-hook-timing",
+        actionLabel: "Fit timing",
       });
     } else if (hookCaptionWarning) {
       items.push({
@@ -2094,6 +2134,7 @@ export function ClipStudioEditor({
     hashtags,
     mainCaption,
     hookCaptionWarning,
+    hookOverlayVisibility,
     hookOverlay.durationSeconds,
     hookOverlay.enabled,
     hookOverlay.text,
@@ -2955,6 +2996,7 @@ export function ClipStudioEditor({
               <span className="error-text small">{fieldErrors.hook}</span>
             ) : null}
             {hookCaptionWarning ? <p className="warning-banner">{hookCaptionWarning}</p> : null}
+            {hookTimingWarning ? <p className="warning-banner">{hookTimingWarning}</p> : null}
             {suggestedHook.trim() ? (
               <button type="button" className="button secondary" onClick={useSuggestedHook} disabled={isPending}>
                 Use suggestion as on-screen hook

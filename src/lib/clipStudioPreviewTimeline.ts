@@ -29,6 +29,59 @@ export type {
 
 export { buildSpeechCleanupCutPlan as buildSpeechCleanupPreviewPlan, resolveSpeechCleanupJumpTarget };
 
+export function resolveCompositionPreviewDuration(input: {
+  draftDurationSeconds: number | null;
+  mediaDurationSeconds: number | null;
+  speechCleanupPlan: SpeechCleanupPreviewPlan | null | undefined;
+}): number | null {
+  if (input.speechCleanupPlan?.enabled) {
+    return input.speechCleanupPlan.cleanedDurationSeconds;
+  }
+
+  return input.draftDurationSeconds ?? input.mediaDurationSeconds;
+}
+
+type PreviewMediaSynchronizationTarget = {
+  currentTime: number;
+  duration: number;
+  readyState: number;
+  playbackRate: number;
+  paused: boolean;
+  ended: boolean;
+  play: () => Promise<unknown>;
+  pause: () => void;
+};
+
+export function synchronizePreviewBackdropMedia(
+  foreground: PreviewMediaSynchronizationTarget | null,
+  backdrop: PreviewMediaSynchronizationTarget | null,
+): void {
+  if (!foreground || !backdrop || backdrop.readyState < 1) {
+    return;
+  }
+
+  const foregroundSeconds = Number.isFinite(foreground.currentTime) ? foreground.currentTime : 0;
+  const backdropDuration = Number.isFinite(backdrop.duration)
+    ? Math.max(0, backdrop.duration)
+    : Number.POSITIVE_INFINITY;
+  const targetSeconds = Math.max(0, Math.min(foregroundSeconds, backdropDuration));
+  if (Math.abs(backdrop.currentTime - targetSeconds) > 0.08) {
+    backdrop.currentTime = targetSeconds;
+  }
+
+  backdrop.playbackRate = foreground.playbackRate;
+  if (!foreground.paused && !foreground.ended) {
+    if (backdrop.paused) {
+      void backdrop.play().catch(() => undefined);
+    }
+    return;
+  }
+
+  if (!backdrop.paused) {
+    backdrop.pause();
+  }
+}
+
 function clampPreviewSeconds(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }

@@ -154,6 +154,26 @@ export function isValidExportFormat(value: unknown): value is ClipExportFormat {
   return typeof value === "string" && SELECTABLE_FORMATS.includes(value as ClipExportFormat);
 }
 
+/**
+ * Export services persist one canonical format/path on the clip record. Keep
+ * the chosen primary format last so a successful multi-format run leaves that
+ * canonical pointer on the format the editor selected as primary.
+ */
+export function orderExportFormatsForCanonicalPrimary(
+  formats: ClipExportFormat[],
+  primaryFormat: ClipExportFormat,
+): ClipExportFormat[] {
+  const uniqueFormats = Array.from(new Set(formats));
+  if (!uniqueFormats.includes(primaryFormat)) {
+    return uniqueFormats;
+  }
+
+  return [
+    ...uniqueFormats.filter((format) => format !== primaryFormat),
+    primaryFormat,
+  ];
+}
+
 export function isValidFramingMode(value: unknown): value is ClipExportLayoutStrategy {
   return typeof value === "string" && SELECTABLE_FRAMING_MODES.includes(value as ClipExportLayoutStrategy);
 }

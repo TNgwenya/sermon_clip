@@ -509,6 +509,79 @@ export function validateEditableCaptionCues(
   };
 }
 
+export function resolveClipStudioInitialCaptionCues({
+  savedCues,
+  transcriptCues,
+  clipDurationSeconds,
+  savedCuesManuallyEdited,
+}: {
+  savedCues: EditableCaptionCue[];
+  transcriptCues: EditableCaptionCue[];
+  clipDurationSeconds: number | null;
+  savedCuesManuallyEdited: boolean;
+}): EditableCaptionCue[] {
+  const savedValidation = validateEditableCaptionCues(savedCues, clipDurationSeconds);
+
+  if (savedCuesManuallyEdited && savedValidation.isValid) {
+    return savedValidation.cues;
+  }
+
+  if (transcriptCues.length > 0) {
+    return transcriptCues.map((cue, index) => ({ ...cue, index: index + 1 }));
+  }
+
+  return savedValidation.cues;
+}
+
+export function mergeCaptionCueTextOverrides({
+  baseCues,
+  textOverrideCues,
+  timingToleranceSeconds = 0.08,
+}: {
+  baseCues: EditableCaptionCue[];
+  textOverrideCues: EditableCaptionCue[];
+  timingToleranceSeconds?: number;
+}): EditableCaptionCue[] {
+  if (baseCues.length === 0) {
+    return textOverrideCues.map((cue, index) => ({ ...cue, index: index + 1 }));
+  }
+
+  const usedOverrideIndexes = new Set<number>();
+  const mergedCues = baseCues.flatMap((baseCue) => {
+    let closestOverrideIndex = -1;
+    let closestDistance = Number.POSITIVE_INFINITY;
+
+    textOverrideCues.forEach((overrideCue, overrideIndex) => {
+      if (usedOverrideIndexes.has(overrideIndex)) {
+        return;
+      }
+
+      const startDistance = Math.abs(overrideCue.startSeconds - baseCue.startSeconds);
+      const endDistance = Math.abs(overrideCue.endSeconds - baseCue.endSeconds);
+      if (startDistance > timingToleranceSeconds || endDistance > timingToleranceSeconds) {
+        return;
+      }
+
+      const totalDistance = startDistance + endDistance;
+      if (totalDistance < closestDistance) {
+        closestDistance = totalDistance;
+        closestOverrideIndex = overrideIndex;
+      }
+    });
+
+    if (closestOverrideIndex < 0) {
+      return [baseCue];
+    }
+
+    usedOverrideIndexes.add(closestOverrideIndex);
+    const overrideCue = textOverrideCues[closestOverrideIndex];
+    const overrideText = normalizeCaptionCueText(overrideCue.text);
+    return overrideText ? [{ ...baseCue, text: overrideText }] : [];
+  });
+
+  return mergedCues.map((cue, index) => ({ ...cue, index: index + 1 }));
+}
+
 export function buildSrtFromEditableCues(cues: EditableCaptionCue[]): string {
   const normalized = validateEditableCaptionCues(cues, null).cues;
   const blocks = normalized.map((cue) => [

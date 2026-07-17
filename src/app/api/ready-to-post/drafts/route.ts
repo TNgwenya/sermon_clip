@@ -91,6 +91,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       exportFormat: true,
       exportStatus: true,
       exportFreshness: true,
+      captionData: true,
       exportedFilePath: true,
       exportPath: true,
       overlayVideoPath: true,

@@ -282,6 +282,18 @@ export async function invalidateAfterOverlaySettingChange(clipId: string, reason
   });
 }
 
+export async function invalidateAfterExportSettingChange(clipId: string, reason: string): Promise<void> {
+  const clip = await loadClipFreshnessSnapshot(clipId);
+
+  await prisma.clipCandidate.update({
+    where: { id: clip.id },
+    data: {
+      exportFreshness: toOutdatedOrNeedsRegeneration(clip.exportStatus === "COMPLETED", clip.exportFreshness),
+      assetInvalidationReason: reason,
+    },
+  });
+}
+
 export async function invalidateAfterBrandingChange(reason: string): Promise<number> {
   const result = await prisma.clipCandidate.updateMany({
     where: {

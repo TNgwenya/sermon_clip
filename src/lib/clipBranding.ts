@@ -86,6 +86,25 @@ export const DEFAULT_CLIP_BRANDING: ClipBrandingConfig = {
   themeColor: null,
 };
 
+/**
+ * Prepared clips let burned-in captions own the lower safe area. Keep this
+ * rule shared with Studio preview logic so the preview does not promise a
+ * lower third that the final compositor will intentionally suppress.
+ */
+export function shouldBrandingLowerThirdYieldToCaptions(input: {
+  applyCaptionsToClip: boolean;
+  captionCueCount: number;
+}): boolean {
+  return input.applyCaptionsToClip && input.captionCueCount > 0;
+}
+
+export function resolveBrandBackgroundOpacity(style: BrandBackgroundStyle): number {
+  if (style === "SOLID_BRAND") return 0.16;
+  if (style === "BLURRED_TINT") return 0.12;
+  if (style === "SOFT_GRADIENT") return 0.09;
+  return 0;
+}
+
 // ─── Validators ───────────────────────────────────────────────────────────────
 
 export function isValidBrandingPreset(value: unknown): value is BrandingPreset {

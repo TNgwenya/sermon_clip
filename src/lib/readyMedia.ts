@@ -1,12 +1,15 @@
 import { stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 
+import { resolveExportHistory } from "@/lib/clipExportSettings";
+
 export type ReadyMediaClip = {
   exportStatus: string | null;
   exportFreshness: string | null;
   exportFormat: string | null;
   exportedFilePath: string | null;
   exportPath: string | null;
+  captionData?: unknown;
   overlayVideoPath?: string | null;
   captionedVideoPath?: string | null;
   renderedFilePath?: string | null;
@@ -28,20 +31,38 @@ type ReadyMediaFile = {
 };
 
 function buildReadyMediaCandidates(clip: ReadyMediaClip): Array<string | null | undefined> {
-  // Ready-to-post currently targets short-form social platforms. A horizontal or
-  // square export may be valid history, but it is not safe posting media here.
   if (
     clip.exportStatus !== "COMPLETED"
     || clip.exportFreshness !== "UP_TO_DATE"
-    || clip.exportFormat !== "VERTICAL_9_16"
   ) {
     return [];
   }
 
-  return [
-    clip.exportedFilePath,
-    clip.exportPath,
-  ];
+  if (clip.exportFormat === "VERTICAL_9_16") {
+    return [
+      clip.exportedFilePath,
+      clip.exportPath,
+    ];
+  }
+
+  // Older multi-format renders could leave the clip's canonical scalar fields
+  // pointing at the last horizontal or square export. Publishing still targets
+  // vertical media, so recover only the latest vertical attempt from history.
+  if (clip.exportFormat === "HORIZONTAL_16_9" || clip.exportFormat === "SQUARE_1_1") {
+    const latestVertical = resolveExportHistory(clip.captionData).find((record) => (
+      record.format === "VERTICAL_9_16" && record.isLatest
+    ));
+
+    if (
+      latestVertical?.status === "COMPLETED"
+      && typeof latestVertical.outputPath === "string"
+      && latestVertical.outputPath.trim().length > 0
+    ) {
+      return [latestVertical.outputPath];
+    }
+  }
+
+  return [];
 }
 
 export async function fileHasBytes(filePath: string): Promise<boolean> {

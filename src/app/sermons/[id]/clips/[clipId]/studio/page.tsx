@@ -28,7 +28,10 @@ import {
   hasCaptionPackage,
 } from "@/lib/clipStudio";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
-import { buildEditableCaptionCuesFromTranscriptSegments } from "@/lib/clipStudioEditing";
+import {
+  buildEditableCaptionCuesFromTranscriptSegments,
+  resolveClipStudioInitialCaptionCues,
+} from "@/lib/clipStudioEditing";
 import { ClipStudioEditor } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-editor";
 import { ClipStudioFormatFraming } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-format-framing";
 import { ClipStudioBranding } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-branding";
@@ -50,6 +53,7 @@ import {
 } from "@/lib/clipExportSettings";
 import { resolveBrandingConfig } from "@/lib/clipBranding";
 import { buildClipAssetRecoveryPlan } from "@/lib/clipAssetRecovery";
+import { resolveClipStudioPreparationState } from "@/lib/clipStudioPrepare";
 import { getBrandingSettings } from "@/server/branding/settings";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import { isFreshRemotePreview, resolveBestPreviewCandidate } from "@/lib/clipPreview";
@@ -244,6 +248,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       exportError: true,
       exportFreshness: true,
       clipNotes: true,
+      exportPath: true,
       ministryMomentId: true,
       ministryMoment: {
         select: {
@@ -308,7 +313,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
 
   const captionPackage = extractCaptionPackage(clip.captionData, clip.caption, hashtags);
   const captionGuidance = extractCaptionGuidance(clip.captionData);
-  const fallbackOnVideoCaptionCues = extractOnVideoCaptionCues(clip.captionData, clip.transcriptText, clip.durationSeconds);
+  const savedOnVideoCaptionCues = extractOnVideoCaptionCues(clip.captionData, null, null);
+  const fallbackOnVideoCaptionCues = extractOnVideoCaptionCues(null, clip.transcriptText, clip.durationSeconds);
   const captionStyleOverride = extractCaptionStyleOverride(clip.captionData);
   const captionPosition = extractCaptionPosition(clip.captionData);
   const captionAppearance = extractCaptionAppearanceSettings(clip.captionData);
@@ -346,8 +352,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
         return { ...record, fileExists: false };
       }
     })),
-    localMediaAvailable && clip.exportedFilePath
-      ? stat(clip.exportedFilePath)
+    localMediaAvailable && (clip.exportedFilePath || clip.exportPath)
+      ? stat(clip.exportedFilePath || clip.exportPath!)
         .then((fileStat) => fileStat.isFile() && fileStat.size > 0)
         .catch(() => false)
       : Promise.resolve(false),
@@ -371,7 +377,18 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     endTimeSeconds: clip.endTimeSeconds,
     segments: studioTranscriptSegments,
   });
-  const onVideoCaptionCues = transcriptCaptionCues.length > 0 ? transcriptCaptionCues : fallbackOnVideoCaptionCues;
+  const generatedOnVideoCaptionCues = transcriptCaptionCues.length > 0
+    ? transcriptCaptionCues
+    : fallbackOnVideoCaptionCues;
+  const captionDataRecord = clip.captionData && typeof clip.captionData === "object" && !Array.isArray(clip.captionData)
+    ? clip.captionData as Record<string, unknown>
+    : null;
+  const onVideoCaptionCues = resolveClipStudioInitialCaptionCues({
+    savedCues: savedOnVideoCaptionCues,
+    transcriptCues: generatedOnVideoCaptionCues,
+    clipDurationSeconds: Math.max(0, clip.endTimeSeconds - clip.startTimeSeconds),
+    savedCuesManuallyEdited: captionDataRecord?.["manuallyEdited"] === true,
+  });
   const timing = buildClipTimingDisplay(clip.startTimeSeconds, clip.endTimeSeconds, clip.durationSeconds);
   const initialEditPreview = {
     startLabel: timing.startLabel,
@@ -454,17 +471,50 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   const clipStatus = clip.status as "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
   const renderStatus = clip.renderStatus as "NOT_RENDERED" | "QUEUED" | "RENDERING" | "COMPLETED" | "FAILED";
   const recoveryPlan = buildClipAssetRecoveryPlan(clip);
-  const latestPreparedMediaExists = exportHistoryWithFileState.some(
-    (record) => record.status === "COMPLETED" && record.fileExists && record.isLatest,
+  const upstreamPreparing =
+    renderStatus === "QUEUED" ||
+    renderStatus === "RENDERING" ||
+    (applyCaptionsToClip && (clip.captionStatus === "GENERATING" || clip.captionBurnStatus === "BURNING")) ||
+    clip.overlayStatus === "RENDERING" ||
+    clip.exportStatus === "QUEUED" ||
+    clip.exportStatus === "EXPORTING";
+  const captionsNeedUpdate = applyCaptionsToClip && (
+    (clip.captionStatus !== "GENERATED" && clip.captionStatus !== "GENERATING") ||
+    (clip.captionBurnStatus !== "COMPLETED" && clip.captionBurnStatus !== "BURNING")
   );
-  const hasPreparedMedia = currentExportFileExists || latestPreparedMediaExists;
-  const preparedFinalNeedsUpdate = hasPreparedMedia && (
-    renderStatus !== "COMPLETED"
-    || clip.exportStatus !== "COMPLETED"
-    || isStaleFinalExportFreshness(clip.renderFreshness)
-    || isStaleFinalExportFreshness(clip.exportFreshness)
-  );
-  const preparedFinalReady = hasPreparedMedia && !preparedFinalNeedsUpdate;
+  const upstreamNeedsUpdate =
+    (renderStatus !== "COMPLETED" && renderStatus !== "QUEUED" && renderStatus !== "RENDERING") ||
+    captionsNeedUpdate ||
+    (clip.exportStatus !== "COMPLETED" && clip.exportStatus !== "QUEUED" && clip.exportStatus !== "EXPORTING") ||
+    isStaleFinalExportFreshness(clip.renderFreshness) ||
+    (applyCaptionsToClip && (
+      isStaleFinalExportFreshness(clip.captionFreshness) ||
+      isStaleFinalExportFreshness(clip.captionBurnFreshness)
+    )) ||
+    isStaleFinalExportFreshness(clip.overlayFreshness) ||
+    isStaleFinalExportFreshness(clip.exportFreshness);
+  const upstreamFailed = recoveryPlan.failedLabels.some((label) => (
+    applyCaptionsToClip || (label !== "Captions" && label !== "Caption burn")
+  ));
+  const preparationState = resolveClipStudioPreparationState({
+    selectedFormats: exportSettings.selectedFormats,
+    records: exportHistoryWithFileState,
+    canonicalExport: {
+      format: clip.exportFormat,
+      status: clip.exportStatus,
+      freshness: clip.exportFreshness,
+      outputPath: clip.exportedFilePath || clip.exportPath,
+      fileExists: currentExportFileExists,
+    },
+    trustCompletedOutputMetadata: !localMediaAvailable,
+    upstreamNeedsUpdate,
+    upstreamPreparing,
+    upstreamFailed,
+  });
+  const hasPreparedMedia = preparationState.availableFormats.length > 0;
+  const preparedFinalNeedsUpdate = preparationState.needsUpdate;
+  const preparedFinalReady = preparationState.ready;
+  const readyFormatSet = new Set(preparationState.readyFormats);
   const latestExportRecords = exportHistoryWithFileState;
   const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
   const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
@@ -546,6 +596,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 clipStatus={clipStatus}
                 hasPreparedMedia={hasPreparedMedia}
                 serverNeedsUpdate={preparedFinalNeedsUpdate}
+                serverIsPreparing={preparationState.preparing}
+                transcriptReviewRequired={transcriptReviewRequired}
               />
             </div>
           </div>
@@ -680,17 +732,38 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 <div className="section-heading-row">
                   <div>
                     <p className="kicker">Publishing handoff</p>
-                    <h3>{preparedFinalReady ? "Prepared video ready" : "Final video needs updating"}</h3>
+                    <h3>
+                      {preparationState.preparing
+                        ? "Preparing final video"
+                        : preparationState.failed
+                          ? "Preparation needs attention"
+                          : preparedFinalReady
+                            ? "Prepared video ready"
+                            : "Final video needs updating"}
+                    </h3>
                   </div>
-                  <StatusBadge tone={preparedFinalReady ? "success" : "warning"}>
-                    {hasPreparedMedia ? "Prepared" : "Not prepared"}
+                  <StatusBadge tone={preparedFinalReady ? "success" : preparationState.preparing ? "accent" : "warning"}>
+                    {preparedFinalReady
+                      ? "Prepared"
+                      : preparationState.preparing
+                        ? "Preparing"
+                        : preparationState.failed
+                          ? "Needs attention"
+                          : "Not prepared"}
                   </StatusBadge>
                 </div>
                 <p className="muted small">
-                  {preparedFinalReady
-                    ? "Prepared media is ready for the ready-to-post package."
-                    : "Use Prepare for Posting to save this composition, approve the clip, and update the final video."}
+                  {preparationState.preparing
+                    ? "The media worker is building the selected output formats."
+                    : preparedFinalReady
+                      ? "Prepared media is ready for the ready-to-post package."
+                      : "Use Prepare for Posting to save this composition, approve the clip, and update the final video."}
                 </p>
+                {!preparationState.preparing && preparationState.missingFormats.length > 0 ? (
+                  <p className="muted small">
+                    Still needed: {preparationState.missingFormats.map((format) => FORMAT_LABELS[format]).join(", ")}.
+                  </p>
+                ) : null}
                 {preparedFinalNeedsUpdate && recoveryPlan.hasRecoverableIssue ? (
                   <p className="muted small">{recoveryPlan.summary}</p>
                 ) : null}
@@ -709,8 +782,10 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                           {record.fileSizeBytes ? ` · ${(record.fileSizeBytes / 1_000_000).toFixed(1)} MB` : ""}
                         </p>
                         <p className="muted small">
-                          {record.status === "COMPLETED" && record.fileExists
-                            ? "File verified locally"
+                          {record.status === "COMPLETED" && readyFormatSet.has(record.format)
+                            ? record.fileExists
+                              ? "File verified locally"
+                              : "Prepared output confirmed by the media worker"
                             : record.status === "FAILED"
                               ? record.errorMessage ?? "Export failed"
                               : "Preparing or waiting for a fresh export"}

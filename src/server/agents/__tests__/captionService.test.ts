@@ -288,6 +288,25 @@ describe("caption service helpers", () => {
     ).toBe(false);
   });
 
+  it("extracts saved Studio cues into a worker-safe SRT payload", () => {
+    const cues = __captionServiceTestUtils.extractManualCaptionCues({
+      manuallyEdited: true,
+      cues: [
+        { index: 8, startSeconds: 0, endSeconds: 1.25, text: "  Keep   the   faith  " },
+        { index: 9, startSeconds: 1.25, endSeconds: 3, text: "God is faithful." },
+        { index: 10, startSeconds: 4, endSeconds: 3, text: "Invalid timing" },
+      ],
+    });
+
+    expect(cues).toEqual([
+      { index: 1, startSeconds: 0, endSeconds: 1.25, text: "Keep the faith" },
+      { index: 2, startSeconds: 1.25, endSeconds: 3, text: "God is faithful." },
+    ]);
+    expect(__captionServiceTestUtils.buildSrtFromCues(cues)).toContain(
+      "00:00:00,000 --> 00:00:01,250\nKeep the faith",
+    );
+  });
+
   it("writes subtitle files atomically before captions are marked generated", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caption-atomic-"));
     try {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canChooseClipForProduction,
   resolveClipStudioAssetInvalidation,
+  resolveClipStudioBoundaryReviewUpdate,
   resolveClipStudioContentValues,
   shouldRecordExplicitTranscriptReview,
 } from "@/lib/clipContentPersistence";
@@ -38,6 +39,25 @@ describe("clip content persistence", () => {
       onVideoCaptionChanged: true,
       visualOverlayChanged: false,
     })).toBe("ON_VIDEO_CAPTIONS");
+  });
+
+  it("does not downgrade boundary quality when only copy or styling changes", () => {
+    expect(resolveClipStudioBoundaryReviewUpdate({
+      boundariesChanged: false,
+      startSeconds: 120,
+      endSeconds: 180,
+    })).toEqual({});
+  });
+
+  it("marks changed boundaries for review with the revised range", () => {
+    expect(resolveClipStudioBoundaryReviewUpdate({
+      boundariesChanged: true,
+      startSeconds: 120.125,
+      endSeconds: 180.875,
+    })).toEqual({
+      boundaryQuality: "NEEDS_REVIEW",
+      boundaryAdjustmentReason: "Clip boundaries were manually edited to 120.13-180.88s. Re-review recommended.",
+    });
   });
 
   it("does not let single or batch decisions bypass transcript review", () => {

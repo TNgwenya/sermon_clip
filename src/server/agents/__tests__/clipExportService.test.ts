@@ -440,6 +440,43 @@ describe("clip export service", () => {
     expect(filter).toContain("format=yuv420p");
   });
 
+  it("preserves manual framing already baked into a prepared vertical master", () => {
+    expect(__clipExportTestUtils.shouldPreservePreparedManualFraming({
+      format: "VERTICAL_9_16",
+      sourceKind: "PREPARED_OVERLAY",
+      hasManualCrop: true,
+    })).toBe(true);
+
+    expect(__clipExportTestUtils.shouldPreservePreparedManualFraming({
+      format: "VERTICAL_9_16",
+      sourceKind: "ORIGINAL_SERMON",
+      hasManualCrop: true,
+    })).toBe(false);
+
+    expect(__clipExportTestUtils.shouldPreservePreparedManualFraming({
+      format: "SQUARE_1_1",
+      sourceKind: "PREPARED_RENDERED",
+      hasManualCrop: true,
+    })).toBe(false);
+  });
+
+  it("passes persisted vertical center and zoom into direct smart-crop exports", () => {
+    const filter = __clipExportTestUtils.buildVideoFilter(
+      { format: "VERTICAL_9_16", width: 1080, height: 1920 },
+      "SMART_CROP",
+      {
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        subjectCenterX: 0.5,
+        subjectCenterY: 0.58,
+        zoom: 1.08,
+      },
+    );
+
+    expect(filter).toContain("scale=3686:2074");
+    expect(filter).toContain(":154,setsar=1");
+  });
+
   it("builds left-focus filter for horizontal output", () => {
     const filter = __clipExportTestUtils.buildVideoFilter(
       { format: "HORIZONTAL_16_9", width: 1920, height: 1080 },

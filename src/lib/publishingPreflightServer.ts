@@ -37,6 +37,7 @@ export async function runPublishingPreflight(input: {
         exportFormat: true,
         exportStatus: true,
         exportFreshness: true,
+        captionData: true,
         transcriptSafetyStatus: true,
         exportedFilePath: true,
         exportPath: true,

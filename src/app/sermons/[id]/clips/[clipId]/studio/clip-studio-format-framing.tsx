@@ -156,6 +156,7 @@ export function ClipStudioFormatFraming({
   const previewSummary = summarizeExportSettings(previewSettings);
   const warnings = buildFramingWarnings(previewSettings);
   const manualCropCount = manualCropPreviewKeyframes.length;
+  const manualCropSupported = primaryFormat === "VERTICAL_9_16";
   const activeModeLabel = resolveFramingDisplayLabel(previewSettings);
   const frameQualitySummary = useMemo(() => {
     if (framingDecisionSummary) {
@@ -236,6 +237,11 @@ export function ClipStudioFormatFraming({
     keyframes?: Array<{ timeSeconds: number; centerX: number; centerY?: number; zoom?: number }>;
   }) {
     setCropMessage("");
+    if (!manualCropSupported) {
+      setCropSuccess(false);
+      setCropMessage("Switch Output shape to Vertical before adjusting the master crop.");
+      return;
+    }
     const keyframes = input.keyframes
       ? normalizeManualCropKeyframes(input.keyframes)
       : input.nudge
@@ -251,7 +257,7 @@ export function ClipStudioFormatFraming({
     setManualCropPreviewKeyframes(keyframes);
     setFramingMode("SMART_CROP");
     setCropSuccess(true);
-    setCropMessage("Framing adjusted in preview. Prepare for Posting saves it.");
+    setCropMessage("Vertical framing adjusted in preview. Prepare for Posting saves it to the master.");
   }
 
   function adjustManualKeyframes(input: { centerX?: number; centerY?: number; zoom?: number }) {
@@ -263,7 +269,11 @@ export function ClipStudioFormatFraming({
       ...keyframe,
       centerX: input.centerX ?? keyframe.centerX,
       centerY: input.centerY ?? keyframe.centerY ?? 0.5,
-      zoom: input.zoom ?? keyframe.zoom ?? 1,
+      zoom: input.zoom ?? (
+        input.centerY !== undefined && input.centerY !== 0.5
+          ? Math.max(keyframe.zoom ?? 1, 1.08)
+          : keyframe.zoom ?? 1
+      ),
     }));
 
     previewManualCrop({ keyframes });
@@ -386,25 +396,25 @@ export function ClipStudioFormatFraming({
               <h3 id="manual-adjust-heading">Fine tune crop</h3>
             </div>
             <StatusBadge tone={manualCropCount > 0 ? "accent" : "neutral"}>
-              {manualCropCount > 0 ? "Custom preview" : "Automatic"}
+              {!manualCropSupported ? "Vertical master only" : manualCropCount > 0 ? "Custom preview" : "Automatic"}
             </StatusBadge>
           </div>
           <div className="framing-control-grid compact">
-            <button type="button" className="button secondary" onClick={() => previewManualCrop({ direction: "left" })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => previewManualCrop({ direction: "left" })} disabled={isPending || !manualCropSupported}>
               Left
             </button>
-            <button type="button" className="button secondary" onClick={() => previewManualCrop({ direction: "center" })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => previewManualCrop({ direction: "center" })} disabled={isPending || !manualCropSupported}>
               Center
             </button>
-            <button type="button" className="button secondary" onClick={() => previewManualCrop({ direction: "right" })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => previewManualCrop({ direction: "right" })} disabled={isPending || !manualCropSupported}>
               Right
             </button>
           </div>
           <div className="framing-nudge-row">
-            <button type="button" className="button secondary" onClick={() => previewManualCrop({ nudge: "left" })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => previewManualCrop({ nudge: "left" })} disabled={isPending || !manualCropSupported}>
               Nudge left
             </button>
-            <button type="button" className="button secondary" onClick={() => previewManualCrop({ nudge: "right" })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => previewManualCrop({ nudge: "right" })} disabled={isPending || !manualCropSupported}>
               Nudge right
             </button>
             <button type="button" className="button secondary" onClick={resetManualCrop} disabled={isPending || manualCropCount === 0}>
@@ -412,25 +422,27 @@ export function ClipStudioFormatFraming({
             </button>
           </div>
           <div className="framing-nudge-row">
-            <button type="button" className="button secondary" onClick={() => adjustManualKeyframes({ centerY: 0.42 })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => adjustManualKeyframes({ centerY: 0.42 })} disabled={isPending || !manualCropSupported}>
               Nudge up
             </button>
-            <button type="button" className="button secondary" onClick={() => adjustManualKeyframes({ centerY: 0.58 })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => adjustManualKeyframes({ centerY: 0.58 })} disabled={isPending || !manualCropSupported}>
               Nudge down
             </button>
-            <button type="button" className="button secondary" onClick={() => adjustManualKeyframes({ zoom: 1.18 })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => adjustManualKeyframes({ zoom: 1.18 })} disabled={isPending || !manualCropSupported}>
               Zoom in
             </button>
           </div>
           <div className="framing-nudge-row compact-two">
-            <button type="button" className="button secondary" onClick={() => adjustManualKeyframes({ zoom: 1 })} disabled={isPending}>
+            <button type="button" className="button secondary" onClick={() => adjustManualKeyframes({ zoom: 1, centerY: 0.5 })} disabled={isPending || !manualCropSupported}>
               Zoom out
             </button>
           </div>
           <p className="muted small">
-            {manualCropCount > 0
-              ? "Custom framing is active in this preview. Prepare for Posting saves it to the final video."
-              : "Manual adjust previews a crop correction for the final render."}
+            {!manualCropSupported
+              ? "Switch Output shape to Vertical to adjust the master crop. Square and horizontal versions inherit that prepared framing."
+              : manualCropCount > 0
+                ? "Custom framing is applied to the vertical master. Square and horizontal versions inherit that prepared framing."
+                : "Manual adjust previews the crop that will be rendered into the vertical master."}
           </p>
           {cropMessage ? (
             <p className={cropSuccess ? "success-banner" : "error-banner"} role="status" aria-live="polite">

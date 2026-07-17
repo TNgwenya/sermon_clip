@@ -13,6 +13,8 @@ export type FramingPreset = ClipExportLayoutStrategy;
 export type SmartCropPoint = {
   timeSeconds: number;
   centerX: number;
+  centerY?: number;
+  zoom?: number;
   confidence?: number;
   stabilized?: boolean;
   rejected?: boolean;
@@ -318,6 +320,7 @@ export function buildVerticalFramingFilter(
     sourceWidth?: number | null;
     sourceHeight?: number | null;
     subjectCenterX?: number | null;
+    subjectCenterY?: number | null;
     subjectCenters?: SmartCropPoint[] | null;
     zoom?: number | null;
   },
@@ -371,7 +374,15 @@ export function buildVerticalFramingFilter(
           ? staticCropX
           : rawCropXExpression;
         const cropXExpression = escapeFfmpegExpression(`min(max(${safeCropXExpression},0),${maxX})`);
-        const cropY = Math.max(0, Math.min(maxY, Math.round(maxY * 0.18)));
+        const cropY = typeof options.subjectCenterY === "number"
+          ? Math.max(
+              0,
+              Math.min(
+                maxY,
+                Math.round(Math.max(0, Math.min(1, options.subjectCenterY)) * scaledHeight - 960),
+              ),
+            )
+          : Math.max(0, Math.min(maxY, Math.round(maxY * 0.18)));
 
         return `[${inputLabel}]setpts=PTS-STARTPTS,scale=${scaledWidth}:${scaledHeight},crop=1080:1920:${cropXExpression}:${cropY},setsar=1,format=yuv420p[v]`;
       }

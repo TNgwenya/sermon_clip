@@ -9212,6 +9212,15 @@ textarea::placeholder {
     font-weight: 900;
   }
 
+  .clip-studio-live-brand-tint {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;
+    background: var(--clip-brand-color, #75d9b8);
+    opacity: var(--clip-brand-tint-opacity, 0);
+  }
+
   .clip-studio-live-brand-slate {
     position: absolute;
     z-index: 8;

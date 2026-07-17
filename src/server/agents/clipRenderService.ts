@@ -38,6 +38,7 @@ import {
   resolveFramingPreset,
   type FramingPreset,
 } from "@/lib/clipFraming";
+import { normalizeManualCropKeyframes } from "@/lib/manualCrop";
 import {
   normalizeSpeechCleanupIntensity,
   resolveSpeechCleanupProfile,
@@ -92,6 +93,7 @@ type ClipWithSermon = Pick<
   | "renderStatus"
   | "renderedFilePath"
   | "exportLayoutStrategy"
+  | "manualCropKeyframes"
 > & {
   sermon: {
     id: string;
@@ -186,8 +188,38 @@ type RenderSmartCrop = {
   sourceWidth: number;
   sourceHeight: number;
   subjectCenterX: number;
-  subjectCenters?: Array<{ timeSeconds: number; centerX: number }>;
+  subjectCenterY?: number;
+  zoom?: number;
+  subjectCenters?: Array<{
+    timeSeconds: number;
+    centerX: number;
+    centerY?: number;
+    zoom?: number;
+  }>;
 };
+
+function resolveManualRenderSmartCrop(value: unknown): Pick<
+  RenderSmartCrop,
+  "subjectCenterX" | "subjectCenterY" | "zoom" | "subjectCenters"
+> | null {
+  const keyframes = normalizeManualCropKeyframes(value);
+  const firstKeyframe = keyframes[0];
+  if (!firstKeyframe) {
+    return null;
+  }
+
+  return {
+    subjectCenterX: firstKeyframe.centerX,
+    subjectCenterY: firstKeyframe.centerY ?? 0.5,
+    zoom: firstKeyframe.zoom ?? 1,
+    subjectCenters: keyframes.map((keyframe) => ({
+      timeSeconds: keyframe.timeSeconds,
+      centerX: keyframe.centerX,
+      ...(keyframe.centerY !== undefined ? { centerY: keyframe.centerY } : {}),
+      ...(keyframe.zoom !== undefined ? { zoom: keyframe.zoom } : {}),
+    })),
+  };
+}
 
 type BatchRenderClip = Pick<ClipCandidate, "renderStatus" | "renderFreshness">;
 
@@ -755,6 +787,7 @@ async function loadClipForRender(clipCandidateId: string): Promise<ClipWithSermo
       renderStatus: true,
       renderedFilePath: true,
       exportLayoutStrategy: true,
+      manualCropKeyframes: true,
       sermon: {
         select: {
           id: true,
@@ -1021,14 +1054,21 @@ export async function renderApprovedClip(
       }
     }
 
+    const manualSmartCrop = resolveManualRenderSmartCrop(clip.manualCropKeyframes);
     const smartCrop =
       framingPreset === "SMART_CROP"
         ? await Promise.all([
             getMediaDimensions(sourceVideoPath, options?.ffmpegPath).catch(() => null),
-            resolveSmartCropCenter(clip.id),
-            resolveSmartCropTimeline(clip.id, effectiveBoundaries),
+            manualSmartCrop ? Promise.resolve(null) : resolveSmartCropCenter(clip.id),
+            manualSmartCrop ? Promise.resolve([]) : resolveSmartCropTimeline(clip.id, effectiveBoundaries),
           ]).then(([dimensions, center, timeline]) => (
-            dimensions && center
+            dimensions && manualSmartCrop
+              ? {
+                  sourceWidth: dimensions.width,
+                  sourceHeight: dimensions.height,
+                  ...manualSmartCrop,
+                }
+              : dimensions && center
               ? {
                   sourceWidth: dimensions.width,
                   sourceHeight: dimensions.height,
@@ -1218,4 +1258,5 @@ export const __clipRenderTestUtils = {
   resolveRenderSpeechCleanupSettings,
   resolveRenderConcurrency,
   resolveRenderBoundaries,
+  resolveManualRenderSmartCrop,
 };

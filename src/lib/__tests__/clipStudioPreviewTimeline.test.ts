@@ -6,8 +6,10 @@ import {
   mapSourceSecondsToCleanedPreviewSeconds,
   resolveActiveCaptionCueText,
   resolveActiveCaptionWordIndex,
+  resolveCompositionPreviewDuration,
   resolveSpeechCleanupJumpTarget,
   shouldShowHookOverlay,
+  synchronizePreviewBackdropMedia,
 } from "@/lib/clipStudioPreviewTimeline";
 import { createSpeechCleanupEditsFromPlan } from "@/lib/speechCleanupPlan";
 
@@ -21,6 +23,103 @@ const baseHook = {
   size: "medium" as const,
   bold: true,
 };
+
+describe("resolveCompositionPreviewDuration", () => {
+  it("uses cleaned duration for timed branding when speech cleanup is active", () => {
+    const plan = buildSpeechCleanupPreviewPlan({
+      captionCues: [
+        { index: 1, startSeconds: 0, endSeconds: 2, text: "Opening" },
+        { index: 2, startSeconds: 5, endSeconds: 8, text: "Closing" },
+      ],
+      durationSeconds: 10,
+      speechCleanup: {
+        removeDeadAir: false,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "normal",
+      },
+    });
+
+    expect(plan.enabled).toBe(true);
+    expect(resolveCompositionPreviewDuration({
+      draftDurationSeconds: 10,
+      mediaDurationSeconds: 10,
+      speechCleanupPlan: plan,
+    })).toBe(plan.cleanedDurationSeconds);
+  });
+
+  it("uses draft duration when cleanup is inactive", () => {
+    expect(resolveCompositionPreviewDuration({
+      draftDurationSeconds: 10,
+      mediaDurationSeconds: 12,
+      speechCleanupPlan: null,
+    })).toBe(10);
+  });
+});
+
+describe("synchronizePreviewBackdropMedia", () => {
+  it("matches foreground time and playback when the blurred backdrop is ready", () => {
+    let playCount = 0;
+    const foreground = {
+      currentTime: 14.2,
+      duration: 30,
+      readyState: 4,
+      playbackRate: 1.25,
+      paused: false,
+      ended: false,
+      play: async () => undefined,
+      pause: () => undefined,
+    };
+    const backdrop = {
+      currentTime: 2,
+      duration: 30,
+      readyState: 4,
+      playbackRate: 1,
+      paused: true,
+      ended: false,
+      play: async () => {
+        playCount += 1;
+      },
+      pause: () => undefined,
+    };
+
+    synchronizePreviewBackdropMedia(foreground, backdrop);
+
+    expect(backdrop.currentTime).toBe(14.2);
+    expect(backdrop.playbackRate).toBe(1.25);
+    expect(playCount).toBe(1);
+  });
+
+  it("pauses the backdrop with the foreground", () => {
+    let pauseCount = 0;
+    const foreground = {
+      currentTime: 8,
+      duration: 30,
+      readyState: 4,
+      playbackRate: 1,
+      paused: true,
+      ended: false,
+      play: async () => undefined,
+      pause: () => undefined,
+    };
+    const backdrop = {
+      currentTime: 8,
+      duration: 30,
+      readyState: 4,
+      playbackRate: 1,
+      paused: false,
+      ended: false,
+      play: async () => undefined,
+      pause: () => {
+        pauseCount += 1;
+      },
+    };
+
+    synchronizePreviewBackdropMedia(foreground, backdrop);
+
+    expect(pauseCount).toBe(1);
+  });
+});
 
 describe("shouldShowHookOverlay", () => {
   it("shows the hook only inside its configured duration", () => {

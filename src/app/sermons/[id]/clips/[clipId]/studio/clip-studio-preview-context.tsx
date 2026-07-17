@@ -69,7 +69,8 @@ type ClipStudioPreviewContextValue = {
   sermonTitle: string;
   preacherName: string;
   isDraftDirty: boolean;
-  markDraftSaved: () => void;
+  draftCompositionKey: string;
+  markDraftSaved: (compositionKey?: string) => void;
   updateExportSettings: (settings: ExportSettings) => void;
   updateBrandingConfig: (config: ClipBrandingConfig) => void;
   updateEditPreview: (preview: ClipStudioEditPreview) => void;
@@ -352,10 +353,10 @@ export function ClipStudioPreviewProvider({
     return () => document.removeEventListener("click", confirmStudioNavigation, true);
   }, [isDraftDirty]);
 
-  const markDraftSaved = useCallback(() => {
-    setSavedCompositionKey(currentCompositionKey);
+  const markDraftSaved = useCallback((compositionKey?: string) => {
+    setSavedCompositionKey(compositionKey ?? latestCompositionKeyRef.current);
     setDraftTrackingReady(true);
-  }, [currentCompositionKey]);
+  }, []);
 
   const updateExportSettings = useCallback((settings: ExportSettings) => {
     setExportSettings((current) => (sameExportSettings(current, settings) ? current : settings));
@@ -402,6 +403,7 @@ export function ClipStudioPreviewProvider({
       sermonTitle,
       preacherName,
       isDraftDirty,
+      draftCompositionKey: currentCompositionKey,
       markDraftSaved,
       updateExportSettings,
       updateBrandingConfig,
@@ -413,6 +415,7 @@ export function ClipStudioPreviewProvider({
     [
       brandingConfig,
       churchName,
+      currentCompositionKey,
       editPreview,
       exportSettings,
       isDraftDirty,

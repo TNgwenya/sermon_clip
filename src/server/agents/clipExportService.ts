@@ -145,6 +145,24 @@ type ExportSourceSelection = {
   };
 };
 
+type ExportSmartCrop = {
+  sourceWidth: number;
+  sourceHeight: number;
+  subjectCenterX: number;
+  subjectCenterY?: number;
+  zoom?: number;
+  subjectCenters?: Array<{
+    timeSeconds: number;
+    centerX: number;
+    centerY?: number;
+    zoom?: number;
+    confidence?: number;
+    stabilized?: boolean;
+    rejected?: boolean;
+    frozen?: boolean;
+  }>;
+};
+
 const EXPORT_SPECS: Record<ExportPreset, ExportSpec> = {
   VERTICAL_9_16: {
     format: "VERTICAL_9_16",
@@ -193,13 +211,7 @@ async function fileHasBytes(filePath: string): Promise<boolean> {
 function buildVideoFilter(
   spec: ExportSpec,
   layout: ExportLayoutStrategy,
-  smartCrop?: {
-    sourceWidth: number;
-    sourceHeight: number;
-    subjectCenterX: number;
-    zoom?: number;
-    subjectCenters?: Array<{ timeSeconds: number; centerX: number; confidence?: number; stabilized?: boolean; rejected?: boolean; frozen?: boolean }>;
-  } | null,
+  smartCrop?: ExportSmartCrop | null,
 ): string {
   if (spec.format === "VERTICAL_9_16") {
     return buildVerticalFramingFilter(layout, smartCrop ?? undefined);
@@ -222,6 +234,16 @@ function buildVideoFilter(
   }
 
   return `[0:v]scale=${spec.width}:${spec.height}:force_original_aspect_ratio=increase,crop=${spec.width}:${spec.height},format=yuv420p[v]`;
+}
+
+function shouldPreservePreparedManualFraming(input: {
+  format: ExportPreset;
+  sourceKind: ExportSourceKind;
+  hasManualCrop: boolean;
+}): boolean {
+  return input.hasManualCrop
+    && input.format === "VERTICAL_9_16"
+    && input.sourceKind !== "ORIGINAL_SERMON";
 }
 
 function getTempPath(outputPath: string): string {
@@ -872,27 +894,35 @@ export async function exportClipWithPreset(
       captionData: clip.captionData,
     });
     const manualCropKeyframes = normalizeManualCropKeyframes(clip.manualCropKeyframes);
+    const firstManualCropKeyframe = manualCropKeyframes[0];
     const boundaries = {
       startTimeSeconds: clip.adjustedStartTimeSeconds ?? clip.startTimeSeconds,
       endTimeSeconds: clip.adjustedEndTimeSeconds ?? clip.endTimeSeconds,
     };
-    const smartCrop =
+    const smartCrop: ExportSmartCrop | null =
       layoutStrategy === "SMART_CROP"
         ? await Promise.all([
             getMediaDimensions(exportSourcePath, options?.ffmpegPath).catch(() => null),
-            resolveSmartCropCenter(clip.id),
+            firstManualCropKeyframe ? Promise.resolve(null) : resolveSmartCropCenter(clip.id),
             manualCropKeyframes.length > 0 ? Promise.resolve([]) : resolveSmartCropTimeline(clip.id, boundaries),
           ]).then(([dimensions, center, timeline]) => (
-            dimensions && center
+            dimensions && (firstManualCropKeyframe || center)
               ? {
                   sourceWidth: dimensions.width,
                   sourceHeight: dimensions.height,
-                  subjectCenterX: center.centerX,
-                  zoom: 1,
+                  subjectCenterX: firstManualCropKeyframe?.centerX ?? center?.centerX ?? 0.5,
+                  ...(firstManualCropKeyframe
+                    ? {
+                        subjectCenterY: firstManualCropKeyframe.centerY ?? 0.5,
+                        zoom: firstManualCropKeyframe.zoom ?? 1,
+                      }
+                    : { zoom: 1 }),
                   subjectCenters: manualCropKeyframes.length > 0
                     ? manualCropKeyframes.map((point) => ({
                         timeSeconds: point.timeSeconds,
                         centerX: point.centerX,
+                        ...(point.centerY !== undefined ? { centerY: point.centerY } : {}),
+                        ...(point.zoom !== undefined ? { zoom: point.zoom } : {}),
                         confidence: 1,
                         stabilized: false,
                         rejected: false,
@@ -933,7 +963,16 @@ export async function exportClipWithPreset(
     if (effectiveSmartCrop) {
       effectiveSmartCrop = {
         ...effectiveSmartCrop,
-        zoom: framingDecision.zoom,
+        zoom: firstManualCropKeyframe?.zoom ?? (firstManualCropKeyframe ? 1 : framingDecision.zoom),
+      };
+    }
+
+    if (firstManualCropKeyframe && layoutStrategy === "SMART_CROP" && smartCrop) {
+      effectiveLayoutStrategy = "SMART_CROP";
+      effectiveSmartCrop = {
+        ...smartCrop,
+        subjectCenterY: firstManualCropKeyframe.centerY ?? 0.5,
+        zoom: firstManualCropKeyframe.zoom ?? 1,
       };
     }
 
@@ -949,8 +988,15 @@ export async function exportClipWithPreset(
       );
     }
 
-    let filter = buildVideoFilter(spec, effectiveLayoutStrategy, effectiveSmartCrop);
-    if (effectiveLayoutStrategy === "SMART_CROP") {
+    const preservePreparedManualFraming = shouldPreservePreparedManualFraming({
+      format,
+      sourceKind: exportSource.kind,
+      hasManualCrop: manualCropKeyframes.length > 0,
+    });
+    let filter = preservePreparedManualFraming
+      ? buildVideoFilter(spec, "CENTER_CROP", null)
+      : buildVideoFilter(spec, effectiveLayoutStrategy, effectiveSmartCrop);
+    if (effectiveLayoutStrategy === "SMART_CROP" && !preservePreparedManualFraming) {
       const filterRiskReason = getSmartCropFilterRiskReason(filter);
       if (filterRiskReason) {
         effectiveLayoutStrategy = "FIT_BLURRED_BACKGROUND";
@@ -1215,6 +1261,7 @@ export const __clipExportTestUtils = {
   fileHasBytes,
   resolvePreparedExportSource,
   resolveBestExportSource,
+  shouldPreservePreparedManualFraming,
   buildReadableExportFileStem,
   resolveOutputPath(input: {
     sermonId: string;

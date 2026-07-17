@@ -62,6 +62,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       exportStatus: true,
       exportFreshness: true,
       exportFormat: true,
+      captionData: true,
       exportedFilePath: true,
       exportPath: true,
       overlayVideoPath: true,

@@ -370,6 +370,37 @@ describe("clip render service validation", () => {
     expect(filter.filterComplex).toContain("[trimmed_v]setpts=PTS-STARTPTS,scale=1080:1920");
   });
 
+  it("resolves persisted manual crop axes and zoom for the first render", () => {
+    expect(__clipRenderTestUtils.resolveManualRenderSmartCrop([
+      { timeSeconds: 0, centerX: 0.38, centerY: 0.42, zoom: 1.08 },
+      { timeSeconds: 8, centerX: 0.62, centerY: 0.42, zoom: 1.08 },
+    ])).toEqual({
+      subjectCenterX: 0.38,
+      subjectCenterY: 0.42,
+      zoom: 1.08,
+      subjectCenters: [
+        { timeSeconds: 0, centerX: 0.38, centerY: 0.42, zoom: 1.08 },
+        { timeSeconds: 8, centerX: 0.62, centerY: 0.42, zoom: 1.08 },
+      ],
+    });
+  });
+
+  it("uses manual vertical framing in the render filter", () => {
+    const manualCrop = __clipRenderTestUtils.resolveManualRenderSmartCrop([
+      { timeSeconds: 0, centerX: 0.5, centerY: 0.58, zoom: 1.08 },
+    ]);
+    const filter = __clipRenderTestUtils.buildRenderFilter({
+      framingPreset: "SMART_CROP",
+      startTimeSeconds: 0,
+      smartCrop: manualCrop
+        ? { sourceWidth: 1920, sourceHeight: 1080, ...manualCrop }
+        : null,
+    });
+
+    expect(filter.filterComplex).toContain("scale=3686:2074");
+    expect(filter.filterComplex).toContain(":154,setsar=1");
+  });
+
   it("does not treat empty rendered video files as reusable media", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "render-empty-"));
     try {

@@ -1,6 +1,39 @@
 import { describe, expect, it } from "vitest";
 
-import { __clipBrandingTestUtils } from "@/lib/clipBranding";
+import {
+  __clipBrandingTestUtils,
+  resolveBrandBackgroundOpacity,
+  shouldBrandingLowerThirdYieldToCaptions,
+} from "@/lib/clipBranding";
+
+describe("resolveBrandBackgroundOpacity", () => {
+  it("keeps Studio tint strength aligned with the final branding compositor", () => {
+    expect(resolveBrandBackgroundOpacity("NONE")).toBe(0);
+    expect(resolveBrandBackgroundOpacity("SOFT_GRADIENT")).toBe(0.09);
+    expect(resolveBrandBackgroundOpacity("BLURRED_TINT")).toBe(0.12);
+    expect(resolveBrandBackgroundOpacity("SOLID_BRAND")).toBe(0.16);
+  });
+});
+
+describe("shouldBrandingLowerThirdYieldToCaptions", () => {
+  it("matches the prepared-video rule when burned-in caption cues are active", () => {
+    expect(shouldBrandingLowerThirdYieldToCaptions({
+      applyCaptionsToClip: true,
+      captionCueCount: 3,
+    })).toBe(true);
+  });
+
+  it("keeps the lower third when captions are disabled or have no cues", () => {
+    expect(shouldBrandingLowerThirdYieldToCaptions({
+      applyCaptionsToClip: false,
+      captionCueCount: 3,
+    })).toBe(false);
+    expect(shouldBrandingLowerThirdYieldToCaptions({
+      applyCaptionsToClip: true,
+      captionCueCount: 0,
+    })).toBe(false);
+  });
+});
 
 describe("resolveBrandingConfig", () => {
   it("uses safe defaults when branding settings are missing", () => {

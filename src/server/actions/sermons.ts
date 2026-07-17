@@ -57,6 +57,7 @@ import {
   detectClipEditImpact,
   invalidateAfterBoundaryOrCropChange,
   invalidateAfterCaptionTextChange,
+  invalidateAfterExportSettingChange,
   invalidateAfterOverlaySettingChange,
   isClipApprovedForPostingAssets,
   listClipFreshnessForSermon,
@@ -68,6 +69,7 @@ import {
 import {
   buildEditableCaptionCuesFromTranscriptSegments,
   buildSrtFromEditableCues,
+  mergeCaptionCueTextOverrides,
   type EditableCaptionCue,
   parseHashtagEditorInput,
   validateCaptionCuesFromTranscript,
@@ -97,6 +99,7 @@ import {
   isValidPlatformPreset,
   markLatestExports,
   mapPlatformPresetToFormat,
+  orderExportFormatsForCanonicalPrimary,
   resolveExportHistory,
   resolveExportSettings,
   type ClipStudioExportRecord,
@@ -122,6 +125,7 @@ import { formatSecondsForTimestampInput } from "@/lib/sermonSegment";
 import type { CaptionStylePresetId } from "@/lib/captionStylePresets";
 import {
   normalizeBrollLayerConfig,
+  normalizeHookOverlayForClipDuration,
   normalizeSpeechCleanupIntensity,
   normalizeCaptionAppearanceSettings,
   type BrollLayerConfig,
@@ -133,6 +137,7 @@ import { buildClipStudioPrepareAssetPlan } from "@/lib/clipStudioPrepare";
 import {
   canChooseClipForProduction,
   resolveClipStudioAssetInvalidation,
+  resolveClipStudioBoundaryReviewUpdate,
   resolveClipStudioContentValues,
   shouldRecordExplicitTranscriptReview,
 } from "@/lib/clipContentPersistence";
@@ -642,6 +647,8 @@ export type UpdateClipStudioEditsState = {
   fieldErrors?: {
     startTimestamp?: string;
     endTimestamp?: string;
+    title?: string;
+    mainCaption?: string;
     captionCues?: string;
     hook?: string;
     hashtags?: string;
@@ -661,6 +668,7 @@ export type UpdateClipExportSettingsInput = {
 
 export type PrepareClipStudioForPostingInput = {
   clipId: string;
+  forceRebuild?: boolean;
   editPreview: {
     startSeconds: number | null;
     endSeconds: number | null;
@@ -710,6 +718,8 @@ export type PrepareClipStudioForPostingState = {
   success: boolean;
   message: string;
   results: ClipStudioRenderResult[];
+  /** The submitted Studio composition reached durable storage, even if media preparation failed later. */
+  draftSaved?: boolean;
   queued?: boolean;
   fieldErrors?: UpdateClipStudioEditsState["fieldErrors"] & UpdateClipExportSettingsState["fieldErrors"] & ClipBrandingActionState["fieldErrors"];
   warnings?: string[];
@@ -4166,31 +4176,6 @@ function normalizeClipStudioCaptionPosition(value: unknown): CaptionPosition {
   return value === "top" || value === "middle" || value === "lower" ? value : "lower";
 }
 
-function normalizeHookOverlay(input: UpdateClipStudioEditsInput["hookOverlay"]) {
-  const position =
-    input.position === "top" || input.position === "center" || input.position === "lower"
-      ? input.position
-      : "top";
-  const animation =
-    input.animation === "fade" || input.animation === "pan-in" || input.animation === "pop" || input.animation === "none"
-      ? input.animation
-      : "fade";
-  const size = input.size === "small" || input.size === "medium" || input.size === "large" ? input.size : "medium";
-
-  return {
-    enabled: Boolean(input.enabled),
-    text: String(input.text ?? "").trim(),
-    position,
-    startSeconds: Number.isFinite(input.startSeconds) ? Math.max(0, input.startSeconds) : 0,
-    durationSeconds: Number.isFinite(input.durationSeconds)
-      ? Math.min(20, Math.max(1, input.durationSeconds))
-      : 6,
-    animation,
-    size,
-    bold: Boolean(input.bold),
-  };
-}
-
 export async function updateClipStudioEditsAction(
   input: UpdateClipStudioEditsInput,
 ): Promise<UpdateClipStudioEditsState> {
@@ -4249,6 +4234,18 @@ export async function updateClipStudioEditsAction(
       success: false,
       message: "Could not save clip changes. Please check the highlighted fields.",
       fieldErrors: timing.fieldErrors,
+      warnings: timing.warnings,
+    };
+  }
+
+  if (!input.title.trim() || !input.mainCaption.trim()) {
+    return {
+      success: false,
+      message: "Could not save clip changes. Add the required title and post caption.",
+      fieldErrors: {
+        title: input.title.trim() ? undefined : "Clip title is required.",
+        mainCaption: input.mainCaption.trim() ? undefined : "Post caption is required.",
+      },
       warnings: timing.warnings,
     };
   }
@@ -4346,14 +4343,21 @@ export async function updateClipStudioEditsAction(
   const shortCaption = input.shortCaption.trim();
   const platformCaption = input.platformCaption.trim();
   const transcriptCaptionCues =
-    boundariesChanged && input.applyCaptionsToClip
+    boundariesChanged
       ? buildEditableCaptionCuesFromTranscriptSegments({
           startTimeSeconds: timing.startSeconds,
           endTimeSeconds: timing.endSeconds,
           segments: selectedTranscriptSegments,
         })
       : [];
-  const draftCaptionCues = input.captionCues.length > 0 ? input.captionCues : transcriptCaptionCues;
+  const draftCaptionCues = boundariesChanged && transcriptCaptionCues.length > 0
+    ? mergeCaptionCueTextOverrides({
+        baseCues: transcriptCaptionCues,
+        textOverrideCues: input.captionCues,
+      })
+    : input.captionCues.length > 0
+      ? input.captionCues
+      : transcriptCaptionCues;
   const captionCueValidation = validateEditableCaptionCues(draftCaptionCues, timing.durationSeconds);
   const normalizedCaptionCues = captionCueValidation.cues;
   const transcriptGroundingValidation = validateCaptionCuesFromTranscript(normalizedCaptionCues, selectedTranscriptText);
@@ -4388,7 +4392,8 @@ export async function updateClipStudioEditsAction(
   const normalizedCaptionStylePresetId = normalizeClipStudioCaptionStylePresetId(input.captionStylePresetId);
   const normalizedCaptionPosition = normalizeClipStudioCaptionPosition(input.captionPosition);
   const normalizedCaptionAppearance = normalizeCaptionAppearanceSettings(input.captionAppearance);
-  const normalizedHookOverlay = normalizeHookOverlay(input.hookOverlay);
+  const hookOverlayVisibility = normalizeHookOverlayForClipDuration(input.hookOverlay, timing.durationSeconds);
+  const normalizedHookOverlay = hookOverlayVisibility.hookOverlay;
   const normalizedBrollLayer = normalizeBrollLayerConfig(input.brollLayer, timing.durationSeconds);
   const normalizedSpeechCleanup = {
     removeDeadAir: Boolean(input.speechCleanup?.removeDeadAir),
@@ -4408,6 +4413,19 @@ export async function updateClipStudioEditsAction(
       },
       warnings: timing.warnings,
     };
+  }
+  if (hookOverlayVisibility.error) {
+    return {
+      success: false,
+      message: "Could not save clip changes. Please check the highlighted fields.",
+      fieldErrors: {
+        hook: hookOverlayVisibility.error,
+      },
+      warnings: timing.warnings,
+    };
+  }
+  if (normalizedHookOverlay.enabled && hookOverlayVisibility.wasClamped) {
+    combinedWarnings.push("Hook overlay timing was fitted inside the current clip duration.");
   }
 
   let srtPath = typeof clip.captionData === "object" && clip.captionData && typeof captionDataRecord["srtPath"] === "string"
@@ -4446,6 +4464,15 @@ export async function updateClipStudioEditsAction(
   const speechCleanupChanged =
     JSON.stringify(previousSpeechCleanup) !== JSON.stringify(normalizedSpeechCleanup) ||
     JSON.stringify(previousSpeechCleanupEdits) !== JSON.stringify(normalizedSpeechCleanupEdits);
+  const studioEditsChanged =
+    boundariesChanged ||
+    socialCopyChanged ||
+    hashtagChanged ||
+    editorialHookChanged ||
+    onVideoCaptionChanged ||
+    visualHookChanged ||
+    brollLayerChanged ||
+    speechCleanupChanged;
   const assetInvalidation = resolveClipStudioAssetInvalidation({
     boundariesChanged,
     speechCleanupChanged,
@@ -4463,8 +4490,11 @@ export async function updateClipStudioEditsAction(
       adjustedEndTimeSeconds: timing.endSeconds,
       transcriptText: selectedTranscriptText,
       title,
-      boundaryQuality: "NEEDS_REVIEW",
-      boundaryAdjustmentReason: `Clip boundaries were manually edited to ${timing.startSeconds.toFixed(2)}-${timing.endSeconds.toFixed(2)}s. Re-review recommended.`,
+      ...resolveClipStudioBoundaryReviewUpdate({
+        boundariesChanged,
+        startSeconds: timing.startSeconds,
+        endSeconds: timing.endSeconds,
+      }),
       caption: mainCaption,
       hook: hookText,
       hashtags,
@@ -4533,7 +4563,7 @@ export async function updateClipStudioEditsAction(
             postReadyBlockers: removeTranscriptSafetyBlocker(clip.postReadyBlockers),
           }
         : {}),
-      ...(clip.status === "EXPORTED" ? { status: "APPROVED" as const } : {}),
+      ...(clip.status === "EXPORTED" && studioEditsChanged ? { status: "APPROVED" as const } : {}),
     },
   });
 
@@ -4669,6 +4699,7 @@ export async function updateClipExportSettingsAction(
       sermonId: true,
       status: true,
       captionData: true,
+      exportFormat: true,
       exportLayoutStrategy: true,
       manualCropKeyframes: true,
     },
@@ -4687,7 +4718,7 @@ export async function updateClipExportSettingsAction(
     ? input.framingMode
     : "CENTER_CROP";
   const previousExportSettings = resolveExportSettings({
-    exportFormat: primaryFormat,
+    exportFormat: clip.exportFormat,
     exportLayoutStrategy: clip.exportLayoutStrategy,
     captionData: clip.captionData,
     manualCropKeyframes: clip.manualCropKeyframes,
@@ -4705,6 +4736,15 @@ export async function updateClipExportSettingsAction(
         ? previousManualCropKeyframes
         : [];
   const manualCropChanged = JSON.stringify(previousManualCropKeyframes) !== JSON.stringify(manualCropKeyframes);
+  const framingChanged =
+    clip.exportLayoutStrategy !== framingMode ||
+    previousExportSettings.framingPersonality !== framingPersonality ||
+    manualCropChanged;
+  const outputSelectionChanged =
+    previousExportSettings.platformPreset !== platformPreset ||
+    previousExportSettings.primaryFormat !== primaryFormat ||
+    previousExportSettings.selectedFormats.join("|") !== normalizedFormats.join("|");
+  const exportSettingsChanged = framingChanged || outputSelectionChanged;
 
   const captionDataRecord =
     clip.captionData && typeof clip.captionData === "object" ? (clip.captionData as Record<string, unknown>) : {};
@@ -4731,11 +4771,11 @@ export async function updateClipExportSettingsAction(
           updatedAt: new Date().toISOString(),
         },
       },
-      ...(clip.status === "EXPORTED" ? { status: "APPROVED" as const } : {}),
+      ...(clip.status === "EXPORTED" && exportSettingsChanged ? { status: "APPROVED" as const } : {}),
     },
   });
 
-  if (clip.exportLayoutStrategy !== framingMode || previousExportSettings.framingPersonality !== framingPersonality || manualCropChanged) {
+  if (framingChanged) {
     await appendPipelineLog(
       clip.sermonId,
       `Regeneration invalidation started for clip ${clip.id}: framing settings changed from Clip Studio format settings.`,
@@ -4747,6 +4787,19 @@ export async function updateClipExportSettingsAction(
     await appendPipelineLog(
       clip.sermonId,
       `Regeneration invalidation completed for clip ${clip.id}: render/caption/burn/overlay/export freshness updated.`,
+    );
+  } else if (outputSelectionChanged) {
+    await appendPipelineLog(
+      clip.sermonId,
+      `Regeneration invalidation started for clip ${clip.id}: output formats changed from Clip Studio.`,
+    );
+    await invalidateAfterExportSettingChange(
+      clip.id,
+      "Output formats changed from Clip Studio. A fresh final export is required.",
+    );
+    await appendPipelineLog(
+      clip.sermonId,
+      `Regeneration invalidation completed for clip ${clip.id}: final export freshness updated.`,
     );
   }
 
@@ -4859,6 +4912,7 @@ export async function updateClipBrandingAction(input: {
       : previousConfig.backgroundStyle,
     themeColor,
   };
+  const brandingChanged = JSON.stringify(previousConfig) !== JSON.stringify(nextConfig);
 
   await prisma.clipCandidate.update({
     where: { id: clip.id },
@@ -4870,11 +4924,11 @@ export async function updateClipBrandingAction(input: {
           updatedAt: new Date().toISOString(),
         },
       },
-      ...(clip.status === "EXPORTED" ? { status: "APPROVED" as const } : {}),
+      ...(clip.status === "EXPORTED" && brandingChanged ? { status: "APPROVED" as const } : {}),
     },
   });
 
-  if (JSON.stringify(previousConfig) !== JSON.stringify(nextConfig)) {
+  if (brandingChanged) {
     await appendPipelineLog(clip.sermonId, `Regeneration invalidation started for clip ${clip.id}: branding changed from Clip Studio.`);
     await invalidateAfterOverlaySettingChange(
       clip.id,
@@ -5099,6 +5153,7 @@ async function updateClipStudioExportHistory(clipId: string, exportHistory: Clip
 export async function renderClipStudioExportsAction(input: {
   clipId: string;
   selectedFormats?: string[];
+  forceRebuild?: boolean;
 }): Promise<ClipStudioRenderActionState> {
   const clipId = input.clipId.trim();
   if (!clipId) {
@@ -5165,7 +5220,10 @@ export async function renderClipStudioExportsAction(input: {
       ? Array.from(new Set(input.selectedFormats.filter((format): format is "VERTICAL_9_16" | "HORIZONTAL_16_9" | "SQUARE_1_1" => isValidExportFormat(format))))
       : exportSettings.selectedFormats;
 
-  const selectedFormats = requestedFormats.length > 0 ? requestedFormats : [exportSettings.primaryFormat];
+  const selectedFormats = orderExportFormatsForCanonicalPrimary(
+    requestedFormats.length > 0 ? requestedFormats : [exportSettings.primaryFormat],
+    exportSettings.primaryFormat,
+  );
 
   const previousHistory = resolveExportHistory(clip.captionData);
   const renderVersion = nextRenderVersion(previousHistory);
@@ -5183,18 +5241,21 @@ export async function renderClipStudioExportsAction(input: {
     fileHasBytes(clip.renderedFilePath),
     fileHasBytes(clip.captionedVideoPath),
   ]);
-  const preparePlan = buildClipStudioPrepareAssetPlan({
-    renderStatus: clip.renderStatus,
-    renderFreshness: clip.renderFreshness,
-    renderedFileReady,
-    captionsEnabled: captionPreferences.applyCaptionsToClip,
-    captionStatus: clip.captionStatus,
-    captionBurnStatus: clip.captionBurnStatus,
-    captionBurnFreshness: clip.captionBurnFreshness,
-    captionedFileReady,
-    exportStatus: clip.exportStatus,
-    exportFreshness: clip.exportFreshness,
-  });
+  const preparePlan = buildClipStudioPrepareAssetPlan(
+    {
+      renderStatus: clip.renderStatus,
+      renderFreshness: clip.renderFreshness,
+      renderedFileReady,
+      captionsEnabled: captionPreferences.applyCaptionsToClip,
+      captionStatus: clip.captionStatus,
+      captionBurnStatus: clip.captionBurnStatus,
+      captionBurnFreshness: clip.captionBurnFreshness,
+      captionedFileReady,
+      exportStatus: clip.exportStatus,
+      exportFreshness: clip.exportFreshness,
+    },
+    { forceRebuild: input.forceRebuild === true },
+  );
   const results: ClipStudioRenderResult[] = [];
   const formatsToExport: typeof selectedFormats = [];
 
@@ -5455,14 +5516,31 @@ export async function renderClipStudioExportsAction(input: {
   };
 }
 
-export async function prepareClipStudioForPostingAction(
+function resolveClipStudioFormats(input: PrepareClipStudioForPostingInput): {
+  primaryFormat: "VERTICAL_9_16" | "HORIZONTAL_16_9" | "SQUARE_1_1";
+  formats: Array<"VERTICAL_9_16" | "HORIZONTAL_16_9" | "SQUARE_1_1">;
+} {
+  const selectedFormats = Array.from(
+    new Set(input.exportSettings.selectedFormats.filter((format) => isValidExportFormat(format))),
+  );
+  const primaryFormat = isValidExportFormat(input.exportSettings.primaryFormat)
+    ? input.exportSettings.primaryFormat
+    : selectedFormats[0] ?? "VERTICAL_9_16";
+
+  return {
+    primaryFormat,
+    formats: Array.from(new Set([primaryFormat, ...selectedFormats])),
+  };
+}
+
+export async function saveClipStudioDraftAction(
   input: PrepareClipStudioForPostingInput,
 ): Promise<PrepareClipStudioForPostingState> {
   const clipId = input.clipId.trim();
   if (!clipId) {
     return {
       success: false,
-      message: "Missing clip id for preparation.",
+      message: "Missing clip id for this Studio draft.",
       results: [],
     };
   }
@@ -5480,13 +5558,42 @@ export async function prepareClipStudioForPostingAction(
     };
   }
 
-  const selectedFormats = Array.from(
-    new Set(input.exportSettings.selectedFormats.filter((format) => isValidExportFormat(format))),
-  );
-  const primaryFormat = isValidExportFormat(input.exportSettings.primaryFormat)
-    ? input.exportSettings.primaryFormat
-    : selectedFormats[0] ?? "VERTICAL_9_16";
-  const formatsToPrepare = selectedFormats.length > 0 ? selectedFormats : [primaryFormat];
+  const preflightFieldErrors: NonNullable<PrepareClipStudioForPostingState["fieldErrors"]> = {};
+  if (!isValidPlatformPreset(input.exportSettings.platformPreset)) {
+    preflightFieldErrors.platformPreset = "Choose a supported publishing platform.";
+  }
+  if (!isValidExportFormat(input.exportSettings.primaryFormat)) {
+    preflightFieldErrors.primaryFormat = "Choose a supported primary video format.";
+  }
+  if (!isValidFramingMode(input.exportSettings.framingMode)) {
+    preflightFieldErrors.framingMode = "Choose a supported framing mode.";
+  }
+  if (!isValidFramingPersonality(input.exportSettings.framingPersonality)) {
+    preflightFieldErrors.framingPersonality = "Choose a supported framing style.";
+  }
+  if (input.exportSettings.selectedFormats.some((format) => !isValidExportFormat(format))) {
+    preflightFieldErrors.selectedFormats = "One or more selected video formats are unsupported.";
+  }
+  if (!isValidBrandingPreset(input.brandingConfig.preset)) {
+    preflightFieldErrors.preset = "Choose a supported church branding preset.";
+  }
+  if (
+    input.brandingConfig.themeColor !== null &&
+    input.brandingConfig.themeColor.trim() !== "" &&
+    validateThemeColor(input.brandingConfig.themeColor) === null
+  ) {
+    preflightFieldErrors.themeColor = "Theme color must be a hex value such as #0F766E.";
+  }
+  if (Object.keys(preflightFieldErrors).length > 0) {
+    return {
+      success: false,
+      message: "Check the highlighted Studio settings before saving this draft.",
+      results: [],
+      fieldErrors: preflightFieldErrors,
+    };
+  }
+
+  const { primaryFormat, formats: selectedFormats } = resolveClipStudioFormats(input);
 
   const editResult = await updateClipStudioEditsAction({
     clipId,
@@ -5526,7 +5633,7 @@ export async function prepareClipStudioForPostingAction(
     primaryFormat,
     framingMode: input.exportSettings.framingMode,
     framingPersonality: input.exportSettings.framingPersonality,
-    selectedFormats: formatsToPrepare,
+    selectedFormats,
     manualCropKeyframes: input.exportSettings.manualCropKeyframes,
   });
 
@@ -5567,6 +5674,27 @@ export async function prepareClipStudioForPostingAction(
     };
   }
 
+  return {
+    success: true,
+    draftSaved: true,
+    message: "Studio draft saved.",
+    results: [],
+    warnings: editResult.warnings,
+  };
+}
+
+export async function prepareClipStudioForPostingAction(
+  input: PrepareClipStudioForPostingInput,
+): Promise<PrepareClipStudioForPostingState> {
+  const clipId = input.clipId.trim();
+  if (!clipId) {
+    return {
+      success: false,
+      message: "Missing clip id for preparation.",
+      results: [],
+    };
+  }
+
   const clip = await prisma.clipCandidate.findUnique({
     where: { id: clipId },
     select: { id: true, sermonId: true, transcriptSafetyStatus: true },
@@ -5577,18 +5705,26 @@ export async function prepareClipStudioForPostingAction(
       success: false,
       message: "Clip candidate was not found.",
       results: [],
-      warnings: editResult.warnings,
     };
   }
 
+  // A preparation attempt must never mutate a review-blocked clip first and
+  // only report the safety failure afterwards. Draft saving remains available
+  // through saveClipStudioDraftAction without approving or rendering media.
   if (clip.transcriptSafetyStatus === "REVIEW_REQUIRED") {
     return {
       success: false,
-      message: "Review the local-language transcript or save checked caption cues before preparing this clip for posting.",
+      message: "Review and confirm the local-language transcript before preparing this clip for posting.",
       results: [],
-      warnings: editResult.warnings,
     };
   }
+
+  const draftResult = await saveClipStudioDraftAction(input);
+  if (!draftResult.success) {
+    return draftResult;
+  }
+
+  const { formats: formatsToPrepare } = resolveClipStudioFormats(input);
 
   await prisma.clipCandidate.update({
     where: { id: clip.id },
@@ -5596,36 +5732,61 @@ export async function prepareClipStudioForPostingAction(
   });
 
   if (!canRunLocalMediaProcessing()) {
-    const queued = await queueSermonMediaAssetJobs(clip.sermonId);
-    revalidatePath(`/sermons/${clip.sermonId}`);
-    revalidatePath(`/sermons/${clip.sermonId}/review`);
-    revalidatePath(`/sermons/${clip.sermonId}/clips/${clip.id}/studio`);
-    revalidatePath("/ready-to-post");
-    revalidatePath("/");
+    try {
+      const queued = await queueSermonMediaAssetJobs(clip.sermonId);
+      // The control panel cannot observe a Mac worker's in-memory queue. Keep
+      // the durable clip state honest so a refresh shows "Preparing" and the
+      // prepare button cannot enqueue the same composition repeatedly.
+      await prisma.clipCandidate.update({
+        where: { id: clip.id },
+        data: {
+          exportStatus: "QUEUED",
+          exportError: null,
+        },
+      });
+      revalidatePath(`/sermons/${clip.sermonId}`);
+      revalidatePath(`/sermons/${clip.sermonId}/review`);
+      revalidatePath(`/sermons/${clip.sermonId}/clips/${clip.id}/studio`);
+      revalidatePath("/ready-to-post");
+      revalidatePath("/");
 
-    return {
-      success: true,
-      queued: true,
-      message: queued.queued > 0
-        ? "Final video preparation was queued for your local worker."
-        : "Final video preparation is already queued for your local worker.",
-      results: [],
-      warnings: editResult.warnings,
-    };
+      return {
+        success: true,
+        draftSaved: true,
+        queued: true,
+        message: queued.queued > 0
+          ? "Draft saved. Final video preparation was queued for your local worker."
+          : "Draft saved. Final video preparation is already queued for your local worker.",
+        results: [],
+        warnings: draftResult.warnings,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        draftSaved: true,
+        message: error instanceof Error
+          ? `Draft saved, but the final video could not be queued: ${error.message}`
+          : "Draft saved, but the final video could not be queued.",
+        results: [],
+        warnings: draftResult.warnings,
+      };
+    }
   }
 
   const renderResult = await renderClipStudioExportsAction({
     clipId: clip.id,
     selectedFormats: formatsToPrepare,
+    forceRebuild: input.forceRebuild === true,
   });
 
   return {
     success: renderResult.success,
+    draftSaved: true,
     message: renderResult.success
-      ? "Prepared for posting using the current preview."
-      : renderResult.message,
+      ? "Prepared for posting using the current Studio draft."
+      : `Draft saved. ${renderResult.message}`,
     results: renderResult.results,
-    warnings: editResult.warnings,
+    warnings: draftResult.warnings,
   };
 }
 

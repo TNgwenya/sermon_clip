@@ -8,6 +8,8 @@ import {
   DEFAULT_INTRO_DURATION_SECONDS,
   DEFAULT_OUTRO_DURATION_SECONDS,
   normalizeBrandingDurationSeconds,
+  resolveBrandBackgroundOpacity,
+  shouldBrandingLowerThirdYieldToCaptions,
 } from "@/lib/clipBranding";
 import { resolveCaptionStylePreset } from "@/lib/captionStylePresets";
 import { resolveFramingDisplayLabel } from "@/lib/clipExportSettings";
@@ -17,8 +19,10 @@ import {
   mapSourceSecondsToCleanedPreviewSeconds,
   resolveActiveCaptionCueText,
   resolveActiveCaptionWordIndex,
+  resolveCompositionPreviewDuration,
   resolveSpeechCleanupJumpTarget,
   shouldShowHookOverlay,
+  synchronizePreviewBackdropMedia,
 } from "@/lib/clipStudioPreviewTimeline";
 import { remapTimelineRangeToCleanedTime } from "@/lib/speechCleanupPlan";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
@@ -157,6 +161,7 @@ export function ClipStudioLivePreview({
   } = useClipStudioPreview();
   const frameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const backdropVideoRef = useRef<HTMLVideoElement | null>(null);
   const [overlayDragState, setOverlayDragState] = useState<OverlayDragState | null>(null);
   const [previewSeconds, setPreviewSeconds] = useState(0);
   const [sourcePreviewSeconds, setSourcePreviewSeconds] = useState(0);
@@ -167,11 +172,16 @@ export function ClipStudioLivePreview({
   const [retryNonce, setRetryNonce] = useState(0);
   const [playbackNotice, setPlaybackNotice] = useState<string | null>(null);
   const brandingEnabled = brandingConfig.enabled && brandingConfig.preset !== "NO_BRANDING";
-  const captionsOverrideBranding = editPreview.applyCaptionsToClip && editPreview.captionCues.length > 0;
+  const captionsOverrideBranding = shouldBrandingLowerThirdYieldToCaptions({
+    applyCaptionsToClip: editPreview.applyCaptionsToClip,
+    captionCueCount: editPreview.captionCues.length,
+  });
   const showWatermark = brandingEnabled && (brandingConfig.watermarkEnabled || brandingConfig.preset === "MINIMAL_WATERMARK");
-  const showLowerThird =
+  const lowerThirdRequested =
     brandingEnabled && brandingConfig.lowerThirdEnabled && brandingConfig.preset !== "MINIMAL_WATERMARK";
-  const hasCaptionBrandCollision = showLowerThird && captionsOverrideBranding;
+  const showLowerThird =
+    lowerThirdRequested && !captionsOverrideBranding;
+  const lowerThirdYieldedToCaptions = lowerThirdRequested && captionsOverrideBranding;
   const captionStyle = resolveCaptionStylePreset(editPreview.captionStylePresetId);
   const activePreviewSrc = sourcePreviewSrc ?? previewSrc;
   const canPreview = hasPreview || Boolean(sourcePreviewSrc);
@@ -194,19 +204,6 @@ export function ClipStudioLivePreview({
   const outroDurationSeconds = normalizeBrandingDurationSeconds(
     brandingConfig.outroDurationSeconds,
     DEFAULT_OUTRO_DURATION_SECONDS,
-  );
-  const effectivePreviewDuration = draftDurationSeconds ?? previewDurationSeconds;
-  const showTimedOutro = Boolean(
-    brandingEnabled &&
-    brandingConfig.outroEnabled &&
-    effectivePreviewDuration !== null &&
-    previewSeconds >= Math.max(0, effectivePreviewDuration - outroDurationSeconds),
-  );
-  const showTimedIntro = Boolean(
-    brandingEnabled &&
-    brandingConfig.introEnabled &&
-    previewSeconds < introDurationSeconds &&
-    !showTimedOutro,
   );
   const draftStartSeconds = hasSourcePreview ? editPreview.startSeconds : 0;
   const draftEndSeconds = hasSourcePreview ? editPreview.endSeconds : draftDurationSeconds;
@@ -233,6 +230,23 @@ export function ClipStudioLivePreview({
   const cleanupWindowKey = `${speechCleanupPreviewPlan.sourceStartSeconds}:${speechCleanupPreviewPlan.sourceEndSeconds}:${speechCleanupPreviewPlan.cuts
     .map((cut) => `${cut.startSeconds}-${cut.endSeconds}`)
     .join(",")}`;
+  const effectivePreviewDuration = resolveCompositionPreviewDuration({
+    draftDurationSeconds,
+    mediaDurationSeconds: previewDurationSeconds,
+    speechCleanupPlan: speechCleanupPreviewPlan,
+  });
+  const showTimedOutro = Boolean(
+    brandingEnabled &&
+    brandingConfig.outroEnabled &&
+    effectivePreviewDuration !== null &&
+    previewSeconds >= Math.max(0, effectivePreviewDuration - outroDurationSeconds),
+  );
+  const showTimedIntro = Boolean(
+    brandingEnabled &&
+    brandingConfig.introEnabled &&
+    previewSeconds < introDurationSeconds &&
+    !showTimedOutro,
+  );
   const windowKey = `${hasSourcePreview ? "source" : "rendered"}:${draftStartSeconds ?? "x"}:${draftEndSeconds ?? "x"}:${cleanupWindowKey}`;
   const hookOverlay = useMemo(() => {
     if (!speechCleanupPreviewPlan.enabled) {
@@ -327,6 +341,7 @@ export function ClipStudioLivePreview({
   }, [activeCaptionCue, captionWords, sourcePreviewSeconds]);
   const previewStyle = {
     "--clip-brand-color": brandingConfig.themeColor ?? "#75d9b8",
+    "--clip-brand-tint-opacity": resolveBrandBackgroundOpacity(brandingConfig.backgroundStyle),
     ...(manualCropPreview
       ? {
           "--clip-manual-x": `${(manualCropPreview.centerX * 100).toFixed(2)}%`,
@@ -424,6 +439,9 @@ export function ClipStudioLivePreview({
 
     setOverlayDragState(null);
   }
+  const syncBackdropToForeground = useCallback(() => {
+    synchronizePreviewBackdropMedia(videoRef.current, backdropVideoRef.current);
+  }, []);
   const updatePreviewSeconds = useCallback(() => {
     const video = videoRef.current;
     const videoSeconds = video?.currentTime ?? 0;
@@ -450,12 +468,13 @@ export function ClipStudioLivePreview({
     setPreviewSeconds(currentSeconds);
     setPreviewDurationSeconds(durationSeconds);
     setIsPreviewPlaying(isPlaying);
+    syncBackdropToForeground();
     updatePreviewClock({
       currentSeconds,
       durationSeconds,
       isPlaying,
     });
-  }, [draftDurationSeconds, draftStartSeconds, hasSourcePreview, isDraftTrimPreview, speechCleanupPreviewPlan, updatePreviewClock]);
+  }, [draftDurationSeconds, draftStartSeconds, hasSourcePreview, isDraftTrimPreview, speechCleanupPreviewPlan, syncBackdropToForeground, updatePreviewClock]);
 
   const clampVideoToDraftWindow = useCallback((options?: { restartAtEnd?: boolean }) => {
     const video = videoRef.current;
@@ -639,7 +658,16 @@ export function ClipStudioLivePreview({
             {canPreview && playbackSrc ? (
               <>
                 {exportSettings.backgroundMode === "BLURRED" ? (
-                  <video className="clip-studio-live-backdrop" muted playsInline preload="metadata" src={playbackSrc} />
+                  <video
+                    ref={backdropVideoRef}
+                    className="clip-studio-live-backdrop"
+                    muted
+                    playsInline
+                    preload="metadata"
+                    src={playbackSrc}
+                    aria-hidden="true"
+                    onLoadedMetadata={syncBackdropToForeground}
+                  />
                 ) : null}
                 <video
                   ref={videoRef}
@@ -723,6 +751,10 @@ export function ClipStudioLivePreview({
               />
             )}
 
+            {previewMediaReady && brandingEnabled && brandingConfig.backgroundStyle !== "NONE" ? (
+              <div className="clip-studio-live-brand-tint" aria-hidden="true" />
+            ) : null}
+
             {previewMediaReady && showWatermark ? (
               <div className="clip-studio-live-watermark">{churchName || "Church"}</div>
             ) : null}
@@ -743,12 +775,6 @@ export function ClipStudioLivePreview({
                       ? churchName || "Church"
                       : BRANDING_PRESET_LABELS[brandingConfig.preset]}
                 </span>
-              </div>
-            ) : null}
-
-            {previewMediaReady && hasCaptionBrandCollision ? (
-              <div className="clip-studio-live-collision-warning" role="status">
-                Captions and the lower third share this area. Move captions or turn off the lower third before preparing.
               </div>
             ) : null}
 
@@ -875,6 +901,11 @@ export function ClipStudioLivePreview({
             {brandingEnabled && (brandingConfig.introEnabled || brandingConfig.outroEnabled) ? (
               <p className="clip-studio-preview-truth-note">
                 Timed brand cards use the same opening and closing windows in preview and preparation.
+              </p>
+            ) : null}
+            {lowerThirdYieldedToCaptions ? (
+              <p className="clip-studio-preview-truth-note">
+                The lower third is hidden because on-video captions use the same safe area. The final video follows this preview.
               </p>
             ) : null}
           </div>

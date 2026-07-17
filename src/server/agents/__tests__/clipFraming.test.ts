@@ -232,6 +232,31 @@ describe("buildVerticalFramingFilter — export framing applied correctly", () =
     expect(filter).toContain("crop=1080:1920:");
   });
 
+  it("SMART_CROP applies a persisted vertical center when zoom creates pan room", () => {
+    const filter = buildVerticalFramingFilter("SMART_CROP", {
+      sourceWidth: 1920,
+      sourceHeight: 1080,
+      subjectCenterX: 0.5,
+      subjectCenterY: 0.58,
+      zoom: 1.08,
+    });
+
+    expect(filter).toContain("scale=3686:2074");
+    expect(filter).toContain(":154,setsar=1");
+  });
+
+  it("SMART_CROP clamps an upward vertical correction inside the source frame", () => {
+    const filter = buildVerticalFramingFilter("SMART_CROP", {
+      sourceWidth: 1920,
+      sourceHeight: 1080,
+      subjectCenterX: 0.5,
+      subjectCenterY: 0.42,
+      zoom: 1.08,
+    });
+
+    expect(filter).toContain(":0,setsar=1");
+  });
+
   it("SMART_CROP builds a time-varying crop from subject tracking points", () => {
     const filter = buildVerticalFramingFilter("SMART_CROP", {
       sourceWidth: 1920,

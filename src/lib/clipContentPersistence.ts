@@ -42,6 +42,24 @@ export function resolveClipStudioAssetInvalidation(input: {
   return "NONE";
 }
 
+export function resolveClipStudioBoundaryReviewUpdate(input: {
+  boundariesChanged: boolean;
+  startSeconds: number;
+  endSeconds: number;
+}): Record<string, never> | {
+  boundaryQuality: "NEEDS_REVIEW";
+  boundaryAdjustmentReason: string;
+} {
+  if (!input.boundariesChanged) {
+    return {};
+  }
+
+  return {
+    boundaryQuality: "NEEDS_REVIEW",
+    boundaryAdjustmentReason: `Clip boundaries were manually edited to ${input.startSeconds.toFixed(2)}-${input.endSeconds.toFixed(2)}s. Re-review recommended.`,
+  };
+}
+
 export function canChooseClipForProduction(
   transcriptSafetyStatus: "TRUSTED" | "REVIEW_REQUIRED" | "REVIEWED",
 ): boolean {
