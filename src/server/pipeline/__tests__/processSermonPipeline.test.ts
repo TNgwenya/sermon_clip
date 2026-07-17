@@ -3,6 +3,11 @@ import { describe, expect, it } from "vitest";
 import { __processSermonPipelineTestUtils } from "@/server/pipeline/processSermonPipeline";
 
 describe("process sermon pipeline review asset preparation", () => {
+  it("explains incomplete mobile uploads without referring to YouTube", () => {
+    expect(__processSermonPipelineTestUtils.incompleteLocalUploadMessage()).toContain("Upload incomplete");
+    expect(__processSermonPipelineTestUtils.incompleteLocalUploadMessage()).toContain("Re-upload the video");
+  });
+
   it("reports premium output failures as a partial pipeline failure", () => {
     const PartialFailure = __processSermonPipelineTestUtils.PipelinePartialCompletionError;
     const failure = new PartialFailure([

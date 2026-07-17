@@ -133,3 +133,7 @@ export function buildLocalUploadSourceUrl(fileName: string): string {
   const normalizedName = fileName.trim() || "sermon-video";
   return `local-upload://${encodeURIComponent(normalizedName)}`;
 }
+
+export function isLocalUploadSourceUrl(value: string | null | undefined): boolean {
+  return value?.trim().startsWith("local-upload://") ?? false;
+}

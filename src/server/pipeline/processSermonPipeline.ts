@@ -1,5 +1,6 @@
 import type { SermonStatus } from "@prisma/client";
 
+import { isLocalUploadSourceUrl } from "@/lib/sermonIntake";
 import { prisma } from "@/lib/prisma";
 import {
   appendJobLog,
@@ -105,6 +106,7 @@ async function loadSermon(sermonId: string) {
       id: true,
       title: true,
       status: true,
+      youtubeUrl: true,
       sourceVideoPath: true,
       audioPath: true,
       transcriptJsonPath: true,
@@ -148,6 +150,10 @@ function shouldMarkParentJobRunning(input: {
   attemptCount: number;
 }): boolean {
   return input.status !== "RUNNING" || input.attemptCount < 1;
+}
+
+export function incompleteLocalUploadMessage(): string {
+  return "Upload incomplete. The recording was not fully saved on the server. Re-upload the video and keep this page open until Sermon Clip confirms that the upload has finished.";
 }
 
 export async function processSermonPipeline(
@@ -200,6 +206,15 @@ export async function processSermonPipeline(
     activeStepLabel = "Download video";
     const sourceVideoPath = getSourceVideoPath(sermon.id);
     const existingSource = await mediaFileIsUsable(sourceVideoPath);
+
+    if (!existingSource.usable && isLocalUploadSourceUrl(sermon.youtubeUrl)) {
+      activeStepLabel = "Upload media";
+      const message = incompleteLocalUploadMessage();
+      steps.push({ label: activeStepLabel, status: "FAILED", message });
+      await appendJobLog(parentJob.id, message);
+      await appendPipelineLog(sermon.id, message);
+      throw new Error(message);
+    }
     const downloadSkipped = !options?.force && existingSource.usable;
 
     if (!existingSource.usable && !options?.force && isAtOrAfter(sermon.status, "DOWNLOADED") && Boolean(sermon.sourceVideoPath)) {
@@ -382,6 +397,7 @@ export async function processSermonPipeline(
 
 export const __processSermonPipelineTestUtils = {
   shouldMarkParentJobRunning,
+  incompleteLocalUploadMessage,
   PipelinePartialCompletionError,
   buildGeneratedClipReviewAssetPlan: (
     clip: Parameters<typeof __clipReviewAssetServiceTestUtils.shouldPreparePreview>[0],
