@@ -132,7 +132,7 @@ function getPublicLogoUrl(path: string): string | null {
     return normalized.slice(publicIndex + "/public".length);
   }
 
-  return null;
+  return "/api/branding/logo";
 }
 
 function renderCaptionSample(text: string, emphasisWords: string[]): ReactNode {

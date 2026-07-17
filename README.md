@@ -175,6 +175,59 @@ npm run storage:migrate-portable-paths -- --from-root "/absolute/path/to/current
 
 The command never moves, copies, or deletes media files.
 
+### Private media archive
+
+Use a separate private Cloudflare R2 Standard bucket for durable source videos,
+extracted audio, transcript JSON, final exports, subtitle and thumbnail files,
+the sermon-folder manifest, content assets, and branding files. Rendered,
+captioned, overlay, debug, and other regenerable intermediates are excluded.
+Archive blobs are content-addressed by SHA-256, so identical source recordings
+are uploaded only once.
+
+Archive uploads are additive: they never delete local files or remote blobs.
+Remote pruning must remain a separate, reviewed retention operation so an
+ordinary deployment cannot remove media that an existing or scheduled post
+still needs.
+
+For a fresh deployment that intentionally leaves old projects behind, skip
+both the seed upload and hydration commands. Leave the private bucket empty,
+then begin archiving only media created on the new host.
+
+Preview the local archive inventory without contacting R2:
+
+```bash
+npm run storage:archive -- plan
+```
+
+For installations created before branding files moved into durable storage,
+stage the active logo without changing the live database. The original is kept:
+
+```bash
+npm run storage:migrate-branding-logo -- --stage-only
+```
+
+Run the same command with `--apply` during the coordinated deployment cutover,
+after the portable-path code is active.
+
+Preview and then apply an upload:
+
+```bash
+npm run storage:archive -- upload
+npm run storage:archive -- upload --apply
+npm run storage:archive -- verify
+```
+
+On a new EC2 host, preview and hydrate the configured `SERMON_STORAGE_ROOT`:
+
+```bash
+npm run storage:archive -- hydrate
+npm run storage:archive -- hydrate --apply
+```
+
+Hydration verifies every downloaded file by SHA-256 and refuses to overwrite a
+different local file unless `--overwrite` is explicitly supplied with
+`hydrate --apply`.
+
 Useful worker settings:
 - `WORKER_API_BASE_URL`: Vercel or local app URL.
 - `WORKER_API_TOKEN`: bearer token shared with the app.

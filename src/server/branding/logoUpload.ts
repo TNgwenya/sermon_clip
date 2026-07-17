@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { getConfiguredStorageRoot } from "@/server/media/portableStoragePath";
+
 export const logoUploadMimeTypes = new Map([
   ["image/png", ".png"],
   ["image/jpeg", ".jpg"],
@@ -37,7 +39,7 @@ export async function saveLogoUpload(
     return { error: "Upload a PNG, JPG, WebP, or SVG logo." };
   }
 
-  const uploadDirectory = options.uploadDirectory ?? join(process.cwd(), "public", "uploads", "branding");
+  const uploadDirectory = options.uploadDirectory ?? join(getConfiguredStorageRoot(), "branding");
   const fileName = `church-logo-${options.now?.() ?? Date.now()}${extension}`;
   const filePath = join(uploadDirectory, fileName);
   const bytes = Buffer.from(await upload.arrayBuffer());
