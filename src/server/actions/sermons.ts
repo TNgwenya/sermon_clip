@@ -121,6 +121,7 @@ import {
   canRunLocalMediaProcessing,
   localMediaProcessingUnavailableMessage,
 } from "@/server/runtime/workerRuntime";
+import { assertMediaStorageCapacity } from "@/server/media/storageCapacity";
 import { formatSecondsForTimestampInput } from "@/lib/sermonSegment";
 import type { CaptionStylePresetId } from "@/lib/captionStylePresets";
 import {
@@ -1637,6 +1638,19 @@ export async function createSermonAction(
         mediaFile: UPLOADED_MEDIA_TOO_LARGE_MESSAGE,
       },
     };
+  }
+
+  if (hasUploadedMedia && canRunLocalMediaProcessing()) {
+    try {
+      await assertMediaStorageCapacity({ incomingBytes: uploadedMedia.size });
+    } catch (storageError) {
+      const reason = storageError instanceof Error ? storageError.message : "Unable to check local media storage capacity.";
+      return {
+        success: false,
+        message: reason,
+        fieldErrors: { mediaFile: reason },
+      };
+    }
   }
 
   try {

@@ -16,6 +16,7 @@
     "storage:migrate-sermon-folders": "node --env-file-if-exists=.env --experimental-strip-types --loader ./scripts/ts-path-loader.mjs scripts/migrate-sermon-storage-folders.ts",
     "storage:migrate-portable-paths": "node --env-file-if-exists=.env --experimental-strip-types --loader ./scripts/ts-path-loader.mjs scripts/migrate-portable-media-paths.ts",
     "storage:archive": "node --env-file-if-exists=.env --experimental-strip-types --loader ./scripts/ts-path-loader.mjs scripts/media-archive.ts",
+    "storage:retention": "node --env-file-if-exists=.env --experimental-strip-types --loader ./scripts/ts-path-loader.mjs scripts/media-retention.ts",
     "storage:migrate-branding-logo": "node --env-file-if-exists=.env --experimental-strip-types --loader ./scripts/ts-path-loader.mjs scripts/migrate-branding-logo-storage.ts",
     "storage:import-local-projects": "node --env-file-if-exists=.env --experimental-strip-types --loader ./scripts/ts-path-loader.mjs scripts/import-local-sermon-projects.ts",
     "youtube:oauth": "node --env-file-if-exists=.env --experimental-strip-types scripts/youtube-oauth-token.ts",

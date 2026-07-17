@@ -228,6 +228,41 @@ Hydration verifies every downloaded file by SHA-256 and refuses to overwrite a
 different local file unless `--overwrite` is explicitly supplied with
 `hydrate --apply`.
 
+### EC2 retention and backup policy
+
+For new EC2 projects, keep durable media locally: the original source,
+extracted audio, `transcript.json`, final exports, subtitles, thumbnails,
+content assets, branding, and the sermon-folder manifest. The daily retention
+task deliberately removes only reproducible working material: rendered,
+captioned, and overlay clips; pipeline logs; temporary transcription audio;
+and transcription chunk caches. It never touches a project that is processing
+or has any scheduled post, regardless of the post's current status.
+
+Preview the next cleanup first, then apply it:
+
+```bash
+npm run storage:retention
+npm run storage:retention -- --apply
+```
+
+The defaults are a 7-day idle period, at most 20 projects per run, and an
+8 GiB free-space reserve. Configure `MEDIA_RETENTION_DAYS`,
+`MEDIA_RETENTION_MAX_PROJECTS_PER_RUN`, and `MEDIA_STORAGE_MIN_FREE_GIB` only
+if the EC2 disk size or ministry workflow warrants it. Direct uploads are
+rejected before writing when the incoming file plus the reserve will not fit.
+
+On EC2, schedule the archive upload before retention. Both commands are safe
+to run daily: archival is additive and content-addressed, while retention only
+removes the regenerable local paths above.
+
+```bash
+npm run storage:archive -- upload --apply
+npm run storage:retention -- --apply
+```
+
+Step 6 will install these as locked-down systemd services and timers. Keep the
+archive bucket private and use the archive-only R2 credentials for that timer.
+
 Useful worker settings:
 - `WORKER_API_BASE_URL`: Vercel or local app URL.
 - `WORKER_API_TOKEN`: bearer token shared with the app.
