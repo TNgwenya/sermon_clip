@@ -4,15 +4,21 @@ import { prisma } from "@/lib/prisma";
 
 export class SermonStatusTransitionError extends Error {
   readonly code = "INVALID_SERMON_STATUS_TRANSITION";
+  readonly sermonId: string;
+  readonly currentStatus: SermonStatus;
+  readonly nextStatus: SermonStatus;
 
   constructor(
     message: string,
-    readonly sermonId: string,
-    readonly currentStatus: SermonStatus,
-    readonly nextStatus: SermonStatus,
+    sermonId: string,
+    currentStatus: SermonStatus,
+    nextStatus: SermonStatus,
   ) {
     super(message);
     this.name = "SermonStatusTransitionError";
+    this.sermonId = sermonId;
+    this.currentStatus = currentStatus;
+    this.nextStatus = nextStatus;
   }
 }
 
