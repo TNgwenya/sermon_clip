@@ -1,5 +1,21 @@
 export type PastorPrimaryAction = "process" | "review" | "prepare" | "post";
 
+export type SermonWorkspaceAction =
+  | "publish"
+  | "edit"
+  | "review"
+  | "working"
+  | "recover"
+  | "analyze";
+
+export type SermonWorkspaceActionInput = {
+  hasExportedClips: boolean;
+  hasApprovedClips: boolean;
+  hasGeneratedMoments: boolean;
+  hasFreshLiveAnalysis: boolean;
+  hasBlockingFailure: boolean;
+};
+
 export type PastorWorkflowStep = {
   label: string;
   ready: boolean;
@@ -108,6 +124,32 @@ export function isStaleActiveProcessingJob(
 
   const lastWorkerSignal = job.heartbeatAt ?? job.updatedAt;
   return now.getTime() - lastWorkerSignal.getTime() > staleAfterMs;
+}
+
+export function deriveSermonWorkspaceAction(
+  input: SermonWorkspaceActionInput,
+): SermonWorkspaceAction {
+  if (input.hasExportedClips) {
+    return "publish";
+  }
+
+  if (input.hasApprovedClips) {
+    return "edit";
+  }
+
+  if (input.hasGeneratedMoments) {
+    return "review";
+  }
+
+  if (input.hasFreshLiveAnalysis) {
+    return "working";
+  }
+
+  if (input.hasBlockingFailure) {
+    return "recover";
+  }
+
+  return "analyze";
 }
 
 export function derivePastorSermonWorkflow(input: PastorSermonWorkflowInput): PastorSermonWorkflow {

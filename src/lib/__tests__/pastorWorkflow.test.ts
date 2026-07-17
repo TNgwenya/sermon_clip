@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveDashboardWorkflow,
   derivePastorSermonWorkflow,
+  deriveSermonWorkspaceAction,
   isStaleActiveProcessingJob,
   pastorFailedStepMessage,
   pastorJobStepLabel,
@@ -10,6 +11,77 @@ import {
 } from "@/lib/pastorWorkflow";
 
 describe("pastor workflow", () => {
+  it.each([
+    {
+      label: "publishes exported work despite historical failures and live analysis",
+      input: {
+        hasExportedClips: true,
+        hasApprovedClips: true,
+        hasGeneratedMoments: true,
+        hasFreshLiveAnalysis: true,
+        hasBlockingFailure: true,
+      },
+      expected: "publish",
+    },
+    {
+      label: "edits approved work despite historical failures and live analysis",
+      input: {
+        hasExportedClips: false,
+        hasApprovedClips: true,
+        hasGeneratedMoments: true,
+        hasFreshLiveAnalysis: true,
+        hasBlockingFailure: true,
+      },
+      expected: "edit",
+    },
+    {
+      label: "reviews generated moments despite historical failures and live analysis",
+      input: {
+        hasExportedClips: false,
+        hasApprovedClips: false,
+        hasGeneratedMoments: true,
+        hasFreshLiveAnalysis: true,
+        hasBlockingFailure: true,
+      },
+      expected: "review",
+    },
+    {
+      label: "shows fresh analysis before recovery",
+      input: {
+        hasExportedClips: false,
+        hasApprovedClips: false,
+        hasGeneratedMoments: false,
+        hasFreshLiveAnalysis: true,
+        hasBlockingFailure: true,
+      },
+      expected: "working",
+    },
+    {
+      label: "recovers when failure blocks an immature sermon",
+      input: {
+        hasExportedClips: false,
+        hasApprovedClips: false,
+        hasGeneratedMoments: false,
+        hasFreshLiveAnalysis: false,
+        hasBlockingFailure: true,
+      },
+      expected: "recover",
+    },
+    {
+      label: "analyzes a sermon with no mature or active work",
+      input: {
+        hasExportedClips: false,
+        hasApprovedClips: false,
+        hasGeneratedMoments: false,
+        hasFreshLiveAnalysis: false,
+        hasBlockingFailure: false,
+      },
+      expected: "analyze",
+    },
+  ] as const)("derives the workspace action: $label", ({ input, expected }) => {
+    expect(deriveSermonWorkspaceAction(input)).toBe(expected);
+  });
+
   it("guides a new dashboard toward adding a sermon", () => {
     const workflow = deriveDashboardWorkflow({
       sermonCount: 0,

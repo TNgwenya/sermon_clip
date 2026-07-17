@@ -19,8 +19,8 @@ function SubmitButton() {
   const { pending } = useFormStatus();
 
   return (
-    <button type="submit" className="button" disabled={pending}>
-      {pending ? "Finding clip moments..." : "Find Sermon Clips"}
+    <button type="submit" className="button primary" disabled={pending}>
+      {pending ? "Analyzing sermon..." : "Analyze sermon"}
     </button>
   );
 }
@@ -40,7 +40,7 @@ export function ProcessSermonButton({ sermonId }: ProcessSermonButtonProps) {
       <input type="hidden" name="sermonId" value={sermonId} />
       <SubmitButton />
       <p className="muted">
-        Finds the strongest moments in this sermon and prepares them for pastor review. You will approve clips before anything is made ready to post.
+        Sermon Clip prepares the transcript and surfaces message-safe moments. Nothing is approved automatically.
       </p>
       {state.message ? <p className={state.success ? "success-banner" : "error-banner"}>{state.message}</p> : null}
     </form>

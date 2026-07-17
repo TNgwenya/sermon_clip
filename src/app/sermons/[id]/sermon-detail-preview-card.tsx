@@ -8,18 +8,16 @@ type SermonDetailPreviewCardProps = {
   clip: {
     id: string;
     title: string;
-    hook: string;
-    suggestedHook?: string | null;
     startTimeSeconds: number;
     durationSeconds: number;
-    score: number;
     status: "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
     clipType: string;
     smartClipCategory?: string | null;
-    renderedFilePath: string | null;
-    exportedFilePath: string | null;
-    captionedVideoPath?: string | null;
-    overlayVideoPath?: string | null;
+    reasonSelected: string;
+    ministryValue?: string | null;
+    transcriptText: string;
+    riskLevel: "LOW" | "MEDIUM" | "HIGH";
+    transcriptSafetyStatus: "TRUSTED" | "REVIEW_REQUIRED" | "REVIEWED";
   };
   localMediaAvailable: boolean;
   canPreviewVideo: boolean;
@@ -39,6 +37,14 @@ function formatClipType(value: string): string {
   return value.toLowerCase().replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function toExactWordsExcerpt(value: string, maxLength = 170): string {
+  const compactText = value.replace(/\s+/g, " ").trim();
+  if (compactText.length <= maxLength) return compactText;
+
+  const wordBoundaryExcerpt = compactText.slice(0, maxLength).replace(/\s+\S*$/, "").trimEnd();
+  return `${wordBoundaryExcerpt || compactText.slice(0, maxLength).trimEnd()}…`;
+}
+
 function supportsHoverPreview(): boolean {
   if (typeof window === "undefined") return false;
   return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
@@ -54,8 +60,17 @@ export function SermonDetailPreviewCard({
   const [isHoverPreviewing, setIsHoverPreviewing] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
   const canPreview = canPreviewVideo && !previewFailed;
-  const hookLine = clip.suggestedHook?.trim() || clip.hook;
-  const actionLabel = clip.status === "EXPORTED" ? "Ready" : clip.status === "APPROVED" ? "Studio" : "Review";
+  const rationale = clip.ministryValue?.trim() || clip.reasonSelected.trim() || "This moment carries a clear, self-contained thought from the sermon.";
+  const exactWordsExcerpt = toExactWordsExcerpt(clip.transcriptText);
+  const statusLabel = clip.status === "EXPORTED" ? "Ready to publish" : clip.status === "APPROVED" ? "Approved" : "To review";
+  const actionLabel = clip.status === "EXPORTED" ? "Publish clip" : clip.status === "APPROVED" ? "Edit clip" : "Review moment";
+  const warningLabel = clip.transcriptSafetyStatus === "REVIEW_REQUIRED"
+    ? "Check sermon wording"
+    : clip.riskLevel === "HIGH"
+      ? "Review pastoral context"
+      : clip.riskLevel === "MEDIUM"
+        ? "Check pastoral context"
+        : null;
   const actionHref = clip.status === "EXPORTED"
     ? `/ready-to-post?sermonId=${sermonId}&clipId=${clip.id}`
     : clip.status === "APPROVED"
@@ -96,10 +111,9 @@ export function SermonDetailPreviewCard({
     <Link
       href={actionHref}
       className="sermon-preview-card"
+      aria-label={`${actionLabel}: ${clip.title}`}
       onPointerEnter={onPointerEnter}
       onPointerLeave={stopPreview}
-      onMouseEnter={onPointerEnter}
-      onMouseLeave={stopPreview}
       onBlur={stopPreview}
     >
       <div className="video-card-shell sermon-detail-preview-media">
@@ -117,10 +131,10 @@ export function SermonDetailPreviewCard({
           />
         ) : (
           <div className="review-video empty-video-state">
-            <span>{localMediaAvailable ? "Preview media not ready yet" : "Preview on Mac app"}</span>
+            <span>{localMediaAvailable ? "Preview is being prepared" : "Open on desktop to preview"}</span>
           </div>
         )}
-        <span className="video-quality-pill">{actionLabel}</span>
+        <span className="video-quality-pill">{statusLabel}</span>
         <span className="video-duration-pill">{Math.round(clip.durationSeconds)}s</span>
       </div>
       <div className="sermon-preview-card-copy">
@@ -129,8 +143,25 @@ export function SermonDetailPreviewCard({
           <span>{formatTimecode(clip.startTimeSeconds)}</span>
         </div>
         <strong>{clip.title}</strong>
-        <p>{hookLine}</p>
-        <span className="muted small">Clip potential {clip.score.toFixed(1)}/10</span>
+        <div className="premium-review-rationale">
+          <span>Why this moment</span>
+          <p>{rationale}</p>
+        </div>
+        {exactWordsExcerpt ? (
+          <div className={`premium-review-evidence${warningLabel ? " needs-review" : ""}`}>
+            <div className="premium-review-evidence-heading">
+              <span>Exact words</span>
+              <small>From the sermon</small>
+            </div>
+            <blockquote>&ldquo;{exactWordsExcerpt}&rdquo;</blockquote>
+          </div>
+        ) : null}
+        <div className="sermon-preview-meta-row">
+          {warningLabel ? <span className="status-pill quality-needs-editing">{warningLabel}</span> : null}
+          <span className="text-link">
+            {actionLabel} <span aria-hidden="true">→</span>
+          </span>
+        </div>
       </div>
     </Link>
   );

@@ -25,7 +25,7 @@ import {
   summarizeTranscriptFailureDiagnostics,
 } from "@/lib/pastorFriendlyErrors";
 import {
-  derivePastorSermonWorkflow,
+  deriveSermonWorkspaceAction,
   isStaleActiveProcessingJob,
   pastorJobStepLabel,
   selectUnresolvedPastorFailedJobs,
@@ -162,6 +162,7 @@ type ProcessingJobListItem = {
   startedAt: Date | null;
   completedAt: Date | null;
   updatedAt: Date;
+  heartbeatAt: Date | null;
   errorMessage: string | null;
   logs: string | null;
 };
@@ -173,6 +174,8 @@ type SermonDetailItem = {
   speakerName: string;
   churchName: string;
   language: string;
+  sermonDate: Date | null;
+  createdAt: Date;
   rightsConfirmed: boolean;
   sourceVideoPath: string | null;
   audioPath: string | null;
@@ -182,6 +185,16 @@ type SermonDetailItem = {
     fullText: string;
     updatedAt: Date;
   } | null;
+  intelligence: {
+    generatedTitle: string | null;
+    centralTheme: string | null;
+    manualTitle: string | null;
+    manualCentralTheme: string | null;
+  } | null;
+  scriptureRefs: Array<{
+    reference: string;
+    isPrimary: boolean;
+  }>;
   sourceDurationSeconds: number | null;
   sermonStartSeconds: number | null;
   sermonEndSeconds: number | null;
@@ -706,21 +719,23 @@ const qualityLabelOrder: Record<ClipQualityLabel, number> = {
   REJECT: 3,
 };
 
-const statusDescriptions: Record<SermonStatus, string> = {
-  CREATED: "Record created and ready for processing.",
-  DOWNLOADING: "Downloading source video.",
-  DOWNLOADED: "Source video is available locally.",
-  AUDIO_EXTRACTING: "Extracting audio from source video.",
-  AUDIO_EXTRACTED: "Audio file is available locally.",
-  TRANSCRIBING: "Generating transcript and timestamped segments.",
-  TRANSCRIBED: "Transcript and segments are ready.",
-  GENERATING_CLIPS: "Generating clip suggestions from transcript windows.",
-  CLIPS_GENERATED: "Clip suggestions are ready for review.",
-  REVIEWING: "Clip candidates are under human review.",
-  EXPORTING: "Exporting approved clips.",
-  EXPORTED: "At least one clip has been exported.",
-  FAILED: "The latest processing attempt failed and needs attention.",
-};
+function formatSermonDate(value: Date | null, fallback: Date): string {
+  return new Intl.DateTimeFormat("en-ZA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(value ?? fallback);
+}
+
+function formatLanguage(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/\b[a-z]/g, (letter) => letter.toUpperCase()) || "Language not set";
+}
 
 export default async function SermonDetailPage({
   params,
@@ -737,6 +752,25 @@ export default async function SermonDetailPage({
         select: {
           fullText: true,
           updatedAt: true,
+        },
+      },
+      intelligence: {
+        select: {
+          generatedTitle: true,
+          centralTheme: true,
+          manualTitle: true,
+          manualCentralTheme: true,
+        },
+      },
+      scriptureRefs: {
+        orderBy: [
+          { isPrimary: "desc" },
+          { frequencyCount: "desc" },
+        ],
+        take: 3,
+        select: {
+          reference: true,
+          isPrimary: true,
         },
       },
       transcriptSegments: {
@@ -861,9 +895,20 @@ export default async function SermonDetailPage({
       },
       processingJobs: {
         orderBy: {
-          createdAt: "desc",
+          updatedAt: "desc",
         },
-        take: 10,
+        take: 25,
+        select: {
+          id: true,
+          type: true,
+          status: true,
+          startedAt: true,
+          completedAt: true,
+          updatedAt: true,
+          heartbeatAt: true,
+          errorMessage: true,
+          logs: true,
+        },
       },
     },
   });
@@ -923,6 +968,10 @@ export default async function SermonDetailPage({
 
   const operationSummary = orderedClipCandidates.reduce(
     (acc, clip) => {
+      if (clip.status === "REJECTED") {
+        return acc;
+      }
+
       if (clip.renderStatus === "RENDERING") {
         acc.running += 1;
       }
@@ -973,13 +1022,12 @@ export default async function SermonDetailPage({
     { running: 0, failed: 0, outdated: 0 },
   );
 
-  const latestJob = processingJobs[0] ?? null;
-  const hasSourceVideo = await doesFileExist(getSourceVideoPath(sermon.id));
+  const hasSourceVideo = Boolean(sermon.sourceVideoPath) || await doesFileExist(getSourceVideoPath(sermon.id));
   const pipelineLogTail = await readPipelineLogTail(sermon.id);
   const downloadProgress = parseLatestDownloadProgress(pipelineLogTail);
   const audioExtractionProgress = parseAudioExtractionProgress(pipelineLogTail, sermon.sourceDurationSeconds);
   const transcriptionProgress = parseTranscriptionProgress(pipelineLogTail);
-  const hasAudioFile = await doesFileExist(getAudioPath(sermon.id));
+  const hasAudioFile = Boolean(sermon.audioPath) || await doesFileExist(getAudioPath(sermon.id));
   const readyClipCount = clipCounts.approved + clipCounts.exported;
   const hasReadyClips = readyClipCount > 0;
   const hasApprovedClips = clipCounts.approved > 0;
@@ -987,22 +1035,6 @@ export default async function SermonDetailPage({
   const hasTranscriptRecord = Boolean(sermon.transcript);
   const hasTranscriptSegments = sermon._count.transcriptSegments > 0;
   const clipGenerationComplete = sermon.clipCandidates.length > 0;
-  const hasGeneratedCaptions = orderedClipCandidates.some((clip) => clip.captionStatus === "GENERATED");
-  const hasRenderedApprovedClips = orderedClipCandidates.some(
-    (clip) =>
-      (clip.status === "APPROVED" || clip.status === "EXPORTED") &&
-      clip.renderStatus === "COMPLETED",
-  );
-  const hasCaptionBurnedClips = orderedClipCandidates.some(
-    (clip) =>
-      (clip.status === "APPROVED" || clip.status === "EXPORTED") &&
-      clip.captionBurnStatus === "COMPLETED",
-  );
-  const hasOverlayedClips = orderedClipCandidates.some(
-    (clip) =>
-      (clip.status === "APPROVED" || clip.status === "EXPORTED") &&
-      clip.overlayStatus === "COMPLETED",
-  );
   const hasOutdatedAssets = operationSummary.outdated > 0;
   const unresolvedFailedJobs = selectUnresolvedPastorFailedJobs(processingJobs);
   const latestFailedJob = unresolvedFailedJobs[0] ?? null;
@@ -1111,20 +1143,23 @@ export default async function SermonDetailPage({
     };
   });
   const completedProcessingSteps = processingTheaterSteps.filter((step) => step.state === "done").length;
-  const analysisJobTypes = new Set(["DOWNLOAD_VIDEO", "EXTRACT_AUDIO", "TRANSCRIBE_AUDIO", "GENERATE_CLIPS"]);
+  const analysisJobTypes = new Set(["PROCESS_SERMON", "DOWNLOAD_VIDEO", "EXTRACT_AUDIO", "TRANSCRIBE_AUDIO", "GENERATE_CLIPS"]);
   const activeAnalysisStatuses = new Set<SermonStatus>([
     "DOWNLOADING",
     "AUDIO_EXTRACTING",
     "TRANSCRIBING",
     "GENERATING_CLIPS",
   ]);
-  const hasLiveAnalysisWork =
-    processingJobs.some((job) => (
-      analysisJobTypes.has(job.type) &&
-      (job.status === "RUNNING" || job.status === "PENDING") &&
-      !isStaleActiveProcessingJob(job)
-    )) ||
-    activeAnalysisStatuses.has(sermon.status);
+  const hasFreshAnalysisJob = processingJobs.some((job) => (
+    analysisJobTypes.has(job.type) &&
+    (job.status === "RUNNING" || job.status === "PENDING") &&
+    !isStaleActiveProcessingJob(job)
+  ));
+  const hasStaleAnalysisJob = processingJobs.some((job) => (
+    analysisJobTypes.has(job.type) && isStaleActiveProcessingJob(job)
+  ));
+  const hasLiveAnalysisWork = hasFreshAnalysisJob
+    || (activeAnalysisStatuses.has(sermon.status) && !hasStaleAnalysisJob);
   const hasLiveProcessingWork =
     operationSummary.running > 0 ||
     processingJobs.some((job) => (
@@ -1221,242 +1256,294 @@ export default async function SermonDetailPage({
       : activeProcessingStep?.state === "active"
         ? "Sermon Clip is working on this sermon now."
         : "This sermon is waiting for the next processing step.";
-  const latestTheaterJob =
-    activeProcessingStep && latestJob?.status === "FAILED" && activeProcessingStep.state !== "failed"
-      ? processingJobs.find((job) => job.status !== "FAILED") ?? null
-      : activeProcessingStep
-        ? latestJob
-        : null;
+  const latestTheaterJob = activeProcessingStep
+    ? activeProcessingStep.latestJob
+      ?? processingJobs.find((job) => (
+        analysisJobTypes.has(job.type)
+        && job.status !== "FAILED"
+        && !isStaleActiveProcessingJob(job)
+      ))
+      ?? null
+    : null;
 
-  const pastorWorkflow = derivePastorSermonWorkflow({
-    sourceVideoReady: hasSourceVideo,
-    transcriptReady: hasTranscriptRecord && hasTranscriptSegments,
-    clipGenerationComplete,
-    suggestedClipCount: orderedClipCandidates.length,
-    approvedOrReadyClipCount: readyClipCount,
-    preparedClipCount: clipCounts.exported,
-    failedStepCount: failedRecoveryCount,
-    staleClipCount: operationSummary.outdated,
-    latestFailedStepType: latestFailedJob?.type ?? null,
+  const workspaceAction = deriveSermonWorkspaceAction({
+    hasExportedClips,
+    hasApprovedClips,
+    hasGeneratedMoments: clipGenerationComplete,
+    hasFreshLiveAnalysis: hasLiveAnalysisWork,
+    hasBlockingFailure: failedRecoveryCount > 0,
   });
-  const commandCenterTitle = clipQualityGateFailure
-    ? clipQualityGateFailure.title
-    : failedRecoveryCount > 0
-    ? "Resolve failed item"
-    : hasLiveAnalysisWork && activeProcessingStep
-    ? activeProcessingStep.label
-    : hasExportedClips
-      ? "Ready to post"
-      : clipCounts.suggested > 0 && !hasReadyClips
-        ? "Review suggested clips"
-    : pastorWorkflow.nextAction;
-  const commandCenterDescription = clipQualityGateFailure
-    ? clipQualityGateFailure.summary
-    : failedRecoveryCount > 0
-    ? `${failedRecoveryCount} failed ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention before this sermon keeps moving. Open Advanced recovery tools when you are ready to retry.`
-    : hasLiveAnalysisWork && activeProcessingStep
-      ? activeProcessingStep.state === "active"
-        ? `${activeProcessingStep.label} is running now. You can follow this stage below or leave while Sermon Clip keeps working.`
-        : `${activeProcessingStep.label} is waiting to begin. Sermon Clip will continue automatically when this stage is ready.`
-      : hasOutdatedAssets
-        ? `${operationSummary.outdated} prepared ${operationSummary.outdated === 1 ? "asset needs" : "assets need"} a refresh before posting.`
-        : hasExportedClips
-          ? `${clipCounts.exported} ${clipCounts.exported === 1 ? "clip is" : "clips are"} ready to post. Open the queue to download or schedule.`
-          : clipCounts.suggested > 0 && !hasReadyClips
-            ? `${clipCounts.suggested} suggested ${clipCounts.suggested === 1 ? "clip is" : "clips are"} ready. Review the strongest moments next.`
-            : hasApprovedClips
-              ? `${clipCounts.approved} approved ${clipCounts.approved === 1 ? "clip is" : "clips are"} waiting to be prepared for posting.`
-              : hasTranscriptRecord
-                ? "The transcript is ready. Find clip moments next."
-                : hasSourceVideo
-                  ? "The sermon video is ready. Continue processing to create the transcript and clip suggestions."
-                  : "Start processing this sermon to find clip moments.";
+  const workspaceStageIndex = workspaceAction === "publish"
+    ? 3
+    : workspaceAction === "edit"
+      ? 2
+      : workspaceAction === "review"
+        ? 1
+        : 0;
   const previewClips = orderedClipCandidates
     .filter((clip) => clip.status !== "REJECTED")
-    .slice(0, 4);
+    .slice(0, 3);
   const nextApprovedClip = orderedClipCandidates.find((clip) => clip.status === "APPROVED") ?? null;
+  const commandCenterTitle = workspaceAction === "publish"
+    ? `${clipCounts.exported} ${clipCounts.exported === 1 ? "clip is" : "clips are"} ready to share`
+    : workspaceAction === "edit"
+      ? nextApprovedClip
+        ? `Polish “${nextApprovedClip.title}”`
+        : "Polish the approved clip"
+      : workspaceAction === "review"
+        ? `Review ${clipCounts.suggested || clipCounts.total} ${clipCounts.total === 1 ? "moment" : "moments"} from this message`
+        : workspaceAction === "working"
+          ? activeProcessingStep?.label ?? "Finding sermon moments"
+          : workspaceAction === "recover"
+            ? clipQualityGateFailure
+              ? "Analysis paused at the transcript"
+              : latestFailedJob
+                ? `${pastorJobStepLabel(latestFailedJob.type)} needs attention`
+                : "Clip preparation needs attention"
+            : "Find the strongest moments";
+  const commandCenterDescription = workspaceAction === "publish"
+    ? "The finished clips are ready for platform copy, download, or scheduling."
+    : workspaceAction === "edit"
+      ? `${clipCounts.approved} approved ${clipCounts.approved === 1 ? "clip is" : "clips are"} ready for captions, framing, and church branding.`
+      : workspaceAction === "review"
+        ? "Watch each excerpt with its exact sermon words, then approve only the moments that carry the message faithfully."
+        : workspaceAction === "working"
+          ? "Sermon Clip is preparing the message now. You can follow the current stage or leave while the work continues."
+          : workspaceAction === "recover"
+            ? clipQualityGateFailure?.summary
+              ?? "The sermon and completed work are safe. Retry the paused step to continue finding moments."
+            : "Analyze the sermon to prepare a transcript and surface message-safe moments for pastor review.";
   const previewableClipIds = new Set(
     (await Promise.all(
       previewClips.map(async (clip) => (await hasClipPreviewMedia(clip) ? clip.id : null)),
     )).filter((clipId): clipId is string => Boolean(clipId)),
   );
-  const refreshItemCount = operationSummary.failed + operationSummary.outdated;
-  const hasPastorReviewFeed = clipCounts.total > 0;
-  const pastorReviewFeedIsPrimaryAction =
-    failedRecoveryCount === 0 &&
-    !hasLiveAnalysisWork &&
-    (pastorWorkflow.primaryAction === "review" || pastorWorkflow.primaryAction === "prepare");
-
-  const publishingChecklist = [
+  const refreshItemCount = failedRecoveryCount + operationSummary.outdated;
+  const displayTitle = sermon.intelligence?.manualTitle?.trim()
+    || sermon.intelligence?.generatedTitle?.trim()
+    || sermon.title;
+  const centralTheme = sermon.intelligence?.manualCentralTheme?.trim()
+    || sermon.intelligence?.centralTheme?.trim()
+    || null;
+  const primaryScripture = sermon.scriptureRefs.find((reference) => reference.isPrimary)?.reference
+    ?? sermon.scriptureRefs[0]?.reference
+    ?? null;
+  const sermonDateLabel = formatSermonDate(sermon.sermonDate, sermon.createdAt);
+  const runtimeLabel = sermon.sourceDurationSeconds
+    ? formatSecondsForProgress(sermon.sourceDurationSeconds)
+    : null;
+  const sourceUrl = sermon.youtubeUrl.trim();
+  const hasPublicSourceLink = /^https?:\/\//i.test(sourceUrl);
+  const statusTone = workspaceAction === "working"
+    ? "working"
+    : workspaceAction === "review" || workspaceAction === "recover"
+      ? "attention"
+      : "ready";
+  const workspaceStatusLabel = workspaceAction === "publish"
+    ? "Ready to publish"
+    : workspaceAction === "edit"
+      ? "Approved clips ready"
+      : workspaceAction === "review"
+        ? "Pastor review needed"
+        : workspaceAction === "working"
+          ? "Analysis in progress"
+          : workspaceAction === "recover"
+            ? "Needs attention"
+            : "Ready to analyze";
+  const workspaceJourney = [
     {
-      label: "Sermon video ready",
-      ready: hasSourceVideo,
-      detail: hasSourceVideo ? "The sermon video is available." : "Add or restore the sermon video.",
+      number: "01",
+      label: "Analyze",
+      detail: clipGenerationComplete
+        ? "Moments found"
+        : workspaceAction === "working"
+          ? "Working now"
+          : workspaceAction === "recover"
+            ? "Needs attention"
+            : "Ready to begin",
+      href: hasLiveAnalysisWork ? "#processing-progress" : "#up-next",
     },
     {
-      label: "Sermon audio ready",
-      ready: hasAudioFile,
-      detail: hasAudioFile ? "The sermon audio is ready for transcription." : "Continue sermon processing.",
+      number: "02",
+      label: "Review",
+      detail: hasReadyClips
+        ? `${readyClipCount} approved`
+        : clipGenerationComplete
+          ? `${clipCounts.suggested || clipCounts.total} to review`
+          : "After analysis",
+      href: `/sermons/${sermon.id}/review`,
     },
     {
-      label: "Transcript generated",
-      ready: hasTranscriptRecord && hasTranscriptSegments,
-      detail:
-        hasTranscriptRecord && hasTranscriptSegments
-          ? `Transcript exists with ${sermon._count.transcriptSegments} segments.`
-          : "Create the sermon transcript.",
+      number: "03",
+      label: "Edit",
+      detail: hasExportedClips
+        ? "Clip prepared"
+        : hasApprovedClips
+          ? `${clipCounts.approved} ready to polish`
+          : "After approval",
+      href: nextApprovedClip
+        ? `/sermons/${sermon.id}/clips/${nextApprovedClip.id}/studio`
+        : `/sermons/${sermon.id}/review`,
     },
     {
-      label: "Clips discovered",
-      ready: clipGenerationComplete,
-      detail: clipGenerationComplete ? `${orderedClipCandidates.length} suggested clips are available.` : "Choose Find More Clip Moments.",
-    },
-    {
-      label: "Clips approved",
-      ready: hasReadyClips,
-      detail: hasReadyClips ? `${readyClipCount} clip(s) are approved or exported.` : "Approve at least one clip.",
-    },
-    {
-      label: "Video previews ready",
-      ready: hasRenderedApprovedClips,
-      detail: hasRenderedApprovedClips ? "At least one approved clip has a video preview." : "Prepare at least one approved clip.",
-    },
-    {
-      label: "Captions complete",
-      ready: hasGeneratedCaptions,
-      detail: hasGeneratedCaptions ? "Captions exist for approved clips." : "Write captions for approved clips.",
-    },
-    {
-      label: "Captions added to video",
-      ready: hasCaptionBurnedClips,
-      detail: hasCaptionBurnedClips ? "At least one clip has captions on the video." : "Prepare approved clips to add captions.",
-    },
-    {
-      label: "Church branding added",
-      ready: hasOverlayedClips,
-      detail: hasOverlayedClips ? "At least one clip includes church branding." : "Prepare approved clips to add church branding.",
-    },
-    {
-      label: "Downloads ready",
-      ready: hasExportedClips,
-      detail: hasExportedClips ? "Ready-to-post files are available for download." : "Prepare at least one approved clip.",
-    },
-    {
-      label: "No unresolved work",
-      ready: !needsAttention,
-      detail: needsAttention
-        ? failedRecoveryCount > 0 && operationSummary.outdated > 0
-          ? `${failedRecoveryCount} failed ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention, and ${operationSummary.outdated} prepared ${operationSummary.outdated === 1 ? "asset needs" : "assets need"} a refresh.`
-          : failedRecoveryCount > 0
-            ? `${failedRecoveryCount} failed ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention.`
-            : `${operationSummary.outdated} prepared ${operationSummary.outdated === 1 ? "asset needs" : "assets need"} a refresh.`
-        : "No failed or stale clip work is currently unresolved.",
+      number: "04",
+      label: "Publish",
+      detail: hasExportedClips
+        ? `${clipCounts.exported} ready to share`
+        : "After preparation",
+      href: `/ready-to-post?sermonId=${sermon.id}`,
     },
   ];
 
   return (
     <main id="main-content" className="container sermon-detail-shell premium-sermon-workspace stack-lg">
-      <header className="sermon-detail-hero stack-sm">
-        <p className="kicker">Sermon workspace</p>
-        <h1>{sermon.title}</h1>
-        <p className="muted">
-          {sermon.speakerName} at {sermon.churchName}. {statusDescriptions[sermon.status]}
-        </p>
+      <nav className="sermon-workspace-breadcrumb" aria-label="Breadcrumb">
+        <Link href="/">Home</Link>
+        <span aria-hidden="true">/</span>
+        <Link href="/sermons">Review &amp; library</Link>
+        <span aria-hidden="true">/</span>
+        <span aria-current="page">Current sermon</span>
+      </nav>
+
+      <header className="sermon-detail-hero sermon-workspace-header">
+        <div className="sermon-workspace-title">
+          <p className="kicker">Current sermon</p>
+          <h1>{displayTitle}</h1>
+          {centralTheme ? <p className="sermon-workspace-theme">{centralTheme}</p> : null}
+          <div className="sermon-workspace-meta" aria-label="Sermon details">
+            <span>{sermonDateLabel}</span>
+            <span>{sermon.speakerName}</span>
+            <span>{sermon.churchName}</span>
+            <span>{formatLanguage(sermon.language)}</span>
+            {runtimeLabel ? <span>{runtimeLabel}</span> : null}
+            {primaryScripture ? <span>{primaryScripture}</span> : null}
+          </div>
+        </div>
+        <span className={`sermon-workspace-status is-${statusTone}`}>
+          {workspaceStatusLabel}
+        </span>
       </header>
 
-      <section className="sermon-command-center">
-        <div className="sermon-command-copy stack-sm">
-          <p className="kicker">Next best step</p>
-          <h2>{commandCenterTitle}</h2>
-          <p className="muted">{commandCenterDescription}</p>
+      <nav className="sermon-workspace-journey" aria-label="Sermon workflow">
+        <ol>
+          {workspaceJourney.map((step, index) => {
+            const state = index < workspaceStageIndex
+              ? "complete"
+              : index === workspaceStageIndex
+                ? workspaceAction === "recover" && index === 0
+                  ? "attention"
+                  : "current"
+                : "upcoming";
+            return (
+              <li key={step.label} className={`is-${state}`}>
+                <Link href={step.href} aria-current={state === "current" || state === "attention" ? "step" : undefined}>
+                  <span>{step.number}</span>
+                  <strong>{step.label}</strong>
+                  <small>{step.detail}</small>
+                </Link>
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+
+      <section id="up-next" className={`sermon-command-center action-${workspaceAction}`}>
+        <div className="sermon-command-main">
+          <div className="sermon-command-copy stack-sm">
+            <p className="kicker">Up next</p>
+            <h2>{commandCenterTitle}</h2>
+            <p className="muted">{commandCenterDescription}</p>
+          </div>
           {needsAttention ? (
-            <div className={`sermon-command-note${failedRecoveryCount > 0 ? " urgent" : ""}`}>
+            <div className="sermon-command-note">
               <strong>
-                {failedRecoveryCount > 0
-                  ? `${failedRecoveryCount} failed ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention`
+                {workspaceAction === "recover"
+                  ? "Your sermon and completed work are safe."
+                  : failedRecoveryCount > 0
+                    ? `${failedRecoveryCount} background ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention`
                   : `${operationSummary.outdated} ${operationSummary.outdated === 1 ? "asset" : "assets"} need refresh`}
               </strong>
               <span>
-                {clipQualityGateFailure
-                  ? clipQualityGateFailure.guidance
-                  : failedRecoveryCount > 0
-                  ? "Retry and repair controls stay tucked inside Advanced recovery tools."
-                  : "Refresh prepared media before posting stale downloads."}
+                {workspaceAction === "recover"
+                  ? clipQualityGateFailure?.guidance ?? "Retry the paused step below when you are ready."
+                  : "This does not stop you from continuing the most mature clip. "}
+                <a href="#troubleshoot-this-sermon">Open troubleshooting</a>
               </span>
             </div>
           ) : null}
-          <div className="review-priority-actions">
-            {failedRecoveryCount > 0 ? (
-              <a href="#troubleshoot-this-sermon" className="button primary">
-                {clipQualityGateFailure ? "Review transcript recovery" : "Open recovery tools"}
-              </a>
-            ) : null}
-            {failedRecoveryCount === 0 && hasLiveAnalysisWork ? (
-              <a href="#processing-progress" className="button primary">
-                Follow progress
-              </a>
-            ) : null}
-            {failedRecoveryCount === 0 && !hasLiveAnalysisWork && pastorWorkflow.primaryAction === "process" ? (
-              <ProcessSermonButton sermonId={sermon.id} />
-            ) : null}
-            {failedRecoveryCount === 0 && !hasLiveAnalysisWork && pastorWorkflow.primaryAction === "review" ? (
-              <Link href={`/sermons/${sermon.id}/review`} className="button primary">
-                Review suggested clips
+          <div className="sermon-primary-action">
+            {workspaceAction === "publish" ? (
+              <Link href={`/ready-to-post?sermonId=${sermon.id}`} className="button primary">
+                Open publishing
               </Link>
             ) : null}
-            {failedRecoveryCount === 0 && !hasLiveAnalysisWork && pastorWorkflow.primaryAction === "prepare" ? (
+            {workspaceAction === "edit" ? (
               <Link
                 href={nextApprovedClip
                   ? `/sermons/${sermon.id}/clips/${nextApprovedClip.id}/studio`
                   : `/sermons/${sermon.id}/review`}
                 className="button primary"
               >
-                {nextApprovedClip ? "Continue in Clip Studio" : "Review suggested clips"}
+                {nextApprovedClip ? "Edit approved clip" : "Review sermon moments"}
               </Link>
             ) : null}
-            {failedRecoveryCount === 0 && !hasLiveAnalysisWork && pastorWorkflow.primaryAction === "post" ? (
-              <Link href={`/ready-to-post?sermonId=${sermon.id}`} className="button primary">
-                Prepare posts
+            {workspaceAction === "review" ? (
+              <Link href={`/sermons/${sermon.id}/review`} className="button primary">
+                Review sermon moments
               </Link>
             ) : null}
-            {hasPastorReviewFeed && !pastorReviewFeedIsPrimaryAction ? (
-              <Link href={`/sermons/${sermon.id}/review`} className="button secondary">
-                Review clips
-              </Link>
+            {workspaceAction === "working" ? (
+              <a href="#processing-progress" className="button primary">
+                View live progress
+              </a>
             ) : null}
-            <Link href={`/sermons/${sermon.id}/intelligence`} className="button tertiary">
-              Sermon insights
-            </Link>
+            {workspaceAction === "recover" && clipQualityGateFailure && !transcriptRefreshedAfterFailure ? (
+              <TranscribeSermonButton
+                sermonId={sermon.id}
+                status={sermon.status}
+                hasAudioFile={hasAudioFile}
+                buttonLabel="Transcribe sermon again"
+                force
+              />
+            ) : null}
+            {workspaceAction === "recover" && (!clipQualityGateFailure || transcriptRefreshedAfterFailure) && latestFailedJob ? (
+              <RetryFailedJobButton sermonId={sermon.id} jobId={latestFailedJob.id} />
+            ) : null}
+            {workspaceAction === "recover" && !latestFailedJob && operationSummary.failed > 0 ? (
+              <RepairFailedClipOperationsButton sermonId={sermon.id} disabled={hasLiveProcessingWork} />
+            ) : null}
+            {workspaceAction === "analyze" ? <ProcessSermonButton sermonId={sermon.id} /> : null}
           </div>
         </div>
 
-        <div className="sermon-command-stats">
-          <article>
-            <span className="muted small">Suggested</span>
-            <strong>{clipCounts.suggested}</strong>
-          </article>
-          <article>
-            <span className="muted small">Approved</span>
-            <strong>{clipCounts.approved}</strong>
-          </article>
-          <article>
-            <span className="muted small">Ready</span>
-            <strong>{clipCounts.exported}</strong>
-          </article>
-          <article>
-            <span className="muted small">Refresh</span>
-            <strong>{formatCompactCount(refreshItemCount)}</strong>
-          </article>
-        </div>
+        <aside className="sermon-message-snapshot" aria-label="Message snapshot">
+          <div className="sermon-snapshot-heading">
+            <p className="kicker">Message snapshot</p>
+            <span>{workspaceJourney[workspaceStageIndex].label} · {workspaceStageIndex + 1} of 4</span>
+          </div>
+          <dl>
+            <div><dt>Transcript</dt><dd>{hasTranscriptRecord && hasTranscriptSegments ? "Ready" : "Not ready"}</dd></div>
+            <div><dt>Moments found</dt><dd>{clipCounts.total}</dd></div>
+            <div><dt>Approved</dt><dd>{readyClipCount}</dd></div>
+            <div><dt>Ready to publish</dt><dd>{clipCounts.exported}</dd></div>
+          </dl>
+          {refreshItemCount > 0 ? (
+            <p className="muted small">{formatCompactCount(refreshItemCount)} background {refreshItemCount === 1 ? "item may" : "items may"} need attention.</p>
+          ) : (
+            <p className="muted small">Every publishing decision remains with your team.</p>
+          )}
+        </aside>
       </section>
 
       {previewClips.length > 0 ? (
-        <section className="sermon-preview-strip" aria-label="Sermon clip previews">
+        <section className="sermon-preview-strip" aria-label="Strongest sermon moments">
           <div className="sermon-preview-strip-heading">
             <div>
-              <p className="kicker">Clip previews</p>
-              <h2>Review these before posting</h2>
+              <p className="kicker">From this message</p>
+              <h2>Moments worth sharing</h2>
+              <p className="muted">See why each excerpt was selected and verify the exact sermon words before approving it.</p>
             </div>
+            <Link href={`/sermons/${sermon.id}/review`} className="button secondary">Open Pastor Review</Link>
           </div>
           <div className="sermon-preview-grid">
             {previewClips.map((clip) => (
@@ -1482,9 +1569,6 @@ export default async function SermonDetailPage({
             <strong>Stage {activeAnalysisStageNumber} of {processingTheaterSteps.length}</strong>
             <span>Video → Audio → Transcript → Moments</span>
           </p>
-          <div className="processing-progress-bar" aria-label={`${processingProgressPercent}% complete`}>
-            <span style={{ width: `${processingProgressPercent}%` }} />
-          </div>
           <p className="muted small processing-leave-note">
             {completedProcessingSteps} of {processingTheaterSteps.length} stages complete · You can leave this page while Sermon Clip keeps working.
           </p>
@@ -1562,12 +1646,48 @@ export default async function SermonDetailPage({
       </section>
       ) : null}
 
+      <details className="sermon-about-details">
+        <summary>
+          <span>
+            <strong>About this sermon</strong>
+            <small>Source, transcript, and message context</small>
+          </span>
+        </summary>
+        <div className="sermon-about-body">
+          <dl className="sermon-about-facts">
+            <div><dt>Speaker</dt><dd>{sermon.speakerName}</dd></div>
+            <div><dt>Church</dt><dd>{sermon.churchName}</dd></div>
+            <div><dt>Message date</dt><dd>{sermonDateLabel}</dd></div>
+            <div><dt>Language</dt><dd>{formatLanguage(sermon.language)}</dd></div>
+            <div><dt>Runtime</dt><dd>{runtimeLabel ?? "Not available"}</dd></div>
+            <div><dt>Transcript</dt><dd>{hasTranscriptRecord && hasTranscriptSegments ? `${sermon._count.transcriptSegments} timestamped sections` : "Not ready"}</dd></div>
+            {primaryScripture ? <div><dt>Primary scripture</dt><dd>{primaryScripture}</dd></div> : null}
+          </dl>
+          <div className="sermon-about-actions">
+            <Link href={`/sermons/${sermon.id}/intelligence`} className="button secondary">Message insights</Link>
+            <Link href={`/sermons/${sermon.id}/review`} className="button tertiary">Open Pastor Review</Link>
+            {hasPublicSourceLink ? (
+              <a href={sourceUrl} className="button tertiary" target="_blank" rel="noreferrer">Watch source</a>
+            ) : null}
+          </div>
+        </div>
+      </details>
+
       <details
         id="troubleshoot-this-sermon"
         className="advanced-details troubleshoot-details"
-        open={failedRecoveryCount > 0}
       >
-        <summary>Advanced recovery tools</summary>
+        <summary>
+          <span className="troubleshoot-summary-copy">
+            <strong>Troubleshooting &amp; recovery</strong>
+            <small>Retry a paused step or repair a specific generated asset.</small>
+          </span>
+          <span className={`troubleshoot-summary-state${needsAttention ? " is-attention" : ""}`}>
+            {needsAttention
+              ? `${refreshItemCount} ${refreshItemCount === 1 ? "item needs" : "items need"} attention`
+              : "No active issues"}
+          </span>
+        </summary>
         <div className="stack-lg advanced-details-body">
           <section className="card stack-md">
             <div className="stack-sm">
@@ -1720,19 +1840,6 @@ export default async function SermonDetailPage({
           </section>
 
           <section className="card stack-sm">
-            <h2>Publishing readiness</h2>
-            <ul className="status-list">
-              {publishingChecklist.map((item) => (
-                <li key={item.label} className="status-item">
-                  <span className={`status-dot ${item.ready ? "done" : "pending"}`} />
-                  <span>{item.label}</span>
-                  <span className="muted">{item.detail}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section className="card stack-sm">
             <h2>Advanced regeneration</h2>
             <p className="muted">
               Use this only when a specific generated asset is stale or wrong and the normal retry buttons are not enough.
@@ -1741,10 +1848,6 @@ export default async function SermonDetailPage({
           </section>
         </div>
       </details>
-
-      <Link href="/" className="text-link">
-        Back to dashboard
-      </Link>
     </main>
   );
 }
