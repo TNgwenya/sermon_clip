@@ -27,11 +27,13 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
       </header>
 
       <nav className="workflow-spine intake-workflow-spine" aria-label="Sermon Clip workflow">
-        <span className="is-current"><strong>01</strong> Add sermon</span>
-        <span><strong>02</strong> Analyze</span>
-        <span><strong>03</strong> Review clips</span>
-        <span><strong>04</strong> Edit &amp; brand</span>
-        <span><strong>05</strong> Prepare &amp; post</span>
+        <ol>
+          <li><span className="workflow-spine-step is-current" aria-current="step"><strong>01</strong> Add sermon</span></li>
+          <li><span className="workflow-spine-step"><strong>02</strong> Analyze</span></li>
+          <li><span className="workflow-spine-step"><strong>03</strong> Review clips</span></li>
+          <li><span className="workflow-spine-step"><strong>04</strong> Edit &amp; brand</span></li>
+          <li><span className="workflow-spine-step"><strong>05</strong> Prepare &amp; post</span></li>
+        </ol>
       </nav>
 
       <div className="premium-intake-layout">

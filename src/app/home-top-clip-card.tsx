@@ -16,6 +16,7 @@ type HomeTopClipCardProps = {
   durationLabel: string;
   timecodeLabel: string;
   clipTypeLabel: string;
+  platformLabel: string | null;
   hookLine: string | null;
   canPreviewVideo: boolean;
   priority?: boolean;
@@ -26,7 +27,8 @@ const PREVIEW_LOOP_SECONDS = 5;
 function supportsHoverPreview(): boolean {
   return (
     typeof window !== "undefined" &&
-    window.matchMedia("(hover: hover) and (pointer: fine)").matches
+    window.matchMedia("(hover: hover) and (pointer: fine)").matches &&
+    !window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
 }
 
@@ -41,6 +43,7 @@ export function HomeTopClipCard({
   durationLabel,
   timecodeLabel,
   clipTypeLabel,
+  platformLabel,
   hookLine,
   canPreviewVideo,
   priority = false,
@@ -64,7 +67,7 @@ export function HomeTopClipCard({
     }
   }, [isHovering, previewEnabled]);
 
-  function handlePointerEnter() {
+  function startPreview() {
     if (!canPreviewVideo || !supportsHoverPreview()) {
       return;
     }
@@ -96,8 +99,9 @@ export function HomeTopClipCard({
   return (
     <Link
       href={href}
-      className="dashboard-clip-card home-top-clip-card"
-      onPointerEnter={handlePointerEnter}
+      className={`dashboard-clip-card home-top-clip-card${canPreviewVideo ? " has-preview" : ""}`}
+      onPointerEnter={startPreview}
+      onFocus={startPreview}
       onPointerLeave={stopPreview}
       onBlur={stopPreview}
     >
@@ -122,22 +126,37 @@ export function HomeTopClipCard({
             onTimeUpdate={handlePreviewTimeUpdate}
           />
         ) : null}
+        <span className="clip-preview-affordance" aria-hidden="true">
+          <svg viewBox="0 0 20 20" focusable="false">
+            <path d="m8 6 6 4-6 4V6Z" fill="currentColor" />
+          </svg>
+        </span>
         <div className="clip-card-topline">
           <span className={`status-pill ${statusTone}`}>{statusLabel}</span>
           <span className="clip-duration-pill">{durationLabel}</span>
         </div>
         <div className="clip-card-poster-footer">
           <span>{timecodeLabel}</span>
-          <strong>{scoreLabel}</strong>
+          <strong className="clip-quality-score">
+            <small>Quality</small>
+            {scoreLabel}<span aria-hidden="true">/10</span>
+          </strong>
         </div>
       </div>
       <div className="stack-sm">
         <div className="clip-badge-row">
           <span className="status-pill clip-type-pill">{clipTypeLabel}</span>
+          {platformLabel ? <span className="status-pill clip-platform-pill">{platformLabel}</span> : null}
         </div>
         <h3>{title}</h3>
         {hookLine ? <p className="clip-hook-line">{hookLine}</p> : null}
         <p className="muted small">{sermonTitle}</p>
+        <span className="clip-card-action" aria-hidden="true">
+          Review clip
+          <svg viewBox="0 0 20 20" focusable="false">
+            <path d="M4 10h11M11 6l4 4-4 4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
+          </svg>
+        </span>
       </div>
     </Link>
   );

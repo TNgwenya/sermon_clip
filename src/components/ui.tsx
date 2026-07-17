@@ -48,14 +48,23 @@ type SectionCardProps = {
   description?: string;
   children: ReactNode;
   className?: string;
+  headerAction?: ActionLink;
 };
 
-export function SectionCard({ title, description, children, className }: SectionCardProps) {
+export function SectionCard({ title, description, children, className, headerAction }: SectionCardProps) {
   return (
     <section className={`card section-card stack-md${className ? ` ${className}` : ""}`}>
-      <div className="section-card-heading stack-sm">
-        <h2>{title}</h2>
-        {description ? <p className="muted">{description}</p> : null}
+      <div className="section-card-heading-row">
+        <div className="section-card-heading stack-sm">
+          <h2>{title}</h2>
+          {description ? <p className="muted">{description}</p> : null}
+        </div>
+        {headerAction ? (
+          <Link href={headerAction.href} className={`section-card-action button ${headerAction.variant ?? "tertiary"}`}>
+            {headerAction.label}
+            <span aria-hidden="true">&#8599;</span>
+          </Link>
+        ) : null}
       </div>
       {children}
     </section>

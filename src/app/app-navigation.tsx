@@ -115,24 +115,112 @@ const navigationGroups: NavigationGroup[] = [
 ];
 
 const secondaryItems = navigationGroups.slice(1).flatMap((group) => group.items);
+const mobilePrimaryItems = [primaryItems[0], primaryItems[2], primaryItems[1], primaryItems[3]];
+
+function NavigationIconPaths({ name }: { name: NavigationIconName }) {
+  switch (name) {
+    case "home":
+      return (
+        <>
+          <path d="m3.5 10.5 8.5-7 8.5 7" />
+          <path d="M5.5 9.25V20h13V9.25M9.5 20v-6h5v6" />
+        </>
+      );
+    case "create":
+      return (
+        <>
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M12 8v8M8 12h8" />
+        </>
+      );
+    case "library":
+      return (
+        <>
+          <path d="M3.5 7.5h6l2-2h9v13h-17z" />
+          <path d="M3.5 10h17" />
+        </>
+      );
+    case "publish":
+      return (
+        <>
+          <path d="M12 15V3M7.5 7.5 12 3l4.5 4.5" />
+          <path d="M5 13.5V20h14v-6.5" />
+        </>
+      );
+    case "plan":
+      return (
+        <>
+          <rect x="3.5" y="5.5" width="17" height="15" rx="2.5" />
+          <path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17M8 14h.01M12 14h.01M16 14h.01M8 17.5h.01M12 17.5h.01" />
+        </>
+      );
+    case "growth":
+      return (
+        <>
+          <path d="M4 19V5" />
+          <path d="m5.5 16 4.25-4.25 3.25 3.25L20 8" />
+          <path d="M15.5 8H20v4.5" />
+        </>
+      );
+    case "ideas":
+      return (
+        <>
+          <path d="m12 3 1.35 4.15L17.5 8.5l-4.15 1.35L12 14l-1.35-4.15L6.5 8.5l4.15-1.35L12 3Z" />
+          <path d="m18.5 14 .7 2.3 2.3.7-2.3.7-.7 2.3-.7-2.3-2.3-.7 2.3-.7.7-2.3Z" />
+          <path d="m5.5 14 .55 1.45 1.45.55-1.45.55L5.5 19l-.55-1.45L3.5 17l1.45-.55L5.5 14Z" />
+        </>
+      );
+    case "insights":
+      return (
+        <>
+          <path d="M4 20V11h4v9M10 20V4h4v16M16 20v-6h4v6" />
+          <path d="M3 20h18" />
+        </>
+      );
+    case "brand":
+      return (
+        <>
+          <path d="M4 4h7l9 9-7 7-9-9V4Z" />
+          <circle cx="8.5" cy="8.5" r="1.25" />
+        </>
+      );
+    case "channels":
+      return (
+        <>
+          <circle cx="6" cy="12" r="2.5" />
+          <circle cx="18" cy="6" r="2.5" />
+          <circle cx="18" cy="18" r="2.5" />
+          <path d="m8.25 10.9 7.5-3.8M8.25 13.1l7.5 3.8" />
+        </>
+      );
+    case "more":
+      return (
+        <>
+          <circle cx="5" cy="12" r="1.25" />
+          <circle cx="12" cy="12" r="1.25" />
+          <circle cx="19" cy="12" r="1.25" />
+        </>
+      );
+  }
+}
 
 function NavigationIcon({ name }: { name: NavigationIconName }) {
-  const glyphs: Record<NavigationIconName, string> = {
-    home: "⌂",
-    create: "+",
-    library: "□",
-    publish: "↑",
-    plan: "▦",
-    growth: "↗",
-    ideas: "✦",
-    insights: "∴",
-    brand: "◇",
-    channels: "◉",
-    more: "•••",
-  };
-
   return (
-    <span className={`rail-item-icon rail-item-icon-${name}`} aria-hidden="true">{glyphs[name]}</span>
+    <span className={`rail-item-icon rail-item-icon-${name}`} aria-hidden="true">
+      <svg
+        width="20"
+        height="20"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        focusable="false"
+      >
+        <NavigationIconPaths name={name} />
+      </svg>
+    </span>
   );
 }
 
@@ -200,7 +288,7 @@ export function AppNavigation() {
       </div>
 
       <nav className="rail-mobile-navigation" aria-label="Mobile navigation">
-        {primaryItems.map((item) => <NavigationLink key={item.href} item={item} pathname={pathname} mobile />)}
+        {mobilePrimaryItems.map((item) => <NavigationLink key={item.href} item={item} pathname={pathname} mobile />)}
         <details ref={mobileMoreRef} className={`rail-mobile-more${secondaryIsActive ? " is-active" : ""}`}>
           <summary aria-label="More navigation options">
             <NavigationIcon name="more" />

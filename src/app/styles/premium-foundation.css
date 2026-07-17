@@ -20,6 +20,11 @@
   --focus-ring: #c6f0df;
   --font-sans: "Avenir Next", Avenir, "SF Pro Display", "Segoe UI", Helvetica, Arial, sans-serif;
   --font-editorial: "Iowan Old Style", "Baskerville", "Times New Roman", serif;
+  --font-display: var(--font-editorial);
+  --canvas: var(--bg);
+  --text-secondary: var(--muted);
+  --text-muted: #7f8781;
+  --accent-mint: var(--accent);
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -33,6 +38,9 @@
   --radius-md: 0.875rem;
   --radius-lg: 1.125rem;
   --radius-xl: 1.5rem;
+  --radius-control: var(--radius-sm);
+  --radius-panel: var(--radius-md);
+  --radius-media: var(--radius-lg);
   --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.025), 0 18px 50px rgba(0, 0, 0, 0.18);
   --shadow-float: 0 24px 80px rgba(0, 0, 0, 0.44);
   --rail-width: 14.25rem;
@@ -337,8 +345,8 @@ input[type="radio"] {
 
 .rail-nav-label {
   padding: 0 0.65rem;
-  color: #737b75;
-  font-size: 0.64rem;
+  color: #909891;
+  font-size: 0.66rem;
   font-weight: 760;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -410,6 +418,12 @@ input[type="radio"] {
   font-size: 1rem;
   font-weight: 760;
   line-height: 1;
+}
+
+.rail-item-icon svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
 .rail-item-icon-more {
@@ -507,6 +521,32 @@ input[type="radio"] {
 
 .premium-app .section-card-heading {
   max-width: 54rem;
+}
+
+.premium-app .section-card-heading-row {
+  min-width: 0;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.premium-app .section-card-action {
+  min-height: 2.45rem;
+  flex: 0 0 auto;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.78rem;
+}
+
+.premium-app .section-card-action > span {
+  color: var(--accent);
+  font-size: 0.9rem;
+  transition: transform 150ms ease;
+}
+
+.premium-app .section-card-action:hover > span,
+.premium-app .section-card-action:focus-visible > span {
+  transform: translate(0.1rem, -0.1rem);
 }
 
 .premium-app .section-card-heading > .muted,
@@ -1094,6 +1134,23 @@ input[type="radio"] {
     flex-basis: 1.28rem;
   }
 
+  .rail-mobile-navigation > .rail-item-emphasis {
+    color: #eafaf2;
+  }
+
+  .rail-mobile-navigation > .rail-item-emphasis .rail-item-icon {
+    width: 2.25rem;
+    height: 2.25rem;
+    flex-basis: 2.25rem;
+    margin-top: -0.55rem;
+    padding: 0.48rem;
+    border: 1px solid rgba(188, 231, 212, 0.42);
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+  }
+
   .rail-mobile-more {
     position: relative;
     min-width: 0;
@@ -1152,6 +1209,14 @@ input[type="radio"] {
 
   .premium-app .page-header {
     padding: 1rem;
+  }
+
+  .premium-app .section-card-heading-row {
+    align-items: start;
+  }
+
+  .premium-app .section-card-action {
+    min-height: 2.35rem;
   }
 
   .premium-app .empty-state {
@@ -1220,6 +1285,11 @@ input[type="radio"] {
 
 @media (hover: none) and (pointer: coarse) {
   .premium-app :where(.button, summary, .rail-item, [role="button"]) {
+    min-height: 2.75rem;
+  }
+
+  .premium-app .social-setup-details summary,
+  .premium-app .social-technical-readiness summary {
     min-height: 2.75rem;
   }
 }

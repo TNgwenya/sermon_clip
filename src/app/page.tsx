@@ -55,6 +55,7 @@ type SermonListItem = {
     startTimeSeconds: number;
     durationSeconds: number;
     clipType: string;
+    bestPlatform: string | null;
     hook: string;
     suggestedHook: string | null;
     reasonSelected: string;
@@ -147,12 +148,31 @@ function workflowStatusText(status: SermonStatus): string {
   return "Ready to start";
 }
 
+function workflowStageForStatus(status: SermonStatus): number {
+  if (status === "CLIPS_GENERATED" || status === "REVIEWING" || status === "FAILED") return 2;
+  if (status === "EXPORTING") return 3;
+  if (status === "EXPORTED") return 4;
+  return 1;
+}
+
 function clipTypeText(value: string): string {
   return value
     .replace(/[_-]+/g, " ")
     .trim()
     .toLowerCase()
     .replace(/\b[a-z]/g, (letter) => letter.toUpperCase()) || "Clip";
+}
+
+function platformLabelText(value: string | null | undefined): string | null {
+  const label = value?.trim();
+  if (!label) return null;
+
+  return label
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b[a-z]/g, (letter) => letter.toUpperCase())
+    .replace(/Youtube/g, "YouTube")
+    .replace(/Tiktok/g, "TikTok");
 }
 
 function shortHookLine(value: string | null | undefined): string | null {
@@ -207,6 +227,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
             startTimeSeconds: true,
             durationSeconds: true,
             clipType: true,
+            bestPlatform: true,
             hook: true,
             suggestedHook: true,
             reasonSelected: true,
@@ -300,6 +321,22 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
       : priorityState === "resume"
         ? firstActionableSermon.title
         : "Paste a sermon link or upload a service video to begin.";
+  const workflowStageIndex = priorityState === "empty"
+    ? 0
+    : priorityState === "resume"
+      ? firstActionableSermon
+        ? workflowStageForStatus(firstActionableSermon.status)
+        : 0
+      : priorityState === "attention"
+        ? 2
+        : 4;
+  const workflowStages = [
+    { label: "Add sermon", href: "/sermons/new" },
+    { label: "Analyze", href: "/sermons" },
+    { label: "Review clips", href: "/sermons" },
+    { label: "Edit & brand", href: "/sermons" },
+    { label: "Prepare & post", href: "/ready-to-post" },
+  ];
 
   return (
     <main id="main-content" className="media-workspace home-workspace premium-dashboard stack-lg">
@@ -308,18 +345,30 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
           <p className="kicker">Sermon content studio</p>
           <h1>Your message.<br />Ready to move.</h1>
           <p className="muted">
-            Find the ministry moments worth sharing, shape them with care, and prepare every clip for the week ahead.
+            Turn one sermon into a thoughtful week of clips, captions, and conversations—without losing the heart of the message.
           </p>
         </div>
-        <Link href="/sermons/new" className="button primary home-create-action">Create from a sermon</Link>
+        <div className="home-hero-actions">
+          <Link href="/sermons/new" className="button primary home-create-action">Create from a sermon</Link>
+          <Link href="/weekly-plan" className="button tertiary home-plan-action">Plan this week</Link>
+        </div>
       </header>
 
       <nav className="workflow-spine" aria-label="Sermon Clip workflow">
-        <span className="is-current"><strong>01</strong> Add sermon</span>
-        <span><strong>02</strong> Analyze</span>
-        <span><strong>03</strong> Review clips</span>
-        <span><strong>04</strong> Edit &amp; brand</span>
-        <span><strong>05</strong> Prepare &amp; post</span>
+        <ol>
+          {workflowStages.map((stage, index) => (
+            <li key={stage.label}>
+              <Link
+                href={stage.href}
+                className={index === workflowStageIndex ? "is-current" : undefined}
+                aria-current={index === workflowStageIndex ? "step" : undefined}
+              >
+                <strong>{String(index + 1).padStart(2, "0")}</strong>
+                <span>{stage.label}</span>
+              </Link>
+            </li>
+          ))}
+        </ol>
       </nav>
 
       <section className="home-command-grid premium-command-grid" aria-label="Your next step">
@@ -367,7 +416,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
           </div>
           <label className="link-input-shell premium-link-input" htmlFor="dashboard-sermon-url">
             <span className="input-icon" aria-hidden="true">URL</span>
-            <input id="dashboard-sermon-url" name="youtubeUrl" type="url" placeholder="Paste a YouTube or sermon link" />
+            <input id="dashboard-sermon-url" name="youtubeUrl" type="url" placeholder="Paste sermon or YouTube link" />
           </label>
           <div className="upload-command-actions">
             <button className="button primary command-cta" type="submit">Continue with link</button>
@@ -381,8 +430,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
         <section className="home-processing-note" aria-live="polite">
           <span className="processing-pulse" aria-hidden="true" />
           <div>
-            <strong>{processingCount} {processingCount === 1 ? "sermon is" : "sermons are"} being prepared</strong>
-            <p className="muted small">You can leave this page. Sermon Clip will keep working.</p>
+            <strong>{processingCount} {processingCount === 1 ? "task is" : "tasks are"} in progress</strong>
+            <p className="muted small">You can leave this page. Sermon Clip will keep the work moving.</p>
           </div>
           <Link href="/sermons" className="button tertiary">See progress</Link>
         </section>
@@ -392,6 +441,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
         title="Moments worth sharing"
         description="Your strongest recent clips, ranked to help your team review with confidence."
         className="home-featured-clips"
+        headerAction={{ label: "Browse library", href: "/sermons" }}
       >
         {topClips.length === 0 ? (
           <EmptyState
@@ -418,6 +468,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
                   durationLabel={formatSecondsForPastorView(clip.durationSeconds)}
                   timecodeLabel={`Starts ${formatSecondsForPastorView(clip.startTimeSeconds)}`}
                   clipTypeLabel={clipTypeText(clip.clipType)}
+                  platformLabel={platformLabelText(clip.bestPlatform)}
                   hookLine={hookLine}
                   canPreviewVideo={previewableTopClipIds.has(clip.id)}
                   priority={index === 0}
@@ -439,6 +490,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
         title="Sermon library"
         description="Return to recent messages, continue review, or prepare the next post."
         className="home-sermon-library"
+        headerAction={{ label: "View all sermons", href: "/sermons" }}
       >
         {sermons.length === 0 ? (
           <EmptyState
