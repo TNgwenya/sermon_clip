@@ -23,6 +23,7 @@ describe("clip export service", () => {
         overlayStatus: "NOT_RENDERED",
         overlayVideoPath: null,
         exportStatus: "NOT_EXPORTED",
+        exportFreshness: "NEEDS_REGENERATION",
         exportFormat: null,
       },
       sourcePath: null,
@@ -52,6 +53,7 @@ describe("clip export service", () => {
         overlayStatus: "NOT_RENDERED",
         overlayVideoPath: null,
         exportStatus: "NOT_EXPORTED",
+        exportFreshness: "NEEDS_REGENERATION",
         exportFormat: null,
       },
       sourcePath: "/tmp/rendered.mp4",
@@ -80,6 +82,7 @@ describe("clip export service", () => {
         overlayStatus: "NOT_RENDERED",
         overlayVideoPath: null,
         exportStatus: "NOT_EXPORTED",
+        exportFreshness: "NEEDS_REGENERATION",
         exportFormat: null,
         transcriptSafetyStatus: "REVIEW_REQUIRED",
       },
@@ -111,6 +114,7 @@ describe("clip export service", () => {
         overlayStatus: "NOT_RENDERED",
         overlayVideoPath: null,
         exportStatus: "NOT_EXPORTED",
+        exportFreshness: "NEEDS_REGENERATION",
         exportFormat: null,
       },
       sourcePath: null,
@@ -140,6 +144,7 @@ describe("clip export service", () => {
         overlayStatus: "NOT_RENDERED",
         overlayVideoPath: null,
         exportStatus: "EXPORTING",
+        exportFreshness: "NEEDS_REGENERATION",
         exportFormat: "VERTICAL_9_16",
       },
       sourcePath: "/tmp/rendered.mp4",
@@ -151,6 +156,23 @@ describe("clip export service", () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toContain("already in progress");
     expect(result.shouldMarkFailed).toBe(false);
+  });
+
+  it("allows a completed export to be rebuilt after its freshness is invalidated", () => {
+    const result = __clipExportTestUtils.validateExportEligibility({
+      clip: {
+        renderStatus: "COMPLETED",
+        exportStatus: "COMPLETED",
+        exportFreshness: "OUTDATED",
+        exportFormat: "VERTICAL_9_16",
+      },
+      sourcePath: "/tmp/rendered.mp4",
+      sourceExists: true,
+      format: "VERTICAL_9_16",
+      allowReexport: false,
+    });
+
+    expect(result.ok).toBe(true);
   });
 
   it("marks missing prepared export source as a real failure", () => {
@@ -170,6 +192,7 @@ describe("clip export service", () => {
         overlayStatus: "NOT_RENDERED",
         overlayVideoPath: null,
         exportStatus: "NOT_EXPORTED",
+        exportFreshness: "NEEDS_REGENERATION",
         exportFormat: null,
       },
       sourcePath: "/tmp/rendered.mp4",
@@ -206,14 +229,83 @@ describe("clip export service", () => {
 
   it("prefers overlay prepared output as final export source", () => {
     const source = __clipExportTestUtils.resolvePreparedExportSource({
+      renderStatus: "COMPLETED",
+      renderFreshness: "UP_TO_DATE",
       renderedFilePath: "/tmp/rendered.mp4",
       captionBurnStatus: "COMPLETED",
+      captionBurnFreshness: "UP_TO_DATE",
       captionedVideoPath: "/tmp/captioned.mp4",
       overlayStatus: "COMPLETED",
+      overlayFreshness: "UP_TO_DATE",
       overlayVideoPath: "/tmp/overlay.mp4",
     });
 
     expect(source).toBe("/tmp/overlay.mp4");
+  });
+
+  it("rejects a stale raw render instead of treating it as an export source", async () => {
+    await expect(__clipExportTestUtils.resolveBestExportSource({
+      renderStatus: "COMPLETED",
+      renderFreshness: "OUTDATED",
+      renderedFilePath: "/tmp/stale-render.mp4",
+      captionBurnStatus: "NOT_BURNED",
+      captionBurnFreshness: "UP_TO_DATE",
+      captionedVideoPath: null,
+      overlayStatus: "NOT_RENDERED",
+      overlayFreshness: "NEEDS_REGENERATION",
+      overlayVideoPath: null,
+      captionData: null,
+      sermonId: "sermon-1",
+      sermon: null,
+      startTimeSeconds: 10,
+      endTimeSeconds: 70,
+      adjustedStartTimeSeconds: null,
+      adjustedEndTimeSeconds: null,
+    } as unknown as Parameters<typeof __clipExportTestUtils.resolveBestExportSource>[0])).rejects.toThrow(
+      "prepared render is stale or incomplete",
+    );
+  });
+
+  it("rejects a stale completed overlay instead of exporting it or silently dropping branding", async () => {
+    await expect(__clipExportTestUtils.resolveBestExportSource({
+      renderedFilePath: "/tmp/rendered.mp4",
+      captionBurnStatus: "COMPLETED",
+      captionBurnFreshness: "UP_TO_DATE",
+      captionedVideoPath: "/tmp/captioned.mp4",
+      overlayStatus: "COMPLETED",
+      overlayFreshness: "OUTDATED",
+      overlayVideoPath: "/tmp/stale-overlay.mp4",
+      captionData: null,
+      sermonId: "sermon-1",
+      sermon: null,
+      startTimeSeconds: 10,
+      endTimeSeconds: 70,
+      adjustedStartTimeSeconds: null,
+      adjustedEndTimeSeconds: null,
+    } as unknown as Parameters<typeof __clipExportTestUtils.resolveBestExportSource>[0])).rejects.toThrow(
+      "prepared overlay is stale or incomplete",
+    );
+  });
+
+  it("rejects a stale captioned source instead of exporting it or silently dropping captions", async () => {
+    await expect(__clipExportTestUtils.resolveBestExportSource({
+      renderedFilePath: "/tmp/rendered.mp4",
+      captionBurnStatus: "COMPLETED",
+      captionBurnFreshness: "OUTDATED",
+      captionedVideoPath: "/tmp/stale-captioned.mp4",
+      overlayStatus: "NOT_RENDERED",
+      overlayFreshness: "NEEDS_REGENERATION",
+      overlayVideoPath: null,
+      captionData: null,
+      sermonId: "sermon-1",
+      sermon: null,
+      startTimeSeconds: 10,
+      endTimeSeconds: 70,
+      adjustedStartTimeSeconds: null,
+      adjustedEndTimeSeconds: null,
+    } as unknown as Parameters<typeof __clipExportTestUtils.resolveBestExportSource>[0])).rejects.toThrow(
+      "prepared captioned video is stale or incomplete",
+    );
   });
 
   it("prefers the original sermon source for final export when no prepared visual layers or cleanup would be lost", async () => {
@@ -243,12 +335,16 @@ describe("clip export service", () => {
         adjustedStartTimeSeconds: 12,
         adjustedEndTimeSeconds: 68,
         renderStatus: "COMPLETED",
+        renderFreshness: "UP_TO_DATE",
         renderedFilePath: path.join(tempDir, "rendered.mp4"),
         captionBurnStatus: "NOT_BURNED",
+        captionBurnFreshness: "UP_TO_DATE",
         captionedVideoPath: null,
         overlayStatus: "NOT_RENDERED",
+        overlayFreshness: "NEEDS_REGENERATION",
         overlayVideoPath: null,
         exportStatus: "NOT_EXPORTED",
+        exportFreshness: "NEEDS_REGENERATION",
         exportFormat: null,
         transcriptSafetyStatus: "TRUSTED",
         sermon: {
@@ -269,10 +365,14 @@ describe("clip export service", () => {
 
   it("keeps prepared captioned output so final export does not lose approved captions", async () => {
     const selection = await __clipExportTestUtils.resolveBestExportSource({
+      renderStatus: "COMPLETED",
+      renderFreshness: "UP_TO_DATE",
       renderedFilePath: "/tmp/rendered.mp4",
       captionBurnStatus: "COMPLETED",
+      captionBurnFreshness: "UP_TO_DATE",
       captionedVideoPath: "/tmp/captioned.mp4",
       overlayStatus: "NOT_RENDERED",
+      overlayFreshness: "NEEDS_REGENERATION",
       overlayVideoPath: null,
       captionData: null,
       sermonId: "sermon-1",
@@ -296,10 +396,14 @@ describe("clip export service", () => {
       await writeFile(originalSourcePath, "source-video");
 
       const selection = await __clipExportTestUtils.resolveBestExportSource({
+        renderStatus: "COMPLETED",
+        renderFreshness: "UP_TO_DATE",
         renderedFilePath: "/tmp/rendered.mp4",
         captionBurnStatus: "NOT_BURNED",
+        captionBurnFreshness: "UP_TO_DATE",
         captionedVideoPath: null,
         overlayStatus: "NOT_RENDERED",
+        overlayFreshness: "NEEDS_REGENERATION",
         overlayVideoPath: null,
         captionData: {
           speechCleanupPlan: {

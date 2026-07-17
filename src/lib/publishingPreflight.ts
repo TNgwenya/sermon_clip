@@ -135,6 +135,15 @@ function buildConnectionChecks(input: {
     });
     const selectedAccountIds = new Set(input.selectedAccountIdsByPlatform?.[platform] ?? []);
     const hasExplicitAccountSelection = selectedAccountIds.size > 0;
+    if (!hasExplicitAccountSelection && accounts.length > 1) {
+      return [makeCheck(
+        `connection:${platform}`,
+        `${platform} publishing connection`,
+        "BLOCKED",
+        `Choose the exact ${platform} account for this automatic post. Multiple connected accounts are available.`,
+        { platform },
+      )];
+    }
     if (hasExplicitAccountSelection && accounts.length !== selectedAccountIds.size) {
       return [makeCheck(
         `connection:${platform}`,

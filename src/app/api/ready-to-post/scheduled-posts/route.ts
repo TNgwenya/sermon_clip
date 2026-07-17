@@ -12,6 +12,7 @@ import {
   updateScheduledPostSchedule,
   updateScheduledPostStatus,
 } from "@/lib/scheduledPosts";
+import { isValidIanaTimeZone, resolveScheduledInstant } from "@/lib/postingSchedule";
 
 export async function GET(): Promise<NextResponse> {
   const scheduledPosts = await listScheduledPosts();
@@ -27,8 +28,14 @@ export async function PATCH(request: Request): Promise<NextResponse> {
   const expectedCurrentStatus = body?.expectedCurrentStatus === "POSTED" || body?.expectedCurrentStatus === "SKIPPED"
     ? body.expectedCurrentStatus
     : null;
-  const scheduledFor = typeof body?.scheduledFor === "string" ? new Date(body.scheduledFor) : null;
-  const timezone = typeof body?.timezone === "string" ? body.timezone.trim().slice(0, 80) : null;
+  const timezone = typeof body?.scheduledFor === "string"
+    ? typeof body?.timezone === "string" && body.timezone.trim()
+      ? body.timezone.trim().slice(0, 80)
+      : "Africa/Johannesburg"
+    : null;
+  const scheduledFor = typeof body?.scheduledFor === "string"
+    ? resolveScheduledInstant(body.scheduledFor, timezone || "Africa/Johannesburg")
+    : null;
 
   if (!id) {
     return NextResponse.json({ error: "Choose a scheduled post to update." }, { status: 400 });
@@ -66,7 +73,15 @@ export async function PATCH(request: Request): Promise<NextResponse> {
       return NextResponse.json({ scheduledPost });
     }
 
-    if (scheduledFor && !Number.isNaN(scheduledFor.getTime())) {
+    if (typeof body?.scheduledFor === "string" && (!timezone || !isValidIanaTimeZone(timezone))) {
+      return NextResponse.json({ error: "Choose a valid IANA timezone, such as Africa/Johannesburg." }, { status: 400 });
+    }
+
+    if (typeof body?.scheduledFor === "string" && !scheduledFor) {
+      return NextResponse.json({ error: "Choose a valid date and time in the selected timezone." }, { status: 400 });
+    }
+
+    if (scheduledFor) {
       if (scheduledFor.getTime() < Date.now() - 60_000) {
         return NextResponse.json({ error: "Choose a future time for this scheduled post." }, { status: 400 });
       }

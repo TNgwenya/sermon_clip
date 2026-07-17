@@ -198,6 +198,8 @@ export async function bulkScheduleWeeklyPlanAction(
       select: {
         id: true,
         exportFormat: true,
+        exportStatus: true,
+        exportFreshness: true,
         exportedFilePath: true,
         exportPath: true,
         overlayVideoPath: true,

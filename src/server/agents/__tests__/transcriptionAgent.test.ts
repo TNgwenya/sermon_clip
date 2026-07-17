@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -56,6 +56,45 @@ describe("transcription sermon segment filtering", () => {
         ready: false,
         reason: "The media file is missing or empty.",
       });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("atomically replaces the final transcript JSON without leaving a temporary file", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "transcription-final-json-"));
+    const transcriptJsonPath = join(tempDir, "transcript.json");
+
+    try {
+      await writeFile(transcriptJsonPath, JSON.stringify({ version: "old" }), "utf8");
+      await __transcriptionTestUtils.writeTranscriptJsonAtomically(transcriptJsonPath, {
+        version: "new",
+        segmentCount: 2,
+      });
+
+      await expect(readFile(transcriptJsonPath, "utf8").then((value) => JSON.parse(value))).resolves.toEqual({
+        version: "new",
+        segmentCount: 2,
+      });
+      await expect(readdir(tempDir)).resolves.toEqual(["transcript.json"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans up the temporary transcript JSON when the final rename fails", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "transcription-final-json-failure-"));
+    const transcriptJsonPath = join(tempDir, "transcript.json");
+
+    try {
+      await mkdir(transcriptJsonPath);
+
+      await expect(
+        __transcriptionTestUtils.writeTranscriptJsonAtomically(transcriptJsonPath, {
+          version: "new",
+        }),
+      ).rejects.toThrow();
+      await expect(readdir(tempDir)).resolves.toEqual(["transcript.json"]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

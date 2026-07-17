@@ -52,12 +52,16 @@ export async function GET(
     where: { id: clipId },
     select: {
       exportStatus: true,
+      exportFreshness: true,
       exportedFilePath: true,
       exportFormat: true,
       exportPath: true,
+      overlayStatus: true,
+      overlayFreshness: true,
       overlayVideoPath: true,
+      captionBurnStatus: true,
+      captionBurnFreshness: true,
       captionedVideoPath: true,
-      renderedFilePath: true,
       captionData: true,
       transcriptSafetyStatus: true,
       title: true,
@@ -117,13 +121,30 @@ export async function GET(
     return NextResponse.json({ error: "Only best or vertical downloads are available here when a specific download history item is not selected." }, { status: 400 });
   }
 
+  const exportIsFresh = clip.exportStatus === "COMPLETED" && clip.exportFreshness === "UP_TO_DATE";
+  const overlayIsFresh = clip.overlayStatus === "COMPLETED" && clip.overlayFreshness === "UP_TO_DATE";
+  const captionBurnIsFresh = clip.captionBurnStatus === "COMPLETED" && clip.captionBurnFreshness === "UP_TO_DATE";
   const downloadCandidates = variant === "vertical"
-    ? [clip.exportFormat === "VERTICAL_9_16" ? clip.exportedFilePath : null, clip.exportPath, clip.overlayVideoPath, clip.captionedVideoPath, clip.renderedFilePath]
-    : [clip.exportedFilePath, clip.exportPath, clip.overlayVideoPath, clip.captionedVideoPath, clip.renderedFilePath];
+    ? clip.exportFormat === "VERTICAL_9_16" && exportIsFresh
+      ? [clip.exportedFilePath, clip.exportPath]
+      : []
+    : [
+        exportIsFresh ? clip.exportedFilePath : null,
+        exportIsFresh ? clip.exportPath : null,
+        overlayIsFresh ? clip.overlayVideoPath : null,
+        captionBurnIsFresh ? clip.captionedVideoPath : null,
+      ];
   const outputPath = await findExistingFile(downloadCandidates);
 
   if (!outputPath) {
-    return NextResponse.json({ error: "The prepared download file is missing or not ready for this clip yet." }, { status: 409 });
+    return NextResponse.json(
+      {
+        error: variant === "vertical"
+          ? "A fresh completed vertical export is not ready. Rebuild this clip before downloading it."
+          : "No fresh prepared download is ready. Rebuild the clip captions, branding, and export first.",
+      },
+      { status: 409 },
+    );
   }
 
   return videoFileResponse({

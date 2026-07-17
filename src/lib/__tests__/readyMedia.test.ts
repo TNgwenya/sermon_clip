@@ -22,6 +22,8 @@ describe("ready media resolution", () => {
     await writeFile(videoPath, Buffer.from("video"));
 
     const media = await resolveReadyMedia({
+      exportStatus: "COMPLETED",
+      exportFreshness: "UP_TO_DATE",
       exportFormat: "VERTICAL_9_16",
       exportedFilePath: videoPath,
       exportPath: null,
@@ -34,19 +36,21 @@ describe("ready media resolution", () => {
     });
   });
 
-  it("falls back to older prepared media paths when the exported path is missing", async () => {
+  it("does not fall back to an older plain render when the export is missing", async () => {
     const renderedPath = join(tempDir, "rendered.mp4");
     await writeFile(renderedPath, Buffer.from("rendered"));
 
     const media = await resolveReadyMedia({
+      exportStatus: "COMPLETED",
+      exportFreshness: "UP_TO_DATE",
       exportFormat: "VERTICAL_9_16",
       exportedFilePath: join(tempDir, "missing.mp4"),
       exportPath: null,
       renderedFilePath: renderedPath,
     });
 
-    expect(media.mediaReady).toBe(true);
-    expect(media.outputPath).toBe(renderedPath);
+    expect(media.mediaReady).toBe(false);
+    expect(media.outputPath).toBeNull();
   });
 
   it("rejects empty or missing media files", async () => {
@@ -54,6 +58,8 @@ describe("ready media resolution", () => {
     await writeFile(emptyPath, Buffer.alloc(0));
 
     const media = await resolveReadyMedia({
+      exportStatus: "COMPLETED",
+      exportFreshness: "UP_TO_DATE",
       exportFormat: "VERTICAL_9_16",
       exportedFilePath: emptyPath,
       exportPath: join(tempDir, "missing.mp4"),
@@ -71,6 +77,8 @@ describe("ready media resolution", () => {
 
     const media = await resolveReadyMedia(
       {
+        exportStatus: "COMPLETED",
+        exportFreshness: "UP_TO_DATE",
         exportFormat: "VERTICAL_9_16",
         exportedFilePath: missingPath,
         exportPath: null,
@@ -83,5 +91,40 @@ describe("ready media resolution", () => {
       outputPath: missingPath,
       estimatedBytes: null,
     });
+  });
+
+  it("rejects an existing export whose freshness was invalidated", async () => {
+    const videoPath = join(tempDir, "stale.mp4");
+    await writeFile(videoPath, Buffer.from("stale-video"));
+
+    const media = await resolveReadyMedia({
+      exportStatus: "COMPLETED",
+      exportFreshness: "OUTDATED",
+      exportFormat: "VERTICAL_9_16",
+      exportedFilePath: videoPath,
+      exportPath: videoPath,
+    });
+
+    expect(media).toEqual({
+      mediaReady: false,
+      outputPath: null,
+      estimatedBytes: null,
+    });
+  });
+
+  it("rejects a fresh horizontal export for short-form ready-to-post publishing", async () => {
+    const videoPath = join(tempDir, "horizontal.mp4");
+    await writeFile(videoPath, Buffer.from("horizontal-video"));
+
+    const media = await resolveReadyMedia({
+      exportStatus: "COMPLETED",
+      exportFreshness: "UP_TO_DATE",
+      exportFormat: "HORIZONTAL_16_9",
+      exportedFilePath: videoPath,
+      exportPath: videoPath,
+    });
+
+    expect(media.mediaReady).toBe(false);
+    expect(media.outputPath).toBeNull();
   });
 });

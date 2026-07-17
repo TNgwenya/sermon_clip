@@ -21,6 +21,7 @@ import {
   selectContentPublishingFiles,
 } from "@/lib/contentPublishingPreflight";
 import { fromPrismaPostingPlatform } from "@/lib/postingDrafts";
+import { isValidIanaTimeZone, resolveScheduledInstant } from "@/lib/postingSchedule";
 import { getPublishingServiceHealth } from "@/lib/publishingServiceHealth";
 import {
   renderApprovedNonVideoAssets,
@@ -49,7 +50,7 @@ const composerSchema = z.object({
 const scheduleSchema = z.object({
   assetId: z.string().trim().min(1),
   platform: contentPublishingPlatformSchema,
-  scheduledFor: z.string().datetime(),
+  scheduledFor: z.string().trim().min(1).max(40),
   timezone: z.string().trim().min(1).max(100),
   title: z.string().trim().min(1).max(255),
   caption: z.string().trim().min(1).max(63_206),
@@ -451,7 +452,13 @@ export async function scheduleContentAssetAction(
     };
   }
 
-  const scheduledFor = new Date(parsed.data.scheduledFor);
+  if (!isValidIanaTimeZone(parsed.data.timezone)) {
+    return { success: false, message: "Choose a valid IANA timezone, such as Africa/Johannesburg." };
+  }
+  const scheduledFor = resolveScheduledInstant(parsed.data.scheduledFor, parsed.data.timezone);
+  if (!scheduledFor) {
+    return { success: false, message: "Choose a valid date and time in the selected timezone." };
+  }
   if (scheduledFor.getTime() < Date.now() - 60_000) {
     return { success: false, message: "Choose a future date and time for this handoff." };
   }
@@ -594,7 +601,12 @@ export async function scheduleContentAssetAction(
     }
 
     const postingSlot = parsed.data.postingSlot?.trim()
-      || new Intl.DateTimeFormat("en", { weekday: "short", month: "short", day: "numeric" }).format(scheduledFor);
+      || new Intl.DateTimeFormat("en", {
+        timeZone: parsed.data.timezone,
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      }).format(scheduledFor);
     const idempotencyKey = [
       "content-asset",
       asset.id,

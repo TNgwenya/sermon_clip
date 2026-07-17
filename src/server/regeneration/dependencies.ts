@@ -17,8 +17,8 @@ export const regenerationGraph: Record<RegenerationStage, RegenerationStage[]> =
   CLIP_DISCOVERY: ["BOUNDARY_REFINEMENT", "RENDER", "CAPTION_GENERATION", "CAPTION_BURN", "OVERLAY_GENERATION", "EXPORT"],
   BOUNDARY_REFINEMENT: ["RENDER", "CAPTION_GENERATION", "CAPTION_BURN", "OVERLAY_GENERATION", "EXPORT"],
   RENDER: ["CAPTION_GENERATION", "CAPTION_BURN", "OVERLAY_GENERATION", "EXPORT"],
-  CAPTION_GENERATION: ["CAPTION_BURN", "EXPORT"],
-  CAPTION_BURN: ["EXPORT"],
+  CAPTION_GENERATION: ["CAPTION_BURN", "OVERLAY_GENERATION", "EXPORT"],
+  CAPTION_BURN: ["OVERLAY_GENERATION", "EXPORT"],
   OVERLAY_GENERATION: ["EXPORT"],
   EXPORT: [],
 };
@@ -262,6 +262,7 @@ export async function invalidateAfterCaptionTextChange(clipId: string, reason: s
     data: {
       captionFreshness: toOutdatedOrNeedsRegeneration(clip.captionStatus === "GENERATED", clip.captionFreshness),
       captionBurnFreshness: toOutdatedOrNeedsRegeneration(clip.captionBurnStatus === "COMPLETED", clip.captionBurnFreshness),
+      overlayFreshness: toOutdatedOrNeedsRegeneration(clip.overlayStatus === "COMPLETED", clip.overlayFreshness),
       exportFreshness: toOutdatedOrNeedsRegeneration(clip.exportStatus === "COMPLETED", clip.exportFreshness),
       assetInvalidationReason: reason,
     },
@@ -289,6 +290,7 @@ export async function invalidateAfterBrandingChange(reason: string): Promise<num
     data: {
       // Branding edits affect pastor/church overlays.
       overlayFreshness: "OUTDATED",
+      exportFreshness: "OUTDATED",
       assetInvalidationReason: reason,
     },
   });
@@ -416,6 +418,7 @@ export async function invalidateAfterCaptionCompleted(clipId: string, reason: st
     where: { id: clip.id },
     data: {
       captionBurnFreshness: toOutdatedOrNeedsRegeneration(clip.captionBurnStatus === "COMPLETED", clip.captionBurnFreshness),
+      overlayFreshness: toOutdatedOrNeedsRegeneration(clip.overlayStatus === "COMPLETED", clip.overlayFreshness),
       exportFreshness: toOutdatedOrNeedsRegeneration(clip.exportStatus === "COMPLETED", clip.exportFreshness),
       assetInvalidationReason: reason,
     },

@@ -9,11 +9,15 @@ const txMock = vi.hoisted(() => ({
   },
   scheduledPost: {
     createMany: vi.fn(),
+    findFirst: vi.fn(),
   },
 }));
 
 const prismaMock = vi.hoisted(() => ({
   $transaction: vi.fn(),
+  scheduledPost: {
+    findFirst: vi.fn(),
+  },
 }));
 
 vi.mock("@/lib/prisma", () => ({
@@ -25,6 +29,8 @@ import { createPostingDraft, PostingDraftValidationError } from "@/lib/postingDr
 const createdAt = new Date("2026-06-30T08:00:00.000Z");
 
 function setupTransaction() {
+  prismaMock.scheduledPost.findFirst.mockResolvedValue(null);
+  txMock.scheduledPost.findFirst.mockResolvedValue(null);
   txMock.postingDraft.create.mockResolvedValue({
     id: "draft-1",
     clipIdsJson: ["clip-1"],
@@ -183,5 +189,101 @@ describe("posting drafts", () => {
     })).rejects.toBeInstanceOf(PostingDraftValidationError);
 
     expect(txMock.scheduledPost.createMany).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit automatic account when multiple accounts are connected", async () => {
+    setupTransaction();
+
+    await expect(createPostingDraft({
+      clipIds: ["clip-1"],
+      platforms: ["Instagram"],
+      postingSlot: "Weekend invite",
+      automationMode: "AUTOMATIC",
+      scheduledFor: new Date("2026-07-01T10:00:00.000Z"),
+    })).rejects.toThrow("Choose the exact Instagram account");
+
+    expect(txMock.scheduledPost.createMany).not.toHaveBeenCalled();
+  });
+
+  it("does not silently attach a manual handoff to the newest connected account", async () => {
+    setupTransaction();
+
+    await createPostingDraft({
+      clipIds: ["clip-1"],
+      platforms: ["Instagram"],
+      postingSlot: "Weekend invite",
+      automationMode: "MANUAL",
+    });
+
+    const data = txMock.scheduledPost.createMany.mock.calls[0]?.[0]?.data;
+    expect(data).toHaveLength(1);
+    expect(data[0].socialAccountId).toBeNull();
+  });
+
+  it("returns the original draft when the same scheduling request is retried", async () => {
+    setupTransaction();
+    const input: Parameters<typeof createPostingDraft>[0] = {
+      clipIds: ["clip-1"],
+      platforms: ["Instagram"],
+      socialAccountIdsByPlatform: { Instagram: ["ig-1"] },
+      postingSlot: "Weekend invite",
+      automationMode: "AUTOMATIC" as const,
+      scheduledFor: new Date("2026-07-01T10:00:00.000Z"),
+      timezone: "Africa/Johannesburg",
+      idempotencyKey: "retry-request-1",
+    };
+
+    const first = await createPostingDraft(input);
+    const createdPost = txMock.scheduledPost.createMany.mock.calls[0]?.[0]?.data[0];
+    prismaMock.scheduledPost.findFirst.mockResolvedValue({
+      idempotencyKey: createdPost.idempotencyKey,
+      postingDraft: {
+        id: "draft-1",
+        clipIdsJson: ["clip-1"],
+        platformsJson: ["Instagram"],
+        postingSlot: "Wed, Jul 1, 12:00 PM",
+        note: null,
+        status: "READY_FOR_MEDIA_TEAM",
+        createdAt,
+      },
+    });
+
+    const retried = await createPostingDraft(input);
+
+    expect(retried.id).toBe(first.id);
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects reuse of a scheduling request key for changed post details", async () => {
+    setupTransaction();
+    const base: Parameters<typeof createPostingDraft>[0] = {
+      clipIds: ["clip-1"],
+      platforms: ["Instagram"],
+      socialAccountIdsByPlatform: { Instagram: ["ig-1"] },
+      postingSlot: "Weekend invite",
+      automationMode: "AUTOMATIC" as const,
+      scheduledFor: new Date("2026-07-01T10:00:00.000Z"),
+      timezone: "Africa/Johannesburg",
+      idempotencyKey: "retry-request-2",
+    };
+
+    await createPostingDraft(base);
+    const createdPost = txMock.scheduledPost.createMany.mock.calls[0]?.[0]?.data[0];
+    prismaMock.scheduledPost.findFirst.mockResolvedValue({
+      idempotencyKey: createdPost.idempotencyKey,
+      postingDraft: {
+        id: "draft-1",
+        clipIdsJson: ["clip-1"],
+        platformsJson: ["Instagram"],
+        postingSlot: "Wed, Jul 1, 12:00 PM",
+        note: null,
+        status: "READY_FOR_MEDIA_TEAM",
+        createdAt,
+      },
+    });
+
+    await expect(createPostingDraft({ ...base, note: "Changed request" }))
+      .rejects.toThrow("already used with different post details");
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
   });
 });

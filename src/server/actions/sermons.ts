@@ -4995,6 +4995,7 @@ async function markManualCaptionEditPreparedForRebuild(input: {
           ? "NEEDS_REGENERATION"
           : "UP_TO_DATE"
         : "UP_TO_DATE",
+      overlayFreshness: "NEEDS_REGENERATION",
       exportFreshness: input.exportStatus === "COMPLETED" ? "NEEDS_REGENERATION" : "UP_TO_DATE",
       assetInvalidationReason: input.reason,
       ...(!input.captionsEnabled

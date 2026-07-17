@@ -23,7 +23,9 @@ import { listCanonicalPlatformPayloads } from "@/lib/publishingPayload";
 import type { PublishingServiceHealth } from "@/lib/publishingServiceHealth";
 import {
   buildPostingCalendarDays,
+  resolveScheduledInstant,
   suggestNextCalendarSlot,
+  toDateTimeInputValueInTimeZone,
   toDateTimeLocalInputValue,
 } from "@/lib/postingSchedule";
 import type { ManualPublishingStatus, RestorablePublishingStatus, ScheduledPost } from "@/lib/scheduledPosts";
@@ -1113,21 +1115,23 @@ export function ReadyQueueExperience({
   }
 
   async function reschedulePost(post: ScheduledPost) {
-    const value = rescheduleValues[post.id] || (post.scheduledFor ? toDateTimeLocalInputValue(new Date(post.scheduledFor)) : "");
+    const timezone = post.timezone ?? "Africa/Johannesburg";
+    const value = rescheduleValues[post.id] || (post.scheduledFor
+      ? toDateTimeInputValueInTimeZone(new Date(post.scheduledFor), timezone)
+      : "");
     if (!value) {
       setPublishingMessage("Choose a new date and time for this post.");
       return;
     }
 
-    const scheduledFor = new Date(value);
-    if (Number.isNaN(scheduledFor.getTime())) {
-      setPublishingMessage("Choose a valid date and time for this post.");
+    if (!resolveScheduledInstant(value, timezone)) {
+      setPublishingMessage("Choose a valid date and time in the selected timezone.");
       return;
     }
 
     await patchScheduledPost(post.id, {
-      scheduledFor: scheduledFor.toISOString(),
-      timezone: post.timezone ?? "Africa/Johannesburg",
+      scheduledFor: value,
+      timezone,
     });
   }
 
@@ -1806,7 +1810,12 @@ export function ReadyQueueExperience({
                           <input
                             id={`reschedule-${post.id}`}
                             type="datetime-local"
-                            value={rescheduleValues[post.id] ?? (post.scheduledFor ? toDateTimeLocalInputValue(new Date(post.scheduledFor)) : "")}
+                            value={rescheduleValues[post.id] ?? (post.scheduledFor
+                              ? toDateTimeInputValueInTimeZone(
+                                  new Date(post.scheduledFor),
+                                  post.timezone ?? "Africa/Johannesburg",
+                                )
+                              : "")}
                             onChange={(event) => updateRescheduleValue(post, event.target.value)}
                             disabled={isPending || publishingLocked || !canReschedule}
                           />

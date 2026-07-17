@@ -1,8 +1,99 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { __regenerationTestUtils } from "../dependencies";
+const prismaMocks = vi.hoisted(() => ({
+  findUnique: vi.fn(),
+  update: vi.fn(),
+  updateMany: vi.fn(),
+}));
+
+vi.mock("@/lib/prisma", () => ({
+  prisma: {
+    clipCandidate: {
+      findUnique: prismaMocks.findUnique,
+      update: prismaMocks.update,
+      updateMany: prismaMocks.updateMany,
+    },
+  },
+}));
+
+import {
+  __regenerationTestUtils,
+  invalidateAfterBrandingChange,
+  invalidateAfterCaptionCompleted,
+  invalidateAfterCaptionTextChange,
+  regenerationGraph,
+} from "../dependencies";
 
 describe("regeneration dependency tracking", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prismaMocks.update.mockResolvedValue({});
+    prismaMocks.updateMany.mockResolvedValue({ count: 2 });
+    prismaMocks.findUnique.mockResolvedValue({
+      id: "clip-1",
+      sermonId: "sermon-1",
+      renderStatus: "COMPLETED",
+      captionStatus: "GENERATED",
+      captionBurnStatus: "COMPLETED",
+      overlayStatus: "COMPLETED",
+      exportStatus: "COMPLETED",
+      renderFreshness: "UP_TO_DATE",
+      captionFreshness: "UP_TO_DATE",
+      captionBurnFreshness: "UP_TO_DATE",
+      overlayFreshness: "UP_TO_DATE",
+      exportFreshness: "UP_TO_DATE",
+    });
+  });
+
+  it("cascades caption changes through overlay composition and final export", () => {
+    expect(regenerationGraph.CAPTION_GENERATION).toEqual([
+      "CAPTION_BURN",
+      "OVERLAY_GENERATION",
+      "EXPORT",
+    ]);
+    expect(regenerationGraph.CAPTION_BURN).toEqual(["OVERLAY_GENERATION", "EXPORT"]);
+  });
+
+  it("marks completed overlays and exports outdated when caption text changes", async () => {
+    await invalidateAfterCaptionTextChange("clip-1", "caption changed");
+
+    expect(prismaMocks.update).toHaveBeenCalledWith({
+      where: { id: "clip-1" },
+      data: expect.objectContaining({
+        captionFreshness: "OUTDATED",
+        captionBurnFreshness: "OUTDATED",
+        overlayFreshness: "OUTDATED",
+        exportFreshness: "OUTDATED",
+      }),
+    });
+  });
+
+  it("marks completed overlays and exports outdated after caption regeneration", async () => {
+    await invalidateAfterCaptionCompleted("clip-1", "captions regenerated");
+
+    expect(prismaMocks.update).toHaveBeenCalledWith({
+      where: { id: "clip-1" },
+      data: expect.objectContaining({
+        captionBurnFreshness: "OUTDATED",
+        overlayFreshness: "OUTDATED",
+        exportFreshness: "OUTDATED",
+      }),
+    });
+  });
+
+  it("cascades a global branding change to both overlay and export freshness", async () => {
+    await expect(invalidateAfterBrandingChange("branding changed")).resolves.toBe(2);
+
+    expect(prismaMocks.updateMany).toHaveBeenCalledWith({
+      where: { status: { in: ["APPROVED", "EXPORTED"] } },
+      data: {
+        overlayFreshness: "OUTDATED",
+        exportFreshness: "OUTDATED",
+        assetInvalidationReason: "branding changed",
+      },
+    });
+  });
+
   it("title/hook/hashtags edit does not imply video rerender", () => {
     const impact = __regenerationTestUtils.detectClipEditImpact(
       {

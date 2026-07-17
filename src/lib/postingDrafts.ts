@@ -1,10 +1,17 @@
+import crypto from "node:crypto";
+
 import type {
   PostingDraftStatus as PrismaPostingDraftStatus,
   PostingPlatform as PrismaPostingPlatform,
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import { buildClipSchedulePlan, normalizeScheduleIntervalMinutes } from "@/lib/postingSchedule";
+import {
+  buildClipSchedulePlan,
+  isValidIanaTimeZone,
+  normalizeScheduleIntervalMinutes,
+  resolveScheduledInstant,
+} from "@/lib/postingSchedule";
 
 export type PostingPlatform = "TikTok" | "Instagram" | "YouTube Shorts" | "Facebook";
 
@@ -104,13 +111,8 @@ export function normalizePostingAutomationMode(value: unknown): PostingAutomatio
     : "MANUAL";
 }
 
-export function normalizeScheduledFor(value: unknown): Date | null {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return null;
-  }
-
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
+export function normalizeScheduledFor(value: unknown, timezone = "Africa/Johannesburg"): Date | null {
+  return resolveScheduledInstant(value, timezone);
 }
 
 export function normalizeTimezone(value: unknown): string {
@@ -121,12 +123,13 @@ export function normalizeTimezone(value: unknown): string {
   return value.trim().slice(0, 80);
 }
 
-function buildPostingSlot(scheduledFor: Date | null, fallback: string): string {
+function buildPostingSlot(scheduledFor: Date | null, fallback: string, timezone: string): string {
   if (!scheduledFor) {
     return fallback.trim() || "This week";
   }
 
   return new Intl.DateTimeFormat("en", {
+    timeZone: timezone,
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -153,6 +156,74 @@ function buildScheduledPostIdempotencyKey(input: {
   ].join(":");
 }
 
+export function normalizePostingDraftIdempotencyKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= 200 ? normalized : null;
+}
+
+function postingDraftRequestPrefix(value: string): string {
+  const digest = crypto.createHash("sha256").update(value).digest("hex");
+  return `posting-draft-request:${digest}:`;
+}
+
+function postingDraftRequestKey(value: string, payloadFingerprint: string, sequence = 0): string {
+  return `${postingDraftRequestPrefix(value)}${payloadFingerprint}${sequence > 0 ? `:${sequence}` : ""}`;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+const postingDraftSelect = {
+  id: true,
+  clipIdsJson: true,
+  platformsJson: true,
+  postingSlot: true,
+  note: true,
+  status: true,
+  createdAt: true,
+} as const;
+
+async function findPostingDraftByRequestKey(
+  requestKey: string,
+  payloadFingerprint: string,
+): Promise<PostingDraft | null> {
+  const scheduledPost = await prisma.scheduledPost.findFirst({
+    where: { idempotencyKey: { startsWith: postingDraftRequestPrefix(requestKey) } },
+    orderBy: { idempotencyKey: "asc" },
+    select: { idempotencyKey: true, postingDraft: { select: postingDraftSelect } },
+  });
+  if (!scheduledPost) return null;
+  if (scheduledPost.idempotencyKey !== postingDraftRequestKey(requestKey, payloadFingerprint)) {
+    throw new PostingDraftValidationError(
+      "This scheduling request key was already used with different post details. Start a new scheduling request.",
+    );
+  }
+  if (!scheduledPost.postingDraft) {
+    throw new PostingDraftValidationError(
+      "This scheduling request was already completed, but its draft is no longer available.",
+    );
+  }
+  return toPostingDraft(scheduledPost.postingDraft);
+}
+
+function isRetryableIdempotencyRace(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === "object"
+    && "code" in error
+    && (error.code === "P2002" || error.code === "P2034"),
+  );
+}
+
 export async function listPostingDrafts(): Promise<PostingDraft[]> {
   const drafts = await prisma.postingDraft.findMany({
     orderBy: { createdAt: "desc" },
@@ -176,21 +247,71 @@ export async function createPostingDraft(input: {
   note?: string;
   clipCopyById?: Record<string, ClipPostCopy>;
   platformCopyByClipId?: Record<string, PlatformClipPostCopy>;
+  idempotencyKey?: string | null;
 }): Promise<PostingDraft> {
   const automationMode = input.automationMode ?? "MANUAL";
   const scheduledFor = input.scheduledFor ?? null;
   const scheduleIntervalMinutes = normalizeScheduleIntervalMinutes(input.scheduleIntervalMinutes, input.clipIds.length);
   const clipSchedulePlan = buildClipSchedulePlan(input.clipIds, scheduledFor, scheduleIntervalMinutes);
-  const postingSlot = buildPostingSlot(scheduledFor, input.postingSlot);
   const timezone = input.timezone?.trim() || "Africa/Johannesburg";
+  if (!isValidIanaTimeZone(timezone)) {
+    throw new PostingDraftValidationError("Choose a valid IANA timezone, such as Africa/Johannesburg.");
+  }
+  const postingSlot = buildPostingSlot(scheduledFor, input.postingSlot, timezone);
   const caption = input.caption?.trim() ?? "";
   const title = input.title?.trim() ?? "";
   const note = input.note?.trim() ?? "";
   const clipCopyById = input.clipCopyById ?? {};
   const platformCopyByClipId = input.platformCopyByClipId ?? {};
+  const requestKey = normalizePostingDraftIdempotencyKey(input.idempotencyKey);
+  const payloadFingerprint = crypto.createHash("sha256").update(stableJson({
+    automationMode,
+    caption,
+    clipCopyById,
+    clipIds: input.clipIds,
+    note,
+    platformCopyByClipId,
+    platforms: input.platforms,
+    postingSlot,
+    scheduleIntervalMinutes,
+    scheduledFor: scheduledFor?.toISOString() ?? null,
+    socialAccountIdsByPlatform: Object.fromEntries(input.platforms.map((platform) => [
+      platform,
+      [...(input.socialAccountIdsByPlatform?.[platform] ?? [])].sort(),
+    ])),
+    timezone,
+    title,
+  })).digest("hex");
 
-  const draft = await prisma.$transaction(async (tx) => {
-    const created = await tx.postingDraft.create({
+  if (requestKey) {
+    const existingDraft = await findPostingDraftByRequestKey(requestKey, payloadFingerprint);
+    if (existingDraft) return existingDraft;
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      if (requestKey) {
+        const existingScheduledPost = await tx.scheduledPost.findFirst({
+          where: { idempotencyKey: { startsWith: postingDraftRequestPrefix(requestKey) } },
+          orderBy: { idempotencyKey: "asc" },
+          select: { idempotencyKey: true, postingDraft: { select: postingDraftSelect } },
+        });
+        if (existingScheduledPost) {
+          if (existingScheduledPost.idempotencyKey !== postingDraftRequestKey(requestKey, payloadFingerprint)) {
+            throw new PostingDraftValidationError(
+              "This scheduling request key was already used with different post details. Start a new scheduling request.",
+            );
+          }
+          if (!existingScheduledPost.postingDraft) {
+            throw new PostingDraftValidationError(
+              "This scheduling request was already completed, but its draft is no longer available.",
+            );
+          }
+          return { existing: toPostingDraft(existingScheduledPost.postingDraft) } as const;
+        }
+      }
+
+      const created = await tx.postingDraft.create({
       data: {
         clipIdsJson: input.clipIds,
         platformsJson: input.platforms,
@@ -208,23 +329,31 @@ export async function createPostingDraft(input: {
       orderBy: { createdAt: "desc" },
     });
 
-    await tx.scheduledPost.createMany({
-      data: clipSchedulePlan.flatMap((clipSchedule) => input.platforms.flatMap((platform) => {
+    const scheduledPosts = clipSchedulePlan.flatMap((clipSchedule) => input.platforms.flatMap((platform) => {
         const dbPlatform = PLATFORM_TO_DB[platform];
         const selectedAccountIds = new Set(input.socialAccountIdsByPlatform?.[platform] ?? []);
-        const selectedAccounts = accounts.filter((item) => item.platform === dbPlatform && selectedAccountIds.has(item.id));
+        const platformAccounts = accounts.filter((item) => item.platform === dbPlatform);
+        const selectedAccounts = platformAccounts.filter((item) => selectedAccountIds.has(item.id));
         if (selectedAccountIds.size > 0 && selectedAccounts.length !== selectedAccountIds.size) {
           throw new PostingDraftValidationError(`Choose a connected ${platform} account before scheduling.`);
         }
 
-        const fallbackAccount = automationMode === "AUTOMATIC" && (dbPlatform === "TIKTOK" || dbPlatform === "INSTAGRAM")
-          ? accounts.find((item) => item.platform === dbPlatform && item.externalProvider === "zernio" && item.externalAccountId)
-            ?? accounts.find((item) => item.platform === dbPlatform)
-          : accounts.find((item) => item.platform === dbPlatform);
-        const targetAccounts = selectedAccounts.length > 0 ? selectedAccounts : [fallbackAccount];
-        const status = automationMode === "AUTOMATIC" ? "PLANNED" : "READY_FOR_MEDIA_TEAM";
+        if (automationMode === "AUTOMATIC" && selectedAccountIds.size === 0 && platformAccounts.length > 1) {
+          throw new PostingDraftValidationError(
+            `Choose the exact ${platform} account for this automatic draft. Multiple connected accounts are available.`,
+          );
+        }
+
+        const targetAccounts = selectedAccounts.length > 0
+          ? selectedAccounts
+          : automationMode === "AUTOMATIC"
+            ? [platformAccounts[0]]
+            : [undefined];
+        const status: "PLANNED" | "READY_FOR_MEDIA_TEAM" = automationMode === "AUTOMATIC"
+          ? "PLANNED"
+          : "READY_FOR_MEDIA_TEAM";
         const clipScheduledFor = clipSchedule.scheduledFor;
-        const clipPostingSlot = buildPostingSlot(clipScheduledFor, input.postingSlot);
+        const clipPostingSlot = buildPostingSlot(clipScheduledFor, input.postingSlot, timezone);
         const clipIds = [clipSchedule.clipId];
         const clipCopy = platformCopyByClipId[clipSchedule.clipId]?.[platform]
           ?? clipCopyById[clipSchedule.clipId];
@@ -245,22 +374,38 @@ export async function createPostingDraft(input: {
           automationMode,
           scheduledFor: clipScheduledFor,
           timezone,
-          idempotencyKey: buildScheduledPostIdempotencyKey({
+          idempotencyKeyInput: {
             draftId: created.id,
             platform,
             clipIds,
             scheduledFor: clipScheduledFor,
             automationMode,
             socialAccountId: account?.id ?? null,
-          }),
+          },
         }));
+      }));
+
+    await tx.scheduledPost.createMany({
+      data: scheduledPosts.map(({ idempotencyKeyInput, ...post }, index) => ({
+        ...post,
+        idempotencyKey: requestKey
+          ? postingDraftRequestKey(requestKey, payloadFingerprint, index)
+          : buildScheduledPostIdempotencyKey(idempotencyKeyInput),
       })),
     });
 
-    return created;
-  });
+      return { created } as const;
+    }, { isolationLevel: "Serializable" });
 
-  return toPostingDraft(draft);
+    if ("existing" in result && result.existing) return result.existing;
+    return toPostingDraft(result.created);
+  } catch (error) {
+    if (requestKey && isRetryableIdempotencyRace(error)) {
+      const existingDraft = await findPostingDraftByRequestKey(requestKey, payloadFingerprint);
+      if (existingDraft) return existingDraft;
+    }
+    throw error;
+  }
 }
 
 export function toPrismaPostingPlatform(platform: PostingPlatform): PrismaPostingPlatform {

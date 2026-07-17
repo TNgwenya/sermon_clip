@@ -9,6 +9,15 @@ import {
   formatDiagnosticLogEntry,
   formatDuration,
 } from "./worker-log.ts";
+import {
+  runCaptionBurnBatch,
+  runOverlayAndExportBatch,
+  summarizeCaptionBatch,
+  summarizePreviewPreparation,
+  summarizeQualityRefreshBatch,
+  summarizeRedoClipGeneration,
+  summarizeRenderBatch,
+} from "./media-worker-jobs.ts";
 
 process.env.WORKER_ENABLED ||= "true";
 const { loadEnvConfig } = nextEnv;
@@ -156,37 +165,9 @@ async function runCaptionBurnJob(sermonId: string): Promise<string> {
   }
 
   const { burnCaptionsIntoRenderedClip } = await import("../src/server/agents/captionBurnService");
-  let completed = 0;
-  let skipped = 0;
-  const failures: string[] = [];
-
-  for (const clip of clips) {
-    const captionData =
-      clip.captionData && typeof clip.captionData === "object" && !Array.isArray(clip.captionData)
-        ? clip.captionData as Record<string, unknown>
-        : {};
-    if (captionData["applyCaptionsToClip"] === false) {
-      skipped += 1;
-      continue;
-    }
-
-    try {
-      await burnCaptionsIntoRenderedClip(clip.id, {
-        allowReburn: true,
-        force: true,
-      });
-      completed += 1;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      failures.push(`${clip.id}: ${message}`);
-    }
-  }
-
-  if (failures.length > 0) {
-    throw new Error(`Caption burn completed ${completed}/${clips.length}; failures: ${failures.slice(0, 3).join(" | ")}`);
-  }
-
-  return `Caption burn completed for ${completed} clip(s), skipped ${skipped} with captions off.`;
+  return runCaptionBurnBatch(clips, {
+    burnCaptions: burnCaptionsIntoRenderedClip,
+  });
 }
 
 async function runOverlayAndExportJob(sermonId: string): Promise<string> {
@@ -219,63 +200,20 @@ async function runOverlayAndExportJob(sermonId: string): Promise<string> {
 
   const { renderClipOverlay } = await import("../src/server/agents/clipOverlayService");
   const { exportVerticalClip } = await import("../src/server/agents/clipExportService");
-  let overlaysCompleted = 0;
-  let exportsCompleted = 0;
-  const failures: string[] = [];
-
-  for (const clip of clips) {
-    const needsOverlay = clip.overlayStatus !== "COMPLETED" || clip.overlayFreshness !== "UP_TO_DATE";
-    const needsExport = clip.exportStatus !== "COMPLETED" || clip.exportFreshness !== "UP_TO_DATE";
-
-    try {
-      if (needsOverlay) {
-        await renderClipOverlay(clip.id, {
-          allowRerender: true,
-          force: true,
-        });
-        overlaysCompleted += 1;
-      }
-
-      if (needsExport) {
-        const layoutStrategy = clip.exportLayoutStrategy ?? "SMART_CROP";
-        try {
-          await exportVerticalClip(clip.id, {
-            allowReexport: true,
-            force: true,
-            layoutStrategy,
-          });
-        } catch (error) {
-          if (layoutStrategy !== "SMART_CROP") {
-            throw error;
-          }
-
-          await prisma.clipCandidate.update({
-            where: { id: clip.id },
-            data: {
-              exportLayoutStrategy: "FIT_BLURRED_BACKGROUND",
-              exportStatus: "NOT_EXPORTED",
-              exportError: null,
-            },
-          });
-          await exportVerticalClip(clip.id, {
-            allowReexport: true,
-            force: true,
-            layoutStrategy: "FIT_BLURRED_BACKGROUND",
-          });
-        }
-        exportsCompleted += 1;
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      failures.push(`${clip.id}: ${message}`);
-    }
-  }
-
-  if (failures.length > 0) {
-    throw new Error(`Overlay/export completed with ${failures.length} failure(s): ${failures.slice(0, 3).join(" | ")}`);
-  }
-
-  return `Overlay/export completed: ${overlaysCompleted} overlay(s), ${exportsCompleted} export(s).`;
+  return runOverlayAndExportBatch(clips, {
+    renderOverlay: renderClipOverlay,
+    exportClip: exportVerticalClip,
+    prepareFitBlurredFallback: async (clipId) => {
+      await prisma.clipCandidate.update({
+        where: { id: clipId },
+        data: {
+          exportLayoutStrategy: "FIT_BLURRED_BACKGROUND",
+          exportStatus: "NOT_EXPORTED",
+          exportError: null,
+        },
+      });
+    },
+  });
 }
 
 async function claimNextJob(): Promise<ProcessingJob | null> {
@@ -420,10 +358,7 @@ async function runJob(job: ProcessingJob): Promise<string> {
       if (shouldRedoGeneratedClips(job)) {
         const { redoClipGenerationFromTranscript } = await import("../src/server/agents/clipRedoService");
         const result = await redoClipGenerationFromTranscript(sermonId, { currentJobId: job.id });
-        if (!result.success && result.generatedClips === undefined) {
-          throw new Error(result.message);
-        }
-        return result.message;
+        return summarizeRedoClipGeneration(result);
       }
 
       const { generateClipSuggestions } = await import("../src/server/agents/clipIntelligenceAgent");
@@ -435,7 +370,7 @@ async function runJob(job: ProcessingJob): Promise<string> {
         processingJobId: job.id,
       });
       const previewResult = await prepareGeneratedClipReviewAssets({ sermonId, force: false });
-      const previewSummary = `Preview prep: ${previewResult.prepared} prepared, ${previewResult.skipped} skipped, ${previewResult.failed} failed.`;
+      const previewSummary = summarizePreviewPreparation(previewResult);
       return result.reusedExistingSuggestions
         ? `Existing clip suggestions reused. ${previewSummary}`
         : `Generated ${result.clipCount} ${append ? "new " : ""}clip suggestion(s). ${previewSummary}`;
@@ -443,17 +378,17 @@ async function runJob(job: ProcessingJob): Promise<string> {
     case "EXPORT_CLIPS": {
       const { renderApprovedClipsForSermon } = await import("../src/server/agents/clipRenderService");
       const result = await renderApprovedClipsForSermon(sermonId, { force: false });
-      return `Rendered ${result.completed} clip(s), skipped ${result.skipped}, failed ${result.failed}.`;
+      return summarizeRenderBatch(result);
     }
     case "GENERATE_SUBTITLES": {
       const { generateCaptionsForApprovedClips } = await import("../src/server/agents/captionService");
       const result = await generateCaptionsForApprovedClips(sermonId, { force: false });
-      return `Generated captions for ${result.generated} clip(s), reused ${result.reused}, skipped ${result.skipped}; ${result.failed} failed.`;
+      return summarizeCaptionBatch(result);
     }
     case "QUALITY_REFRESH": {
       const { refreshSermonClipQuality } = await import("../src/server/agents/clipQualityRefreshService");
       const result = await refreshSermonClipQuality({ sermonId, mode: "missing" });
-      return `Refreshed ${result.clipsRefreshed} clip quality record(s); ${result.clipsFailed} failed.`;
+      return summarizeQualityRefreshBatch(result);
     }
     case "BURN_SUBTITLES":
     {

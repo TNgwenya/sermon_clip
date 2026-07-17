@@ -164,6 +164,8 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         smartClipCategory: true,
         intendedAudience: true,
         exportFormat: true,
+        exportStatus: true,
+        exportFreshness: true,
         exportedFilePath: true,
         exportPath: true,
         overlayVideoPath: true,

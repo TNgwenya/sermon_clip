@@ -60,6 +60,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       intendedAudience: true,
       exportedAt: true,
       exportStatus: true,
+      exportFreshness: true,
       exportFormat: true,
       exportedFilePath: true,
       exportPath: true,

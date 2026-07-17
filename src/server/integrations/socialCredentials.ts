@@ -82,14 +82,20 @@ export function decryptToken(value: string): string {
   ]).toString("utf8");
 }
 
-async function upsertSocialAccount(input: NonNullable<StoredCredentialInput["socialAccount"]>): Promise<string> {
+function socialAccountExternalProvider(provider: SocialConnectorProvider): string {
+  return provider.toLowerCase();
+}
+
+async function upsertSocialAccount(
+  input: NonNullable<StoredCredentialInput["socialAccount"]>,
+  identity: { provider: SocialConnectorProvider; externalAccountId: string },
+  existingSocialAccountId: string | null,
+): Promise<string> {
+  const externalProvider = socialAccountExternalProvider(identity.provider);
   const existing = await prisma.socialAccount.findFirst({
     where: {
-      platform: input.platform,
-      OR: [
-        { handle: input.handle ?? undefined },
-        { label: input.label },
-      ],
+      externalProvider,
+      externalAccountId: identity.externalAccountId,
     },
     select: { id: true },
   });
@@ -98,29 +104,80 @@ async function upsertSocialAccount(input: NonNullable<StoredCredentialInput["soc
     await prisma.socialAccount.update({
       where: { id: existing.id },
       data: {
+        platform: input.platform,
         label: input.label,
         handle: input.handle?.trim() || null,
         status: "CONNECTED",
+        externalProvider,
+        externalAccountId: identity.externalAccountId,
       },
     });
     return existing.id;
   }
 
-  const created = await prisma.socialAccount.create({
-    data: {
-      platform: input.platform,
-      label: input.label,
-      handle: input.handle?.trim() || null,
-      status: "CONNECTED",
-    },
-    select: { id: true },
-  });
+  if (existingSocialAccountId) {
+    const linkedAccount = await prisma.socialAccount.findUnique({
+      where: { id: existingSocialAccountId },
+      select: {
+        id: true,
+        externalProvider: true,
+        externalAccountId: true,
+        credentials: { select: { provider: true, externalAccountId: true } },
+      },
+    });
+    const identityMatches = linkedAccount
+      && linkedAccount.externalProvider === externalProvider
+      && linkedAccount.externalAccountId === identity.externalAccountId;
+    const canAdoptIdentity = linkedAccount
+      && !linkedAccount.externalProvider
+      && !linkedAccount.externalAccountId
+      && linkedAccount.credentials.every((credential) => (
+        credential.provider === identity.provider
+        && credential.externalAccountId === identity.externalAccountId
+      ));
+    if (linkedAccount && (identityMatches || canAdoptIdentity)) {
+      await prisma.socialAccount.update({
+        where: { id: linkedAccount.id },
+        data: {
+          platform: input.platform,
+          label: input.label,
+          handle: input.handle?.trim() || null,
+          status: "CONNECTED",
+          externalProvider,
+          externalAccountId: identity.externalAccountId,
+        },
+      });
+      return linkedAccount.id;
+    }
+  }
+
+  let created: { id: string };
+  try {
+    created = await prisma.socialAccount.create({
+      data: {
+        platform: input.platform,
+        label: input.label,
+        handle: input.handle?.trim() || null,
+        status: "CONNECTED",
+        externalProvider,
+        externalAccountId: identity.externalAccountId,
+      },
+      select: { id: true },
+    });
+  } catch (error) {
+    if (!error || typeof error !== "object" || !("code" in error) || error.code !== "P2002") throw error;
+    const concurrentlyCreated = await prisma.socialAccount.findFirst({
+      where: { externalProvider, externalAccountId: identity.externalAccountId },
+      select: { id: true },
+    });
+    if (!concurrentlyCreated) throw error;
+    created = concurrentlyCreated;
+  }
 
   return created.id;
 }
 
 export async function upsertSocialCredential(input: StoredCredentialInput): Promise<void> {
-  const socialAccountId = input.socialAccount ? await upsertSocialAccount(input.socialAccount) : null;
   const existing = await prisma.socialCredential.findUnique({
     where: {
       provider_externalAccountId: {
@@ -130,8 +187,15 @@ export async function upsertSocialCredential(input: StoredCredentialInput): Prom
     },
     select: {
       refreshTokenCiphertext: true,
+      socialAccountId: true,
     },
   });
+  const socialAccountId = input.socialAccount
+    ? await upsertSocialAccount(input.socialAccount, {
+        provider: input.provider,
+        externalAccountId: input.externalAccountId,
+      }, existing?.socialAccountId ?? null)
+    : existing?.socialAccountId ?? null;
 
   await prisma.socialCredential.upsert({
     where: {

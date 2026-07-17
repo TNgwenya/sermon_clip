@@ -1,4 +1,5 @@
-import { access, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { access, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { SermonStatus } from "@prisma/client";
@@ -377,43 +378,45 @@ async function replaceTranscriptRecords(input: {
       })
     : null;
 
-  const transcript = await prisma.transcript.upsert({
-    where: { sermonId: input.sermonId },
-    update: {
-      fullText: input.fullText,
-      provider: input.provider,
-      language: input.language,
-      rawJsonPath: input.transcriptJsonPath,
-    },
-    create: {
-      sermonId: input.sermonId,
-      fullText: input.fullText,
-      provider: input.provider,
-      language: input.language,
-      rawJsonPath: input.transcriptJsonPath,
-    },
-  });
-
-  await prisma.transcriptSegment.deleteMany({
-    where: { sermonId: input.sermonId },
-  });
-
-  for (let index = 0; index < input.segments.length; index += TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE) {
-    const batch = input.segments.slice(index, index + TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE);
-    await prisma.transcriptSegment.createMany({
-      data: batch.map((segment) => buildTranscriptSegmentRecord({
+  await prisma.$transaction(async (tx) => {
+    const transcript = await tx.transcript.upsert({
+      where: { sermonId: input.sermonId },
+      update: {
+        fullText: input.fullText,
+        provider: input.provider,
+        language: input.language,
+        rawJsonPath: input.transcriptJsonPath,
+      },
+      create: {
         sermonId: input.sermonId,
-        transcriptId: transcript.id,
-        segment,
-      })),
+        fullText: input.fullText,
+        provider: input.provider,
+        language: input.language,
+        rawJsonPath: input.transcriptJsonPath,
+      },
     });
-  }
 
-  await prisma.sermon.update({
-    where: { id: input.sermonId },
-    data: {
-      transcriptJsonPath: input.transcriptJsonPath,
-    },
+    await tx.transcriptSegment.deleteMany({
+      where: { sermonId: input.sermonId },
+    });
+
+    for (let index = 0; index < input.segments.length; index += TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE) {
+      const batch = input.segments.slice(index, index + TRANSCRIPT_SEGMENT_INSERT_BATCH_SIZE);
+      await tx.transcriptSegment.createMany({
+        data: batch.map((segment) => buildTranscriptSegmentRecord({
+          sermonId: input.sermonId,
+          transcriptId: transcript.id,
+          segment,
+        })),
+      });
+    }
+
+    await tx.sermon.update({
+      where: { id: input.sermonId },
+      data: {
+        transcriptJsonPath: input.transcriptJsonPath,
+      },
+    });
   });
 
   if (invalidation?.transcriptChanged) {
@@ -520,6 +523,24 @@ async function readCachedChunkTranscript(input: {
 
 async function writeCachedChunkTranscript(cachePath: string, payload: CachedChunkTranscriptPayload): Promise<void> {
   await writeFile(cachePath, JSON.stringify(payload, null, 2), "utf8");
+}
+
+async function writeTranscriptJsonAtomically(
+  transcriptJsonPath: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const tempPath = path.join(
+    path.dirname(transcriptJsonPath),
+    `.${path.basename(transcriptJsonPath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  const serializedPayload = JSON.stringify(payload, null, 2);
+
+  try {
+    await writeFile(tempPath, serializedPayload, "utf8");
+    await rename(tempPath, transcriptJsonPath);
+  } finally {
+    await unlink(tempPath).catch(() => undefined);
+  }
 }
 
 function normalizeTranscriptTextForCleanup(text: string): string {
@@ -2277,7 +2298,7 @@ export async function transcribeSermonAudio(
       raw: normalizedTranscript.raw,
     };
 
-    await writeFile(transcriptJsonPath, JSON.stringify(rawPayload, null, 2), "utf8");
+    await writeTranscriptJsonAtomically(transcriptJsonPath, rawPayload);
 
     await replaceTranscriptRecords({
       sermonId: sermon.id,
@@ -2363,5 +2384,7 @@ export const __transcriptionTestUtils = {
   shouldRetryWithSpeechEnhancedAudio,
   speechEnhancedRetryEnabled,
   transcriptQualityScore,
+  replaceTranscriptRecords,
   writeCachedChunkTranscript,
+  writeTranscriptJsonAtomically,
 };

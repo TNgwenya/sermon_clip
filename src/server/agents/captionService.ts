@@ -640,7 +640,7 @@ async function generateCaptionsForClipCore(
   await markCaptionAssetCompleted(clip.id, true);
   await invalidateAfterCaptionCompleted(
     clip.id,
-    "Caption asset regenerated. Burned caption and export assets require regeneration.",
+    "Caption asset regenerated. Burned captions, overlays, and exports require regeneration.",
   );
 
   await appendJobLog(

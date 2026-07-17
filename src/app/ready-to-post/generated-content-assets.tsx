@@ -80,6 +80,14 @@ function scheduleDefaultValue(): string {
   return toDateTimeLocalInputValue(date);
 }
 
+function onlyAccountIdForPlatform(
+  accounts: ContentAssetPublishingAccount[],
+  platform: ContentPublishingPlatform,
+): string {
+  const matching = accounts.filter((account) => account.platform === platform);
+  return matching.length === 1 ? matching[0].id : "";
+}
+
 function ContentAssetScheduleModal({
   asset,
   metaPublishingAccounts,
@@ -92,7 +100,7 @@ function ContentAssetScheduleModal({
   const [platform, setPlatform] = useState<ContentPublishingPlatform>(asset.platform ?? "INSTAGRAM");
   const [automationMode, setAutomationMode] = useState<ContentAssetAutomationMode>("MANUAL");
   const [socialAccountId, setSocialAccountId] = useState(() => (
-    metaPublishingAccounts.find((account) => account.platform === (asset.platform ?? "INSTAGRAM"))?.id ?? ""
+    onlyAccountIdForPlatform(metaPublishingAccounts, asset.platform ?? "INSTAGRAM")
   ));
   const [scheduledFor, setScheduledFor] = useState(scheduleDefaultValue);
   const [timezone, setTimezone] = useState("Africa/Johannesburg");
@@ -141,7 +149,7 @@ function ContentAssetScheduleModal({
       const result = await scheduleContentAssetAction({
         assetId: asset.id,
         platform,
-        scheduledFor: new Date(scheduledFor).toISOString(),
+        scheduledFor,
         timezone,
         title,
         caption,
@@ -196,7 +204,7 @@ function ContentAssetScheduleModal({
                     ? "INSTAGRAM"
                     : "FACEBOOK";
                   setPlatform(fallbackPlatform);
-                  setSocialAccountId(metaPublishingAccounts.find((account) => account.platform === fallbackPlatform)?.id ?? "");
+                  setSocialAccountId(onlyAccountIdForPlatform(metaPublishingAccounts, fallbackPlatform));
                 }
               }}
               disabled={isPending}
@@ -212,7 +220,7 @@ function ContentAssetScheduleModal({
               onChange={(event) => {
                 const nextPlatform = event.target.value as ContentPublishingPlatform;
                 setPlatform(nextPlatform);
-                setSocialAccountId(metaPublishingAccounts.find((account) => account.platform === nextPlatform)?.id ?? "");
+                setSocialAccountId(onlyAccountIdForPlatform(metaPublishingAccounts, nextPlatform));
                 setMessage("");
               }}
               disabled={isPending}

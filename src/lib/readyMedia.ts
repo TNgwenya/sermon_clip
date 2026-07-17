@@ -2,6 +2,8 @@ import { stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 
 export type ReadyMediaClip = {
+  exportStatus: string | null;
+  exportFreshness: string | null;
   exportFormat: string | null;
   exportedFilePath: string | null;
   exportPath: string | null;
@@ -26,13 +28,19 @@ type ReadyMediaFile = {
 };
 
 function buildReadyMediaCandidates(clip: ReadyMediaClip): Array<string | null | undefined> {
+  // Ready-to-post currently targets short-form social platforms. A horizontal or
+  // square export may be valid history, but it is not safe posting media here.
+  if (
+    clip.exportStatus !== "COMPLETED"
+    || clip.exportFreshness !== "UP_TO_DATE"
+    || clip.exportFormat !== "VERTICAL_9_16"
+  ) {
+    return [];
+  }
+
   return [
-    clip.exportFormat === "VERTICAL_9_16" ? clip.exportedFilePath : null,
     clip.exportedFilePath,
     clip.exportPath,
-    clip.overlayVideoPath,
-    clip.captionedVideoPath,
-    clip.renderedFilePath,
   ];
 }
 

@@ -4,10 +4,13 @@ import {
   buildPostingCalendarDays,
   buildClipSchedulePlan,
   formatScheduleInterval,
+  isValidIanaTimeZone,
   normalizeScheduleIntervalMinutes,
+  resolveScheduledInstant,
   resolveCalendarDayKey,
   suggestNextCalendarSlot,
   suggestScheduleIntervalMinutes,
+  toDateTimeInputValueInTimeZone,
   toDateTimeLocalInputValue,
 } from "@/lib/postingSchedule";
 
@@ -102,5 +105,37 @@ describe("posting schedule helpers", () => {
 
   it("formats dates for datetime-local inputs", () => {
     expect(toDateTimeLocalInputValue(new Date("2026-07-03T18:30:00.000Z"))).toMatch(/2026-07-03T/);
+    expect(toDateTimeInputValueInTimeZone(
+      new Date("2026-07-03T16:30:00.000Z"),
+      "Africa/Johannesburg",
+    )).toBe("2026-07-03T18:30");
+    expect(toDateTimeInputValueInTimeZone(
+      new Date("2026-07-03T16:30:00.000Z"),
+      "America/New_York",
+    )).toBe("2026-07-03T12:30");
+  });
+
+  it("resolves wall-clock scheduling in the selected timezone instead of the browser timezone", () => {
+    expect(resolveScheduledInstant("2026-07-03T18:30", "Africa/Johannesburg")?.toISOString())
+      .toBe("2026-07-03T16:30:00.000Z");
+    expect(resolveScheduledInstant("2026-07-03T18:30", "America/New_York")?.toISOString())
+      .toBe("2026-07-03T22:30:00.000Z");
+    expect(resolveScheduledInstant("2026-07-03T16:30:00.000Z", "America/New_York")?.toISOString())
+      .toBe("2026-07-03T16:30:00.000Z");
+  });
+
+  it("uses the offset in effect on the scheduled date", () => {
+    expect(resolveScheduledInstant("2026-10-21T18:00", "Europe/London")?.toISOString())
+      .toBe("2026-10-21T17:00:00.000Z");
+    expect(resolveScheduledInstant("2026-10-28T18:00", "Europe/London")?.toISOString())
+      .toBe("2026-10-28T18:00:00.000Z");
+  });
+
+  it("rejects nonexistent and ambiguous daylight-saving wall-clock times", () => {
+    expect(resolveScheduledInstant("2026-03-29T01:30", "Europe/London")).toBeNull();
+    expect(resolveScheduledInstant("2026-10-25T01:30", "Europe/London")).toBeNull();
+    expect(resolveScheduledInstant("2026-07-03T18:30", "Not/A_Timezone")).toBeNull();
+    expect(isValidIanaTimeZone("Africa/Johannesburg")).toBe(true);
+    expect(isValidIanaTimeZone("Not/A_Timezone")).toBe(false);
   });
 });

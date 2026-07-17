@@ -5,7 +5,12 @@ import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { PostingAutomationMode, PostingDraft, PostingPlatform } from "@/lib/postingDrafts";
-import { formatScheduleInterval, suggestScheduleIntervalMinutes, toDateTimeLocalInputValue } from "@/lib/postingSchedule";
+import {
+  formatScheduleInterval,
+  resolveScheduledInstant,
+  suggestScheduleIntervalMinutes,
+  toDateTimeLocalInputValue,
+} from "@/lib/postingSchedule";
 import type { CanonicalPlatformPayload } from "@/lib/publishingPayload";
 import type { PublishingPreflightPacket } from "@/lib/publishingPreflight";
 import type { SocialAccount } from "@/lib/socialAccounts";
@@ -49,14 +54,20 @@ function platformCopyLimits(platform: PostingPlatform): { title: number; caption
   return { title: 2200, caption: 2200 };
 }
 
-function formatPlanTime(date: Date): string {
+function formatPlanTime(date: Date, timezone: string): string {
   return new Intl.DateTimeFormat(undefined, {
+    timeZone: timezone,
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
   }).format(date);
+}
+
+function createScheduleRequestKey(): string {
+  return globalThis.crypto?.randomUUID?.()
+    ?? `schedule-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 type ScheduleDraftModalProps = {
@@ -95,8 +106,10 @@ function buildAutomaticPlatforms(accounts: SocialAccount[]): Set<PostingPlatform
 
 function buildDefaultAccountSelections(accounts: SocialAccount[]): AccountSelectionsByPlatform {
   return platforms.reduce((accumulator, platform) => {
-    const firstAccount = accounts.find((account) => account.platform === platform);
-    return firstAccount ? { ...accumulator, [platform]: [firstAccount.id] } : accumulator;
+    const platformAccounts = accounts.filter((account) => account.platform === platform);
+    return platformAccounts.length === 1
+      ? { ...accumulator, [platform]: [platformAccounts[0].id] }
+      : accumulator;
   }, {} as AccountSelectionsByPlatform);
 }
 
@@ -216,6 +229,7 @@ export function ScheduleDraftModal({
   const [message, setMessage] = useState("");
   const [preflight, setPreflight] = useState<PublishingPreflightPacket | null>(null);
   const [pending, setPending] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState(createScheduleRequestKey);
   const intervalOptions = useMemo(() => {
     const options = [
       suggestedIntervalMinutes,
@@ -242,7 +256,9 @@ export function ScheduleDraftModal({
       }
     }
 
-    return { ...accumulator, [platform]: [platformAccounts[0].id] };
+    return platformAccounts.length === 1
+      ? { ...accumulator, [platform]: [platformAccounts[0].id] }
+      : { ...accumulator, [platform]: [] };
   }, {} as AccountSelectionsByPlatform), [selectableAccountsByPlatform, selectedSocialAccountIdsByPlatform]);
   const scheduleIntervalMinutes = customScheduleIntervalMinutes ?? suggestedIntervalMinutes;
   const hasMissingAccountSelection = selectedPlatforms.some((platform) => (
@@ -254,8 +270,8 @@ export function ScheduleDraftModal({
     return !copy?.title.trim() || !copy.caption.trim();
   }));
   const schedulePreview = useMemo(() => {
-    const start = new Date(scheduledFor);
-    if (automationMode !== "AUTOMATIC" || Number.isNaN(start.getTime())) {
+    const start = resolveScheduledInstant(scheduledFor, timezone);
+    if (automationMode !== "AUTOMATIC" || !start) {
       return [];
     }
 
@@ -267,7 +283,7 @@ export function ScheduleDraftModal({
         || `Clip ${index + 1}`,
       scheduledFor: new Date(start.getTime() + index * interval * 60_000),
     }));
-  }, [automationMode, clipDetailsById, orderedClipIds, platformCopyByClipId, scheduleIntervalMinutes, scheduledFor, selectedPlatforms]);
+  }, [automationMode, clipDetailsById, orderedClipIds, platformCopyByClipId, scheduleIntervalMinutes, scheduledFor, selectedPlatforms, timezone]);
 
   if (!open || typeof document === "undefined") {
     return null;
@@ -378,12 +394,13 @@ export function ScheduleDraftModal({
         platforms: selectedPlatforms,
         socialAccountIdsByPlatform,
         automationMode,
-        scheduledFor: automationMode === "AUTOMATIC" ? new Date(scheduledFor).toISOString() : null,
+        scheduledFor: automationMode === "AUTOMATIC" ? scheduledFor : null,
         timezone,
         postingSlot,
         note,
         scheduleIntervalMinutes: orderedClipIds.length > 1 ? scheduleIntervalMinutes : 0,
         platformCopyByClipId: platformCopy,
+        idempotencyKey,
       };
       const preflightResponse = await fetch("/api/ready-to-post/preflight", {
         method: "POST",
@@ -403,7 +420,10 @@ export function ScheduleDraftModal({
 
       const response = await fetch("/api/ready-to-post/drafts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        },
         body: JSON.stringify(requestBody),
       });
       const result = await response.json();
@@ -412,6 +432,7 @@ export function ScheduleDraftModal({
         return;
       }
       onCreated(result.draft);
+      setIdempotencyKey(createScheduleRequestKey());
       setMessage(automationMode === "AUTOMATIC" ? "Automatic posting plan scheduled." : "Posting draft saved for the media team.");
     } catch {
       setMessage("Could not create the posting draft.");
@@ -674,7 +695,7 @@ export function ScheduleDraftModal({
                 {schedulePreview.map((item) => (
                   <div key={item.clipId}>
                     <span>{item.label}</span>
-                    <strong>{formatPlanTime(item.scheduledFor)}</strong>
+                    <strong>{formatPlanTime(item.scheduledFor, timezone)}</strong>
                   </div>
                 ))}
                 {orderedClipIds.length > schedulePreview.length ? (

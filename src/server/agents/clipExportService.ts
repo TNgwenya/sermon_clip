@@ -102,12 +102,16 @@ type ClipForExport = Pick<
   | "adjustedStartTimeSeconds"
   | "adjustedEndTimeSeconds"
   | "renderStatus"
+  | "renderFreshness"
   | "renderedFilePath"
   | "captionBurnStatus"
+  | "captionBurnFreshness"
   | "captionedVideoPath"
   | "overlayStatus"
+  | "overlayFreshness"
   | "overlayVideoPath"
   | "exportStatus"
+  | "exportFreshness"
   | "exportFormat"
   | "transcriptSafetyStatus"
 > & {
@@ -439,7 +443,7 @@ async function failExport(clipId: string, message: string): Promise<void> {
 }
 
 function validateExportEligibility(input: {
-  clip: Pick<ClipForExport, "renderStatus" | "exportStatus" | "exportFormat"> &
+  clip: Pick<ClipForExport, "renderStatus" | "exportStatus" | "exportFormat" | "exportFreshness"> &
     { transcriptSafetyStatus?: ClipForExport["transcriptSafetyStatus"] } &
     Record<string, unknown>;
   sourcePath: string | null;
@@ -469,6 +473,7 @@ function validateExportEligibility(input: {
   if (
     input.clip.exportStatus === "COMPLETED" &&
     input.clip.exportFormat === input.format &&
+    input.clip.exportFreshness === "UP_TO_DATE" &&
     !input.allowReexport
   ) {
     return { ok: false, reason: "Clip already exported in this format. Use re-export to run again.", shouldMarkFailed: false };
@@ -525,12 +530,16 @@ async function loadClip(clipId: string): Promise<ClipForExport> {
       adjustedStartTimeSeconds: true,
       adjustedEndTimeSeconds: true,
       renderStatus: true,
+      renderFreshness: true,
       renderedFilePath: true,
       captionBurnStatus: true,
+      captionBurnFreshness: true,
       captionedVideoPath: true,
       overlayStatus: true,
+      overlayFreshness: true,
       overlayVideoPath: true,
       exportStatus: true,
+      exportFreshness: true,
       exportFormat: true,
       transcriptSafetyStatus: true,
       sermon: {
@@ -564,14 +573,21 @@ function resolveRenderBoundaries(clip: Pick<ClipForExport, "startTimeSeconds" | 
 function resolvePreparedExportSourceSelection(
   clip: Pick<
     ClipForExport,
+    | "renderStatus"
+    | "renderFreshness"
     | "renderedFilePath"
     | "captionBurnStatus"
+    | "captionBurnFreshness"
     | "captionedVideoPath"
     | "overlayStatus"
+    | "overlayFreshness"
     | "overlayVideoPath"
   >,
 ): ExportSourceSelection {
-  if (clip.overlayStatus === "COMPLETED" && clip.overlayVideoPath) {
+  if (clip.overlayStatus === "COMPLETED" || clip.overlayVideoPath) {
+    if (clip.overlayStatus !== "COMPLETED" || clip.overlayFreshness !== "UP_TO_DATE" || !clip.overlayVideoPath) {
+      throw new Error("The prepared overlay is stale or incomplete. Rebuild branding before exporting this clip.");
+    }
     return {
       sourcePath: clip.overlayVideoPath,
       kind: "PREPARED_OVERLAY",
@@ -579,12 +595,19 @@ function resolvePreparedExportSourceSelection(
     };
   }
 
-  if (clip.captionBurnStatus === "COMPLETED" && clip.captionedVideoPath) {
+  if (clip.captionBurnStatus === "COMPLETED" || clip.captionedVideoPath) {
+    if (clip.captionBurnStatus !== "COMPLETED" || clip.captionBurnFreshness !== "UP_TO_DATE" || !clip.captionedVideoPath) {
+      throw new Error("The prepared captioned video is stale or incomplete. Rebuild burned captions before exporting this clip.");
+    }
     return {
       sourcePath: clip.captionedVideoPath,
       kind: "PREPARED_CAPTIONED",
       reason: "Prepared captioned output preserves approved burned-in captions.",
     };
+  }
+
+  if (clip.renderStatus !== "COMPLETED" || clip.renderFreshness !== "UP_TO_DATE" || !clip.renderedFilePath) {
+    throw new Error("The prepared render is stale or incomplete. Rebuild the clip before exporting it.");
   }
 
   return {
@@ -597,10 +620,14 @@ function resolvePreparedExportSourceSelection(
 export function resolvePreparedExportSource(
   clip: Pick<
     ClipForExport,
+    | "renderStatus"
+    | "renderFreshness"
     | "renderedFilePath"
     | "captionBurnStatus"
+    | "captionBurnFreshness"
     | "captionedVideoPath"
     | "overlayStatus"
+    | "overlayFreshness"
     | "overlayVideoPath"
   >,
 ): string | null {
@@ -721,7 +748,7 @@ export async function exportClipWithPreset(
   await mkdir(/* turbopackIgnore: true */ path.dirname(outputPath), { recursive: true });
   const outputExists = await fileHasBytes(outputPath);
 
-  if (outputExists && !options?.allowReexport && !options?.force) {
+  if (outputExists && clip.exportFreshness === "UP_TO_DATE" && !options?.allowReexport && !options?.force) {
     await upsertActiveClipEditPlanForClip({
       clipCandidateId: clip.id,
       createdBy: "export",

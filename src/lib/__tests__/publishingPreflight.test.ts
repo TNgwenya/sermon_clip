@@ -96,6 +96,32 @@ describe("publishing preflight", () => {
     }));
   });
 
+  it("blocks automatic publishing when multiple accounts exist without an explicit choice", () => {
+    const packet = buildPublishingPreflight({
+      automationMode: "AUTOMATIC",
+      platforms: ["YouTube Shorts"],
+      clips: [readyClip],
+      accounts: ["channel-1", "channel-2"].map((id) => ({
+        id,
+        platform: "YouTube Shorts" as const,
+        status: "CONNECTED" as const,
+        externalProvider: "youtube",
+        externalAccountId: id,
+        externalPlatform: "youtube",
+        credentialReady: true,
+      })),
+      capabilities,
+      serviceHealth: liveService,
+    });
+
+    expect(packet.canSchedule).toBe(false);
+    expect(packet.checks).toContainEqual(expect.objectContaining({
+      id: "connection:YouTube Shorts",
+      status: "BLOCKED",
+      summary: expect.stringContaining("Choose the exact YouTube Shorts account"),
+    }));
+  });
+
   it("blocks mixed-quality multi-account selections instead of passing on one valid account", () => {
     const packet = buildPublishingPreflight({
       automationMode: "AUTOMATIC",

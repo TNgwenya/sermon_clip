@@ -6,13 +6,14 @@ import {
   listPostingDrafts,
   normalizeClipIds,
   normalizePostingAutomationMode,
+  normalizePostingDraftIdempotencyKey,
   normalizePostingPlatforms,
   normalizeScheduledFor,
   normalizeTimezone,
   PostingDraftValidationError,
   type PostingPlatform,
 } from "@/lib/postingDrafts";
-import { normalizeScheduleIntervalMinutes } from "@/lib/postingSchedule";
+import { isValidIanaTimeZone, normalizeScheduleIntervalMinutes } from "@/lib/postingSchedule";
 import { runPublishingPreflight } from "@/lib/publishingPreflightServer";
 import { resolveReadyMedia } from "@/lib/readyMedia";
 
@@ -28,9 +29,11 @@ export async function POST(request: Request): Promise<NextResponse> {
   const platforms = normalizePostingPlatforms(body?.platforms);
   const postingSlot = typeof body?.postingSlot === "string" ? body.postingSlot.trim() : "";
   const automationMode = normalizePostingAutomationMode(body?.automationMode);
-  const scheduledFor = normalizeScheduledFor(body?.scheduledFor);
-  const scheduleIntervalMinutes = normalizeScheduleIntervalMinutes(body?.scheduleIntervalMinutes, clipIds.length);
   const timezone = normalizeTimezone(body?.timezone);
+  const scheduledFor = normalizeScheduledFor(body?.scheduledFor, timezone);
+  const scheduleIntervalMinutes = normalizeScheduleIntervalMinutes(body?.scheduleIntervalMinutes, clipIds.length);
+  const rawIdempotencyKey = request.headers.get("idempotency-key") ?? body?.idempotencyKey;
+  const idempotencyKey = normalizePostingDraftIdempotencyKey(rawIdempotencyKey);
   const caption = typeof body?.caption === "string" ? body.caption.trim() : "";
   const title = typeof body?.title === "string" ? body.title.trim() : "";
   const note = typeof body?.note === "string" ? body.note.trim() : "";
@@ -44,6 +47,14 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   if (platforms.length === 0) {
     return NextResponse.json({ error: "Choose at least one platform for the posting draft." }, { status: 400 });
+  }
+
+  if (!isValidIanaTimeZone(timezone)) {
+    return NextResponse.json({ error: "Choose a valid IANA timezone, such as Africa/Johannesburg." }, { status: 400 });
+  }
+
+  if (rawIdempotencyKey != null && !idempotencyKey) {
+    return NextResponse.json({ error: "The scheduling request key must be between 1 and 200 characters." }, { status: 400 });
   }
 
   if (automationMode === "AUTOMATIC" && !scheduledFor) {
@@ -78,6 +89,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       id: true,
       durationSeconds: true,
       exportFormat: true,
+      exportStatus: true,
+      exportFreshness: true,
       exportedFilePath: true,
       exportPath: true,
       overlayVideoPath: true,
@@ -191,6 +204,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       note,
       clipCopyById,
       platformCopyByClipId,
+      idempotencyKey,
     });
   } catch (error) {
     if (error instanceof PostingDraftValidationError) {

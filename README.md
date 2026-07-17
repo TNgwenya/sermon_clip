@@ -16,11 +16,11 @@ It supports:
 - One-click pre-review processing (download, extract, transcribe, generate clips)
 
 ## What this MVP does not do yet
-- Authentication or user roles
-- Unattended publishing without a connected platform account, public R2 staging, and a live posting worker
+- Multi-user authentication, church workspaces, or role-based access control
+- Unattended publishing unless a reviewed platform account, required public media staging, and a live posting worker are all configured
 - Payments or subscriptions
 - Automatic approval of clips
-- Automatic export or automatic subtitle generation
+- Publishing without human review of the prepared content
 
 ## Tech stack
 - Next.js (App Router)
@@ -28,7 +28,7 @@ It supports:
 - Prisma
 - Postgres metadata database for Vercel/worker scheduling
 - Node.js server actions and backend modules
-- Local filesystem storage
+- Local filesystem storage, with optional Cloudflare R2 staging for remote previews and platform publishing
 - FFmpeg
 - yt-dlp
 - OpenAI API (transcription and clip intelligence)
@@ -339,12 +339,13 @@ Use http://localhost:3000/health to quickly validate local dependencies and envi
 - Processing duration depends on local machine performance and network speed.
 - Very short sermons can fail clip generation if transcript windows are too short for clip constraints.
 - Subtitle burn-in relies on local FFmpeg capabilities and fallback rendering behavior.
-- No background worker queue yet; actions run in-process.
+- Media and posting queues require their respective Mac workers to remain online; some interactive actions still run in the web process.
+- The current access gate is intended for a single trusted workspace, not isolated multi-church tenancy.
 
 ## Safety and rights reminder
 - This app is local-first.
 - Files are stored under `storage/sermons/{sermonId}` by default.
-- It does not upload files to S3.
-- It does not auto-post to social platforms.
-- You must have rights/permission to process sermon media.
-- Human approval is required before export.
+- When R2 is configured, the app uploads remote clip previews and temporary or generated publishing media to the configured bucket and public base URL.
+- Automatic posting is available only through explicitly configured accounts and a live posting worker; keep dry-run and private defaults enabled while validating a connection.
+- You must have rights and permission to process and publish sermon media, including music, congregation footage, and images of minors.
+- Human approval is required before preparing content for publication.
