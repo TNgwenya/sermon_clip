@@ -158,6 +158,23 @@ npm run worker:media
 npm run worker:posting
 ```
 
+Media paths stored beneath `SERMON_STORAGE_ROOT` are persisted as portable
+`sermon-storage://...` references and resolved against the current machine's
+storage root when read. Legacy absolute paths remain readable. Before moving
+the media root to another machine, preview the database-only conversion:
+
+```bash
+npm run storage:migrate-portable-paths -- --from-root "/absolute/path/to/current/storage"
+```
+
+Review the counts, then apply it explicitly:
+
+```bash
+npm run storage:migrate-portable-paths -- --from-root "/absolute/path/to/current/storage" --apply
+```
+
+The command never moves, copies, or deletes media files.
+
 Useful worker settings:
 - `WORKER_API_BASE_URL`: Vercel or local app URL.
 - `WORKER_API_TOKEN`: bearer token shared with the app.

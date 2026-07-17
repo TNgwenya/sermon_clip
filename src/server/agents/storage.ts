@@ -6,8 +6,8 @@ import {
   canRunLocalMediaProcessing,
   localMediaProcessingUnavailableMessage,
 } from "@/server/runtime/workerRuntime";
+import { getConfiguredStorageRoot } from "@/server/media/portableStoragePath";
 
-const DEFAULT_STORAGE_ROOT = path.join(/* turbopackIgnore: true */ process.cwd(), "storage");
 const SERMON_FOLDER_MANIFEST_FILE = ".sermon-folders.json";
 const MAX_SERMON_FOLDER_SLUG_LENGTH = 80;
 
@@ -22,8 +22,7 @@ function assertPathSegment(value: string, label: string): string {
 }
 
 export function getStorageRoot(): string {
-  const configured = process.env.SERMON_STORAGE_ROOT?.trim();
-  return configured && configured.length > 0 ? configured : DEFAULT_STORAGE_ROOT;
+  return getConfiguredStorageRoot();
 }
 
 function getSermonsRoot(): string {
