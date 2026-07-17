@@ -3,8 +3,48 @@ import { spawnSync } from "node:child_process";
 
 import { PrismaClient } from "@prisma/client";
 
+import {
+  isRetryableDatabaseConnectionError,
+  withDatabaseConnectionRetry,
+} from "./prisma-deploy-retry.mjs";
+
 const prisma = new PrismaClient();
 const BASELINE_MARKER_TABLE = '"_sermon_clip_baseline_state"';
+const DEFAULT_DATABASE_RETRY_MAX_ATTEMPTS = 4;
+const DEFAULT_DATABASE_RETRY_BASE_DELAY_MS = 1_000;
+const DEFAULT_DATABASE_RETRY_MAX_DELAY_MS = 8_000;
+
+function integerEnvironmentValue(name, fallback, { minimum, maximum }) {
+  const rawValue = process.env[name]?.trim();
+  if (!rawValue) return fallback;
+
+  const parsedValue = Number(rawValue);
+  if (!Number.isInteger(parsedValue) || parsedValue < minimum || parsedValue > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
+  }
+
+  return parsedValue;
+}
+
+function databaseRetryOptions() {
+  return {
+    maxAttempts: integerEnvironmentValue(
+      "PRISMA_DEPLOY_MAX_ATTEMPTS",
+      DEFAULT_DATABASE_RETRY_MAX_ATTEMPTS,
+      { minimum: 1, maximum: 10 },
+    ),
+    baseDelayMs: integerEnvironmentValue(
+      "PRISMA_DEPLOY_RETRY_BASE_DELAY_MS",
+      DEFAULT_DATABASE_RETRY_BASE_DELAY_MS,
+      { minimum: 0, maximum: 60_000 },
+    ),
+    maxDelayMs: integerEnvironmentValue(
+      "PRISMA_DEPLOY_RETRY_MAX_DELAY_MS",
+      DEFAULT_DATABASE_RETRY_MAX_DELAY_MS,
+      { minimum: 0, maximum: 60_000 },
+    ),
+  };
+}
 
 function run(command, args) {
   const result = spawnSync(command, args, {
@@ -35,6 +75,39 @@ async function databaseMigrationState() {
     hasBaselineMarker: state.hasBaselineMarker === true,
     appliedMigrationCount: Number(appliedRows[0]?.count ?? 0),
   };
+}
+
+async function databaseMigrationStateWithRetry() {
+  const retryOptions = databaseRetryOptions();
+
+  try {
+    return await withDatabaseConnectionRetry(
+      () => databaseMigrationState(),
+      {
+        ...retryOptions,
+        onRetry: async ({ attempt, nextAttempt, maxAttempts, delayMs }) => {
+          console.warn(
+            `Database connection unavailable during migration preflight (attempt ${attempt}/${maxAttempts}). `
+              + `Retrying attempt ${nextAttempt} in ${delayMs}ms.`,
+          );
+          // Reset Prisma's query engine so the next attempt opens a fresh Neon
+          // connection instead of retaining a failed initialization state.
+          await prisma.$disconnect().catch(() => undefined);
+        },
+      },
+    );
+  } catch (error) {
+    if (!isRetryableDatabaseConnectionError(error)) throw error;
+
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Database migration preflight could not connect after ${retryOptions.maxAttempts} attempts. `
+        + "Required migrations were not skipped, so this deployment was stopped safely. "
+        + "Confirm the Neon project and branch are active and that Vercel's DATABASE_URL points to the current endpoint, then redeploy. "
+        + `Last connection error: ${message}`,
+      { cause: error },
+    );
+  }
 }
 
 async function migrationNames() {
@@ -134,7 +207,7 @@ async function baselineCurrentSchema({ resume }) {
 }
 
 async function main() {
-  const state = await databaseMigrationState();
+  const state = await databaseMigrationStateWithRetry();
 
   const requiresBaseline = state.hasBaselineMarker
     || !state.hasMigrationTable

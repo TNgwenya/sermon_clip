@@ -184,7 +184,7 @@ After connecting YouTube in Social Settings, stored OAuth credentials are prefer
 
 The generated-content desk also includes a reusable Design Studio, an operational mixed-content weekly planner at `/weekly-plan`, WhatsApp/Story/HTML-email handoff packs, and branded ministry-guide PDFs. Weekly-plan bulk scheduling remains a reviewed manual handoff by design.
 
-For Neon/Vercel setup, create the Neon database and set `DATABASE_URL` in Vercel and locally. Vercel uses `npm run deploy:build`, which safely baselines an empty database from the current PostgreSQL schema and uses `prisma migrate deploy` for databases that already have migration history. To copy existing local SQLite rows into Neon, run:
+For Neon/Vercel setup, create the Neon database and set `DATABASE_URL` in Vercel and locally. Vercel uses `npm run deploy:build`, which safely baselines an empty database from the current PostgreSQL schema and uses `prisma migrate deploy` for databases that already have migration history. The migration preflight retries transient Neon connection and cold-start failures with bounded exponential backoff; authentication, schema, and migration errors still fail immediately, and an unreachable database never causes migrations to be skipped. The defaults can be tuned with `PRISMA_DEPLOY_MAX_ATTEMPTS`, `PRISMA_DEPLOY_RETRY_BASE_DELAY_MS`, and `PRISMA_DEPLOY_RETRY_MAX_DELAY_MS`. To copy existing local SQLite rows into Neon, run:
 
 ```bash
 SQLITE_DATABASE_PATH=prisma/dev.db npm run import:sqlite-to-postgres
