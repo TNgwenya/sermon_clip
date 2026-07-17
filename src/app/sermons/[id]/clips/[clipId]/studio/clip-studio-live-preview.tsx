@@ -622,7 +622,7 @@ export function ClipStudioLivePreview({
       <div className="section-heading-row">
         <div className="stack-sm">
           <p className="kicker">Preview</p>
-          <h2>Live clip output</h2>
+          <h2>Live preview</h2>
         </div>
         <StatusBadge tone={renderTone}>{renderLabel}</StatusBadge>
       </div>

@@ -2474,9 +2474,10 @@ export function ClipStudioEditor({
         </div>
       </SectionCard>
 
-      <details ref={audioReviewSectionRef} className="clip-studio-editor-disclosure" open>
+      <details ref={audioReviewSectionRef} className="clip-studio-editor-disclosure">
         <summary>
-          <span>Audio</span>
+          <span>Audio cleanup</span>
+          <span className="muted small">{speechCleanupSummary}</span>
         </summary>
       <SectionCard title="Audio">
         <div className="stack-md">
@@ -2543,7 +2544,7 @@ export function ClipStudioEditor({
       </details>
 
       <SectionCard
-        title="Post copy"
+        title="Social post copy"
         description="Prepare the words that travel with the video on social platforms. These fields do not change the timed words shown inside the clip."
       >
         <div className="stack-md">

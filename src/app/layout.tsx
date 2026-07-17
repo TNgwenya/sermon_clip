@@ -9,22 +9,43 @@ import "./styles/premium-review-ready.css";
 import "./styles/premium-studio.css";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000"),
   title: {
-    default: "Sermon Clip — Sermon Content Studio",
+    default: "Sermon Clip — Church Content Studio",
     template: "%s | Sermon Clip",
   },
-  description: "Turn full sermons into beautifully edited, branded, ready-to-post social clips.",
+  description: "One sermon. A week of faithful content. Find, review, edit, and prepare ministry-safe social clips with your church team.",
   applicationName: "Sermon Clip",
   category: "creative studio",
   icons: {
     icon: "/sermon-clip-1024.png",
     apple: "/sermon-clip-1024.png",
   },
+  openGraph: {
+    title: "Sermon Clip — Church Content Studio",
+    description: "One sermon. A week of faithful content. Find, review, edit, and prepare ministry-safe social clips with your church team.",
+    siteName: "Sermon Clip",
+    type: "website",
+    images: [
+      {
+        url: "/og.png",
+        width: 1733,
+        height: 908,
+        alt: "Sermon Clip church content studio",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Sermon Clip — Church Content Studio",
+    description: "One sermon. A week of faithful content. Find, review, edit, and prepare ministry-safe social clips with your church team.",
+    images: ["/og.png"],
+  },
 };
 
 export const viewport: Viewport = {
   colorScheme: "dark",
-  themeColor: "#090b0a",
+  themeColor: "#0b0d0b",
 };
 
 export default function RootLayout({

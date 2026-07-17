@@ -42,11 +42,11 @@ export function ClipStudioWorkbenchTabs({
 
   const tabs: StudioTab[] = useMemo(
     () => [
-      { id: "edit", label: "Edit", eyebrow: "Clip tools", content: edit },
+      { id: "edit", label: "Words", eyebrow: "Trim, captions and post copy", content: edit },
       { id: "format", label: "Frame", eyebrow: "Format and crop", content: format },
       { id: "branding", label: "Brand", eyebrow: "Church identity", content: branding },
-      { id: "post", label: "Output", eyebrow: "Prepared media state", content: post },
-      { id: "evidence", label: "Why", eyebrow: "Why this clip works", content: evidence },
+      { id: "post", label: "Post", eyebrow: "Prepared media and handoff", content: post },
+      { id: "evidence", label: "Why", eyebrow: "Message evidence", content: evidence },
     ],
     [branding, edit, evidence, format, post],
   );
@@ -55,10 +55,10 @@ export function ClipStudioWorkbenchTabs({
   const mobileTasks: Array<{ id: MobileStudioTaskId; label: string }> = [
     { id: "preview", label: "Preview" },
     { id: "transcript", label: "Words" },
-    { id: "edit", label: "Edit" },
+    { id: "edit", label: "Words" },
     { id: "format", label: "Frame" },
     { id: "branding", label: "Brand" },
-    { id: "post", label: "Output" },
+    { id: "post", label: "Post" },
   ];
 
   function selectTab(index: number) {
@@ -144,7 +144,7 @@ export function ClipStudioWorkbenchTabs({
 
       <div className="clip-studio-workbench-head">
         <div>
-          <p className="kicker">Studio tools</p>
+          <p className="kicker">Clip inspector</p>
           <h2>{activeEyebrow}</h2>
         </div>
         <div
@@ -195,8 +195,8 @@ export function ClipStudioWorkbenchTabs({
       {advanced ? (
         <details className="clip-studio-editor-disclosure clip-studio-diagnostics-disclosure">
           <summary>
-            <span>Diagnostics</span>
-            <span className="muted small">Frame checks and render details</span>
+            <span>Production diagnostics</span>
+            <span className="muted small">Frame checks, tracking and render details</span>
           </summary>
           <div className="stack-md">{advanced}</div>
         </details>

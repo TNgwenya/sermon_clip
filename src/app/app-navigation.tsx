@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useRef } from "react";
@@ -8,7 +7,7 @@ import { useRef } from "react";
 type NavigationIconName =
   | "home"
   | "create"
-  | "library"
+  | "review"
   | "publish"
   | "plan"
   | "growth"
@@ -16,6 +15,7 @@ type NavigationIconName =
   | "insights"
   | "brand"
   | "channels"
+  | "settings"
   | "more";
 
 type NavigationItem = {
@@ -27,95 +27,89 @@ type NavigationItem = {
   emphasis?: boolean;
 };
 
-type NavigationGroup = {
+type NavigationMenu = {
   label: string;
+  icon: NavigationIconName;
   items: NavigationItem[];
 };
 
 const primaryItems: NavigationItem[] = [
   {
     href: "/",
-    label: "Studio home",
-    shortLabel: "Home",
+    label: "Home",
     icon: "home",
     isActive: (pathname) => pathname === "/",
   },
   {
     href: "/sermons/new",
-    label: "New sermon",
-    shortLabel: "Create",
+    label: "Create",
     icon: "create",
     isActive: (pathname) => pathname === "/sermons/new" || pathname === "/create",
     emphasis: true,
   },
   {
     href: "/sermons",
-    label: "Sermon library",
-    shortLabel: "Library",
-    icon: "library",
+    label: "Review & library",
+    shortLabel: "Review",
+    icon: "review",
     isActive: (pathname) => pathname === "/sermons" || (pathname.startsWith("/sermons/") && !pathname.startsWith("/sermons/new")),
   },
   {
     href: "/ready-to-post",
-    label: "Ready to post",
-    shortLabel: "Publish",
+    label: "Publish",
     icon: "publish",
     isActive: (pathname) => pathname.startsWith("/ready-to-post"),
   },
 ];
 
-const navigationGroups: NavigationGroup[] = [
-  { label: "Studio", items: primaryItems },
+const contentPlanItems: NavigationItem[] = [
   {
-    label: "Plan and learn",
-    items: [
-      {
-        href: "/weekly-plan",
-        label: "Weekly planner",
-        icon: "plan",
-        isActive: (pathname) => pathname.startsWith("/weekly-plan"),
-      },
-      {
-        href: "/growth",
-        label: "Growth",
-        icon: "growth",
-        isActive: (pathname) => pathname.startsWith("/growth"),
-      },
-      {
-        href: "/opportunities",
-        label: "Content ideas",
-        icon: "ideas",
-        isActive: (pathname) => pathname.startsWith("/opportunities"),
-      },
-      {
-        href: "/intelligence-dashboard",
-        label: "Sermon insights",
-        icon: "insights",
-        isActive: (pathname) => pathname.startsWith("/intelligence-dashboard") || pathname.startsWith("/knowledge-base"),
-      },
-    ],
+    href: "/weekly-plan",
+    label: "Weekly plan",
+    icon: "plan",
+    isActive: (pathname) => pathname.startsWith("/weekly-plan"),
   },
   {
-    label: "Church setup",
-    items: [
-      {
-        href: "/settings/branding",
-        label: "Brand kit",
-        icon: "brand",
-        isActive: (pathname) => pathname.startsWith("/settings/branding"),
-      },
-      {
-        href: "/settings/social",
-        label: "Social channels",
-        icon: "channels",
-        isActive: (pathname) => pathname.startsWith("/settings/social"),
-      },
-    ],
+    href: "/opportunities",
+    label: "Content ideas",
+    icon: "ideas",
+    isActive: (pathname) => pathname.startsWith("/opportunities"),
+  },
+  {
+    href: "/growth",
+    label: "Growth",
+    icon: "growth",
+    isActive: (pathname) => pathname.startsWith("/growth"),
+  },
+  {
+    href: "/intelligence-dashboard",
+    label: "Sermon insights",
+    icon: "insights",
+    isActive: (pathname) => pathname.startsWith("/intelligence-dashboard") || pathname.startsWith("/knowledge-base"),
   },
 ];
 
-const secondaryItems = navigationGroups.slice(1).flatMap((group) => group.items);
-const mobilePrimaryItems = [primaryItems[0], primaryItems[2], primaryItems[1], primaryItems[3]];
+const settingsItems: NavigationItem[] = [
+  {
+    href: "/settings/branding",
+    label: "Brand kit",
+    icon: "brand",
+    isActive: (pathname) => pathname.startsWith("/settings/branding"),
+  },
+  {
+    href: "/settings/social",
+    label: "Social channels",
+    icon: "channels",
+    isActive: (pathname) => pathname.startsWith("/settings/social"),
+  },
+];
+
+const utilityMenus: NavigationMenu[] = [
+  { label: "Content plan", icon: "plan", items: contentPlanItems },
+  { label: "Settings", icon: "settings", items: settingsItems },
+];
+
+const secondaryItems = utilityMenus.flatMap((menu) => menu.items);
 
 function NavigationIconPaths({ name }: { name: NavigationIconName }) {
   switch (name) {
@@ -133,11 +127,12 @@ function NavigationIconPaths({ name }: { name: NavigationIconName }) {
           <path d="M12 8v8M8 12h8" />
         </>
       );
-    case "library":
+    case "review":
       return (
         <>
           <path d="M3.5 7.5h6l2-2h9v13h-17z" />
           <path d="M3.5 10h17" />
+          <path d="m9 14.5 1.8 1.8 4.2-4.2" />
         </>
       );
     case "publish":
@@ -193,6 +188,13 @@ function NavigationIconPaths({ name }: { name: NavigationIconName }) {
           <path d="m8.25 10.9 7.5-3.8M8.25 13.1l7.5 3.8" />
         </>
       );
+    case "settings":
+      return (
+        <>
+          <circle cx="12" cy="12" r="3.2" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.86 2.86-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.55v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.86-2.86.06-.06A1.7 1.7 0 0 0 4.1 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2.3V9.55h.09A1.7 1.7 0 0 0 4.1 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06L6.56 3.7l.06.06A1.7 1.7 0 0 0 8.5 4.1a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2.3h4.05v.09A1.7 1.7 0 0 0 15 4.1a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.86 2.86-.06.06A1.7 1.7 0 0 0 19.4 8.5c.13.4.34.74.6 1 .3.28.68.42 1.1.4h.1v4.05h-.1A1.7 1.7 0 0 0 19.4 15Z" />
+        </>
+      );
     case "more":
       return (
         <>
@@ -224,6 +226,16 @@ function NavigationIcon({ name }: { name: NavigationIconName }) {
   );
 }
 
+function LivingFrameMark() {
+  return (
+    <span className="rail-mark living-frame-mark" aria-hidden="true">
+      <span className="living-frame-window" />
+      <span className="living-frame-message" />
+      <span className="living-frame-light" />
+    </span>
+  );
+}
+
 function NavigationLink({ item, pathname, mobile = false, onNavigate }: {
   item: NavigationItem;
   pathname: string;
@@ -245,6 +257,27 @@ function NavigationLink({ item, pathname, mobile = false, onNavigate }: {
   );
 }
 
+function UtilityMenu({ menu, pathname }: { menu: NavigationMenu; pathname: string }) {
+  const active = menu.items.some((item) => item.isActive(pathname));
+
+  return (
+    <details
+      key={`${menu.label}-${active ? "active" : "idle"}`}
+      className={`rail-utility-menu${active ? " is-active" : ""}`}
+      open={active || undefined}
+    >
+      <summary>
+        <NavigationIcon name={menu.icon} />
+        <span>{menu.label}</span>
+        <span className="rail-utility-chevron" aria-hidden="true" />
+      </summary>
+      <div className="rail-utility-items">
+        {menu.items.map((item) => <NavigationLink key={item.href} item={item} pathname={pathname} />)}
+      </div>
+    </details>
+  );
+}
+
 export function AppNavigation() {
   const pathname = usePathname();
   const mobileMoreRef = useRef<HTMLDetailsElement>(null);
@@ -257,47 +290,69 @@ export function AppNavigation() {
   return (
     <aside className="app-rail" aria-label="Sermon Clip navigation">
       <div className="rail-desktop-navigation">
-        <Link href="/" className="rail-brand" aria-label="Sermon Clip studio home">
-          <span className="rail-mark" aria-hidden="true">
-            <Image src="/sermon-clip-1024.png" alt="" width={44} height={44} priority />
-          </span>
+        <Link href="/" className="rail-brand" aria-label="Sermon Clip church content studio home">
+          <LivingFrameMark />
           <span className="rail-brand-copy">
             <strong>Sermon Clip</strong>
-            <small>Content studio</small>
+            <small>Church content studio</small>
           </span>
         </Link>
 
         <nav className="rail-nav" aria-label="Primary navigation">
-          {navigationGroups.map((group) => (
-            <div className="rail-nav-group" key={group.label}>
-              <p className="rail-nav-label">{group.label}</p>
-              <div className="rail-nav-items">
-                {group.items.map((item) => <NavigationLink key={item.href} item={item} pathname={pathname} />)}
-              </div>
+          <div className="rail-primary-navigation">
+            <p className="rail-nav-label">Weekly workflow</p>
+            <div className="rail-nav-items">
+              {primaryItems.map((item) => <NavigationLink key={item.href} item={item} pathname={pathname} />)}
             </div>
-          ))}
+          </div>
+
+          <div className="rail-utility-navigation">
+            <p className="rail-nav-label">Workspace</p>
+            {utilityMenus.map((menu) => <UtilityMenu key={menu.label} menu={menu} pathname={pathname} />)}
+          </div>
         </nav>
 
         <div className="rail-footer">
-          <span className="rail-credit" aria-hidden="true">SC</span>
-          <span>
-            <strong>Ministry-first AI</strong>
-            <small>Every clip stays in your hands.</small>
-          </span>
+          <Link href="/settings/branding" className="rail-workspace-card" aria-label="Open your church workspace settings">
+            <span className="rail-workspace-avatar" aria-hidden="true">CH</span>
+            <span className="rail-workspace-copy">
+              <small>Active workspace</small>
+              <strong>Your church</strong>
+            </span>
+            <span className="rail-workspace-status" aria-hidden="true" />
+          </Link>
+          <div className="rail-review-note">
+            <span className="rail-review-beacon" aria-hidden="true" />
+            <span>
+              <strong>Human review is on</strong>
+              <small>Every message stays in your hands.</small>
+            </span>
+          </div>
         </div>
       </div>
 
       <nav className="rail-mobile-navigation" aria-label="Mobile navigation">
-        {mobilePrimaryItems.map((item) => <NavigationLink key={item.href} item={item} pathname={pathname} mobile />)}
+        {primaryItems.map((item) => <NavigationLink key={item.href} item={item} pathname={pathname} mobile />)}
         <details ref={mobileMoreRef} className={`rail-mobile-more${secondaryIsActive ? " is-active" : ""}`}>
           <summary aria-label="More navigation options">
             <NavigationIcon name="more" />
             <span>More</span>
           </summary>
           <div className="rail-mobile-more-panel">
-            <p className="rail-nav-label">More from Sermon Clip</p>
-            {secondaryItems.map((item) => (
-              <NavigationLink key={item.href} item={item} pathname={pathname} onNavigate={closeMobileMore} />
+            <div className="rail-mobile-workspace">
+              <span className="rail-workspace-avatar" aria-hidden="true">CH</span>
+              <span>
+                <small>Active workspace</small>
+                <strong>Your church</strong>
+              </span>
+            </div>
+            {utilityMenus.map((menu) => (
+              <div className="rail-mobile-menu-group" key={menu.label}>
+                <p className="rail-nav-label">{menu.label}</p>
+                {menu.items.map((item) => (
+                  <NavigationLink key={item.href} item={item} pathname={pathname} onNavigate={closeMobileMore} />
+                ))}
+              </div>
             ))}
           </div>
         </details>

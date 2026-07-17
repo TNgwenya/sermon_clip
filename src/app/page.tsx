@@ -148,13 +148,6 @@ function workflowStatusText(status: SermonStatus): string {
   return "Ready to start";
 }
 
-function workflowStageForStatus(status: SermonStatus): number {
-  if (status === "CLIPS_GENERATED" || status === "REVIEWING" || status === "FAILED") return 2;
-  if (status === "EXPORTING") return 3;
-  if (status === "EXPORTED") return 4;
-  return 1;
-}
-
 function clipTypeText(value: string): string {
   return value
     .replace(/[_-]+/g, " ")
@@ -267,7 +260,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
   const topClips = allClips
     .filter((clip) => clip.status !== "REJECTED")
     .sort((a, b) => (b.finalQualityScore ?? b.score) - (a.finalQualityScore ?? a.score))
-    .slice(0, 4);
+    .slice(0, 3);
   const previewableTopClipIds = new Set(
     (await Promise.all(
       topClips.map(async (clip) => (await canPreviewClipVideo(clip) ? clip.id : null)),
@@ -275,6 +268,24 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
   );
   const firstFailedSermon = failedSermons[0] ?? null;
   const firstActionableSermon = sermons.find((sermon) => sermon.status !== "FAILED") ?? sermons[0] ?? null;
+  const currentSermon = sermons[0] ?? null;
+  const currentSermonTitle = currentSermon?.intelligence?.generatedTitle ?? currentSermon?.title ?? "Your next Sunday message";
+  const currentSermonDate = currentSermon?.sermonDate ?? currentSermon?.createdAt ?? null;
+  const currentSermonDateLabel = currentSermonDate
+    ? new Intl.DateTimeFormat("en-ZA", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        timeZone: "UTC",
+      }).format(currentSermonDate)
+    : "This Sunday";
+  const currentClips = currentSermon?.clipCandidates ?? [];
+  const currentApprovedCount = currentClips.filter((clip) => clip.status === "APPROVED" || clip.status === "EXPORTED").length;
+  const currentReadyCount = currentClips.filter((clip) => (
+    (clip.qualityLabel ?? clip.postReadyStatus) === "POST_READY"
+    || clip.exportStatus === "COMPLETED"
+    || clip.status === "EXPORTED"
+  )).length;
   const priorityState = needsAttentionCount > 0
     ? "attention"
     : exportedCount > 0 || metrics.clipsExported > 0
@@ -310,119 +321,115 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
   const priorityTitle = priorityState === "attention"
     ? `${needsAttentionCount} ${needsAttentionCount === 1 ? "item needs" : "items need"} attention.`
     : priorityState === "ready"
-      ? "Prepared clips are ready."
+      ? "Share the next prepared clip."
       : priorityState === "resume"
         ? workflowStatusText(firstActionableSermon.status)
-        : "Create sermon clips.";
+        : "Bring in your first sermon.";
   const priorityDetail = priorityState === "attention"
     ? attentionDetail
     : priorityState === "ready"
       ? "Download, copy captions, or schedule the next post."
       : priorityState === "resume"
-        ? firstActionableSermon.title
-        : "Paste a sermon link or upload a service video to begin.";
-  const workflowStageIndex = priorityState === "empty"
+        ? `Continue ${firstActionableSermon.intelligence?.generatedTitle ?? firstActionableSermon.title} where your team left off.`
+        : "Paste a sermon link or upload a service recording to begin.";
+  const weekStageIndex = !currentSermon
     ? 0
-    : priorityState === "resume"
-      ? firstActionableSermon
-        ? workflowStageForStatus(firstActionableSermon.status)
-        : 0
-      : priorityState === "attention"
+    : currentClips.length === 0
+      ? 1
+      : currentApprovedCount === 0
         ? 2
-        : 4;
-  const workflowStages = [
-    { label: "Add sermon", href: "/sermons/new" },
-    { label: "Analyze", href: "/sermons" },
-    { label: "Review clips", href: "/sermons" },
-    { label: "Edit & brand", href: "/sermons" },
-    { label: "Prepare & post", href: "/ready-to-post" },
+        : 3;
+  const weeklyRhythm = [
+    {
+      day: "Sunday",
+      title: "Message",
+      detail: currentSermon ? "Sermon received" : "Add this week’s sermon",
+      href: currentSermon ? `/sermons/${currentSermon.id}` : "/sermons/new",
+    },
+    {
+      day: "Monday",
+      title: "Discover",
+      detail: currentClips.length > 0 ? `${currentClips.length} moments surfaced` : "Find faithful moments",
+      href: currentSermon ? `/sermons/${currentSermon.id}` : "/sermons/new",
+    },
+    {
+      day: "Tuesday",
+      title: "Discern",
+      detail: currentApprovedCount > 0 ? `${currentApprovedCount} approved by your team` : "Review with context",
+      href: currentSermon ? `/sermons/${currentSermon.id}/review` : "/sermons",
+    },
+    {
+      day: "This week",
+      title: "Share",
+      detail: currentReadyCount > 0 ? `${currentReadyCount} ready for your channels` : "Prepare the next post",
+      href: "/ready-to-post",
+    },
   ];
 
   return (
     <main id="main-content" className="media-workspace home-workspace premium-dashboard stack-lg">
-      <header className="home-hero premium-home-hero">
-        <div className="stack-sm">
-          <p className="kicker">Sermon content studio</p>
-          <h1>Your message.<br />Ready to move.</h1>
-          <p className="muted">
-            Turn one sermon into a thoughtful week of clips, captions, and conversations—without losing the heart of the message.
-          </p>
+      <header className="home-studio-intro">
+        <div>
+          <p className="kicker">Church content studio</p>
+          <h1>One sermon. A week of faithful content.</h1>
         </div>
-        <div className="home-hero-actions">
-          <Link href="/sermons/new" className="button primary home-create-action">Create from a sermon</Link>
-          <Link href="/weekly-plan" className="button tertiary home-plan-action">Plan this week</Link>
-        </div>
+        <p>Carry Sunday into the week with clear, on-brand moments your church can share with confidence.</p>
+        <Link href="/weekly-plan" className="home-plan-link">Open weekly plan <span aria-hidden="true">&#8599;</span></Link>
       </header>
 
-      <nav className="workflow-spine" aria-label="Sermon Clip workflow">
-        <ol>
-          {workflowStages.map((stage, index) => (
-            <li key={stage.label}>
-              <Link
-                href={stage.href}
-                className={index === workflowStageIndex ? "is-current" : undefined}
-                aria-current={index === workflowStageIndex ? "step" : undefined}
-              >
-                <strong>{String(index + 1).padStart(2, "0")}</strong>
-                <span>{stage.label}</span>
-              </Link>
-            </li>
-          ))}
-        </ol>
-      </nav>
-
-      <section className="home-command-grid premium-command-grid" aria-label="Your next step">
-        <article className={`home-priority-card premium-priority-card priority-${priorityState}`}>
-          <div className="stack-md">
-            <div className="priority-heading-row">
-              <p className="kicker">
-                {priorityState === "attention"
-                  ? "Needs your attention"
-                  : priorityState === "ready"
-                    ? "Ready when you are"
-                    : priorityState === "resume"
-                      ? "Continue your work"
-                      : "Begin here"}
-              </p>
-              <span className="priority-context">Next best action</span>
+      <section className="home-focus-grid" aria-label="This week’s sermon and next action">
+        <article className={`home-current-message priority-${priorityState}`}>
+          <div className="current-message-heading">
+            <div className="current-message-label">
+              <span className="current-message-mark" aria-hidden="true" />
+              <span>Current message</span>
             </div>
-            <h2>{priorityTitle}</h2>
-            <p className="muted priority-detail">{priorityDetail}</p>
+            {currentSermonDate ? <time dateTime={currentSermonDate.toISOString()}>{currentSermonDateLabel}</time> : <span>{currentSermonDateLabel}</span>}
           </div>
-          <div className="home-priority-footer">
-            <Link href={priorityActionHref} className="button primary">{priorityActionLabel}</Link>
-            <div className="home-priority-metrics" aria-label="Workspace signals">
-              <span>
-                <strong>{needsAttentionCount}</strong>
-                <small>need attention</small>
-              </span>
-              <span>
-                <strong>{processingCount}</strong>
-                <small>in progress</small>
-              </span>
-              <span>
-                <strong>{exportedCount || metrics.clipsExported}</strong>
-                <small>prepared</small>
-              </span>
+
+          <div className="current-message-copy">
+            <h2>{currentSermonTitle}</h2>
+            {currentSermon ? (
+              <>
+                <p className="current-message-byline">{currentSermon.speakerName} <span aria-hidden="true">·</span> {currentSermon.churchName}</p>
+                {currentSermon.intelligence?.centralTheme ? <p className="current-message-theme">{currentSermon.intelligence.centralTheme}</p> : null}
+              </>
+            ) : (
+              <p className="current-message-theme">Add the service recording and Sermon Clip will help your team find the moments worth carrying forward.</p>
+            )}
+          </div>
+
+          <div className="current-next-action">
+            <div>
+              <p className="kicker">Next best action</p>
+              <h3>{priorityTitle}</h3>
+              <p>{priorityDetail}</p>
             </div>
+            <Link href={priorityActionHref} className="button primary current-action-button">
+              {priorityActionLabel}
+              <span aria-hidden="true">&#8594;</span>
+            </Link>
           </div>
         </article>
 
         <form action="/sermons/new" method="get" className="home-quick-start premium-quick-start stack-md">
-          <div className="stack-sm">
+          <div className="quick-start-heading">
             <p className="kicker">Fast import</p>
-            <h2>Bring in Sunday’s sermon.</h2>
-            <p className="muted">Paste a public video link, or upload the recording from your team.</p>
+            <span className="quick-start-number" aria-hidden="true">01</span>
+          </div>
+          <div className="stack-sm">
+            <h2>Start with another sermon.</h2>
+            <p className="muted">Paste a public video link and review the details before analysis begins.</p>
           </div>
           <label className="link-input-shell premium-link-input" htmlFor="dashboard-sermon-url">
-            <span className="input-icon" aria-hidden="true">URL</span>
+            <span className="input-icon" aria-hidden="true">Link</span>
             <input id="dashboard-sermon-url" name="youtubeUrl" type="url" placeholder="Paste sermon or YouTube link" />
           </label>
           <div className="upload-command-actions">
-            <button className="button primary command-cta" type="submit">Continue with link</button>
-            <Link href="/sermons/new" className="button tertiary">Upload a video</Link>
+            <button className="button secondary command-cta" type="submit">Import link</button>
+            <Link href="/sermons/new" className="quick-upload-link">or upload a video</Link>
           </div>
-          <p className="small muted quick-start-assurance">You will review the sermon details before analysis begins.</p>
+          <p className="small muted quick-start-assurance">Nothing is published without your approval.</p>
         </form>
       </section>
 
@@ -437,9 +444,33 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
         </section>
       ) : null}
 
+      <section className="home-week-rhythm" aria-labelledby="weekly-rhythm-title">
+        <div className="week-rhythm-heading">
+          <div>
+            <p className="kicker">A simple weekly rhythm</p>
+            <h2 id="weekly-rhythm-title">From pulpit to people.</h2>
+          </div>
+          <p>One message, carried forward with care.</p>
+        </div>
+        <ol>
+          {weeklyRhythm.map((step, index) => {
+            const state = index < weekStageIndex ? "complete" : index === weekStageIndex ? "current" : "upcoming";
+            return (
+              <li key={step.title} className={`is-${state}`} aria-current={state === "current" ? "step" : undefined}>
+                <Link href={step.href}>
+                  <span className="week-rhythm-day">{step.day}</span>
+                  <strong>{step.title}</strong>
+                  <small>{step.detail}</small>
+                </Link>
+              </li>
+            );
+          })}
+        </ol>
+      </section>
+
       <SectionCard
         title="Moments worth sharing"
-        description="Your strongest recent clips, ranked to help your team review with confidence."
+        description="A considered shortlist of recent moments—ready for your team to watch, discern, and shape."
         className="home-featured-clips"
         headerAction={{ label: "Browse library", href: "/sermons" }}
       >
@@ -479,16 +510,9 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
         )}
       </SectionCard>
 
-      <section className="home-signal-strip premium-signal-strip" aria-label="Studio overview">
-        <StatCard label="Sermons" value={sermons.length} detail="In your studio" />
-        <StatCard label="Moments found" value={metrics.clipsGenerated} detail="Suggested by Sermon Clip" tone="accent" />
-        <StatCard label="Post-ready" value={postReadyCount} detail="Passed review" tone="success" />
-        <StatCard label="Prepared" value={exportedCount || metrics.clipsExported} detail="Ready to download" tone="success" />
-      </section>
-
       <SectionCard
-        title="Sermon library"
-        description="Return to recent messages, continue review, or prepare the next post."
+        title="Recent messages"
+        description="Return to a sermon when you need the full message, transcript, or complete set of moments."
         className="home-sermon-library"
         headerAction={{ label: "View all sermons", href: "/sermons" }}
       >
@@ -500,10 +524,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
           />
         ) : (
           <div className="dashboard-project-grid">
-            {sermons.slice(0, 6).map((sermon) => {
+            {sermons.slice(0, 4).map((sermon) => {
               const clipCount = sermon.clipCandidates.length;
-              const bestClip = sermon.clipCandidates[0];
-              const bestLabel = bestClip?.qualityLabel ?? bestClip?.postReadyStatus ?? null;
               return (
                 <Link href={`/sermons/${sermon.id}`} key={sermon.id} className="dashboard-project-card">
                   <div className="dashboard-project-art">
@@ -511,10 +533,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
                     <small>clips</small>
                   </div>
                   <div className="stack-sm">
-                    <div className="clip-badge-row">
-                      <span className="status-pill">{workflowStatusText(sermon.status)}</span>
-                      {bestClip ? <span className={`status-pill ${qualityTone(bestLabel)}`}>{qualityLabelText(bestLabel)}</span> : null}
-                    </div>
+                    <span className="sermon-library-status">{workflowStatusText(sermon.status)}</span>
                     <h3>{sermon.intelligence?.generatedTitle ?? sermon.title}</h3>
                     <p className="muted small">{sermon.speakerName} at {sermon.churchName}</p>
                     {sermon.intelligence?.centralTheme ? <p className="small muted">{sermon.intelligence.centralTheme}</p> : null}
@@ -525,6 +544,22 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
           </div>
         )}
       </SectionCard>
+
+      <section className="home-operations" aria-labelledby="studio-overview-title">
+        <div className="home-operations-heading">
+          <div>
+            <p className="kicker">Studio overview</p>
+            <h2 id="studio-overview-title">The work behind the week.</h2>
+          </div>
+          {needsAttentionCount > 0 ? <Link href="/health">Review {needsAttentionCount} {needsAttentionCount === 1 ? "issue" : "issues"}</Link> : null}
+        </div>
+        <div className="home-signal-strip premium-signal-strip" aria-label="Operational studio metrics">
+          <StatCard label="Sermons" value={sermons.length} detail="In your studio" />
+          <StatCard label="Moments found" value={metrics.clipsGenerated} detail="Across every message" tone="accent" />
+          <StatCard label="Post-ready" value={postReadyCount} detail="Approved for sharing" tone="success" />
+          <StatCard label="Prepared" value={exportedCount || metrics.clipsExported} detail="Ready to download" tone="success" />
+        </div>
+      </section>
     </main>
   );
 }

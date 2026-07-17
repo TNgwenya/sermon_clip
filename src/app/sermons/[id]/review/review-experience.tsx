@@ -140,11 +140,15 @@ function toDraft(clip: Pick<ClipReviewItem, "title" | "hook" | "caption" | "hash
 
 function toClipStatusLabel(status: ClipReviewItem["status"]): string {
   if (status === "SUGGESTED") {
-    return "Review";
+    return "Awaiting decision";
   }
 
   if (status === "EXPORTED") {
-    return "Ready";
+    return "Prepared";
+  }
+
+  if (status === "REJECTED") {
+    return "Not selected";
   }
 
   return status.toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -330,7 +334,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
 
   function curateReviewFeed() {
     const confirmed = window.confirm(
-      `Refine ${summary.pending} undecided moment${summary.pending === 1 ? "" : "s"}? Weaker suggestions may move to Not using, and you can restore them later.`,
+      `Refine ${summary.pending} undecided moment${summary.pending === 1 ? "" : "s"}? Weaker suggestions may move to Not selected, and you can restore them later.`,
     );
     if (!confirmed) {
       return;
@@ -389,10 +393,10 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
       <header className="review-feed-topbar premium-review-header card stack-sm">
         <div className="review-feed-topbar-row">
           <div>
-            <p className="kicker">Review clips</p>
+            <p className="kicker">Pastor review</p>
             <h1>{sermonTitle}</h1>
             <p className="muted premium-review-intro">
-              Watch each moment, confirm the message stands on its own, then approve it or refine it in Studio.
+              Watch the moment, verify the message in context, then approve it, edit it, or leave it out.
             </p>
           </div>
           <div className="review-feed-topbar-actions">
@@ -435,7 +439,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
 
         <ol className="premium-review-journey" aria-label="Sermon clip workflow">
           <li className="is-complete"><span>1</span><strong>Analyze</strong></li>
-          <li className="is-current" aria-current="step"><span>2</span><strong>Review moments</strong></li>
+          <li className="is-current" aria-current="step"><span>2</span><strong>Pastor review</strong></li>
           <li><span>3</span><strong>Edit &amp; brand</strong></li>
           <li><span>4</span><strong>Prepare post</strong></li>
         </ol>
@@ -461,7 +465,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               <div><dt>Total moments</dt><dd>{summary.total}</dd></div>
               <div><dt>Approved</dt><dd>{summary.approved}</dd></div>
               <div><dt>Waiting</dt><dd>{summary.pending}</dd></div>
-              <div><dt>Not using</dt><dd>{summary.rejected}</dd></div>
+              <div><dt>Not selected</dt><dd>{summary.rejected}</dd></div>
               <div><dt>Preview ready</dt><dd>{summary.rendered}</dd></div>
               {fallbackClipCount > 0 ? <div><dt>Fallback suggestions</dt><dd>{fallbackClipCount}</dd></div> : null}
             </dl>
@@ -524,12 +528,12 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               <label className="stack-sm review-feed-toolbar-field">
                 Status
                 <select value={filter} onChange={(event) => setFilter(event.target.value as ReviewFilter)} disabled={isPending}>
-                  <option value="ALL">All Clips</option>
-                  <option value="PENDING">Needs Review</option>
+                  <option value="ALL">All clips</option>
+                  <option value="PENDING">Awaiting decision</option>
                   <option value="APPROVED">Approved</option>
-                  <option value="REJECTED">Rejected</option>
-                  <option value="RENDERED">Preview Ready</option>
-                  <option value="NOT_RENDERED">No Preview Yet</option>
+                  <option value="REJECTED">Not selected</option>
+                  <option value="RENDERED">Preview ready</option>
+                  <option value="NOT_RENDERED">Preview pending</option>
                 </select>
               </label>
 
@@ -576,7 +580,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                   disabled={isPending || selected.length === 0}
                   onClick={() => runBatch("reject")}
                 >
-                  Reject selected
+                  Mark as not selected
                 </button>
                 <button
                   type="button"
@@ -667,15 +671,14 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             const clipCategory = toPastorFriendlyCategory(
               getQualityCategoryLabel(clip.qualityClipCategory ?? clip.smartClipCategory),
             );
-            const actionLabel = qualityView.actionLabel;
             const actionTone = qualityView.actionTone;
             const workflowLabel =
               clip.status === "EXPORTED" || clip.exportStatus === "COMPLETED"
-                ? "Final video prepared"
+                ? "Prepared"
                 : clip.status === "APPROVED"
                   ? "Approved"
                   : clip.status === "REJECTED"
-                    ? "Not using"
+                    ? "Not selected"
                     : "Awaiting decision";
             const insight = toPastorFriendlyInsight(
               clip.reasonSelected ??
@@ -725,10 +728,11 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             const canPreviewVideo = clip.canPreviewVideo && !previewRequestFailed;
             const isApprovedState = clip.status === "APPROVED" || clip.status === "EXPORTED";
             const isPostReady = clip.status === "EXPORTED" || clip.exportStatus === "COMPLETED";
-            const visibleSignal =
-              clip.riskLevel !== "LOW" || clip.contextWarning
-                ? `${clip.riskLevel.toLowerCase()} context risk`
-                : `${qualityView.scoreLabel} score`;
+            const contextLabel = clip.riskLevel !== "LOW" || clip.contextWarning
+              ? `${clip.riskLevel.toLowerCase()} context risk`
+              : clip.boundaryQuality === "GOOD"
+                ? "Context intact"
+                : "Check the clip boundaries";
 
             return (
               <article
@@ -749,9 +753,6 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                     </label>
 
                     <div className="review-feed-video-frame">
-                      <span className="review-feed-score-pill" aria-label={`Clip potential ${qualityView.scoreLabel} out of 10`}>
-                        {qualityView.scoreLabel}/10
-                      </span>
                       <span className="review-feed-duration-pill">{toDurationLabel(clip.durationSeconds)}</span>
                       {canPreviewVideo ? (
                         <video
@@ -803,16 +804,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       <span className={`status-pill review-workflow-status status-${clip.status.toLowerCase()}`}>
                         {workflowLabel}
                       </span>
-                      <span className={`status-pill review-quality-status quality-action-${actionTone}`}>
-                        Quality · {actionLabel}
-                      </span>
-                      {qualityView.freshness.state !== "current" ? (
-                        <span className="status-pill quality-needs-editing">{qualityView.freshness.label}</span>
-                      ) : null}
                       {transcriptReviewRequired ? <span className="status-pill quality-needs-editing">Transcript review needed</span> : null}
-                      {clip.riskLevel !== "LOW" || clip.contextWarning ? (
-                        <span className={`status-pill risk-${clip.riskLevel.toLowerCase()}`}>{visibleSignal}</span>
-                      ) : null}
                     </div>
 
                     <div className="premium-review-rationale">
@@ -820,11 +812,26 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       <p>{insight}</p>
                     </div>
 
+                    <div className={`premium-review-evidence ${transcriptReviewRequired ? "needs-review" : ""}`}>
+                      <div className="premium-review-evidence-heading">
+                        <span>Exact words</span>
+                        <small>{contextLabel}</small>
+                      </div>
+                      <blockquote>&ldquo;{clip.transcriptText}&rdquo;</blockquote>
+                      <p>
+                        <strong>Context:</strong>{" "}
+                        {clip.boundaryAdjustmentReason
+                          ? clip.boundaryAdjustmentReason
+                          : clip.boundaryQuality === "GOOD"
+                            ? "The opening and ending form a complete thought from the sermon."
+                            : "Listen to the opening and ending before approving this excerpt."}
+                      </p>
+                    </div>
+
                     {transcriptReviewRequired ? (
                       <div className="warning-banner stack-sm premium-review-safety-gate">
                         <strong>{transcriptGuidance.title}</strong>
                         <p>{transcriptGuidance.summary}</p>
-                        <blockquote className="review-feed-transcript">&ldquo;{clip.transcriptText}&rdquo;</blockquote>
                         {clip.transcriptEvidence?.uncertainRegions.length ? (
                           <div className="stack-sm">
                             <strong className="small">Listen closely here</strong>
@@ -857,9 +864,8 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                     ) : null}
 
                     <details className="review-feed-card-details">
-                      <summary>Message &amp; quality details</summary>
+                      <summary>Scores &amp; recommendation</summary>
                       <div className="stack-sm">
-                        <p className="review-feed-transcript">&quot;{clip.transcriptText}&quot;</p>
                         <div
                           className="review-feed-quality-strip review-feed-quality-strip-compact"
                           aria-label={`Quality signals for ${clip.title}`}
@@ -939,7 +945,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       {isApprovedState ? (
                         <span className="review-approved-status status-pill status-approved">Approved</span>
                       ) : clip.status === "REJECTED" ? (
-                        <span className="review-approved-status status-pill status-rejected">Not using</span>
+                        <span className="review-approved-status status-pill status-rejected">Not selected</span>
                       ) : (
                         <button
                           type="button"
@@ -947,7 +953,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                           disabled={isPending || !canApprove}
                           onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "APPROVED"))}
                         >
-                          Use this moment
+                          Approve
                         </button>
                       )}
                       {isApprovedState && isPostReady ? (
@@ -959,7 +965,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                           href={`/sermons/${sermonId}/clips/${clip.id}/studio`}
                           className={isApprovedState ? "button primary review-action-primary" : "button secondary review-action-edit"}
                         >
-                          {isApprovedState ? "Finish in Studio" : "Edit in Studio"}
+                          {isApprovedState ? "Finish in Studio" : "Edit"}
                         </Link>
                       )}
                       {clip.status === "SUGGESTED" ? (
@@ -976,14 +982,14 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
 
                     <p className="premium-review-action-note">
                       {clip.status === "REJECTED"
-                        ? "This moment is out of the active queue. You can move it back to review from More actions."
+                        ? "This moment is out of the active queue. You can return it to review from More actions."
                         : transcriptReviewRequired
                           ? "Check the transcript wording before approving this moment."
                         : isApprovedState
                           ? isPostReady
                             ? "The final video is ready for its posting plan."
                             : "Fine-tune captions, framing, and church branding."
-                          : "Approve this moment, or open Studio to make it your own."}
+                          : "Make one clear decision, then move to the next moment."}
                     </p>
 
                     <details className="review-card-more-actions">
@@ -996,7 +1002,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                             disabled={isPending || !canReject}
                             onClick={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "REJECTED"))}
                           >
-                            Move to not using
+                            Mark as not selected
                           </button>
                         ) : null}
                         {clip.status !== "SUGGESTED" && clip.status !== "EXPORTED" ? (

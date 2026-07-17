@@ -136,17 +136,17 @@ const CALENDAR_STATUS_FILTER_LABELS: Record<CalendarStatusFilter, string> = {
 };
 
 const CLIP_QUALITY_FILTER_LABELS: Record<ClipQualityFilter, string> = {
-  ALL: "All quality",
-  POST_READY: "Post-ready",
-  GOOD_NEEDS_REVIEW: "Good, review",
+  ALL: "All readiness",
+  POST_READY: "Ready to post",
+  GOOD_NEEDS_REVIEW: "Review recommended",
   NEEDS_EDITING: "Needs editing",
   REJECT: "Not recommended",
-  NEEDS_REVIEW: "Needs review",
+  NEEDS_REVIEW: "Not yet assessed",
 };
 
 const QUALITY_LABELS: Record<ClipQualityLabel, string> = {
-  POST_READY: "Post-ready",
-  GOOD_NEEDS_REVIEW: "Good, review first",
+  POST_READY: "Ready to post",
+  GOOD_NEEDS_REVIEW: "Review recommended",
   NEEDS_EDITING: "Needs editing",
   REJECT: "Not recommended",
 };
@@ -626,22 +626,7 @@ function getQualityLabel(clip: ReadyQueueClip): ClipQualityLabel | null {
 }
 
 function getQualityLabelText(label: ClipQualityLabel | null): string {
-  return label ? QUALITY_LABELS[label] : "Needs review";
-}
-
-function getQualityToneClass(label: ClipQualityLabel | null): string {
-  switch (label) {
-    case "POST_READY":
-      return "quality-post-ready";
-    case "GOOD_NEEDS_REVIEW":
-      return "quality-good-needs-review";
-    case "NEEDS_EDITING":
-      return "quality-needs-editing";
-    case "REJECT":
-      return "quality-reject";
-    default:
-      return "quality-good-needs-review";
-  }
+  return label ? QUALITY_LABELS[label] : "Not yet assessed";
 }
 
 function formatScore(value: number | null | undefined): string {
@@ -891,7 +876,6 @@ export function ReadyQueueExperience({
       intendedAudience: selectedClip.intendedAudience,
     })
     : null;
-  const selectedQualityLabel = selectedClip ? getQualityLabel(selectedClip) : null;
   const selectedQualityIssues = selectedClip ? buildReadinessIssues(selectedClip) : [];
   const selectedNeedsEditorialReview = selectedClip ? !isEditoriallyPostReady(selectedClip) : true;
   const selectedQualitySummary = selectedClip
@@ -1300,9 +1284,9 @@ export function ReadyQueueExperience({
         <div className="publishing-board-panel premium-ready-clip-picker">
           <div className="publishing-section-head">
             <div>
-              <p className="kicker">Stage 1 · Choose a clip</p>
-              <h2>What should your church share next?</h2>
-              <p className="muted small">Select a finished moment to open its video, caption, and posting options.</p>
+              <p className="kicker">1 · Choose</p>
+              <h2>Choose the message</h2>
+              <p className="muted small">Open a finished moment, or select several for a batch handoff.</p>
             </div>
           </div>
           <div className="ready-filter-row">
@@ -1377,15 +1361,11 @@ export function ReadyQueueExperience({
                         <span>{clip.title}</span>
                       </label>
                       <p className="muted small">{clip.sermon.title}</p>
-                      <div className="ready-tray-state-row">
-                        <span className={`status-pill ${clip.mediaReady ? "status-exported" : "quality-reject"}`}>
-                          {clip.mediaReady ? "Video prepared" : "Video needs repair"}
-                        </span>
-                        <span className={`status-pill ${getQualityToneClass(qualityLabel)}`}>
-                          {getQualityLabelText(qualityLabel)}
-                        </span>
-                        {isBatchSelected ? <span className="status-pill premium-batch-selected">Selected for batch</span> : null}
-                      </div>
+                      <p className={`ready-tray-status ${clip.mediaReady ? "is-ready" : "needs-attention"}`}>
+                        <strong>{clip.mediaReady ? "Prepared" : "Needs repair"}</strong>
+                        <span>{getQualityLabelText(qualityLabel)}</span>
+                        {isBatchSelected ? <em>Batch selected</em> : null}
+                      </p>
                     </div>
                   </article>
                 );
@@ -1399,17 +1379,14 @@ export function ReadyQueueExperience({
             <>
               <div className="publishing-section-head compact">
                 <div>
-                  <p className="kicker">Stage 2 · Prepare the post</p>
+                  <p className="kicker">2 · Prepare</p>
                   <h2>{selectedClip.title}</h2>
-                  <p className="muted small">{selectedClip.sermon.title}</p>
+                  <p className="muted small">Selected from {selectedClip.sermon.title}</p>
                 </div>
-                <span className={`status-pill ${getQualityToneClass(selectedQualityLabel)}`}>
-                  {getQualityLabelText(selectedQualityLabel)}
-                </span>
               </div>
-              <div className={`selected-action-summary ${selectedClip.mediaReady ? "is-ready" : "needs-attention"}`}>
+              <div className={`selected-action-summary premium-ready-media-state ${selectedClip.mediaReady ? "is-ready" : "needs-attention"}`}>
                 <div>
-                  <strong>{selectedClip.mediaReady ? "Posting video prepared" : "Posting video needs a refresh"}</strong>
+                  <strong>{selectedClip.mediaReady ? "Final video prepared" : "Final video needs a refresh"}</strong>
                   <span>
                     {selectedClip.mediaReady
                       ? selectedNeedsEditorialReview
@@ -1418,7 +1395,6 @@ export function ReadyQueueExperience({
                       : "This clip is blocked until its media is repaired."}
                   </span>
                 </div>
-                <span className="status-pill">{selectedClip.mediaReady ? "Media: prepared" : "Media: repair"}</span>
               </div>
               {(!controlPanelMode || selectedClip.remotePreviewUrl) ? <div
                 className="video-card-shell ready-video-shell selected-asset-video"
@@ -1457,23 +1433,23 @@ export function ReadyQueueExperience({
                   <p className="muted small">This clip does not have a remote preview yet. Use the Mac app for local preview, or refresh review assets before previewing remotely.</p>
                 </div>
               )}
-              <div className="selected-action-summary">
+              <details className="selected-action-summary premium-ready-cover-note">
+                <summary>{selectedClip.coverFrameSelected ? "Chosen cover frame included" : "Automatic cover frame included"}</summary>
                 <div>
-                  <strong>{selectedClip.coverFrameSelected ? "Chosen cover frame included" : "Automatic cover frame included"}</strong>
                   <span>
                     {selectedClip.coverFrameSelected && typeof selectedClip.coverFrameTimeSeconds === "number"
                       ? `The saved frame at ${formatSecondsForPastorView(selectedClip.coverFrameTimeSeconds)} is used as this clip’s poster. Confirm it in each platform before publishing.`
                       : "Sermon Clip is using a neutral automatic poster. Choose a deliberate frame in Clip Studio for stronger presentation."}
                   </span>
+                  <a
+                    className="button tertiary"
+                    href={`/api/clips/${selectedClip.id}/thumbnail?download=cover`}
+                    download={`${selectedClip.title}-cover.jpg`}
+                  >
+                    Download cover
+                  </a>
                 </div>
-                <a
-                  className="button tertiary"
-                  href={`/api/clips/${selectedClip.id}/thumbnail?download=cover`}
-                  download={`${selectedClip.title}-cover.jpg`}
-                >
-                  Download cover
-                </a>
-              </div>
+              </details>
               <details className="selected-quality-panel selected-quality-details">
                 <summary>Readiness note</summary>
                 <div className="selected-quality-summary">
@@ -1495,7 +1471,7 @@ export function ReadyQueueExperience({
               </details>
               {selectedClip.mediaReady ? (
                 <details className="platform-caption-panel platform-caption-details premium-platform-copy" open>
-                  <summary>Suggested copy for manual upload</summary>
+                  <summary>Prepare platform copy</summary>
                   <p className="muted small premium-platform-copy-intro">
                     Choose a platform, review the suggestion, then follow the handoff below. Scheduling confirms its own post copy separately.
                   </p>
@@ -1548,36 +1524,43 @@ export function ReadyQueueExperience({
                           </>
                         ) : null}
                       </div>
-                      <ol className="premium-manual-handoff" aria-label={`${activeHandoff.platform} manual upload handoff`}>
-                        <li>
-                          <span>1</span>
-                          <div><strong>Download the final video</strong><small>Use the prepared vertical video with captions and branding.</small></div>
-                          {!controlPanelMode ? (
-                            <a className="button secondary" href={selectedReadyPackage.downloadHref}>Download video</a>
-                          ) : (
-                            <span className="status-pill">Download in Mac app</span>
-                          )}
-                        </li>
-                        <li>
-                          <span>2</span>
-                          <div><strong>Copy the suggested platform copy</strong><small>Review and adjust it in the platform before publishing.</small></div>
-                          <CopyCaptionButton
-                            label={activeHandoff.platform === "YouTube Shorts" ? "Copy suggested title" : "Copy suggested caption"}
-                            text={activeHandoff.primaryCopyText}
-                          />
-                        </li>
-                        <li>
-                          <span>3</span>
-                          <div><strong>Open the platform upload</strong><small>Upload the video, paste the copy, and confirm the cover and privacy.</small></div>
-                          <a className="button tertiary" href={activeHandoff.uploadUrl} target="_blank" rel="noreferrer">
-                            {getPlatformUploadActionLabel(activeHandoff.platform)}
-                          </a>
-                        </li>
-                      </ol>
                       <div className="caption-copy-grid premium-handoff-extras">
+                        <CopyCaptionButton
+                          label={activeHandoff.platform === "YouTube Shorts" ? "Copy suggested title" : "Copy suggested caption"}
+                          text={activeHandoff.primaryCopyText}
+                        />
                         {activeHandoff.platform === "YouTube Shorts" ? <CopyCaptionButton label="Copy suggested caption" text={activeHandoff.captionText} /> : null}
                         <CopyCaptionButton label="Copy hashtags" text={(activePlatformPayload?.hashtags ?? selectedReadyPackage.hashtags).join(" ")} />
                       </div>
+                      <details className="premium-manual-handoff-details">
+                        <summary>Manual upload checklist</summary>
+                        <ol className="premium-manual-handoff" aria-label={`${activeHandoff.platform} manual upload handoff`}>
+                          <li>
+                            <span>1</span>
+                            <div><strong>Download the final video</strong><small>Use the prepared vertical video with captions and branding.</small></div>
+                            {!controlPanelMode ? (
+                              <a className="button secondary" href={selectedReadyPackage.downloadHref}>Download video</a>
+                            ) : (
+                              <span className="status-pill">Download in Mac app</span>
+                            )}
+                          </li>
+                          <li>
+                            <span>2</span>
+                            <div><strong>Copy the platform copy</strong><small>Review and adjust it in the platform before publishing.</small></div>
+                            <CopyCaptionButton
+                              label={activeHandoff.platform === "YouTube Shorts" ? "Copy title" : "Copy caption"}
+                              text={activeHandoff.primaryCopyText}
+                            />
+                          </li>
+                          <li>
+                            <span>3</span>
+                            <div><strong>Open the platform upload</strong><small>Upload the video, paste the copy, and confirm the cover and privacy.</small></div>
+                            <a className="button tertiary" href={activeHandoff.uploadUrl} target="_blank" rel="noreferrer">
+                              {getPlatformUploadActionLabel(activeHandoff.platform)}
+                            </a>
+                          </li>
+                        </ol>
+                      </details>
                     </div>
                   ) : null}
                 </details>
@@ -1602,6 +1585,11 @@ export function ReadyQueueExperience({
                       socialAccounts={socialAccounts}
                       onDraftCreated={addDraft}
                     />
+                    {activeHandoff ? (
+                      <a className="button tertiary" href={activeHandoff.uploadUrl} target="_blank" rel="noreferrer">
+                        Open {activeHandoff.platform}
+                      </a>
+                    ) : null}
                   </>
                 ) : (
                   <ClipAssetRecoveryButton
@@ -1650,13 +1638,13 @@ export function ReadyQueueExperience({
         </aside>
       </section>
 
-      <section id="posting-calendar" className="social-calendar-panel premium-ready-calendar" aria-label="Mixed-content social media calendar">
+      <section id="posting-calendar" className="social-calendar-panel premium-ready-calendar premium-ready-secondary-surface" aria-label="Publishing calendar">
         <div className="social-calendar-header">
           <div>
-            <p className="kicker">Plan ahead</p>
-            <h2>Mixed-content calendar</h2>
+            <p className="kicker">Calendar</p>
+            <h2>Plan what goes out next</h2>
             <p className="muted small">
-              Track clips, quote cards, carousels, prayers, devotionals, and invitations in one publishing plan.
+              See scheduled clips and other church content after you finish the post above.
             </p>
           </div>
           <div className="social-calendar-window-controls" aria-label="Calendar window controls">
@@ -1675,14 +1663,14 @@ export function ReadyQueueExperience({
           </div>
         </div>
 
-        <section className={`publishing-service-card is-${publishingServiceHealth.status.toLowerCase()}`} aria-label="Automatic publishing service status">
-          <div className="publishing-service-copy">
+        <details className={`publishing-service-card is-${publishingServiceHealth.status.toLowerCase()}`}>
+          <summary className="publishing-service-copy">
             <span className="publishing-service-indicator" aria-hidden="true" />
-            <div>
+            <span>
               <strong>{publishingServiceLabel(publishingServiceHealth)}</strong>
-              <p className="muted small">{publishingServiceHealth.summary}</p>
-            </div>
-          </div>
+              <small>{publishingServiceHealth.summary}</small>
+            </span>
+          </summary>
           <div className="publishing-service-actions">
             <button type="button" className="button tertiary" onClick={() => void refreshPublishingServiceHealth()}>
               Check service
@@ -1696,7 +1684,7 @@ export function ReadyQueueExperience({
               </dl>
             </details>
           </div>
-        </section>
+        </details>
 
         <div className="social-calendar-toolbar">
           <div className="social-calendar-summary">

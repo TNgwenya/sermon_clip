@@ -469,15 +469,15 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
       <header className="ready-publishing-header premium-ready-header">
         <div className="ready-title-block">
           <p className="kicker">Publishing desk</p>
-          <h1>Prepare your next post</h1>
+          <h1>From finished clip to published post.</h1>
           <p className="muted">
             {focusedContentAsset
-              ? `Review ${focusedContentAsset.title} from ${focusedContentAsset.sermonTitle}, then download its files or schedule a media-team handoff.`
+              ? `Prepare ${focusedContentAsset.title} from ${focusedContentAsset.sermonTitle}, then download it or place it on the calendar.`
               : scopedClipTitle
-              ? `Review ${scopedClipTitle}${scopedSermonTitle ? ` from ${scopedSermonTitle}` : ""}, prepare the platform copy, then download or schedule it.`
+              ? `Prepare ${scopedClipTitle}${scopedSermonTitle ? ` from ${scopedSermonTitle}` : ""}, then download it or place it on the calendar.`
             : scopedSermonTitle
-              ? `Choose a finished clip from ${scopedSermonTitle}, check the final video and caption, then send it to the right channel.`
-              : "Choose a finished sermon clip, prepare its post, then download or schedule it."}
+              ? `Choose a finished clip from ${scopedSermonTitle}, prepare its platform copy, then download or schedule it.`
+              : "Choose a finished sermon clip, prepare the platform copy, then download or schedule it."}
           </p>
           {focusedContentAsset || scopedClipTitle || scopedSermonTitle ? (
             <div className="ready-scope-pill">
@@ -485,20 +485,19 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
               <strong>{focusedContentAsset?.title ?? scopedClipTitle ?? scopedSermonTitle}</strong>
             </div>
           ) : null}
-          <div className="ready-quick-stats" aria-label="Prepared publishing summary">
-            <span><strong>{downloadableClipCount}</strong> media prepared</span>
-            <span className="ready-stat-ready"><strong>{editoriallyPostReadyClipCount}</strong> post-ready</span>
-            {contentAssets.length > 0 ? <span><strong>{contentAssets.length}</strong> generated post{contentAssets.length === 1 ? "" : "s"}</span> : null}
-            {preparingClipCount > 0 ? (
-              <span><strong>{preparingClipCount}</strong> preparing</span>
-            ) : null}
-            {blockedReadyClipCount > 0 ? (
-              <span className="ready-stat-repair"><strong>{blockedReadyClipCount}</strong> needs repair</span>
-            ) : null}
-            <span><strong>{visibleScheduledPosts.length}</strong> planned</span>
-            {failedPreparationClipCount > 0 ? (
-              <span className="ready-stat-repair"><strong>{failedPreparationClipCount}</strong> prep issue{failedPreparationClipCount === 1 ? "" : "s"}</span>
-            ) : null}
+          <div className="premium-ready-summary" aria-label="Publishing summary">
+            <div><strong>{downloadableClipCount}</strong><span>Prepared</span></div>
+            <div><strong>{editoriallyPostReadyClipCount}</strong><span>Ready to post</span></div>
+            <div><strong>{visibleScheduledPosts.length}</strong><span>Scheduled</span></div>
+            <details>
+              <summary>Queue details</summary>
+              <dl>
+                <div><dt>Generated posts</dt><dd>{contentAssets.length}</dd></div>
+                <div><dt>Preparing now</dt><dd>{preparingClipCount}</dd></div>
+                <div><dt>Media needs repair</dt><dd>{blockedReadyClipCount}</dd></div>
+                <div><dt>Preparation issues</dt><dd>{failedPreparationClipCount}</dd></div>
+              </dl>
+            </details>
           </div>
         </div>
         <nav className="ready-publishing-nav" aria-label="Ready to post actions">
@@ -518,11 +517,11 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         <ol className="premium-ready-steps" aria-label="Ready-to-post workflow">
           <li className={clipId || contentAssetId ? "is-complete" : "is-current"}>
             <span>1</span>
-            <div><strong>Choose content</strong><small>Start with the message and format you want to share.</small></div>
+            <div><strong>Choose</strong><small>Select the message you want to share.</small></div>
           </li>
           <li className={clipId || contentAssetId ? "is-current" : ""}>
             <span>2</span>
-            <div><strong>Prepare the post</strong><small>Check the final media and platform copy.</small></div>
+            <div><strong>Prepare</strong><small>Check the final video and platform copy.</small></div>
           </li>
           <li>
             <span>3</span>
@@ -531,10 +530,10 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         </ol>
 
         <nav className="premium-ready-view-nav" aria-label="Publishing desk sections">
-          <a href="#ready-clips">Prepared clips</a>
-          <a href="#generated-content-assets">Generated content</a>
-          <a href="#posting-calendar">Mixed calendar</a>
-          <a href="#publishing-support">Publishing history</a>
+          <a href="#ready-clips">Clips</a>
+          <a href="#generated-content-assets">Other content</a>
+          <a href="#posting-calendar">Calendar</a>
+          <a href="#publishing-support">History</a>
         </nav>
       </header>
 
@@ -542,7 +541,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         {approvedWaitingClipCount > 0 ? (
           <section className="ready-prep-command premium-ready-prep" aria-label="Approved clips waiting for preparation">
             <div className="ready-prep-copy">
-              <p className="kicker">{failedPreparationClipCount > 0 ? "Needs recovery" : "Stage 2 · Prepare post"}</p>
+              <p className="kicker">{failedPreparationClipCount > 0 ? "Needs recovery" : "2 · Prepare"}</p>
               <h2>
                 {failedPreparationClipCount > 0
                   ? `${failedPreparationClipCount} clip${failedPreparationClipCount === 1 ? "" : "s"} ${failedPreparationClipCount === 1 ? "needs" : "need"} attention`

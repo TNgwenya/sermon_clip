@@ -1,17 +1,17 @@
 /* Route-scoped Clip Studio chrome. Editing and preview behavior remain in their feature components. */
 .clip-studio-shell {
-  --studio-canvas: #090b0a;
-  --studio-surface: #111512;
-  --studio-surface-raised: #171c18;
-  --studio-surface-soft: #1d241f;
-  --studio-line: rgba(221, 235, 226, 0.11);
-  --studio-line-strong: rgba(138, 219, 193, 0.28);
-  --studio-text: #f3f4ef;
-  --studio-muted: #a9b0aa;
-  --studio-accent: #8adbc1;
-  --studio-accent-soft: rgba(138, 219, 193, 0.11);
-  --studio-warning: #efc47e;
-  --studio-danger: #f29393;
+  --studio-canvas: var(--canvas, #090b0a);
+  --studio-surface: var(--surface, #111512);
+  --studio-surface-raised: var(--surface-raised, #171c18);
+  --studio-surface-soft: var(--surface-soft, #1d241f);
+  --studio-line: var(--border, rgba(221, 235, 226, 0.11));
+  --studio-line-strong: var(--border-strong, rgba(157, 214, 189, 0.28));
+  --studio-text: var(--text, #f3f4ef);
+  --studio-muted: var(--muted, #a9b0aa);
+  --studio-accent: var(--accent, #9dd6bd);
+  --studio-accent-soft: color-mix(in srgb, var(--studio-accent) 11%, transparent);
+  --studio-warning: var(--warning, #efc47e);
+  --studio-danger: var(--danger, #f29393);
   width: min(100%, 1760px);
   max-width: none;
   gap: 1.1rem;
@@ -20,13 +20,11 @@
 }
 
 .clip-studio-shell .clip-studio-topbar {
-  border: 1px solid var(--studio-line);
-  border-radius: 16px;
-  background:
-    radial-gradient(circle at 10% 0%, rgba(138, 219, 193, 0.08), transparent 30%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent),
-    var(--studio-surface);
-  padding: clamp(1rem, 1.7vw, 1.4rem);
+  border: 0;
+  border-bottom: 1px solid var(--studio-line);
+  border-radius: 0;
+  background: transparent;
+  padding: 0 0 clamp(1rem, 1.8vw, 1.5rem);
 }
 
 .clip-studio-shell .clip-studio-topbar-row {
@@ -45,7 +43,7 @@
 
 .clip-studio-shell .clip-studio-topbar h1 {
   max-width: 42rem;
-  font-size: clamp(1.75rem, 2.4vw, 2.55rem);
+  font-size: clamp(1.8rem, 2.5vw, 2.7rem);
   line-height: 1.04;
   letter-spacing: -0.025em;
   text-wrap: balance;
@@ -165,7 +163,7 @@
 
 .clip-studio-shell .clip-studio-layout {
   display: grid;
-  grid-template-columns: minmax(260px, 0.72fr) minmax(460px, 1.42fr) minmax(350px, 0.92fr);
+  grid-template-columns: minmax(250px, 0.62fr) minmax(480px, 1.55fr) minmax(330px, 0.84fr);
   grid-template-areas: "transcript preview tools";
   gap: clamp(0.85rem, 1.3vw, 1.25rem);
   align-items: start;
@@ -213,9 +211,9 @@
   max-height: none;
   overflow: visible;
   border-color: var(--studio-line-strong);
-  border-radius: 16px;
+  border-radius: var(--radius-media, 18px);
   background:
-    radial-gradient(circle at 50% 0%, rgba(138, 219, 193, 0.12), transparent 34%),
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--studio-accent) 12%, transparent), transparent 34%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 34%),
     #0d110f;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
@@ -257,11 +255,11 @@
 }
 
 .clip-studio-shell .clip-studio-live-frame.format-vertical {
-  width: min(100%, 440px);
+  width: min(100%, 500px);
 }
 
 .clip-studio-shell .clip-studio-player-controls {
-  width: min(100%, 440px);
+  width: min(100%, 500px);
   min-height: 52px;
   border-color: var(--studio-line);
   background: rgba(8, 11, 9, 0.88);
@@ -306,11 +304,12 @@
   grid-row: auto;
   gap: 0.65rem;
   align-items: stretch;
-  border: 1px solid var(--studio-line);
-  border-radius: 14px;
-  background: rgba(15, 19, 16, 0.96);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
-  padding: 0.75rem;
+  border: 0;
+  border-bottom: 1px solid var(--studio-line);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--studio-canvas) 90%, transparent);
+  box-shadow: none;
+  padding: 0.45rem 0 0.7rem;
   backdrop-filter: blur(16px);
 }
 
@@ -337,16 +336,16 @@
   width: 100%;
   gap: 0.25rem;
   border: 0;
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.035);
-  padding: 0.25rem;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
 }
 
 .clip-studio-shell .clip-studio-tab {
   min-width: 0;
   min-height: 44px;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: 0;
   background: transparent;
   color: var(--studio-muted);
   padding: 0.55rem 0.35rem;
@@ -358,16 +357,18 @@
 }
 
 .clip-studio-shell .clip-studio-tab:hover {
-  border-color: var(--studio-line);
-  background: rgba(255, 255, 255, 0.04);
+  border-color: transparent;
+  border-bottom-color: var(--studio-line-strong);
+  background: transparent;
   color: var(--studio-text);
 }
 
 .clip-studio-shell .clip-studio-tab.is-active {
-  border-color: rgba(138, 219, 193, 0.24);
-  background: var(--studio-accent-soft);
-  color: #ddfff3;
-  box-shadow: inset 0 0 0 1px rgba(138, 219, 193, 0.05);
+  border-color: transparent;
+  border-bottom-color: var(--studio-accent);
+  background: transparent;
+  color: var(--studio-text);
+  box-shadow: none;
 }
 
 .clip-studio-shell .clip-studio-tab:focus-visible,
@@ -396,13 +397,13 @@
 .clip-studio-shell .clip-studio-workbench .section-card,
 .clip-studio-shell .clip-studio-details,
 .clip-studio-shell .clip-studio-editor-disclosure {
-  border-color: var(--studio-line);
-  border-radius: 14px;
-  background: var(--studio-surface);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .clip-studio-shell .clip-studio-workbench .section-card {
-  padding: clamp(0.9rem, 1.3vw, 1.15rem);
+  padding: clamp(0.85rem, 1.2vw, 1.1rem) 0;
 }
 
 .clip-studio-shell .clip-studio-review-checklist-summary {
@@ -416,9 +417,10 @@
   display: grid;
   gap: 0.12rem;
   min-width: 0;
-  border: 1px solid var(--studio-line);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.035);
+  border: 0;
+  border-right: 1px solid var(--studio-line);
+  border-radius: 0;
+  background: transparent;
   color: var(--studio-muted);
   padding: 0.55rem 0.48rem;
   font-size: 0.62rem;
@@ -428,8 +430,8 @@
 }
 
 .clip-studio-shell .clip-studio-review-checklist-summary > span.is-required {
-  border-color: rgba(138, 219, 193, 0.28);
-  background: rgba(138, 219, 193, 0.08);
+  border-color: var(--studio-line-strong);
+  background: transparent;
 }
 
 .clip-studio-shell .clip-studio-review-checklist-summary strong {
@@ -550,7 +552,7 @@
   pointer-events: none;
 }
 
-@media (max-width: 1480px) {
+@media (max-width: 1439px) {
   .clip-studio-shell {
     width: 100%;
     padding-inline: 1rem;

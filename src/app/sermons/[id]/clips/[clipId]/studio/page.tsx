@@ -483,9 +483,11 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
           <div className="clip-studio-topbar-row">
             <div className="clip-studio-title-block">
               <div className="stack-sm">
-                <p className="kicker">Clip Studio</p>
+                <p className="kicker">Clip Studio · Message-safe editing</p>
                 <h1 id="clip-studio-title">{clip.title}</h1>
-                <p className="muted clip-studio-topbar-subtitle">{sermon.title}</p>
+                <p className="muted clip-studio-topbar-subtitle">
+                  {sermon.title} · Polish the moment without losing its meaning.
+                </p>
               </div>
 
               <div className="clip-studio-primary-status" aria-label="Current clip status">
@@ -533,10 +535,10 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             <div className="clip-studio-topbar-actions" aria-label="Clip Studio navigation and preparation">
               <div className="clip-studio-context-actions">
                 <Link href={`/sermons/${sermonId}`} className="button tertiary">
-                  Sermon overview
+                  Back to sermon
                 </Link>
                 <Link href={`/sermons/${sermonId}/review`} className="button tertiary">
-                  Review clips
+                  Review moments
                 </Link>
               </div>
               <ClipStudioPrepareButton
@@ -677,7 +679,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
               <section className="clip-studio-details stack-md">
                 <div className="section-heading-row">
                   <div>
-                    <p className="kicker">Post</p>
+                    <p className="kicker">Publishing handoff</p>
                     <h3>{preparedFinalReady ? "Prepared video ready" : "Final video needs updating"}</h3>
                   </div>
                   <StatusBadge tone={preparedFinalReady ? "success" : "warning"}>
@@ -721,7 +723,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 )}
                 {preparedFinalReady ? (
                   <Link href={`/ready-to-post?clipId=${clip.id}`} className="button secondary">
-                    Open ready queue
+                    Open publishing desk
                   </Link>
                 ) : null}
               </section>
