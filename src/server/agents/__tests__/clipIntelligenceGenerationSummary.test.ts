@@ -35,6 +35,14 @@ describe("clip intelligence generation summary", () => {
     };
   }
 
+  it("keeps worker-owned generation jobs active until preview preparation finishes", () => {
+    expect(__clipIntelligenceTestUtils.shouldCompleteClipGenerationJob()).toBe(true);
+    expect(__clipIntelligenceTestUtils.shouldCompleteClipGenerationJob({
+      processingJobId: "worker-job",
+      deferJobSuccess: true,
+    })).toBe(false);
+  });
+
   it("builds structured generation counts and top clip ids", () => {
     const summary = __clipIntelligenceTestUtils.buildStructuredGenerationSummary({
       totalCandidatesGenerated: 8,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildClipGenerationRetryPlan,
+  clipGenerationIntentsMatch,
   CLIP_GENERATION_PREVIEW_REPAIR_MODE,
   CLIP_GENERATION_RETRY_MODE,
   isClipGenerationForcedRetrySummary,
@@ -40,7 +41,7 @@ describe("clip generation retry planning", () => {
   it("preserves append intent without turning the retry into a destructive forced replacement", () => {
     const plan = buildClipGenerationRetryPlan({
       existingActiveSuggestionCount: 5,
-      failedJobErrorMessage: "Preview prep failed.",
+      failedJobErrorMessage: "AI clip selection timed out.",
       failedJobGenerationSummary: { append: true },
     });
 
@@ -58,7 +59,7 @@ describe("clip generation retry planning", () => {
   it("preserves redo intent in the summary written with the queued retry", () => {
     expect(buildClipGenerationRetryPlan({
       existingActiveSuggestionCount: 5,
-      failedJobErrorMessage: "Preview prep failed.",
+      failedJobErrorMessage: "AI clip selection timed out.",
       failedJobGenerationSummary: { mode: "redo" },
     })).toEqual({
       retryMode: CLIP_GENERATION_RETRY_MODE,
@@ -80,6 +81,34 @@ describe("clip generation retry planning", () => {
       existingActiveSuggestionCount: 5,
     });
     expect(isClipGenerationForcedRetrySummary(plan.generationSummary)).toBe(true);
+  });
+
+  it("repairs preview-only append and redo failures without another AI generation", () => {
+    for (const failedJobGenerationSummary of [{ append: true }, { mode: "redo" }]) {
+      expect(buildClipGenerationRetryPlan({
+        existingActiveSuggestionCount: 5,
+        failedJobErrorMessage: "Preview prep: 4 prepared, 0 skipped, 1 failed.",
+        failedJobGenerationSummary,
+      })).toEqual({
+        retryMode: CLIP_GENERATION_PREVIEW_REPAIR_MODE,
+        generationSummary: {
+          mode: CLIP_GENERATION_PREVIEW_REPAIR_MODE,
+          existingActiveSuggestionCount: 5,
+        },
+      });
+    }
+  });
+
+  it("matches only compatible active queue intents", () => {
+    expect(clipGenerationIntentsMatch(undefined, {})).toBe(true);
+    expect(clipGenerationIntentsMatch({ append: true }, { mode: CLIP_GENERATION_RETRY_MODE, append: true })).toBe(true);
+    expect(clipGenerationIntentsMatch({ mode: "redo" }, { mode: "redo", failure: {} })).toBe(true);
+    expect(clipGenerationIntentsMatch({ append: true }, { mode: "redo" })).toBe(false);
+    expect(clipGenerationIntentsMatch(undefined, { append: true })).toBe(false);
+    expect(clipGenerationIntentsMatch(
+      { mode: CLIP_GENERATION_PREVIEW_REPAIR_MODE },
+      { mode: CLIP_GENERATION_RETRY_MODE },
+    )).toBe(false);
   });
 
   it("does not treat malformed or unrelated job summaries as preview-only repairs", () => {

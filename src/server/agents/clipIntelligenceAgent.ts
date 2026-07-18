@@ -96,6 +96,7 @@ type GenerateClipOptions = {
   responseOverride?: string;
   repairResponseOverride?: string;
   processingJobId?: string;
+  deferJobSuccess?: boolean;
 };
 
 type SermonContext = {
@@ -2782,6 +2783,10 @@ function normalizeCandidate<T extends ClipJsonCandidate>(candidate: T): T {
   };
 }
 
+function shouldCompleteClipGenerationJob(options?: GenerateClipOptions): boolean {
+  return options?.deferJobSuccess !== true;
+}
+
 async function resolveClipGenerationJob(sermonId: string, processingJobId?: string): Promise<ProcessingJob> {
   if (processingJobId) {
     const claimedJob = await prisma.processingJob.findUnique({ where: { id: processingJobId } });
@@ -2959,10 +2964,12 @@ export async function generateClipSuggestions(
       options?.targetCategory ? null : clipVolumeTarget,
     )) {
       await updateSermonStatus(sermon.id, "CLIPS_GENERATED");
-      await markJobSucceeded(
-        job.id,
-        `Existing clip suggestions reused (${existingSuggestionCount} available; target range ${clipVolumeTarget.rangeLabel}); skipped AI call.`,
-      );
+      const reuseMessage = `Existing clip suggestions reused (${existingSuggestionCount} available; target range ${clipVolumeTarget.rangeLabel}); skipped AI call.`;
+      if (shouldCompleteClipGenerationJob(options)) {
+        await markJobSucceeded(job.id, reuseMessage);
+      } else {
+        await appendJobLog(job.id, `${reuseMessage} Job completion deferred until preview preparation finishes.`);
+      }
       await appendPipelineLog(
         sermon.id,
         `Existing clip suggestions reused (${existingSuggestionCount} available; target range ${clipVolumeTarget.rangeLabel}); skipped AI call.`,
@@ -3475,7 +3482,11 @@ export async function generateClipSuggestions(
         ? `Rejected ${rejectedReasons.length} invalid candidate(s): ${rejectedReasons.join(" | ")}`
         : "No candidates were rejected by validation.",
     ].join(" ");
-    await markJobSucceeded(job.id, successMessage);
+    if (shouldCompleteClipGenerationJob(options)) {
+      await markJobSucceeded(job.id, successMessage);
+    } else {
+      await appendJobLog(job.id, `${successMessage} Job completion deferred until preview preparation finishes.`);
+    }
     await appendPipelineLog(sermon.id, `Clip suggestions generated successfully (${dedupedWithBoundaryFields.length} saved).`);
 
     return { clipCount: dedupedWithBoundaryFields.length, reusedExistingSuggestions: false };
@@ -3505,6 +3516,7 @@ export async function generateClipSuggestions(
 
 export const __clipIntelligenceTestUtils = {
   shouldReuseExistingSuggestions,
+  shouldCompleteClipGenerationJob,
   buildSuggestionDeleteWhere,
   shouldPreserveClipDuringRegeneration,
   buildRollingWindows,

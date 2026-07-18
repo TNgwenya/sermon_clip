@@ -377,6 +377,7 @@ async function runJob(job: ProcessingJob): Promise<string> {
             force,
             append: appendSuggestions,
             processingJobId: job.id,
+            deferJobSuccess: true,
           });
         },
         preparePreviews: async () => {

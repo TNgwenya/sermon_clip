@@ -14,6 +14,13 @@ export type ClipGenerationRetryPlan = {
   };
 };
 
+export type ClipGenerationIntent =
+  | "default"
+  | "append"
+  | "redo"
+  | typeof CLIP_GENERATION_PREVIEW_REPAIR_MODE
+  | typeof CLIP_GENERATION_RETRY_MODE;
+
 function asSummary(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -39,14 +46,12 @@ export function resolveClipGenerationRetryMode(input: {
   failedJobErrorMessage?: string | null;
   failedJobGenerationSummary?: unknown;
 }): ClipGenerationRetryMode {
-  const summary = asSummary(input.failedJobGenerationSummary);
-  const explicitGenerationRequest = summary?.["append"] === true || summary?.["mode"] === "redo";
   const previewOnlyFailure = failedAtPreviewPreparation(
     input.failedJobErrorMessage,
     input.failedJobGenerationSummary,
   );
 
-  return input.existingActiveSuggestionCount > 0 && previewOnlyFailure && !explicitGenerationRequest
+  return input.existingActiveSuggestionCount > 0 && previewOnlyFailure
     ? CLIP_GENERATION_PREVIEW_REPAIR_MODE
     : CLIP_GENERATION_RETRY_MODE;
 }
@@ -58,6 +63,19 @@ export function buildClipGenerationRetryPlan(input: {
 }): ClipGenerationRetryPlan {
   const retryMode = resolveClipGenerationRetryMode(input);
   const failedSummary = asSummary(input.failedJobGenerationSummary);
+
+  // Once generation produced active suggestions, a preview-stage failure must
+  // repair those assets only. Replaying append/redo would spend another AI call
+  // and can discard the newly generated clips.
+  if (retryMode === CLIP_GENERATION_PREVIEW_REPAIR_MODE) {
+    return {
+      retryMode,
+      generationSummary: {
+        mode: retryMode,
+        existingActiveSuggestionCount: input.existingActiveSuggestionCount,
+      },
+    };
+  }
 
   if (failedSummary?.["mode"] === "redo") {
     return {
@@ -86,4 +104,21 @@ export function isClipGenerationPreviewRepairSummary(value: unknown): boolean {
 export function isClipGenerationForcedRetrySummary(value: unknown): boolean {
   const summary = asSummary(value);
   return summary?.["mode"] === CLIP_GENERATION_RETRY_MODE && summary["append"] !== true;
+}
+
+export function resolveClipGenerationIntent(value: unknown): ClipGenerationIntent {
+  const summary = asSummary(value);
+  if (summary?.["mode"] === "redo") return "redo";
+  if (summary?.["append"] === true) return "append";
+  if (summary?.["mode"] === CLIP_GENERATION_PREVIEW_REPAIR_MODE) {
+    return CLIP_GENERATION_PREVIEW_REPAIR_MODE;
+  }
+  if (summary?.["mode"] === CLIP_GENERATION_RETRY_MODE) {
+    return CLIP_GENERATION_RETRY_MODE;
+  }
+  return "default";
+}
+
+export function clipGenerationIntentsMatch(existing: unknown, requested: unknown): boolean {
+  return resolveClipGenerationIntent(existing) === resolveClipGenerationIntent(requested);
 }

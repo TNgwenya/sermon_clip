@@ -89,7 +89,10 @@ import {
   buildPrepareClipPlan,
 } from "@/lib/prepareWorkflow";
 import { getQueuedMediaAssetsForRemoteBatchAction } from "@/lib/clipReview";
-import { buildClipGenerationRetryPlan } from "@/lib/clipGenerationRetry";
+import {
+  buildClipGenerationRetryPlan,
+  clipGenerationIntentsMatch,
+} from "@/lib/clipGenerationRetry";
 import { isStaleActiveProcessingJob } from "@/lib/pastorWorkflow";
 import { prunePostingPackageHistoryByClipIds } from "@/lib/postingPackages";
 import {
@@ -314,7 +317,7 @@ async function queueSermonProcessingJob(
   sermonId: string,
   type: ProcessingJobType,
   generationSummary?: Prisma.InputJsonValue,
-): Promise<{ id: string; reusedExisting: boolean }> {
+): Promise<{ id: string; reusedExisting: boolean; intentConflict: boolean }> {
   const existing = await prisma.processingJob.findFirst({
     where: {
       sermonId,
@@ -322,11 +325,16 @@ async function queueSermonProcessingJob(
       status: { in: ["PENDING", "RUNNING"] },
     },
     orderBy: { createdAt: "desc" },
-    select: { id: true },
+    select: { id: true, generationSummary: true },
   });
 
   if (existing) {
-    return { id: existing.id, reusedExisting: true };
+    return {
+      id: existing.id,
+      reusedExisting: true,
+      intentConflict: type === "GENERATE_CLIPS"
+        && !clipGenerationIntentsMatch(existing.generationSummary, generationSummary),
+    };
   }
 
   try {
@@ -334,10 +342,19 @@ async function queueSermonProcessingJob(
       execution: "QUEUED",
       generationSummary,
     });
-    return { id: job.id, reusedExisting: false };
+    return { id: job.id, reusedExisting: false, intentConflict: false };
   } catch (error) {
     if (error instanceof ActiveProcessingJobError) {
-      return { id: error.existingJobId, reusedExisting: true };
+      const racedJob = await prisma.processingJob.findUnique({
+        where: { id: error.existingJobId },
+        select: { generationSummary: true },
+      });
+      return {
+        id: error.existingJobId,
+        reusedExisting: true,
+        intentConflict: type === "GENERATE_CLIPS"
+          && (!racedJob || !clipGenerationIntentsMatch(racedJob.generationSummary, generationSummary)),
+      };
     }
     throw error;
   }
@@ -1943,6 +1960,12 @@ export async function generateClipSuggestionsAction(
       "GENERATE_CLIPS",
       append ? { append: true } : undefined,
     );
+    if (job.intentConflict) {
+      return {
+        success: false,
+        message: "A different clip-generation request is already running. Wait for it to finish, then try this action again.",
+      };
+    }
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath(`/sermons/${sermonId}/review`);
     revalidatePath("/");
@@ -2011,6 +2034,12 @@ export async function redoClipGenerationFromTranscriptAction(
       "GENERATE_CLIPS",
       { mode: "redo" },
     );
+    if (job.intentConflict) {
+      return {
+        success: false,
+        message: "Another clip-generation request is already running. Wait for it to finish before redoing the clips.",
+      };
+    }
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath(`/sermons/${sermonId}/review`);
     revalidatePath("/ready-to-post");
@@ -2237,6 +2266,12 @@ export async function retryFailedProcessingJobById(input: {
         job.type,
         retryPlan.generationSummary,
       );
+      if (queuedJob.intentConflict) {
+        return {
+          success: false,
+          message: "Another clip-generation request started first. Wait for it to finish, refresh this page, and retry only if a failure remains.",
+        };
+      }
       await appendPipelineLog(
         sermonId,
         retryMode === "repair_previews"
