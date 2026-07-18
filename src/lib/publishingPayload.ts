@@ -33,6 +33,23 @@ export type CanonicalPlatformPayload = {
 export type CanonicalPlatformPayloadMap = Record<PostingPlatform, CanonicalPlatformPayload>;
 
 const PLATFORM_ORDER: PostingPlatform[] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
+const LOW_VALUE_HASHTAGS = new Set([
+  "fyp",
+  "foryou",
+  "foryoupage",
+  "viral",
+  "trending",
+  "explorepage",
+]);
+const BROAD_HASHTAGS = new Set([
+  "christian",
+  "church",
+  "faith",
+  "hope",
+  "preaching",
+  "sermon",
+  "sermonclip",
+]);
 
 function clamp(value: string, maxLength: number): string {
   const trimmed = value.trim();
@@ -50,49 +67,57 @@ function normalizeForComparison(value: string): string {
     .trim();
 }
 
+function comparisonTokens(value: string): string[] {
+  return normalizeForComparison(value)
+    .split(" ")
+    .filter((token) => token.length > 1);
+}
+
+function copyIsNearDuplicate(left: string, right: string): boolean {
+  const leftTokens = new Set(comparisonTokens(left));
+  const rightTokens = new Set(comparisonTokens(right));
+  if (leftTokens.size === 0 || rightTokens.size === 0) {
+    return false;
+  }
+
+  const overlap = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  const containment = overlap / Math.min(leftTokens.size, rightTokens.size);
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  const similarity = union > 0 ? overlap / union : 0;
+  return containment >= 0.72 || similarity >= 0.68;
+}
+
 function joinUniqueParagraphs(parts: Array<string | null | undefined>): string {
-  const seen = new Set<string>();
+  const accepted: Array<{ key: string; value: string }> = [];
 
-  return parts
-    .map((part) => part?.trim() ?? "")
-    .filter((part) => {
-      if (!part) {
-        return false;
-      }
+  for (const part of parts) {
+    const value = part?.trim() ?? "";
+    const key = normalizeForComparison(value);
+    if (
+      !key
+      || accepted.some((existing) => (
+        existing.key === key || copyIsNearDuplicate(existing.key, key)
+      ))
+    ) {
+      continue;
+    }
 
-      const comparisonKey = normalizeForComparison(part);
-      if (!comparisonKey || seen.has(comparisonKey)) {
-        return false;
-      }
+    accepted.push({ key, value });
+  }
 
-      seen.add(comparisonKey);
-      return true;
-    })
-    .join("\n\n");
+  return accepted.map(({ value }) => value).join("\n\n");
 }
 
 function openingIsAlreadyPresent(opening: string, body: string): boolean {
   const normalizedOpening = normalizeForComparison(opening);
   const normalizedBody = normalizeForComparison(body);
-
   if (!normalizedOpening || !normalizedBody) {
     return false;
   }
 
   return normalizedBody.startsWith(normalizedOpening)
-    || normalizedOpening.startsWith(normalizedBody);
-}
-
-function buildOpeningLedCopy(opening: string, body: string): string {
-  if (!body) {
-    return opening;
-  }
-
-  if (openingIsAlreadyPresent(opening, body)) {
-    return body;
-  }
-
-  return joinUniqueParagraphs([opening, body]);
+    || normalizedOpening.startsWith(normalizedBody)
+    || copyIsNearDuplicate(normalizedOpening, normalizedBody);
 }
 
 function buildShortCaption(value: string, fallback: string, maxLength = 360): string {
@@ -121,13 +146,63 @@ function buildCaptionWithinLimit(input: {
   return clamp(joinUniqueParagraphs([content, suffix]), input.maxLength);
 }
 
-function selectHashtags(hashtags: string[], max: number): string[] {
-  return hashtags.slice(0, max);
+function hashtagKey(value: string): string {
+  return value.replace(/^#/, "").toLocaleLowerCase();
 }
 
-function buildAudienceLine(value: string | null | undefined): string {
-  const audience = value?.trim();
-  return audience ? `For ${audience.toLowerCase()}.` : "";
+function rankHashtags(hashtags: string[], context: string, max: number): string[] {
+  const normalizedContext = normalizeForComparison(context).replace(/\s+/g, "");
+  return hashtags
+    .map((hashtag, index) => {
+      const key = hashtagKey(hashtag).replace(/_/g, "");
+      const mentioned = key.length >= 4 && normalizedContext.includes(key);
+      return {
+        hashtag,
+        index,
+        score: (mentioned ? 3 : 0) + (BROAD_HASHTAGS.has(key) ? -1 : 0),
+      };
+    })
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, max)
+    .map(({ hashtag }) => hashtag);
+}
+
+function hashtagsNotAlreadyInCopy(content: string, hashtags: string[]): string[] {
+  const existing = new Set(
+    (content.match(/#[\p{L}\p{N}_]+/gu) ?? []).map((hashtag) => hashtagKey(hashtag)),
+  );
+  return hashtags.filter((hashtag) => !existing.has(hashtagKey(hashtag)));
+}
+
+function cleanSocialCopy(value: string): string {
+  const paragraphs = value
+    .replace(/\r\n/g, "\n")
+    .split(/\n\s*\n/g)
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
+    .filter((paragraph) => paragraph && !/^(?:#[\p{L}\p{N}_]+\s*)+$/u.test(paragraph))
+    .map((paragraph) => {
+      const sentences = paragraph.match(/[^.!?]+[.!?]+(?:[”"']+)?|[^.!?]+$/g) ?? [paragraph];
+      return sentences
+        .map((sentence) => sentence.trim())
+        .filter((sentence) => !/^(?:in\s+)?(?:this|the)\s+(?:clip|sermon moment)\b/i.test(sentence))
+        .filter((sentence) => !/^the\s+(?:speaker|pastor|preacher)\b/i.test(sentence))
+        .map((sentence) => sentence.replace(/^it is (a|an)\s+/i, (_match, article: string) => `${article[0].toUpperCase()}${article.slice(1)} `))
+        .join(" ")
+        .trim();
+    })
+    .filter(Boolean);
+
+  return joinUniqueParagraphs(paragraphs);
+}
+
+function firstSentence(value: string): string {
+  return value.match(/^.*?[.!?](?:[”"']+)?(?=\s|$)/)?.[0]?.trim() || value.trim();
+}
+
+function looksLikeResponsePrompt(value: string): boolean {
+  const normalized = value.trim();
+  return normalized.endsWith("?")
+    || /^(?:what|how|where|when|who|which|will|can|do|are|would|take|share|save|join|pray|reflect|tell)\b/i.test(normalized);
 }
 
 export function normalizePublishingHashtags(value: unknown): string[] {
@@ -135,11 +210,28 @@ export function normalizePublishingHashtags(value: unknown): string[] {
     return [];
   }
 
-  return Array.from(new Set(value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((item) => (item.startsWith("#") ? item : `#${item.replace(/^#+/, "")}`))));
+  const seen = new Set<string>();
+  const hashtags: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") {
+      continue;
+    }
+
+    const token = item.trim().replace(/^#+/, "");
+    if (!token || !/^[\p{L}\p{N}_]+$/u.test(token)) {
+      continue;
+    }
+
+    const key = token.toLocaleLowerCase();
+    if (LOW_VALUE_HASHTAGS.has(key) || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    hashtags.push(`#${token}`);
+  }
+
+  return hashtags;
 }
 
 export function buildCanonicalPlatformPayloads(input: {
@@ -152,41 +244,61 @@ export function buildCanonicalPlatformPayloads(input: {
   intendedAudience?: string | null;
 }): CanonicalPlatformPayloadMap {
   const title = input.title.trim() || "Sermon clip";
-  const caption = input.caption.trim();
+  const caption = cleanSocialCopy(input.caption);
   const hook = input.hook.trim() || title;
+  const rawShortCaption = cleanSocialCopy(input.shortCaption?.trim() || buildShortCaption(caption, hook));
+  const conversationalCaption = cleanSocialCopy(input.platformCaption?.trim() || "");
+  const responsePrompt = looksLikeResponsePrompt(conversationalCaption) ? conversationalCaption : "";
+  const platformContext = [title, hook, caption, conversationalCaption, input.intendedAudience]
+    .filter(Boolean)
+    .join(" ");
   const hashtags = normalizePublishingHashtags(input.hashtags);
-  const audienceLine = buildAudienceLine(input.intendedAudience);
-  const shortCaption = input.shortCaption?.trim() || buildShortCaption(caption, hook);
-  const conversationalCaption = input.platformCaption?.trim() || caption || hook;
 
-  const tiktokHashtags = selectHashtags(hashtags, 5);
-  const tiktokBody = buildOpeningLedCopy(hook, shortCaption);
+  const tiktokHashtags = rankHashtags(hashtags, platformContext, 5);
+  const distinctShortCaption = openingIsAlreadyPresent(hook, rawShortCaption) ? "" : rawShortCaption;
+  const fallbackTakeaway = firstSentence(conversationalCaption || caption);
+  const tiktokBody = joinUniqueParagraphs([
+    hook,
+    distinctShortCaption || (!openingIsAlreadyPresent(hook, fallbackTakeaway) ? fallbackTakeaway : ""),
+    responsePrompt,
+  ]).replace(/\n\n/g, "\n");
   const tiktokCaption = buildCaptionWithinLimit({
     content: tiktokBody,
-    suffixes: [tiktokHashtags.join(" ")],
+    suffixes: [hashtagsNotAlreadyInCopy(tiktokBody, tiktokHashtags).join(" ")],
     maxLength: 2_200,
   });
 
-  const instagramHashtags = selectHashtags(hashtags, 8);
+  const instagramHashtags = rankHashtags(hashtags, platformContext, 5);
+  const instagramSubstance = responsePrompt ? caption || hook : conversationalCaption || caption || hook;
+  const instagramBody = joinUniqueParagraphs([hook, instagramSubstance, responsePrompt]);
   const instagramCaption = buildCaptionWithinLimit({
-    content: conversationalCaption,
-    suffixes: [audienceLine, instagramHashtags.join(" ")],
+    content: instagramBody,
+    suffixes: [hashtagsNotAlreadyInCopy(instagramBody, instagramHashtags).join(" ")],
     maxLength: 2_200,
   });
 
-  const youtubeHashtags = selectHashtags(hashtags, 3);
+  const youtubeHashtags = rankHashtags(hashtags, platformContext, 3);
   const youtubeTitle = clamp(title, 80);
+  const youtubeBody = joinUniqueParagraphs([
+    responsePrompt ? "" : conversationalCaption,
+    caption || hook,
+    responsePrompt,
+  ]);
   const youtubeCaption = buildCaptionWithinLimit({
-    content: caption || hook,
-    suffixes: [youtubeHashtags.join(" ")],
+    content: youtubeBody,
+    suffixes: [hashtagsNotAlreadyInCopy(youtubeBody, youtubeHashtags).join(" ")],
     maxLength: 5_000,
   });
 
-  const facebookHashtags = selectHashtags(hashtags, 3);
-  const facebookBody = joinUniqueParagraphs([title, caption || hook, audienceLine]);
+  const facebookHashtags = rankHashtags(hashtags, platformContext, 1);
+  const facebookBody = joinUniqueParagraphs([
+    responsePrompt ? "" : conversationalCaption,
+    caption || hook,
+    responsePrompt,
+  ]);
   const facebookCaption = buildCaptionWithinLimit({
     content: facebookBody,
-    suffixes: [facebookHashtags.join(" ")],
+    suffixes: [hashtagsNotAlreadyInCopy(facebookBody, facebookHashtags).join(" ")],
     maxLength: 63_206,
   });
 
@@ -200,11 +312,11 @@ export function buildCanonicalPlatformPayloads(input: {
       primaryCopyText: tiktokCaption,
       shortCaption: tiktokBody,
       guidance: {
-        rationale: "Leads with the spoken hook and keeps the supporting copy brief for a fast, sound-on feed.",
+        rationale: "Leads with the spoken hook, one clear takeaway, and a focused hashtag set for a fast, sound-on feed.",
         callToAction: "Optional: ask one specific reflection question only when this sermon moment naturally invites a response.",
         formatChecks: [
           "Keep the opening line easy to scan before the hashtag line.",
-          "Use three to five focused hashtags instead of a long generic list.",
+          "Use three to five sermon-specific hashtags instead of generic reach bait.",
         ],
       },
       constraints: {
@@ -221,19 +333,19 @@ export function buildCanonicalPlatformPayloads(input: {
       hashtags: instagramHashtags,
       primaryCopyLabel: "Caption",
       primaryCopyText: instagramCaption,
-      shortCaption,
+      shortCaption: rawShortCaption,
       guidance: {
-        rationale: "Keeps the fuller ministry context and audience cue, with readable spacing for a Reel caption.",
+        rationale: "Opens with the hook, keeps the approved ministry substance, and uses a natural response prompt only when one was supplied.",
         callToAction: "Optional: invite people to save or share only when the clip offers a clear takeaway worth returning to.",
         formatChecks: [
           "Keep the message in short paragraphs so it remains readable beside the Reel.",
-          "Confirm the chosen cover frame also works in the profile grid.",
+          "Use two to five focused hashtags and confirm the cover frame works in the profile grid.",
         ],
       },
       constraints: {
         titleMaxCharacters: 100,
         captionMaxCharacters: 2_200,
-        recommendedHashtags: { min: 3, max: 8 },
+        recommendedHashtags: { min: 2, max: 5 },
         primaryField: "Caption",
       },
     },
@@ -244,9 +356,9 @@ export function buildCanonicalPlatformPayloads(input: {
       hashtags: youtubeHashtags,
       primaryCopyLabel: "Title",
       primaryCopyText: youtubeTitle,
-      shortCaption,
+      shortCaption: rawShortCaption,
       guidance: {
-        rationale: "Prioritizes a clear title for discovery, while the description supports the message without repeating that title.",
+        rationale: "Prioritizes a clear, specific title for discovery and a non-repeating description grounded in the sermon moment.",
         callToAction: "Optional: add the church's real full-sermon or next-step link; no generic engagement line has been added.",
         formatChecks: [
           "Review the title as the main promise of the Short before publishing.",
@@ -267,19 +379,19 @@ export function buildCanonicalPlatformPayloads(input: {
       hashtags: facebookHashtags,
       primaryCopyLabel: "Caption",
       primaryCopyText: facebookCaption,
-      shortCaption: joinUniqueParagraphs([title, shortCaption]),
+      shortCaption: rawShortCaption || firstSentence(facebookBody),
       guidance: {
-        rationale: "Adds enough written context for a mixed-age community feed and avoids an automatic, generic share request.",
+        rationale: "Keeps enough written context for a church community feed without repeating the separately supplied title.",
         callToAction: "Optional: add the church's real next step, such as service details, a discussion prompt, or the full-sermon link.",
         formatChecks: [
           "Read the title and first paragraph together to remove any repeated idea.",
-          "Use few or no hashtags when the post is primarily for the church community.",
+          "Use no more than two hashtags when the post is primarily for the church community.",
         ],
       },
       constraints: {
         titleMaxCharacters: 255,
         captionMaxCharacters: 63_206,
-        recommendedHashtags: { min: 0, max: 3 },
+        recommendedHashtags: { min: 0, max: 2 },
         primaryField: "Caption",
       },
     },

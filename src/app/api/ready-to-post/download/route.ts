@@ -12,6 +12,7 @@ import { buildReadyToPostPackage } from "@/lib/readyToPost";
 import { recordPostingPackage } from "@/lib/postingPackages";
 import { createZipArchive } from "@/lib/zipArchive";
 import { resolveReadyMedia } from "@/lib/readyMedia";
+import { extractCaptionPackage } from "@/lib/clipStudio";
 
 function parseClipIds(value: string | null): string[] {
   if (!value || value === "all") {
@@ -107,12 +108,21 @@ export async function GET(request: Request): Promise<NextResponse> {
       );
     }
 
+    const postCopy = extractCaptionPackage(
+      clip.captionData,
+      clip.caption,
+      Array.isArray(clip.hashtags)
+        ? clip.hashtags.filter((item): item is string => typeof item === "string")
+        : [],
+    );
     const readyPackage = buildReadyToPostPackage({
       clipId: clip.id,
       title: clip.title,
       hook: clip.hook,
-      caption: clip.caption,
-      hashtags: clip.hashtags,
+      caption: postCopy.primaryCaption ?? clip.caption,
+      shortCaption: postCopy.shortCaption,
+      platformCaption: postCopy.platformCaption,
+      hashtags: postCopy.hashtags,
       smartClipCategory: clip.smartClipCategory,
       intendedAudience: clip.intendedAudience,
     });
@@ -137,10 +147,12 @@ export async function GET(request: Request): Promise<NextResponse> {
       modifiedAt: clip.exportedAt ?? undefined,
     });
 
-    for (const variant of readyPackage.variants) {
+    for (const payload of readyPackage.platformPayloads) {
       entries.push({
-        name: `${folderName}/captions/${buildClipExportBaseName({ title: variant.platform })}.txt`,
-        data: variant.text,
+        name: `${folderName}/captions/${buildClipExportBaseName({ title: payload.platform })}.txt`,
+        data: payload.platform === "YouTube Shorts"
+          ? `Title:\n${payload.title}\n\nDescription:\n${payload.caption}`
+          : payload.caption,
       });
     }
 

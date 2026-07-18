@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { buildCanonicalPlatformPayloads } from "@/lib/publishingPayload";
+import {
+  buildCanonicalPlatformPayloads,
+  normalizePublishingHashtags,
+} from "@/lib/publishingPayload";
 
 describe("canonical publishing payloads", () => {
   it("builds differentiated platform payloads from the approved clip copy", () => {
@@ -19,19 +22,19 @@ describe("canonical publishing payloads", () => {
       primaryCopyLabel: "Caption",
     });
     expect(payloads.TikTok.caption).toBe(
-      "You are not alone in the storm.\n\nGod is near when life feels loud.\n\n#Faith #Hope",
+      "You are not alone in the storm.\nGod is near when life feels loud.\n\n#Faith #Hope",
     );
     expect(payloads.Instagram.caption).toBe(
-      "God is near when life feels loud.\n\nFor young adults.\n\n#Faith #Hope",
+      "You are not alone in the storm.\n\nGod is near when life feels loud.\n\n#Faith #Hope",
     );
     expect(payloads["YouTube Shorts"]).toMatchObject({
       title: "Jesus Meets Us In The Storm",
       caption: "God is near when life feels loud.\n\n#Faith #Hope",
       primaryCopyLabel: "Title",
     });
-    expect(payloads.Facebook.caption).toBe(
-      "Jesus Meets Us In The Storm\n\nGod is near when life feels loud.\n\nFor young adults.\n\n#Faith #Hope",
-    );
+    expect(payloads.Facebook.caption).toContain("God is near when life feels loud.");
+    expect(payloads.Facebook.caption).toContain("#Faith");
+    expect(payloads.Facebook.caption).not.toContain(payloads.Facebook.title);
     expect(payloads.Facebook.caption).not.toContain("share with someone");
     expect(new Set(Object.values(payloads).map((payload) => payload.caption)).size).toBe(4);
   });
@@ -78,9 +81,9 @@ describe("canonical publishing payloads", () => {
     });
 
     expect(payloads.TikTok.hashtags).toHaveLength(5);
-    expect(payloads.Instagram.hashtags).toHaveLength(8);
+    expect(payloads.Instagram.hashtags).toHaveLength(5);
     expect(payloads["YouTube Shorts"].hashtags).toHaveLength(3);
-    expect(payloads.Facebook.hashtags).toHaveLength(3);
+    expect(payloads.Facebook.hashtags).toHaveLength(1);
   });
 
   it("does not repeat the hook when the approved caption already opens with it", () => {
@@ -92,6 +95,65 @@ describe("canonical publishing payloads", () => {
     });
 
     expect(payloads.TikTok.caption.match(/You are not alone\./g)).toHaveLength(1);
+  });
+
+  it("does not repeat a short caption that only rephrases the hook", () => {
+    const payloads = buildCanonicalPlatformPayloads({
+      title: "Faith before certainty",
+      hook: "Faith moves before certainty.",
+      caption: "Obedience can begin before every answer is visible.",
+      shortCaption: "Faith moves before we have certainty.",
+      hashtags: ["Faith"],
+    });
+
+    expect(payloads.TikTok.caption).toContain("Faith moves before certainty.");
+    expect(payloads.TikTok.caption).not.toContain("Faith moves before we have certainty.");
+  });
+
+  it("sanitizes hashtags case-insensitively and rejects spam or invalid tags", () => {
+    expect(normalizePublishingHashtags([
+      "Faith",
+      "#faith",
+      "#Hope_and_Healing",
+      "#HOPE_AND_HEALING",
+      "#fyp",
+      "viral",
+      "#two words",
+      "#Prayer!",
+      "#",
+      "",
+    ])).toEqual([
+      "#Faith",
+      "#Hope_and_Healing",
+    ]);
+  });
+
+  it("keeps the substantive approved caption in the Instagram adaptation", () => {
+    const payloads = buildCanonicalPlatformPayloads({
+      title: "Choose the faithful step",
+      hook: "Faith moves before certainty.",
+      caption: "God has already placed something in your hand. Choose one faithful act of obedience this week.",
+      platformCaption: "What faithful step can you take today?",
+      hashtags: ["Faith", "Discipleship"],
+    });
+
+    expect(payloads.Instagram.caption).toContain(
+      "God has already placed something in your hand. Choose one faithful act of obedience this week.",
+    );
+    expect(payloads.Instagram.caption).toContain("What faithful step can you take today?");
+  });
+
+  it("does not repeat the separately supplied Facebook title in its caption", () => {
+    const payloads = buildCanonicalPlatformPayloads({
+      title: "Grace meets us in the storm",
+      hook: "You are not alone in this storm.",
+      caption: "God remains present when life feels loud and uncertain.",
+      hashtags: ["Faith", "Hope"],
+    });
+
+    expect(payloads.Facebook.title).toBe("Grace meets us in the storm");
+    expect(payloads.Facebook.caption).not.toContain("Grace meets us in the storm");
+    expect(payloads.Facebook.caption).toContain("God remains present when life feels loud and uncertain.");
   });
 
   it("honors saved short and conversational copy without overwriting the approved caption", () => {

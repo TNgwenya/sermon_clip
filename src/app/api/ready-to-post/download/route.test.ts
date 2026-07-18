@@ -26,8 +26,8 @@ vi.mock("@/lib/postingPackages", async (importOriginal) => {
 
 import { GET } from "./route";
 
-function readEntryNames(zip: Buffer): string[] {
-  const names: string[] = [];
+function readEntries(zip: Buffer): Map<string, Buffer> {
+  const entries = new Map<string, Buffer>();
   let offset = 0;
 
   while (offset < zip.length) {
@@ -40,11 +40,25 @@ function readEntryNames(zip: Buffer): string[] {
     const nameLength = zip.readUInt16LE(offset + 26);
     const extraLength = zip.readUInt16LE(offset + 28);
     const nameStart = offset + 30;
-    names.push(zip.subarray(nameStart, nameStart + nameLength).toString());
-    offset = nameStart + nameLength + extraLength + compressedSize;
+    const name = zip.subarray(nameStart, nameStart + nameLength).toString();
+    const dataStart = nameStart + nameLength + extraLength;
+    entries.set(name, zip.subarray(dataStart, dataStart + compressedSize));
+    offset = dataStart + compressedSize;
   }
 
-  return names;
+  return entries;
+}
+
+function readEntryNames(zip: Buffer): string[] {
+  return [...readEntries(zip).keys()];
+}
+
+function readEntryTextBySuffix(zip: Buffer, suffix: string): string {
+  const matchingEntry = [...readEntries(zip).entries()].find(([name]) => name.endsWith(suffix));
+  if (!matchingEntry) {
+    throw new Error(`Expected ZIP entry ending in ${suffix}`);
+  }
+  return matchingEntry[1].toString();
 }
 
 describe("ready-to-post download route", () => {
@@ -173,6 +187,72 @@ describe("ready-to-post download route", () => {
         error: 'The prepared video for "A Strong Moment" is missing or not ready yet.',
       });
       expect(recordPostingPackageMock).not.toHaveBeenCalled();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses saved caption package copy and hashtags in the ZIP entry contents", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "ready-download-"));
+    const videoPath = join(tempDir, "clip.mp4");
+
+    try {
+      await writeFile(videoPath, Buffer.from("video-bytes"));
+
+      prismaMock.clipCandidate.findMany.mockResolvedValue([
+        {
+          id: "clip-1",
+          title: "Choose the Faithful Step",
+          hook: "Faith moves before certainty.",
+          caption: "Legacy clip caption that should not be packaged.",
+          hashtags: ["#LegacyTag"],
+          captionData: {
+            captionPackage: {
+              primaryCaption: "God has already placed something in your hand. Choose one faithful act this week.",
+              shortCaption: "Choose the next faithful step.",
+              platformCaption: "What faithful step can you take today?",
+              optionalHashtags: ["#Faith", "Discipleship"],
+            },
+          },
+          score: 8.7,
+          finalQualityScore: 9.1,
+          startTimeSeconds: 120,
+          smartClipCategory: "CALL_TO_ACTION",
+          intendedAudience: "Church family",
+          exportedAt: new Date("2026-06-23T08:00:00.000Z"),
+          exportStatus: "COMPLETED",
+          exportFreshness: "UP_TO_DATE",
+          exportFormat: "VERTICAL_9_16",
+          exportedFilePath: videoPath,
+          exportPath: null,
+          overlayVideoPath: null,
+          captionedVideoPath: null,
+          renderedFilePath: null,
+          sermon: {
+            title: "Stirring Up Your Gift",
+            speakerName: "Pastor Test",
+            churchName: "Test Church",
+            sermonDate: new Date("2026-06-21T00:00:00.000Z"),
+          },
+        },
+      ]);
+
+      const response = await GET(new Request("http://localhost/api/ready-to-post/download?clipIds=clip-1"));
+      const zip = Buffer.from(await response.arrayBuffer());
+
+      expect(response.status).toBe(200);
+      expect(readEntryTextBySuffix(zip, "/captions/tiktok.txt")).toContain("Choose the next faithful step.");
+      expect(readEntryTextBySuffix(zip, "/captions/instagram.txt")).toContain(
+        "God has already placed something in your hand. Choose one faithful act this week.",
+      );
+      expect(readEntryTextBySuffix(zip, "/captions/instagram.txt")).toContain(
+        "What faithful step can you take today?",
+      );
+      expect(readEntryTextBySuffix(zip, "/captions/youtube-shorts.txt")).toContain(
+        "God has already placed something in your hand. Choose one faithful act this week.",
+      );
+      expect(readEntryTextBySuffix(zip, "/hashtags.txt")).toBe("#Faith #Discipleship");
+      expect(readEntryTextBySuffix(zip, "/captions/tiktok.txt")).not.toContain("Legacy clip caption");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

@@ -352,7 +352,7 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         platformCaption: postCopy.platformCaption,
         coverFrameSelected: Boolean(coverFrameSelection),
         coverFrameTimeSeconds: coverFrameSelection?.timeSeconds ?? null,
-        hashtags: clip.hashtags,
+        hashtags: postCopy.hashtags,
         score: clip.score,
         finalQualityScore: clip.finalQualityScore,
         qualityLabel: clip.qualityLabel,

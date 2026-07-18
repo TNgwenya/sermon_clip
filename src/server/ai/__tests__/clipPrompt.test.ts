@@ -38,6 +38,10 @@ describe("clip selection prompt", () => {
     expect(prompt).toContain("never add false urgency");
     expect(prompt).toContain("Do not repeat the same sentence across fields");
     expect(prompt).toContain('"ctaOptions"');
+    expect(prompt).toContain("Write captions directly to the viewer");
+    expect(prompt).toContain("four to eight focused optionalHashtags");
+    expect(prompt).toContain("Never return a transcript fragment");
+    expect(prompt).toContain("#fyp");
   });
 
   it("preserves local-language wording and forbids unverified translations", () => {

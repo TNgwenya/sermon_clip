@@ -33,9 +33,15 @@ describe("ready-to-post package", () => {
       "You are not alone in the storm.",
     );
     expect(variants.find((variant) => variant.platform === "Instagram")?.text).toContain(
+      "God is near when life feels loud.",
+    );
+    expect(variants.find((variant) => variant.platform === "Instagram")?.text).not.toContain(
       "For young adults.",
     );
     expect(variants.find((variant) => variant.platform === "Facebook")?.text).toContain(
+      "God is near when life feels loud.",
+    );
+    expect(variants.find((variant) => variant.platform === "Facebook")?.text).not.toContain(
       "Jesus Meets Us In The Storm",
     );
     expect(variants.find((variant) => variant.platform === "Facebook")?.text).not.toContain(

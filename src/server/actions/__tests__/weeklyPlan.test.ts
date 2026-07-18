@@ -35,4 +35,37 @@ describe("weekly plan scheduling safeguards", () => {
     expect(result).toHaveLength(10);
     expect(result.every((file) => file.mimeType === "image/png")).toBe(true);
   });
+
+  it("adapts saved clip copy when a weekly-plan platform changes", () => {
+    const clip = {
+      title: "Choose the Faithful Step",
+      hook: "Faith moves before certainty.",
+      caption: "Legacy caption",
+      hashtags: ["#Legacy"],
+      intendedAudience: "Church family",
+      captionData: {
+        captionPackage: {
+          primaryCaption: "God has already placed something in your hand. Choose one faithful act this week.",
+          shortCaption: "Choose the next faithful step.",
+          platformCaption: "What faithful step can you take today?",
+          optionalHashtags: ["#Faith", "#Discipleship"],
+        },
+      },
+    };
+
+    const instagram = __weeklyPlanActionTestUtils.resolveWeeklyClipPlatformCopy({
+      ...clip,
+      platform: "INSTAGRAM",
+    });
+    const youtube = __weeklyPlanActionTestUtils.resolveWeeklyClipPlatformCopy({
+      ...clip,
+      platform: "YOUTUBE_SHORTS",
+    });
+
+    expect(instagram.caption).toContain("God has already placed something in your hand.");
+    expect(instagram.caption).toContain("What faithful step can you take today?");
+    expect(youtube.title).toBe("Choose the Faithful Step");
+    expect(youtube.caption).toContain("#Faith #Discipleship");
+    expect(instagram.caption).not.toContain("Legacy caption");
+  });
 });

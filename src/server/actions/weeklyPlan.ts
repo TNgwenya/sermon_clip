@@ -15,6 +15,8 @@ import {
   WEEKLY_PLAN_OBJECTIVES,
 } from "@/lib/weeklyPlan";
 import { resolveReadyMedia } from "@/lib/readyMedia";
+import { extractCaptionPackage } from "@/lib/clipStudio";
+import { buildCanonicalPlatformPayloads } from "@/lib/publishingPayload";
 
 const platformSchema = z.enum(["TIKTOK", "INSTAGRAM", "YOUTUBE_SHORTS", "FACEBOOK"]);
 const planItemSchema = z.object({
@@ -127,6 +129,34 @@ function formatPostingSlot(date: Date, timezone: string): string {
   }).format(date);
 }
 
+function resolveWeeklyClipPlatformCopy(input: {
+  title: string;
+  hook: string;
+  caption: string;
+  hashtags: Prisma.JsonValue;
+  intendedAudience: string | null;
+  captionData: Prisma.JsonValue | null;
+  platform: PrismaPostingPlatform;
+}): { title: string; caption: string } {
+  const packageCopy = extractCaptionPackage(
+    input.captionData,
+    input.caption,
+    normalizeJsonStringArray(input.hashtags),
+  );
+  const platform = fromPrismaPostingPlatform(input.platform);
+  const payload = buildCanonicalPlatformPayloads({
+    title: input.title,
+    hook: input.hook,
+    caption: packageCopy.primaryCaption ?? input.caption,
+    shortCaption: packageCopy.shortCaption,
+    platformCaption: packageCopy.platformCaption,
+    hashtags: packageCopy.hashtags,
+    intendedAudience: input.intendedAudience,
+  })[platform];
+
+  return { title: payload.title, caption: payload.caption };
+}
+
 export async function bulkScheduleWeeklyPlanAction(
   input: BulkScheduleWeeklyPlanInput,
 ): Promise<BulkScheduleWeeklyPlanResult> {
@@ -197,6 +227,11 @@ export async function bulkScheduleWeeklyPlanAction(
       },
       select: {
         id: true,
+        title: true,
+        hook: true,
+        caption: true,
+        hashtags: true,
+        intendedAudience: true,
         exportFormat: true,
         exportStatus: true,
         exportFreshness: true,
@@ -299,6 +334,7 @@ export async function bulkScheduleWeeklyPlanAction(
   }
 
   const warnings = findRepeatedSermonPointWarnings(items);
+  const clipsById = new Map(clips.map((clip) => [clip.id, clip]));
   try {
     const createdPostIds = await prisma.$transaction(async (tx) => {
       const draft = await tx.postingDraft.create({
@@ -315,14 +351,18 @@ export async function bulkScheduleWeeklyPlanAction(
       const postIds: string[] = [];
       for (const item of items) {
         const scheduledFor = new Date(item.scheduledFor);
+        const clip = item.sourceKind === "CLIP" ? clipsById.get(item.sourceId) : null;
+        const platformCopy = clip
+          ? resolveWeeklyClipPlatformCopy({ ...clip, platform: item.platform })
+          : null;
         const post = await tx.scheduledPost.create({
           data: {
             postingDraftId: draft.id,
             clipIdsJson: item.sourceKind === "CLIP" ? [item.sourceId] : [],
             platform: item.platform as PrismaPostingPlatform,
             postingSlot: formatPostingSlot(scheduledFor, parsed.data.timezone),
-            title: item.title,
-            caption: item.caption,
+            title: platformCopy?.title ?? item.title,
+            caption: platformCopy?.caption ?? item.caption,
             note: [
               `Weekly plan objective: ${parsed.data.objective.toLowerCase()}.`,
               `Sermon point: ${item.pointKey}.`,
@@ -458,4 +498,5 @@ export const __weeklyPlanActionTestUtils = {
   buildWeeklyPlanIdempotencyKey,
   formatPostingSlot,
   selectPlatformPreflightFiles,
+  resolveWeeklyClipPlatformCopy,
 };

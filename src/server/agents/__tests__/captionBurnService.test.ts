@@ -1,6 +1,29 @@
 import { describe, expect, it } from "vitest";
 
 import { __captionBurnTestUtils } from "../captionBurnService";
+import { getSharp } from "../sharpClient";
+
+function extractFirstSvgTextElement(svg: string): { openingTag: string; element: string } {
+  const element = svg.match(/<text\b[^>]*>[\s\S]*?<\/text>/)?.[0];
+  const openingTag = element?.match(/^<text\b[^>]*>/)?.[0];
+
+  if (!element || !openingTag) {
+    throw new Error("Caption SVG did not contain a text element.");
+  }
+
+  return { openingTag, element };
+}
+
+async function rasterizedSvgTextWidth(element: string): Promise<number> {
+  const sharp = await getSharp();
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="240" viewBox="0 0 960 240">${element}</svg>`;
+  const { info } = await sharp(Buffer.from(svg))
+    .png()
+    .trim()
+    .toBuffer({ resolveWithObject: true });
+
+  return info.width;
+}
 
 describe("caption burn service validation", () => {
   it("allows eligible caption burn", () => {
@@ -277,6 +300,99 @@ describe("caption burn service validation", () => {
 
     expect(svg).toContain("#0F766E");
     expect(svg).toContain("LIKE");
+  });
+
+  it("preserves visible spacing between separately highlighted words", async () => {
+    const svg = __captionBurnTestUtils.buildCaptionOverlaySvg({
+      index: 1,
+      startSeconds: 0,
+      endSeconds: 2,
+      text: "AND SO LIKE",
+      activeWordIndex: 2,
+    });
+    const { element, openingTag } = extractFirstSvgTextElement(svg);
+    const renderedWidth = await rasterizedSvgTextWidth(element);
+    const referenceWidth = await rasterizedSvgTextWidth(`${openingTag}AND SO LIKE</text>`);
+
+    // Ordinary leading spaces inside separate SVG tspans are collapsible. The
+    // highlighted rendering must retain essentially the same phrase width as
+    // one normal text run so words cannot appear jammed together in the video.
+    expect(renderedWidth).toBeGreaterThanOrEqual(referenceWidth * 0.97);
+  });
+
+  it("splits oversized cues into readable windows without losing any spoken words", () => {
+    const originalText = [
+      "Grace", "meets", "us", "in", "the", "middle", "of", "our", "fear", "and",
+      "reminds", "us", "that", "God", "is", "still", "present", "still", "working", "and",
+      "still", "calling", "us", "forward", "with", "faith", "hope", "and", "courage",
+    ].join(" ");
+    const splitCues = __captionBurnTestUtils.splitCaptionCueOverlaysForLayout(
+      [{ index: 1, startSeconds: 2, endSeconds: 16, text: originalText }],
+      {
+        fontScale: "large",
+        maxLines: 2,
+        uppercase: false,
+        verticalOffset: 0,
+      },
+    );
+
+    expect(splitCues.length).toBeGreaterThan(1);
+    expect(splitCues.map((cue) => cue.text).join(" ")).toBe(originalText);
+    expect(splitCues[0]?.startSeconds).toBe(2);
+    expect(splitCues.at(-1)?.endSeconds).toBe(16);
+    expect(splitCues.every((cue, index) => (
+      cue.endSeconds > cue.startSeconds
+      && (index === 0 || Math.abs(cue.startSeconds - splitCues[index - 1].endSeconds) < 0.002)
+    ))).toBe(true);
+  });
+
+  it("raises lower captions when the saved safe area requires extra platform clearance", () => {
+    const appearance = {
+      fontScale: "regular" as const,
+      maxLines: 3 as const,
+      uppercase: false,
+      verticalOffset: 0,
+    };
+    const marginFromExpression = (value: string) => Number(value.match(/H-h-(\d+)/)?.[1] ?? Number.NaN);
+    const minimalMargin = marginFromExpression(
+      __captionBurnTestUtils.captionOverlayYExpression("lower", appearance, "LOWER_MINIMAL"),
+    );
+    const standardMargin = marginFromExpression(
+      __captionBurnTestUtils.captionOverlayYExpression("lower", appearance, "STANDARD"),
+    );
+    const raisedMargin = marginFromExpression(
+      __captionBurnTestUtils.captionOverlayYExpression("lower", appearance, "RAISED"),
+    );
+
+    expect(Number.isFinite(minimalMargin)).toBe(true);
+    expect(minimalMargin).toBeLessThan(standardMargin);
+    expect(raisedMargin).toBeGreaterThan(standardMargin);
+  });
+
+  it("gives multiline caption SVGs enough line height and card height", () => {
+    const svg = __captionBurnTestUtils.buildCaptionOverlaySvg(
+      {
+        index: 1,
+        startSeconds: 0,
+        endSeconds: 4,
+        text: "Grace meets us here and reminds every weary heart that God is still present today",
+      },
+      {
+        fontScale: "regular",
+        maxLines: 4,
+        uppercase: false,
+        verticalOffset: 0,
+      },
+    );
+    const svgHeight = Number(svg.match(/<svg[^>]*\bheight="(\d+)"/)?.[1] ?? Number.NaN);
+    const textElements = svg.match(/<text\b[^>]*>/g) ?? [];
+    const yPositions = textElements.map((element) => Number(element.match(/\by="(\d+)"/)?.[1] ?? Number.NaN));
+    const fontSize = Number(textElements[0]?.match(/\bfont-size="(\d+)"/)?.[1] ?? Number.NaN);
+
+    expect(yPositions.length).toBeGreaterThan(1);
+    expect(yPositions.every(Number.isFinite)).toBe(true);
+    expect(yPositions.slice(1).every((value, index) => value - yPositions[index] >= fontSize * 1.18)).toBe(true);
+    expect(svgHeight - ((yPositions.at(-1) ?? 0) + fontSize)).toBeGreaterThanOrEqual(20);
   });
 
   it("renders each saved preset through the active-word burn path", () => {
