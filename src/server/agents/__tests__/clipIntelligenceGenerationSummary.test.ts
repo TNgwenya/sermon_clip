@@ -39,7 +39,6 @@ describe("clip intelligence generation summary", () => {
     expect(__clipIntelligenceTestUtils.shouldCompleteClipGenerationJob()).toBe(true);
     expect(__clipIntelligenceTestUtils.shouldCompleteClipGenerationJob({
       processingJobId: "worker-job",
-      deferJobSuccess: true,
     })).toBe(false);
   });
 

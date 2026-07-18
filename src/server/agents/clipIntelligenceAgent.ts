@@ -1,10 +1,12 @@
 import type { Prisma, ProcessingJob } from "@prisma/client";
 import { ZodError } from "zod";
 
+import { buildClipGenerationPreviewCheckpoint } from "@/lib/clipGenerationRetry";
 import { prisma } from "@/lib/prisma";
 import {
   appendJobLog,
   createProcessingJob,
+  markJobAwaitingClipPreviewPreparation,
   markJobFailed,
   markJobRunning,
   markJobSucceeded,
@@ -96,7 +98,6 @@ type GenerateClipOptions = {
   responseOverride?: string;
   repairResponseOverride?: string;
   processingJobId?: string;
-  deferJobSuccess?: boolean;
 };
 
 type SermonContext = {
@@ -2784,7 +2785,7 @@ function normalizeCandidate<T extends ClipJsonCandidate>(candidate: T): T {
 }
 
 function shouldCompleteClipGenerationJob(options?: GenerateClipOptions): boolean {
-  return options?.deferJobSuccess !== true;
+  return !options?.processingJobId;
 }
 
 async function resolveClipGenerationJob(sermonId: string, processingJobId?: string): Promise<ProcessingJob> {
@@ -2968,7 +2969,11 @@ export async function generateClipSuggestions(
       if (shouldCompleteClipGenerationJob(options)) {
         await markJobSucceeded(job.id, reuseMessage);
       } else {
-        await appendJobLog(job.id, `${reuseMessage} Job completion deferred until preview preparation finishes.`);
+        await markJobAwaitingClipPreviewPreparation(
+          job.id,
+          job.generationSummary,
+          `${reuseMessage} Job completion deferred until preview preparation finishes.`,
+        );
       }
       await appendPipelineLog(
         sermon.id,
@@ -3420,6 +3425,26 @@ export async function generateClipSuggestions(
           };
         }),
       });
+
+      if (options?.processingJobId) {
+        const checkpointed = await tx.processingJob.updateMany({
+          where: {
+            id: job.id,
+            type: "GENERATE_CLIPS",
+            status: "RUNNING",
+          },
+          data: {
+            generationSummary: buildClipGenerationPreviewCheckpoint(
+              job.generationSummary,
+            ) as Prisma.InputJsonObject,
+          },
+        });
+        if (checkpointed.count !== 1) {
+          throw new Error(
+            `Clip-generation job ${job.id} lost its running lease before clip persistence completed.`,
+          );
+        }
+      }
     });
 
     const savedClips = await prisma.clipCandidate.findMany({
@@ -3485,7 +3510,11 @@ export async function generateClipSuggestions(
     if (shouldCompleteClipGenerationJob(options)) {
       await markJobSucceeded(job.id, successMessage);
     } else {
-      await appendJobLog(job.id, `${successMessage} Job completion deferred until preview preparation finishes.`);
+      await markJobAwaitingClipPreviewPreparation(
+        job.id,
+        job.generationSummary,
+        `${successMessage} Job completion deferred until preview preparation finishes.`,
+      );
     }
     await appendPipelineLog(sermon.id, `Clip suggestions generated successfully (${dedupedWithBoundaryFields.length} saved).`);
 

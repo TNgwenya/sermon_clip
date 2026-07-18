@@ -1,5 +1,9 @@
 import type { Prisma, ProcessingJob, ProcessingJobType, SermonStatus } from "@prisma/client";
 
+import {
+  buildClipGenerationPreviewCheckpoint,
+  clipGenerationIntentsMatch,
+} from "@/lib/clipGenerationRetry";
 import { prisma } from "@/lib/prisma";
 import { appendPipelineLog } from "@/server/agents/storage";
 import { updateSermonStatus } from "@/server/status/sermonStatus";
@@ -56,6 +60,12 @@ export class ActiveProcessingJobError extends Error {
 
 export type ProcessingJobExecution = "INLINE" | "QUEUED";
 
+export type QueuedProcessingJobResult = {
+  id: string;
+  reusedExisting: boolean;
+  intentConflict: boolean;
+};
+
 export async function createProcessingJob(
   sermonId: string,
   type: ProcessingJobType,
@@ -106,6 +116,92 @@ export async function createProcessingJob(
 
     throw error;
   }
+}
+
+function queuedJobResult(input: {
+  id: string;
+  type: ProcessingJobType;
+  existingGenerationSummary: unknown;
+  requestedGenerationSummary: unknown;
+}): QueuedProcessingJobResult {
+  return {
+    id: input.id,
+    reusedExisting: true,
+    intentConflict: input.type === "GENERATE_CLIPS"
+      && !clipGenerationIntentsMatch(
+        input.existingGenerationSummary,
+        input.requestedGenerationSummary,
+      ),
+  };
+}
+
+export async function queueSermonProcessingJob(
+  sermonId: string,
+  type: ProcessingJobType,
+  generationSummary?: Prisma.InputJsonValue,
+): Promise<QueuedProcessingJobResult> {
+  // One retry closes the narrow race where the unique-index winner completes
+  // between our failed insert and the active-row re-read.
+  for (let createAttempt = 0; createAttempt < 2; createAttempt += 1) {
+    const existing = await prisma.processingJob.findFirst({
+      where: {
+        sermonId,
+        type,
+        status: { in: ["PENDING", "RUNNING"] },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, generationSummary: true },
+    });
+
+    if (existing) {
+      return queuedJobResult({
+        id: existing.id,
+        type,
+        existingGenerationSummary: existing.generationSummary,
+        requestedGenerationSummary: generationSummary,
+      });
+    }
+
+    try {
+      const job = await createProcessingJob(sermonId, type, {
+        execution: "QUEUED",
+        generationSummary,
+      });
+      return { id: job.id, reusedExisting: false, intentConflict: false };
+    } catch (error) {
+      if (error instanceof ActiveProcessingJobError) {
+        const racedJob = await prisma.processingJob.findFirst({
+          where: {
+            id: error.existingJobId,
+            sermonId,
+            type,
+            status: { in: ["PENDING", "RUNNING"] },
+          },
+          select: { id: true, generationSummary: true },
+        });
+        if (racedJob) {
+          return queuedJobResult({
+            id: racedJob.id,
+            type,
+            existingGenerationSummary: racedJob.generationSummary,
+            requestedGenerationSummary: generationSummary,
+          });
+        }
+
+        if (createAttempt === 0) {
+          continue;
+        }
+      } else if (errorCode(error) === "P2002" && createAttempt === 0) {
+        // createProcessingJob could not find the winner because it completed
+        // immediately after enforcing the partial unique index. Retry once.
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error(`Unable to queue ${type} for sermon ${sermonId} after a concurrent job completed.`);
 }
 
 export async function resolveProcessingJob(
@@ -269,6 +365,34 @@ export async function appendJobLog(jobId: string, message: string): Promise<void
       throw error;
     }
     console.warn(`Processing job log append skipped for ${jobId}: ${message}`, serializeProcessingError(error));
+  }
+}
+
+export async function markJobAwaitingClipPreviewPreparation(
+  jobId: string,
+  currentGenerationSummary: unknown,
+  logs?: string,
+): Promise<void> {
+  const checkpoint = buildClipGenerationPreviewCheckpoint(currentGenerationSummary);
+  const updated = await retryProcessingJobDbWrite(() => prisma.processingJob.updateMany({
+    where: {
+      id: jobId,
+      type: "GENERATE_CLIPS",
+      status: "RUNNING",
+    },
+    data: {
+      generationSummary: checkpoint as Prisma.InputJsonObject,
+    },
+  }));
+
+  if (updated.count !== 1) {
+    throw new Error(
+      `Clip-generation job ${jobId} was no longer running while checkpointing preview preparation.`,
+    );
+  }
+
+  if (logs) {
+    await appendJobLog(jobId, logs);
   }
 }
 

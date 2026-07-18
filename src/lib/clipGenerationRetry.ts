@@ -32,7 +32,11 @@ function failedAtPreviewPreparation(
   generationSummary: unknown,
 ): boolean {
   const normalizedMessage = errorMessage?.trim().toLowerCase() ?? "";
-  if (normalizedMessage.includes("preview prep") || normalizedMessage.includes("preview preparation")) {
+  if (
+    normalizedMessage.includes("preview prep")
+    || normalizedMessage.includes("preview preparation")
+    || normalizedMessage.includes("preview issues")
+  ) {
     return true;
   }
 
@@ -46,12 +50,14 @@ export function resolveClipGenerationRetryMode(input: {
   failedJobErrorMessage?: string | null;
   failedJobGenerationSummary?: unknown;
 }): ClipGenerationRetryMode {
+  const summary = asSummary(input.failedJobGenerationSummary);
   const previewOnlyFailure = failedAtPreviewPreparation(
     input.failedJobErrorMessage,
     input.failedJobGenerationSummary,
   );
+  const generationAlreadyCompleted = summary?.["mode"] === CLIP_GENERATION_PREVIEW_REPAIR_MODE;
 
-  return input.existingActiveSuggestionCount > 0 && previewOnlyFailure
+  return input.existingActiveSuggestionCount > 0 && (previewOnlyFailure || generationAlreadyCompleted)
     ? CLIP_GENERATION_PREVIEW_REPAIR_MODE
     : CLIP_GENERATION_RETRY_MODE;
 }
@@ -109,10 +115,10 @@ export function isClipGenerationForcedRetrySummary(value: unknown): boolean {
 export function resolveClipGenerationIntent(value: unknown): ClipGenerationIntent {
   const summary = asSummary(value);
   if (summary?.["mode"] === "redo") return "redo";
-  if (summary?.["append"] === true) return "append";
   if (summary?.["mode"] === CLIP_GENERATION_PREVIEW_REPAIR_MODE) {
     return CLIP_GENERATION_PREVIEW_REPAIR_MODE;
   }
+  if (summary?.["append"] === true) return "append";
   if (summary?.["mode"] === CLIP_GENERATION_RETRY_MODE) {
     return CLIP_GENERATION_RETRY_MODE;
   }
@@ -121,4 +127,16 @@ export function resolveClipGenerationIntent(value: unknown): ClipGenerationInten
 
 export function clipGenerationIntentsMatch(existing: unknown, requested: unknown): boolean {
   return resolveClipGenerationIntent(existing) === resolveClipGenerationIntent(requested);
+}
+
+export function buildClipGenerationPreviewCheckpoint(value: unknown): Record<string, unknown> {
+  const summary = asSummary(value) ?? {};
+  const metadata = Object.fromEntries(
+    Object.entries(summary).filter(([key]) => !["append", "failure", "mode"].includes(key)),
+  );
+
+  return {
+    ...metadata,
+    mode: CLIP_GENERATION_PREVIEW_REPAIR_MODE,
+  };
 }

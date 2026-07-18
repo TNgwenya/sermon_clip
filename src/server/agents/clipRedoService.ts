@@ -202,7 +202,6 @@ export async function redoClipGenerationFromTranscript(
     const generationResult = await generateClipSuggestions(sermonId, {
       force: true,
       processingJobId: options?.currentJobId,
-      deferJobSuccess: Boolean(options?.currentJobId),
     });
     const previewSummary = await prepareGeneratedClipReviewAssets({ sermonId, force: true });
 

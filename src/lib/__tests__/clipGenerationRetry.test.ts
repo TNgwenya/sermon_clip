@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildClipGenerationPreviewCheckpoint,
   buildClipGenerationRetryPlan,
   clipGenerationIntentsMatch,
   CLIP_GENERATION_PREVIEW_REPAIR_MODE,
   CLIP_GENERATION_RETRY_MODE,
   isClipGenerationForcedRetrySummary,
   isClipGenerationPreviewRepairSummary,
+  resolveClipGenerationIntent,
   resolveClipGenerationRetryMode,
 } from "@/lib/clipGenerationRetry";
 
@@ -84,11 +86,19 @@ describe("clip generation retry planning", () => {
   });
 
   it("repairs preview-only append and redo failures without another AI generation", () => {
-    for (const failedJobGenerationSummary of [{ append: true }, { mode: "redo" }]) {
+    for (const input of [
+      {
+        failedJobErrorMessage: "Preview prep: 4 prepared, 0 skipped, 1 failed.",
+        failedJobGenerationSummary: { append: true },
+      },
+      {
+        failedJobErrorMessage: "Redo completed with preview issues. Generated 5 clips, but 1 preview needs attention.",
+        failedJobGenerationSummary: { mode: "redo" },
+      },
+    ]) {
       expect(buildClipGenerationRetryPlan({
         existingActiveSuggestionCount: 5,
-        failedJobErrorMessage: "Preview prep: 4 prepared, 0 skipped, 1 failed.",
-        failedJobGenerationSummary,
+        ...input,
       })).toEqual({
         retryMode: CLIP_GENERATION_PREVIEW_REPAIR_MODE,
         generationSummary: {
@@ -97,6 +107,31 @@ describe("clip generation retry planning", () => {
         },
       });
     }
+  });
+
+  it("keeps a checkpointed generation in preview-repair mode after a worker interruption", () => {
+    const checkpoint = buildClipGenerationPreviewCheckpoint({
+      mode: "redo",
+      append: true,
+      existingActiveSuggestionCount: 5,
+      failure: { stage: "old_failure" },
+      requestSource: "pastor_review",
+    });
+
+    expect(checkpoint).toEqual({
+      mode: CLIP_GENERATION_PREVIEW_REPAIR_MODE,
+      existingActiveSuggestionCount: 5,
+      requestSource: "pastor_review",
+    });
+    expect(resolveClipGenerationIntent({
+      ...checkpoint,
+      append: true,
+    })).toBe(CLIP_GENERATION_PREVIEW_REPAIR_MODE);
+    expect(buildClipGenerationRetryPlan({
+      existingActiveSuggestionCount: 5,
+      failedJobErrorMessage: "Worker lease expired.",
+      failedJobGenerationSummary: checkpoint,
+    }).retryMode).toBe(CLIP_GENERATION_PREVIEW_REPAIR_MODE);
   });
 
   it("matches only compatible active queue intents", () => {

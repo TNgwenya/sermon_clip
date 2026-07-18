@@ -31,12 +31,12 @@ import {
   unregisterSermonStorageFolder,
 } from "@/server/agents/storage";
 import {
-  ActiveProcessingJobError,
   appendJobLog,
   createProcessingJob,
   markJobFailed,
   markJobRunning,
   markJobSucceeded,
+  queueSermonProcessingJob,
 } from "@/server/agents/processing";
 import type { ClipQualityRefreshSummary } from "@/server/agents/clipQualityRefreshService";
 import type { ClipSuggestionCurationSummary } from "@/server/agents/clipSuggestionCurationService";
@@ -89,10 +89,7 @@ import {
   buildPrepareClipPlan,
 } from "@/lib/prepareWorkflow";
 import { getQueuedMediaAssetsForRemoteBatchAction } from "@/lib/clipReview";
-import {
-  buildClipGenerationRetryPlan,
-  clipGenerationIntentsMatch,
-} from "@/lib/clipGenerationRetry";
+import { buildClipGenerationRetryPlan } from "@/lib/clipGenerationRetry";
 import { isStaleActiveProcessingJob } from "@/lib/pastorWorkflow";
 import { prunePostingPackageHistoryByClipIds } from "@/lib/postingPackages";
 import {
@@ -310,53 +307,6 @@ function burnCaptionsIntoRenderedClip(
 function assertLocalMediaProcessing(action: string): void {
   if (!canRunLocalMediaProcessing()) {
     throw new Error(localMediaProcessingUnavailableMessage(action));
-  }
-}
-
-async function queueSermonProcessingJob(
-  sermonId: string,
-  type: ProcessingJobType,
-  generationSummary?: Prisma.InputJsonValue,
-): Promise<{ id: string; reusedExisting: boolean; intentConflict: boolean }> {
-  const existing = await prisma.processingJob.findFirst({
-    where: {
-      sermonId,
-      type,
-      status: { in: ["PENDING", "RUNNING"] },
-    },
-    orderBy: { createdAt: "desc" },
-    select: { id: true, generationSummary: true },
-  });
-
-  if (existing) {
-    return {
-      id: existing.id,
-      reusedExisting: true,
-      intentConflict: type === "GENERATE_CLIPS"
-        && !clipGenerationIntentsMatch(existing.generationSummary, generationSummary),
-    };
-  }
-
-  try {
-    const job = await createProcessingJob(sermonId, type, {
-      execution: "QUEUED",
-      generationSummary,
-    });
-    return { id: job.id, reusedExisting: false, intentConflict: false };
-  } catch (error) {
-    if (error instanceof ActiveProcessingJobError) {
-      const racedJob = await prisma.processingJob.findUnique({
-        where: { id: error.existingJobId },
-        select: { generationSummary: true },
-      });
-      return {
-        id: error.existingJobId,
-        reusedExisting: true,
-        intentConflict: type === "GENERATE_CLIPS"
-          && (!racedJob || !clipGenerationIntentsMatch(racedJob.generationSummary, generationSummary)),
-      };
-    }
-    throw error;
   }
 }
 

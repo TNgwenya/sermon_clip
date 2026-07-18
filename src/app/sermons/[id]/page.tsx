@@ -18,6 +18,7 @@ import { RepairFailedClipOperationsButton } from "@/app/sermons/[id]/repair-fail
 import { SermonLiveRefresh } from "@/app/sermons/[id]/sermon-live-refresh";
 import { SermonDetailPreviewCard } from "@/app/sermons/[id]/sermon-detail-preview-card";
 import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
+import { summarizeSermonClipAttention } from "@/lib/sermonClipAttention";
 import { getAudioPath, getLogPath, getSourceVideoPath } from "@/server/agents/storage";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import {
@@ -969,61 +970,7 @@ export default async function SermonDetailPage({
     { total: 0, approved: 0, suggested: 0, rejected: 0, exported: 0 },
   );
 
-  const operationSummary = orderedClipCandidates.reduce(
-    (acc, clip) => {
-      if (clip.status === "REJECTED") {
-        return acc;
-      }
-
-      if (clip.renderStatus === "RENDERING") {
-        acc.running += 1;
-      }
-      if (clip.exportStatus === "EXPORTING") {
-        acc.running += 1;
-      }
-      if (clip.captionStatus === "GENERATING") {
-        acc.running += 1;
-      }
-      if (clip.captionBurnStatus === "BURNING") {
-        acc.running += 1;
-      }
-      if (clip.overlayStatus === "RENDERING") {
-        acc.running += 1;
-      }
-
-      if (clip.renderStatus === "FAILED") {
-        acc.failed += 1;
-      }
-      if (clip.exportStatus === "FAILED") {
-        acc.failed += 1;
-      }
-      if (clip.captionStatus === "FAILED") {
-        acc.failed += 1;
-      }
-      if (clip.captionBurnStatus === "FAILED") {
-        acc.failed += 1;
-      }
-      if (clip.overlayStatus === "FAILED") {
-        acc.failed += 1;
-      }
-
-      const freshnessValues = [
-        clip.renderFreshness,
-        clip.captionFreshness,
-        clip.captionBurnFreshness,
-        clip.overlayFreshness,
-        clip.exportFreshness,
-      ];
-      for (const freshness of freshnessValues) {
-        if (freshness === "OUTDATED" || freshness === "NEEDS_REGENERATION") {
-          acc.outdated += 1;
-        }
-      }
-
-      return acc;
-    },
-    { running: 0, failed: 0, outdated: 0 },
-  );
+  const operationSummary = summarizeSermonClipAttention(orderedClipCandidates);
 
   const hasSourceVideo = Boolean(sermon.sourceVideoPath) || await doesFileExist(getSourceVideoPath(sermon.id));
   const pipelineLogTail = await readPipelineLogTail(sermon.id);
@@ -1042,7 +989,7 @@ export default async function SermonDetailPage({
     (latest, clip) => !latest || clip.createdAt > latest ? clip.createdAt : latest,
     null,
   );
-  const hasOutdatedAssets = operationSummary.outdated > 0;
+  const hasOutdatedAssets = operationSummary.clipsNeedingRefresh > 0;
   const unresolvedFailedJobs = selectUnresolvedPastorFailedJobs(processingJobs);
   const latestFailedJob = unresolvedFailedJobs[0] ?? null;
   const transcriptFailureDiagnostics = summarizeTranscriptFailureDiagnostics(sermon.transcriptSegments);
@@ -1311,7 +1258,7 @@ export default async function SermonDetailPage({
       previewClips.map(async (clip) => (await hasClipPreviewMedia(clip) ? clip.id : null)),
     )).filter((clipId): clipId is string => Boolean(clipId)),
   );
-  const refreshItemCount = failedRecoveryCount + operationSummary.outdated;
+  const refreshItemCount = failedRecoveryCount + operationSummary.clipsNeedingRefresh;
   const displayTitle = sermon.intelligence?.manualTitle?.trim()
     || sermon.intelligence?.generatedTitle?.trim()
     || sermon.title;
@@ -1454,7 +1401,7 @@ export default async function SermonDetailPage({
                   ? "Your sermon and completed work are safe."
                   : failedRecoveryCount > 0
                     ? `${failedRecoveryCount} background ${failedRecoveryCount === 1 ? "item needs" : "items need"} attention`
-                  : `${operationSummary.outdated} ${operationSummary.outdated === 1 ? "asset" : "assets"} need refresh`}
+                  : `${operationSummary.clipsNeedingRefresh} ${operationSummary.clipsNeedingRefresh === 1 ? "clip needs" : "clips need"} refresh`}
               </strong>
               <span>
                 {workspaceAction === "recover"
@@ -1820,7 +1767,7 @@ export default async function SermonDetailPage({
             <div className="troubleshoot-metric-row">
               <span>Running clip operations: <strong>{operationSummary.running}</strong></span>
               <span>Failed clip operations: <strong>{operationSummary.failed}</strong></span>
-              <span>Clips needing refresh: <strong>{operationSummary.outdated}</strong></span>
+              <span>Clips needing refresh: <strong>{operationSummary.clipsNeedingRefresh}</strong></span>
             </div>
             {operationSummary.failed > 0 ? (
               <div className="error-banner stack-sm">

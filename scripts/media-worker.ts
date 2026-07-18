@@ -288,6 +288,16 @@ function shouldRedoGeneratedClips(job: ProcessingJob): boolean {
   return generationSummary(job)?.mode === "redo";
 }
 
+async function restoreCompletedClipGenerationStatus(sermonId: string): Promise<void> {
+  await prisma.sermon.updateMany({
+    where: {
+      id: sermonId,
+      status: { in: ["GENERATING_CLIPS", "FAILED"] },
+    },
+    data: { status: "CLIPS_GENERATED" },
+  });
+}
+
 function stageIndex(status: string): number {
   return SERMON_STAGE_ORDER.findIndex((stage) => stage === status);
 }
@@ -362,11 +372,13 @@ async function runJob(job: ProcessingJob): Promise<string> {
       if (shouldRedoGeneratedClips(job)) {
         const { redoClipGenerationFromTranscript } = await import("../src/server/agents/clipRedoService");
         const result = await redoClipGenerationFromTranscript(sermonId, { currentJobId: job.id });
-        return summarizeRedoClipGeneration(result);
+        const summary = summarizeRedoClipGeneration(result);
+        await restoreCompletedClipGenerationStatus(sermonId);
+        return summary;
       }
 
       const append = shouldAppendGeneratedClips(job);
-      return runClipGenerationWorkerJob({
+      const summary = await runClipGenerationWorkerJob({
         previewRepairOnly: isClipGenerationPreviewRepairSummary(job.generationSummary),
         forceGeneration: isClipGenerationForcedRetrySummary(job.generationSummary),
         append,
@@ -377,7 +389,6 @@ async function runJob(job: ProcessingJob): Promise<string> {
             force,
             append: appendSuggestions,
             processingJobId: job.id,
-            deferJobSuccess: true,
           });
         },
         preparePreviews: async () => {
@@ -385,6 +396,8 @@ async function runJob(job: ProcessingJob): Promise<string> {
           return prepareGeneratedClipReviewAssets({ sermonId, force: false });
         },
       });
+      await restoreCompletedClipGenerationStatus(sermonId);
+      return summary;
     }
     case "EXPORT_CLIPS": {
       const { renderApprovedClipsForSermon } = await import("../src/server/agents/clipRenderService");
