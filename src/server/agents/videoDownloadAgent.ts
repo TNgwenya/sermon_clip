@@ -76,12 +76,14 @@ function resolveConcurrentFragments(value: string | null | undefined): string {
 
 function buildDownloaderArgs(): string[] {
   const downloader = process.env.YT_DLP_EXTERNAL_DOWNLOADER?.trim();
+  const cookieFile = process.env.YOUTUBE_COOKIE_FILE_PATH?.trim();
   if (!downloader) {
-    return [];
+    return cookieFile ? ["--cookies", cookieFile] : [];
   }
 
   const args = process.env.YT_DLP_EXTERNAL_DOWNLOADER_ARGS?.trim();
   return [
+    ...(cookieFile ? ["--cookies", cookieFile] : []),
     "--downloader",
     downloader,
     ...(args ? ["--downloader-args", args] : []),

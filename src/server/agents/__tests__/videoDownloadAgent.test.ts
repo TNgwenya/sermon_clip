@@ -107,6 +107,24 @@ describe("videoDownloadAgent helpers", () => {
     }
   });
 
+  it("uses the configured YouTube cookie file when present", () => {
+    const originalCookieFile = process.env.YOUTUBE_COOKIE_FILE_PATH;
+    try {
+      process.env.YOUTUBE_COOKIE_FILE_PATH = "/private/youtube-cookies.txt";
+
+      const args = __videoDownloadTestUtils.buildBaseDownloadArgs("https://youtu.be/abc123", "/tmp/source.mp4");
+
+      expect(args).toContain("--cookies");
+      expect(args).toContain("/private/youtube-cookies.txt");
+    } finally {
+      if (originalCookieFile === undefined) {
+        delete process.env.YOUTUBE_COOKIE_FILE_PATH;
+      } else {
+        process.env.YOUTUBE_COOKIE_FILE_PATH = originalCookieFile;
+      }
+    }
+  });
+
   it("uses a distinct partial path for download attempts", () => {
     const finalPath = "/tmp/sermons/source/source.mp4";
     const partialPath = __videoDownloadTestUtils.getTempDownloadPath(finalPath);
