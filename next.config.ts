@@ -5,6 +5,12 @@ import { fileURLToPath } from "node:url";
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
+  // EC2's free-tier instance cannot reliably repeat the full TypeScript check
+  // during a production build. The deployment command enables this only after
+  // the same check has passed locally/CI.
+  typescript: {
+    ignoreBuildErrors: process.env.SKIP_DEPLOY_TYPECHECK === "true",
+  },
   turbopack: {
     root: projectRoot,
   },
