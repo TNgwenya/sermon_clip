@@ -11,13 +11,17 @@ import {
 } from "./worker-log.ts";
 import {
   runCaptionBurnBatch,
+  runClipGenerationWorkerJob,
   runOverlayAndExportBatch,
   summarizeCaptionBatch,
-  summarizePreviewPreparation,
   summarizeQualityRefreshBatch,
   summarizeRedoClipGeneration,
   summarizeRenderBatch,
 } from "./media-worker-jobs.ts";
+import {
+  isClipGenerationForcedRetrySummary,
+  isClipGenerationPreviewRepairSummary,
+} from "../src/lib/clipGenerationRetry.ts";
 
 process.env.WORKER_ENABLED ||= "true";
 const { loadEnvConfig } = nextEnv;
@@ -361,19 +365,25 @@ async function runJob(job: ProcessingJob): Promise<string> {
         return summarizeRedoClipGeneration(result);
       }
 
-      const { generateClipSuggestions } = await import("../src/server/agents/clipIntelligenceAgent");
-      const { prepareGeneratedClipReviewAssets } = await import("../src/server/agents/clipReviewAssetService");
       const append = shouldAppendGeneratedClips(job);
-      const result = await generateClipSuggestions(sermonId, {
-        force: false,
+      return runClipGenerationWorkerJob({
+        previewRepairOnly: isClipGenerationPreviewRepairSummary(job.generationSummary),
+        forceGeneration: isClipGenerationForcedRetrySummary(job.generationSummary),
         append,
-        processingJobId: job.id,
+      }, {
+        generateSuggestions: async ({ force, append: appendSuggestions }) => {
+          const { generateClipSuggestions } = await import("../src/server/agents/clipIntelligenceAgent");
+          return generateClipSuggestions(sermonId, {
+            force,
+            append: appendSuggestions,
+            processingJobId: job.id,
+          });
+        },
+        preparePreviews: async () => {
+          const { prepareGeneratedClipReviewAssets } = await import("../src/server/agents/clipReviewAssetService");
+          return prepareGeneratedClipReviewAssets({ sermonId, force: false });
+        },
       });
-      const previewResult = await prepareGeneratedClipReviewAssets({ sermonId, force: false });
-      const previewSummary = summarizePreviewPreparation(previewResult);
-      return result.reusedExistingSuggestions
-        ? `Existing clip suggestions reused. ${previewSummary}`
-        : `Generated ${result.clipCount} ${append ? "new " : ""}clip suggestion(s). ${previewSummary}`;
     }
     case "EXPORT_CLIPS": {
       const { renderApprovedClipsForSermon } = await import("../src/server/agents/clipRenderService");

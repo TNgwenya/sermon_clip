@@ -59,7 +59,10 @@ export type ProcessingJobExecution = "INLINE" | "QUEUED";
 export async function createProcessingJob(
   sermonId: string,
   type: ProcessingJobType,
-  options: { execution?: ProcessingJobExecution } = {},
+  options: {
+    execution?: ProcessingJobExecution;
+    generationSummary?: Prisma.InputJsonValue;
+  } = {},
 ): Promise<ProcessingJob> {
   const queued = options.execution === "QUEUED";
   const now = new Date();
@@ -69,6 +72,9 @@ export async function createProcessingJob(
         sermonId,
         type,
         status: queued ? "PENDING" : "RUNNING",
+        ...(options.generationSummary === undefined
+          ? {}
+          : { generationSummary: options.generationSummary }),
         ...(queued
           ? {}
           : {

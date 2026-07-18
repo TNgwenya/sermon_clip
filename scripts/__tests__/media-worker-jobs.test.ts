@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   runCaptionBurnBatch,
+  runClipGenerationWorkerJob,
   runOverlayAndExportBatch,
   summarizeCaptionBatch,
   summarizePreviewPreparation,
@@ -86,6 +87,53 @@ describe("media worker clip-generation outcomes", () => {
       success: false,
       message: "Redo generated 3 clips, but 1 preview needs attention.",
     })).toThrow("Redo generated 3 clips, but 1 preview needs attention.");
+  });
+
+  it("repairs failed previews without calling clip-generation AI again", async () => {
+    const generateSuggestions = vi.fn(async () => ({
+      clipCount: 5,
+      reusedExistingSuggestions: false,
+    }));
+    const preparePreviews = vi.fn(async () => ({
+      prepared: 5,
+      skipped: 0,
+      failed: 0,
+    }));
+
+    await expect(runClipGenerationWorkerJob({
+      previewRepairOnly: true,
+      forceGeneration: false,
+      append: false,
+    }, {
+      generateSuggestions,
+      preparePreviews,
+    })).resolves.toBe(
+      "Existing clip suggestions reused without a new AI call. Preview prep: 5 prepared, 0 skipped, 0 failed.",
+    );
+    expect(generateSuggestions).not.toHaveBeenCalled();
+    expect(preparePreviews).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces generation for a genuine manually retried generation failure", async () => {
+    const generateSuggestions = vi.fn(async () => ({
+      clipCount: 3,
+      reusedExistingSuggestions: false,
+    }));
+    const preparePreviews = vi.fn(async () => ({
+      prepared: 3,
+      skipped: 0,
+      failed: 0,
+    }));
+
+    await expect(runClipGenerationWorkerJob({
+      previewRepairOnly: false,
+      forceGeneration: true,
+      append: false,
+    }, {
+      generateSuggestions,
+      preparePreviews,
+    })).resolves.toContain("Generated 3 clip suggestion(s).");
+    expect(generateSuggestions).toHaveBeenCalledWith({ force: true, append: false });
   });
 });
 

@@ -89,6 +89,7 @@ import {
   buildPrepareClipPlan,
 } from "@/lib/prepareWorkflow";
 import { getQueuedMediaAssetsForRemoteBatchAction } from "@/lib/clipReview";
+import { resolveClipGenerationRetryMode } from "@/lib/clipGenerationRetry";
 import { isStaleActiveProcessingJob } from "@/lib/pastorWorkflow";
 import { prunePostingPackageHistoryByClipIds } from "@/lib/postingPackages";
 import {
@@ -312,6 +313,7 @@ function assertLocalMediaProcessing(action: string): void {
 async function queueSermonProcessingJob(
   sermonId: string,
   type: ProcessingJobType,
+  generationSummary?: Prisma.InputJsonValue,
 ): Promise<{ id: string; reusedExisting: boolean }> {
   const existing = await prisma.processingJob.findFirst({
     where: {
@@ -328,7 +330,10 @@ async function queueSermonProcessingJob(
   }
 
   try {
-    const job = await createProcessingJob(sermonId, type, { execution: "QUEUED" });
+    const job = await createProcessingJob(sermonId, type, {
+      execution: "QUEUED",
+      generationSummary,
+    });
     return { id: job.id, reusedExisting: false };
   } catch (error) {
     if (error instanceof ActiveProcessingJobError) {
@@ -2135,6 +2140,8 @@ export async function retryFailedProcessingJobById(input: {
         type: true,
         status: true,
         updatedAt: true,
+        errorMessage: true,
+        generationSummary: true,
       },
     }),
     prisma.processingJob.findMany({
@@ -2213,6 +2220,46 @@ export async function retryFailedProcessingJobById(input: {
         "Recovered stale running or pending job before manual retry.",
       );
       await appendPipelineLog(sermonId, `Marked stale ${job.status.toLowerCase()} job ${job.id} (${job.type}) as failed before retry.`);
+    }
+
+    if (job.type === "GENERATE_CLIPS") {
+      const existingActiveSuggestionCount = await prisma.clipCandidate.count({
+        where: {
+          sermonId,
+          status: { in: ["SUGGESTED", "APPROVED"] },
+          isAiGenerated: true,
+        },
+      });
+      const retryMode = resolveClipGenerationRetryMode({
+        existingActiveSuggestionCount,
+        failedJobErrorMessage: job.errorMessage,
+        failedJobGenerationSummary: job.generationSummary,
+      });
+      const queuedJob = await queueSermonProcessingJob(sermonId, job.type, {
+        mode: retryMode,
+        existingActiveSuggestionCount,
+      });
+      await appendPipelineLog(
+        sermonId,
+        retryMode === "repair_previews"
+          ? `Manual clip-generation retry kept ${existingActiveSuggestionCount} existing suggestion(s) and queued preview repair without a new AI generation call.`
+          : `Manual clip-generation retry queued a fresh generation attempt; ${existingActiveSuggestionCount} existing active suggestion(s) were present.`,
+      );
+
+      revalidatePath(`/sermons/${sermonId}`);
+      revalidatePath(`/sermons/${sermonId}/review`);
+      revalidatePath("/");
+
+      return {
+        success: true,
+        message: retryMode === "repair_previews"
+          ? queuedJob.reusedExisting
+            ? "Clip preview repair is already queued. Existing suggestions will be kept."
+            : "Clip preview repair queued. Existing suggestions will be kept."
+          : queuedJob.reusedExisting
+            ? "Clip generation retry is already queued for the media worker."
+            : "Clip generation retry queued for the media worker.",
+      };
     }
 
     if (!canRunLocalMediaProcessing()) {

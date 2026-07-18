@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAdaptiveModelSampleTimes,
   buildModelSampleTimes,
+  __videoSubjectTrackingTestUtils,
   inferHeuristicTracks,
   inferModelTracksFromDetections,
   measureTrackingMotion,
@@ -23,6 +24,43 @@ function box(timeSeconds: number, centerX: number, confidence = 0.9): VideoSubje
 }
 
 describe("video subject tracking service", () => {
+  it("builds one FFmpeg input pass for a batch of requested frame times", () => {
+    const args = __videoSubjectTrackingTestUtils.buildFrameExtractionBatchArgs({
+      sourceVideoPath: "/media/sermon.mp4",
+      requests: [
+        { timeSeconds: 10, outputPath: "/tmp/frame-0.jpg" },
+        { timeSeconds: 11.5, outputPath: "/tmp/frame-1.jpg" },
+        { timeSeconds: 13.25, outputPath: "/tmp/frame-2.jpg" },
+      ],
+    });
+    const filter = args[args.indexOf("-filter_complex") + 1];
+
+    expect(args.filter((argument) => argument === "-i")).toHaveLength(1);
+    expect(args.slice(0, 5)).toEqual(["-y", "-ss", "10.000", "-i", "/media/sermon.mp4"]);
+    expect(filter).toContain("split=3[sample0][sample1][sample2]");
+    expect(filter).toContain("trim=start=0.000");
+    expect(filter).toContain("trim=start=1.500");
+    expect(filter).toContain("trim=start=3.250");
+    expect(args.filter((argument) => argument === "-frames:v")).toHaveLength(3);
+    expect(args).toContain("/tmp/frame-2.jpg");
+  });
+
+  it("keeps batches small enough for free-tier FFmpeg memory limits", () => {
+    expect(__videoSubjectTrackingTestUtils.frameExtractionBatchSize).toBeGreaterThanOrEqual(8);
+    expect(__videoSubjectTrackingTestUtils.frameExtractionBatchSize).toBeLessThanOrEqual(24);
+  });
+
+  it("handles a one-frame batch without an unnecessary split graph", () => {
+    const args = __videoSubjectTrackingTestUtils.buildFrameExtractionBatchArgs({
+      sourceVideoPath: "/media/sermon.mp4",
+      requests: [{ timeSeconds: 25, outputPath: "/tmp/frame.jpg" }],
+    });
+    const filter = args[args.indexOf("-filter_complex") + 1];
+
+    expect(filter).not.toContain("split=");
+    expect(filter).toContain("[0:v]trim=start=0.000");
+  });
+
   it("creates face, body, and speaker-area tracks with normalized boxes", () => {
     const tracks = inferHeuristicTracks({
       startTimeSeconds: 10,

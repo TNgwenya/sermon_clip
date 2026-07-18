@@ -83,6 +83,12 @@ function clamp01(value: number): number {
 }
 
 const INITIAL_MODEL_SAMPLE_INTERVAL_SECONDS = 1.5;
+const FRAME_EXTRACTION_BATCH_SIZE = 24;
+
+type FrameExtractionRequest = {
+  timeSeconds: number;
+  outputPath: string;
+};
 
 function detectionCenterX(detection: PersonDetection): number {
   return detection.x + detection.width / 2;
@@ -236,6 +242,82 @@ function ffmpegCommandFor(binaryPath?: string): string {
   return binaryPath?.trim() || "ffmpeg";
 }
 
+function buildFrameExtractionBatchArgs(input: {
+  sourceVideoPath: string;
+  requests: FrameExtractionRequest[];
+}): string[] {
+  if (input.requests.length === 0) {
+    return [];
+  }
+
+  const firstTimeSeconds = Math.min(...input.requests.map((request) => request.timeSeconds));
+  const sourceLabels = input.requests.map((_, index) => `[sample${index}]`).join("");
+  const filters: string[] = [];
+
+  if (input.requests.length > 1) {
+    filters.push(`[0:v]split=${input.requests.length}${sourceLabels}`);
+  }
+
+  input.requests.forEach((request, index) => {
+    const sourceLabel = input.requests.length > 1 ? `[sample${index}]` : "[0:v]";
+    const relativeTimeSeconds = Math.max(0, request.timeSeconds - firstTimeSeconds);
+    filters.push(
+      `${sourceLabel}trim=start=${relativeTimeSeconds.toFixed(3)},setpts=PTS-STARTPTS,scale=640:-1[frame${index}]`,
+    );
+  });
+
+  return [
+    "-y",
+    "-ss",
+    firstTimeSeconds.toFixed(3),
+    "-i",
+    input.sourceVideoPath,
+    "-an",
+    "-sn",
+    "-dn",
+    "-filter_complex",
+    filters.join(";"),
+    ...input.requests.flatMap((request, index) => [
+      "-map",
+      `[frame${index}]`,
+      "-frames:v",
+      "1",
+      "-q:v",
+      "3",
+      request.outputPath,
+    ]),
+  ];
+}
+
+async function runFrameExtractionCommand(input: {
+  args: string[];
+  ffmpegPath?: string;
+  failureLabel: string;
+}): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(ffmpegCommandFor(input.ffmpegPath), input.args, {
+      stdio: ["ignore", "ignore", "pipe"],
+      shell: false,
+    });
+
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", (error) => {
+      reject(new Error(`${input.failureLabel}: ${error.message}`));
+    });
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(stderr.trim() || `${input.failureLabel} with exit code ${code ?? "unknown"}.`));
+    });
+  });
+}
+
 async function extractFrame(input: {
   sourceVideoPath: string;
   timeSeconds: number;
@@ -255,28 +337,29 @@ async function extractFrame(input: {
     input.outputPath,
   ];
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(ffmpegCommandFor(input.ffmpegPath), args, {
-      stdio: ["ignore", "ignore", "pipe"],
-      shell: false,
-    });
-
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on("error", (error) => {
-      reject(new Error(`FFmpeg frame extraction failed: ${error.message}`));
-    });
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-
-      reject(new Error(stderr.trim() || `FFmpeg frame extraction failed with exit code ${code ?? "unknown"}.`));
-    });
+  await runFrameExtractionCommand({
+    args,
+    ffmpegPath: input.ffmpegPath,
+    failureLabel: "FFmpeg frame extraction failed",
   });
+}
+
+async function extractFramesInBatches(input: {
+  sourceVideoPath: string;
+  requests: FrameExtractionRequest[];
+  ffmpegPath?: string;
+}): Promise<void> {
+  for (let index = 0; index < input.requests.length; index += FRAME_EXTRACTION_BATCH_SIZE) {
+    const requests = input.requests.slice(index, index + FRAME_EXTRACTION_BATCH_SIZE);
+    await runFrameExtractionCommand({
+      args: buildFrameExtractionBatchArgs({
+        sourceVideoPath: input.sourceVideoPath,
+        requests,
+      }),
+      ffmpegPath: input.ffmpegPath,
+      failureLabel: "FFmpeg batched frame extraction failed",
+    });
+  }
 }
 
 async function loadCocoModel(): Promise<CocoSsdModel> {
@@ -544,14 +627,36 @@ async function inferModelTracks(input: {
     let previousDetection: PersonDetection | null = null;
 
     async function sampleAtTimes(times: number[], frameNamePrefix: string): Promise<void> {
-      for (const [index, timeSeconds] of times.entries()) {
-        const framePath = path.join(tempDir, `${frameNamePrefix}-${index}.jpg`);
-        await extractFrame({
+      const requests = times.map((timeSeconds, index) => ({
+        timeSeconds,
+        outputPath: path.join(tempDir, `${frameNamePrefix}-${index}.jpg`),
+      }));
+
+      try {
+        await extractFramesInBatches({
           sourceVideoPath: input.sourceVideoPath,
-          timeSeconds,
-          outputPath: framePath,
+          requests,
           ffmpegPath: input.ffmpegPath,
         });
+      } catch {
+        // Some older or minimal FFmpeg builds may reject a multi-output filter
+        // graph. Preserve the established one-frame path as a compatibility
+        // fallback before allowing the caller to use heuristic tracking.
+        for (const request of requests) {
+          await extractFrame({
+            sourceVideoPath: input.sourceVideoPath,
+            timeSeconds: request.timeSeconds,
+            outputPath: request.outputPath,
+            ffmpegPath: input.ffmpegPath,
+          });
+        }
+      }
+
+      for (const [index, timeSeconds] of times.entries()) {
+        const framePath = requests[index]?.outputPath;
+        if (!framePath) {
+          continue;
+        }
 
         const selected = selectPastorDetection(await detectPeopleInFrame(framePath, timeSeconds), previousDetection);
         if (selected) {
@@ -588,6 +693,11 @@ async function inferModelTracks(input: {
     await rm(tempDir, { recursive: true, force: true });
   }
 }
+
+export const __videoSubjectTrackingTestUtils = {
+  buildFrameExtractionBatchArgs,
+  frameExtractionBatchSize: FRAME_EXTRACTION_BATCH_SIZE,
+};
 
 function makeBoxes(input: {
   sampleTimes: number[];

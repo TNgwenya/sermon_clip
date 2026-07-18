@@ -78,4 +78,29 @@ describe("createProcessingJob", () => {
     await expect(createProcessingJob("sermon-1", "PROCESS_SERMON")).resolves.toBe(created);
     expect(mocks.findFirst).not.toHaveBeenCalled();
   });
+
+  it("stores queued retry instructions atomically with the job", async () => {
+    const created = processingJob({ id: "job-repair", status: "PENDING", workerId: null });
+    mocks.create.mockResolvedValue(created);
+
+    await createProcessingJob("sermon-1", "GENERATE_CLIPS", {
+      execution: "QUEUED",
+      generationSummary: {
+        mode: "repair_previews",
+        existingActiveSuggestionCount: 5,
+      },
+    });
+
+    expect(mocks.create).toHaveBeenCalledWith({
+      data: {
+        sermonId: "sermon-1",
+        type: "GENERATE_CLIPS",
+        status: "PENDING",
+        generationSummary: {
+          mode: "repair_previews",
+          existingActiveSuggestionCount: 5,
+        },
+      },
+    });
+  });
 });

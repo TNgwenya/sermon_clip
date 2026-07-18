@@ -24,6 +24,19 @@ type PreviewPreparationResult = {
   failed: number;
 };
 
+type ClipGenerationResult = {
+  clipCount: number;
+  reusedExistingSuggestions: boolean;
+};
+
+type ClipGenerationDependencies = {
+  generateSuggestions: (options: {
+    force: boolean;
+    append: boolean;
+  }) => Promise<ClipGenerationResult>;
+  preparePreviews: () => Promise<PreviewPreparationResult>;
+};
+
 type QualityRefreshResult = {
   clipsRefreshed: number;
   clipsSkipped?: number;
@@ -126,6 +139,29 @@ export function summarizePreviewPreparation(result: PreviewPreparationResult): s
   }
 
   return summary;
+}
+
+export async function runClipGenerationWorkerJob(
+  input: {
+    previewRepairOnly: boolean;
+    forceGeneration: boolean;
+    append: boolean;
+  },
+  dependencies: ClipGenerationDependencies,
+): Promise<string> {
+  if (input.previewRepairOnly) {
+    const previewResult = await dependencies.preparePreviews();
+    return `Existing clip suggestions reused without a new AI call. ${summarizePreviewPreparation(previewResult)}`;
+  }
+
+  const result = await dependencies.generateSuggestions({
+    force: input.forceGeneration,
+    append: input.append,
+  });
+  const previewSummary = summarizePreviewPreparation(await dependencies.preparePreviews());
+  return result.reusedExistingSuggestions
+    ? `Existing clip suggestions reused. ${previewSummary}`
+    : `Generated ${result.clipCount} ${input.append ? "new " : ""}clip suggestion(s). ${previewSummary}`;
 }
 
 export function summarizeQualityRefreshBatch(result: QualityRefreshResult): string {
