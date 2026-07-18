@@ -34,6 +34,17 @@ describe("content opportunity schema", () => {
     expect(parsed.success).toBe(true);
   });
 
+  it("normalizes human-friendly category and type formatting from the model", () => {
+    const parsed = contentOpportunitySchema.parse({
+      ...sampleOpportunity,
+      category: "social",
+      opportunityType: "quote graphic",
+    });
+
+    expect(parsed.category).toBe("SOCIAL");
+    expect(parsed.opportunityType).toBe("QUOTE_GRAPHIC");
+  });
+
   it("rejects missing body content", () => {
     const parsed = contentOpportunitySchema.safeParse({
       ...sampleOpportunity,

@@ -172,6 +172,7 @@ function buildSystemPrompt(): string {
     "When generating questions, provide concise but meaningful prompts suitable for ministry use.",
     "Ensure the generated set includes useful sermon recaps, captions, quote ideas, reflection questions, small-group questions, and invitation posts when requested.",
     "Use only allowed opportunity categories and opportunity types.",
+    "Return category and opportunityType using the exact UPPER_SNAKE_CASE enum values from the JSON example.",
     "Confidence scores must be between 0.0 and 1.0.",
     "Return structured JSON only. Do not include markdown or text outside JSON.",
     "Exact JSON shape required:",
@@ -322,7 +323,7 @@ async function callOpportunityModel(
       { role: "system", content: buildSystemPrompt() },
       { role: "user", content: buildUserPrompt(context, requestedQuantities) },
     ],
-    promptVersion: "content-opportunities-v3-grounded-excerpts",
+    promptVersion: "content-opportunities-v4-normalized-enums",
     metadata: {
       requestedQuantities,
       sourceTranscriptCharacters: context.transcriptFullText.length,

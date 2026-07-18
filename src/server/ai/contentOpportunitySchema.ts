@@ -12,6 +12,12 @@ export const CONTENT_OPPORTUNITY_CATEGORIES = [
 
 export type ContentOpportunityCategory = (typeof CONTENT_OPPORTUNITY_CATEGORIES)[number];
 
+function normalizeEnumValue(value: unknown): unknown {
+  return typeof value === "string"
+    ? value.trim().replace(/[\s-]+/g, "_").toUpperCase()
+    : value;
+}
+
 export const CONTENT_OPPORTUNITY_TYPES = [
   "SHORT_FORM_CLIP_IDEA",
   "QUOTE_GRAPHIC",
@@ -139,8 +145,10 @@ export const DEFAULT_CONTENT_OPPORTUNITY_QUANTITIES: Record<ContentOpportunityTy
 };
 
 export const contentOpportunitySchema = z.object({
-  category: z.enum(CONTENT_OPPORTUNITY_CATEGORIES),
-  opportunityType: z.enum(CONTENT_OPPORTUNITY_TYPES),
+  // Models occasionally return human-friendly lowercase values despite the
+  // JSON example. Normalize formatting before validating the strict enum.
+  category: z.preprocess(normalizeEnumValue, z.enum(CONTENT_OPPORTUNITY_CATEGORIES)),
+  opportunityType: z.preprocess(normalizeEnumValue, z.enum(CONTENT_OPPORTUNITY_TYPES)),
   title: z.string().trim().min(1).max(200),
   shortDescription: z.string().trim().min(1).max(400),
   bodyContent: z.string().trim().min(1).max(8000),
