@@ -126,6 +126,8 @@ describe("caption burn service validation", () => {
     expect(__captionBurnTestUtils.buildCaptionForceStyle("minimal-church")).toContain("FontSize=17");
     expect(__captionBurnTestUtils.buildCaptionForceStyle("scripture-focus")).toContain("FontName=Georgia");
     expect(__captionBurnTestUtils.buildCaptionForceStyle("cinematic-testimony")).toContain("Shadow=2");
+    expect(__captionBurnTestUtils.buildCaptionForceStyle("golden-hour")).toContain("FontSize=24");
+    expect(__captionBurnTestUtils.buildCaptionForceStyle("editorial-serif")).toContain("FontName=Georgia");
   });
 
   it("applies caption appearance to burn styles", () => {
@@ -273,8 +275,37 @@ describe("caption burn service validation", () => {
       activeWordIndex: 2,
     });
 
-    expect(svg).toContain("#22C55E");
+    expect(svg).toContain("#0F766E");
     expect(svg).toContain("LIKE");
+  });
+
+  it("renders each saved preset through the active-word burn path", () => {
+    const cue = {
+      index: 1,
+      startSeconds: 0,
+      endSeconds: 2,
+      text: "hope rises again",
+      activeWordIndex: 1,
+    };
+    const golden = __captionBurnTestUtils.buildCaptionOverlaySvg(cue, undefined, "golden-hour");
+    const royal = __captionBurnTestUtils.buildCaptionOverlaySvg(cue, undefined, "royal-focus");
+
+    expect(golden).toContain('fill="#1C1408"');
+    expect(golden).toContain('fill="#FCD34D"');
+    expect(royal).toContain('fill="#1E1338"');
+    expect(royal).toContain('fill="#C4B5FD"');
+    expect(golden).not.toBe(royal);
+  });
+
+  it("honors preset uppercase in the rendered overlay", () => {
+    const svg = __captionBurnTestUtils.buildCaptionOverlaySvg(
+      { index: 1, startSeconds: 0, endSeconds: 2, text: "keep the faith", activeWordIndex: 0 },
+      undefined,
+      "kinetic-pop",
+    );
+
+    expect(svg).toContain("KEEP");
+    expect(svg).not.toContain("keep the faith");
   });
 
   it("renders caption appearance in overlay SVG", () => {

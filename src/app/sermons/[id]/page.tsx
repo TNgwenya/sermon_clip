@@ -28,6 +28,7 @@ import {
   deriveSermonWorkspaceAction,
   isStaleActiveProcessingJob,
   pastorJobStepLabel,
+  resolvePastorProcessingStepStatus,
   selectUnresolvedPastorFailedJobs,
 } from "@/lib/pastorWorkflow";
 
@@ -43,6 +44,7 @@ type ClipTranscriptSafetyStatus = "TRUSTED" | "REVIEW_REQUIRED" | "REVIEWED";
 
 type RawClipCandidate = {
   id: string;
+  createdAt: Date;
   startTimeSeconds: number;
   endTimeSeconds: number;
   durationSeconds: number;
@@ -794,6 +796,7 @@ export default async function SermonDetailPage({
         },
         select: {
           id: true,
+          createdAt: true,
           startTimeSeconds: true,
           endTimeSeconds: true,
           durationSeconds: true,
@@ -1035,6 +1038,10 @@ export default async function SermonDetailPage({
   const hasTranscriptRecord = Boolean(sermon.transcript);
   const hasTranscriptSegments = sermon._count.transcriptSegments > 0;
   const clipGenerationComplete = sermon.clipCandidates.length > 0;
+  const latestClipCreatedAt = sermon.clipCandidates.reduce<Date | null>(
+    (latest, clip) => !latest || clip.createdAt > latest ? clip.createdAt : latest,
+    null,
+  );
   const hasOutdatedAssets = operationSummary.outdated > 0;
   const unresolvedFailedJobs = selectUnresolvedPastorFailedJobs(processingJobs);
   const latestFailedJob = unresolvedFailedJobs[0] ?? null;
@@ -1073,52 +1080,38 @@ export default async function SermonDetailPage({
       label: "Prepare sermon video",
       complete: hasSourceVideo,
       jobType: "DOWNLOAD_VIDEO",
+      completionEvidenceAt: null,
     },
     {
       label: "Prepare sermon audio",
       complete: hasAudioFile,
       jobType: "EXTRACT_AUDIO",
+      completionEvidenceAt: null,
     },
     {
       label: "Create sermon transcript",
       complete: hasTranscriptRecord && hasTranscriptSegments && Boolean(sermon.transcriptJsonPath),
       jobType: "TRANSCRIBE_AUDIO",
+      completionEvidenceAt: sermon.transcript?.updatedAt ?? null,
     },
     {
       label: "Find meaningful moments",
       complete: clipGenerationComplete,
       jobType: "GENERATE_CLIPS",
+      completionEvidenceAt: latestClipCreatedAt,
     },
   ] as const;
 
   function getChecklistStatus(label: (typeof processSteps)[number]): string {
     const jobStatus = jobStatusByType[label.jobType];
-    if (jobStatus === "FAILED") {
-      return "Failed";
-    }
-
     const latestStepJob = processingJobs.find((job) => job.type === label.jobType);
-    if (latestStepJob && isStaleActiveProcessingJob(latestStepJob)) {
-      return "Stuck / retry";
-    }
-
-    if (jobStatus === "RUNNING") {
-      return "Current / Running";
-    }
-
-    if (label.complete) {
-      return jobStatus === "SUCCEEDED" ? "Complete" : "Complete";
-    }
-
-    if (jobStatus === "SUCCEEDED") {
-      return "Complete";
-    }
-
-    if (jobStatus === "PENDING") {
-      return "Pending";
-    }
-
-    return "Pending";
+    return resolvePastorProcessingStepStatus({
+      complete: label.complete,
+      completionEvidenceAt: label.completionEvidenceAt,
+      jobStatus,
+      jobStartedAt: latestStepJob?.startedAt ?? null,
+      staleActiveJob: Boolean(latestStepJob && isStaleActiveProcessingJob(latestStepJob)),
+    });
   }
 
   const processingTheaterSteps = processSteps.map((step) => {
@@ -1128,10 +1121,10 @@ export default async function SermonDetailPage({
       ...step,
       status,
       latestJob: stepJob,
-      detail: stepJob
-        ? `${stepJob.status.toLowerCase()} · updated ${formatDateTime(stepJob.updatedAt)}`
-        : step.complete
-          ? "Complete"
+      detail: status === "Complete"
+        ? "Complete · output is available"
+        : stepJob
+          ? `${stepJob.status.toLowerCase()} · updated ${formatDateTime(stepJob.updatedAt)}`
           : "Waiting to start",
       state: status === "Failed" || status === "Stuck / retry"
         ? "failed"

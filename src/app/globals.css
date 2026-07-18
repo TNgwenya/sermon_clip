@@ -1344,6 +1344,38 @@ select:focus-visible {
   font-weight: 850;
 }
 
+.caption-style-golden-hour {
+  border: 1px solid rgba(245, 158, 11, 0.56);
+  background: rgba(28, 20, 8, 0.9);
+  color: #fffbeb;
+  box-shadow: 0 14px 32px rgba(18, 12, 3, 0.36);
+  font-weight: 900;
+}
+
+.caption-style-royal-focus {
+  border: 1px solid rgba(167, 139, 250, 0.58);
+  background: rgba(30, 19, 56, 0.92);
+  color: #f5f3ff;
+  box-shadow: 0 14px 32px rgba(15, 8, 32, 0.38);
+  font-weight: 900;
+}
+
+.caption-style-editorial-serif {
+  border: 1px solid rgba(214, 197, 159, 0.88);
+  background: rgba(255, 248, 231, 0.96);
+  color: #241c12;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 800;
+}
+
+.caption-style-clean-outline {
+  border: 1px solid rgba(255, 255, 255, 0.46);
+  background: rgba(2, 6, 23, 0.48);
+  color: #ffffff;
+  box-shadow: 0 14px 32px rgba(2, 6, 23, 0.3);
+  font-weight: 900;
+}
+
 .caption-emphasis-mark {
   border-radius: 6px;
   background: color-mix(in srgb, var(--brand-secondary, #1d4ed8), transparent 76%);
@@ -3974,7 +4006,11 @@ textarea::placeholder {
 .brand-caption-option-preview.caption-style-cinematic-testimony,
 .brand-caption-option-preview.caption-style-clean-lower,
 .brand-caption-option-preview.caption-style-minimal-church,
-.brand-caption-option-preview.caption-style-scripture-focus {
+.brand-caption-option-preview.caption-style-scripture-focus,
+.brand-caption-option-preview.caption-style-golden-hour,
+.brand-caption-option-preview.caption-style-royal-focus,
+.brand-caption-option-preview.caption-style-editorial-serif,
+.brand-caption-option-preview.caption-style-clean-outline {
   font-size: 0.82rem;
 }
 
@@ -3986,10 +4022,16 @@ textarea::placeholder {
 .brand-caption-option-preview.caption-style-youth-social,
 .brand-caption-option-preview.caption-style-creator-highlight,
 .brand-caption-option-preview.caption-style-cinematic-testimony,
+.brand-caption-option-preview.caption-style-golden-hour,
+.brand-caption-option-preview.caption-style-royal-focus,
+.brand-caption-option-preview.caption-style-clean-outline,
 .clip-studio-caption-style-preview.caption-style-bold-sermon,
 .clip-studio-caption-style-preview.caption-style-youth-social,
 .clip-studio-caption-style-preview.caption-style-creator-highlight,
-.clip-studio-caption-style-preview.caption-style-cinematic-testimony {
+.clip-studio-caption-style-preview.caption-style-cinematic-testimony,
+.clip-studio-caption-style-preview.caption-style-golden-hour,
+.clip-studio-caption-style-preview.caption-style-royal-focus,
+.clip-studio-caption-style-preview.caption-style-clean-outline {
   color: #ffffff;
 }
 
@@ -3998,11 +4040,13 @@ textarea::placeholder {
 .brand-caption-option-preview.caption-style-clean-lower,
 .brand-caption-option-preview.caption-style-minimal-church,
 .brand-caption-option-preview.caption-style-scripture-focus,
+.brand-caption-option-preview.caption-style-editorial-serif,
 .clip-studio-caption-style-preview.caption-style-kinetic-pop,
 .clip-studio-caption-style-preview.caption-style-soft-bubble,
 .clip-studio-caption-style-preview.caption-style-clean-lower,
 .clip-studio-caption-style-preview.caption-style-minimal-church,
-.clip-studio-caption-style-preview.caption-style-scripture-focus {
+.clip-studio-caption-style-preview.caption-style-scripture-focus,
+.clip-studio-caption-style-preview.caption-style-editorial-serif {
   color: #111827;
 }
 
@@ -9212,6 +9256,25 @@ textarea::placeholder {
     font-weight: 900;
   }
 
+  .clip-studio-live-watermark.has-logo {
+    width: 3.4rem;
+    height: 3.4rem;
+    padding: 0.34rem;
+    border-color: rgba(255, 255, 255, 0.28);
+    background: rgba(2, 6, 23, 0.68);
+  }
+
+  .clip-studio-live-watermark.has-logo img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .clip-studio-live-watermark.logo-placement-bottom {
+    top: auto;
+    bottom: 0.72rem;
+  }
+
   .clip-studio-live-brand-tint {
     position: absolute;
     inset: 0;
@@ -9257,6 +9320,16 @@ textarea::placeholder {
     border-radius: 8px;
     background: rgba(2, 6, 23, 0.78);
     padding: 0.56rem 0.66rem;
+  }
+
+  .clip-studio-live-lower-third.brand-placement-top {
+    top: 0.72rem;
+    bottom: auto;
+    padding-right: 4.5rem;
+  }
+
+  .clip-studio-live-lower-third.brand-placement-bottom {
+    padding-right: 4.5rem;
   }
 
   .clip-studio-live-lower-third strong,
@@ -9353,6 +9426,10 @@ textarea::placeholder {
     top: 1.2rem;
   }
 
+  .clip-studio-live-hook.hook-top.avoids-top-brand-rail {
+    top: 5.6rem;
+  }
+
   .clip-studio-live-hook.hook-center {
     top: 50%;
     transform: translateY(-50%);
@@ -9399,9 +9476,9 @@ textarea::placeholder {
     border: 2px solid rgba(255, 255, 255, 0.18);
     border-radius: 14px;
     background:
-      linear-gradient(135deg, rgba(255, 255, 255, 0.16), transparent 42%),
-      rgba(13, 17, 25, 0.84);
-    box-shadow: 0 24px 54px rgba(0, 0, 0, 0.34);
+      linear-gradient(135deg, rgba(255, 255, 255, 0.18), transparent 42%),
+      rgba(13, 17, 25, 0.74);
+    box-shadow: 0 24px 54px rgba(0, 0, 0, 0.3);
     color: #f8fafc;
     padding: 1rem 0.82rem;
     text-align: center;
@@ -9430,18 +9507,18 @@ textarea::placeholder {
 
   .clip-studio-live-broll.broll-position-full {
     top: 50%;
-    min-height: 38%;
+    min-height: 31%;
     transform: translateY(-50%);
   }
 
   .clip-studio-live-broll.broll-position-upper {
-    top: 5.1rem;
-    min-height: 8.8rem;
+    top: 7.4rem;
+    min-height: 7.4rem;
   }
 
   .clip-studio-live-broll.broll-position-lower {
-    bottom: 8.8rem;
-    min-height: 8.8rem;
+    bottom: 10.6rem;
+    min-height: 7.4rem;
   }
 
   .clip-studio-live-broll.broll-scripture {
@@ -9627,6 +9704,43 @@ textarea::placeholder {
   .clip-studio-live-caption.caption-style-cinematic-testimony > span {
     background: rgba(3, 7, 18, 0.88);
     outline: 1px solid rgba(226, 232, 240, 0.22);
+  }
+
+  /* Shared visual tokens keep Studio and the rendered SVG caption card aligned. */
+  .clip-studio-live-caption[class*="caption-style-"] > span {
+    width: 100%;
+    border-color: var(--caption-card-border);
+    border-style: solid;
+    border-width: var(--caption-card-border-width);
+    border-radius: var(--caption-card-radius);
+    outline: none;
+    background: var(--caption-card-background);
+    color: var(--caption-text-color);
+    font-family: var(--caption-font-family);
+    font-weight: var(--caption-font-weight);
+    -webkit-text-stroke: var(--caption-text-stroke);
+  }
+
+  .clip-studio-live-caption[class*="caption-style-"] .clip-studio-live-caption-word.is-active {
+    background: transparent;
+    color: var(--caption-active-color);
+    padding: 0.02em 0.03em;
+    box-shadow: none;
+    text-shadow: inherit;
+  }
+
+  .clip-studio-live-hook[style] {
+    border-color: var(--caption-card-border);
+    border-style: solid;
+    border-width: var(--caption-card-border-width);
+    border-radius: var(--caption-card-radius);
+    background: var(--caption-card-background);
+    color: var(--caption-text-color);
+    font-family: var(--caption-font-family);
+    font-weight: var(--caption-font-weight);
+    justify-items: center;
+    text-align: center;
+    -webkit-text-stroke: var(--caption-text-stroke);
   }
 
   .clip-studio-live-caption.caption-size-compact > span {
@@ -11207,6 +11321,72 @@ textarea::placeholder {
     padding: 0.85rem;
   }
 
+  .clip-studio-brand-kit-status {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.72rem;
+    align-items: center;
+    border: 1px solid rgba(117, 217, 184, 0.22);
+    border-radius: 10px;
+    background: rgba(117, 217, 184, 0.06);
+    padding: 0.68rem;
+  }
+
+  .clip-studio-brand-kit-status p {
+    margin: 0.18rem 0 0;
+  }
+
+  .clip-studio-brand-kit-mark {
+    display: grid;
+    width: 3.4rem;
+    height: 3.4rem;
+    place-items: center;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+    background: rgba(2, 6, 23, 0.72);
+    color: #f8fafc;
+    font-weight: 900;
+  }
+
+  .clip-studio-brand-kit-mark img {
+    width: calc(100% - 0.55rem);
+    height: calc(100% - 0.55rem);
+    object-fit: contain;
+  }
+
+  .clip-studio-brand-fields {
+    gap: 0.72rem;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 10px;
+    padding: 0.68rem;
+  }
+
+  .clip-studio-brand-toggle-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.48rem;
+  }
+
+  .clip-studio-brand-timing-controls {
+    display: grid;
+    gap: 0.48rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.14);
+    padding-top: 0.62rem;
+  }
+
+  .clip-studio-brand-color-row {
+    display: grid;
+    grid-template-columns: 3rem minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+
+  .clip-studio-brand-color-row input[type="color"] {
+    width: 3rem;
+    height: 2.65rem;
+    padding: 0.2rem;
+  }
+
   .clip-studio-brand-preview.is-disabled {
     opacity: 0.82;
   }
@@ -11235,6 +11415,18 @@ textarea::placeholder {
     background: rgba(2, 6, 23, 0.72);
     color: #f8fafc;
     font-weight: 900;
+  }
+
+  .clip-studio-brand-watermark.has-logo {
+    width: 3.4rem;
+    height: 3.4rem;
+    padding: 0.32rem;
+  }
+
+  .clip-studio-brand-watermark.has-logo img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
   }
 
   .clip-studio-brand-lower-third {
@@ -11850,7 +12042,8 @@ textarea::placeholder {
     .clip-studio-caption-style-grid,
     .clip-studio-caption-appearance-grid,
     .clip-studio-hook-grid,
-    .clip-studio-broll-grid {
+    .clip-studio-broll-grid,
+    .clip-studio-brand-toggle-grid {
       grid-template-columns: 1fr;
     }
 

@@ -68,6 +68,7 @@ type ClipStudioPreviewContextValue = {
   churchName: string;
   sermonTitle: string;
   preacherName: string;
+  logoSrc: string | null;
   isDraftDirty: boolean;
   draftCompositionKey: string;
   markDraftSaved: (compositionKey?: string) => void;
@@ -88,6 +89,7 @@ type ClipStudioPreviewProviderProps = {
   churchName: string;
   sermonTitle: string;
   preacherName: string;
+  logoSrc: string | null;
   children: ReactNode;
 };
 
@@ -247,6 +249,7 @@ export function ClipStudioPreviewProvider({
   churchName,
   sermonTitle,
   preacherName,
+  logoSrc,
   children,
 }: ClipStudioPreviewProviderProps) {
   const [exportSettings, setExportSettings] = useState(initialExportSettings);
@@ -402,6 +405,7 @@ export function ClipStudioPreviewProvider({
       churchName,
       sermonTitle,
       preacherName,
+      logoSrc,
       isDraftDirty,
       draftCompositionKey: currentCompositionKey,
       markDraftSaved,
@@ -422,6 +426,7 @@ export function ClipStudioPreviewProvider({
       markDraftSaved,
       playbackRequest,
       preacherName,
+      logoSrc,
       previewClock,
       requestPreviewPlayback,
       seekPreviewTo,

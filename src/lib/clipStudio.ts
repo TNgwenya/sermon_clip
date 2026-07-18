@@ -1,5 +1,5 @@
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
-import type { CaptionStylePresetId } from "@/lib/captionStylePresets";
+import { isCaptionStylePresetId as isKnownCaptionStylePresetId, type CaptionStylePresetId } from "@/lib/captionStylePresets";
 import type { EditableCaptionCue } from "@/lib/clipStudioEditing";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -173,6 +173,53 @@ export const DEFAULT_BROLL_LAYER_CONFIG: BrollLayerConfig = {
   cards: [],
 };
 
+export function inferBrollCardTone(value: string): BrollCardTone {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (/\b(?:[1-3]\s*)?[A-Za-z]{2,}\s+\d{1,3}:\d{1,3}\b/.test(text)) {
+    return "scripture";
+  }
+
+  if (/\b(?:remember|choose|pray|share|invite|trust|believe|we\s+(?:must|should|need)|you\s+(?:must|should|need|can))\b/i.test(text)) {
+    return "application";
+  }
+
+  if (/\b(?:because|when|while|before|after|in\s+this\s+(?:passage|chapter|moment))\b/i.test(text)) {
+    return "context";
+  }
+
+  return "quote";
+}
+
+export function labelForBrollTone(tone: BrollCardTone): string {
+  if (tone === "scripture") return "Scripture";
+  if (tone === "application") return "Put it into practice";
+  if (tone === "context") return "Context";
+  return "Key quote";
+}
+
+export function resolveNextBrollCardStart(input: {
+  clipDurationSeconds: number;
+  previewSeconds: number;
+  cards: Array<Pick<BrollCardConfig, "startSeconds" | "durationSeconds">>;
+}): number {
+  const durationSeconds = Math.max(1, input.clipDurationSeconds);
+  const latestStartSeconds = Math.max(0, durationSeconds - 1);
+  if (Number.isFinite(input.previewSeconds) && input.previewSeconds >= 0.5) {
+    return Number(Math.min(latestStartSeconds, input.previewSeconds).toFixed(1));
+  }
+
+  const latestCardEnd = input.cards.reduce(
+    (latest, card) => Math.max(latest, card.startSeconds + card.durationSeconds),
+    0,
+  );
+  const suggestedStart = input.cards.length === 0
+    ? Math.max(1.5, durationSeconds * 0.28)
+    : latestCardEnd + Math.max(0.75, durationSeconds * 0.04);
+  const distributedFallback = durationSeconds * Math.min(0.78, 0.28 + input.cards.length * 0.18);
+
+  return Number(Math.min(latestStartSeconds, suggestedStart <= latestStartSeconds ? suggestedStart : distributedFallback).toFixed(1));
+}
+
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -206,18 +253,7 @@ function asNumber(value: unknown): number | null {
 }
 
 function isCaptionStylePresetId(value: unknown): value is CaptionStylePresetId {
-  return (
-    value === "bold-sermon" ||
-    value === "kinetic-pop" ||
-    value === "creator-highlight" ||
-    value === "soft-bubble" ||
-    value === "clean-lower" ||
-    value === "high-contrast" ||
-    value === "youth-social" ||
-    value === "minimal-church" ||
-    value === "scripture-focus" ||
-    value === "cinematic-testimony"
-  );
+  return isKnownCaptionStylePresetId(value);
 }
 
 export function extractOnVideoCaptionCues(

@@ -4,6 +4,7 @@ import type { ClipExportFormat } from "@prisma/client";
 
 import {
   resolveBrandBackgroundOpacity,
+  type BrandingLowerThirdPlacement,
   type ClipBrandingConfig,
   type WatermarkPosition,
 } from "@/lib/clipBranding";
@@ -18,6 +19,8 @@ export type BrandingOverlayContext = {
   watermarkPosition: WatermarkPosition;
   width: number;
   height: number;
+  logoPath?: string | null;
+  lowerThirdPlacement?: BrandingLowerThirdPlacement;
 };
 
 export type BrandingOverlayLayer = "all" | "base" | "intro" | "outro";
@@ -100,14 +103,42 @@ export function getBrandingOverlayDimensions(format: ClipExportFormat): { width:
   return { width: 1080, height: 1920 };
 }
 
-function buildLayout(width: number, height: number): {
+function buildLayout(width: number, height: number, placement: BrandingLowerThirdPlacement): {
+  backgroundX: number;
+  backgroundWidth: number;
   backgroundY: number;
   backgroundHeight: number;
   lineYs: number[];
   fontSizes: number[];
 } {
+  const horizontalInset = height >= 1600 ? 36 : 28;
+
+  if (placement === "TOP") {
+    if (height >= 1600) {
+      return {
+        backgroundX: horizontalInset,
+        backgroundWidth: width - horizontalInset * 2,
+        backgroundY: 92,
+        backgroundHeight: 196,
+        lineYs: [116, 164, 208],
+        fontSizes: [32, 23, 19],
+      };
+    }
+
+    return {
+      backgroundX: horizontalInset,
+      backgroundWidth: width - horizontalInset * 2,
+      backgroundY: 48,
+      backgroundHeight: 138,
+      lineYs: [66, 102, 136],
+      fontSizes: [30, 22, 17],
+    };
+  }
+
   if (height >= 1600) {
     return {
+      backgroundX: horizontalInset,
+      backgroundWidth: width - horizontalInset * 2,
       backgroundY: height - 300,
       backgroundHeight: 210,
       lineYs: [height - 282, height - 238, height - 200],
@@ -116,11 +147,67 @@ function buildLayout(width: number, height: number): {
   }
 
   return {
+    backgroundX: horizontalInset,
+    backgroundWidth: width - horizontalInset * 2,
     backgroundY: height - 170,
     backgroundHeight: 120,
     lineYs: [height - 153, height - 120, height - 92],
     fontSizes: [30, 22, 17],
   };
+}
+
+function fitBrandText(value: string, maxCharacters: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxCharacters) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(1, maxCharacters - 1)).trimEnd()}…`;
+}
+
+function resolveLogoPlacement(input: {
+  position: WatermarkPosition;
+  width: number;
+  height: number;
+  logoWidth: number;
+  logoHeight: number;
+  lowerThirdPlacement: BrandingLowerThirdPlacement;
+}): { left: number; top: number } {
+  const margin = input.height >= 1600 ? 52 : 36;
+  const safePosition = input.lowerThirdPlacement === "TOP"
+    ? input.position === "BOTTOM_LEFT"
+      ? "TOP_LEFT"
+      : input.position === "BOTTOM_RIGHT"
+        ? "TOP_RIGHT"
+        : input.position
+    : input.lowerThirdPlacement === "BOTTOM"
+      ? input.position === "TOP_LEFT"
+        ? "BOTTOM_LEFT"
+        : input.position === "TOP_RIGHT"
+          ? "BOTTOM_RIGHT"
+          : input.position
+      : input.position;
+
+  if (safePosition === "TOP_LEFT") {
+    return { left: margin, top: margin };
+  }
+
+  if (safePosition === "BOTTOM_LEFT") {
+    return { left: margin, top: input.height - input.logoHeight - margin };
+  }
+
+  if (safePosition === "BOTTOM_RIGHT") {
+    return {
+      left: input.width - input.logoWidth - margin,
+      top: input.height - input.logoHeight - margin,
+    };
+  }
+
+  if (safePosition === "CENTER") {
+    return { left: Math.round((input.width - input.logoWidth) / 2), top: margin };
+  }
+
+  return { left: input.width - input.logoWidth - margin, top: margin };
 }
 
 function buildWatermarkPosition(
@@ -149,7 +236,8 @@ export function buildBrandingOverlaySvg(
   layer: BrandingOverlayLayer = "all",
 ): string {
   const { width, height } = context;
-  const layout = buildLayout(width, height);
+  const lowerThirdPlacement = context.lowerThirdPlacement ?? "BOTTOM";
+  const layout = buildLayout(width, height, lowerThirdPlacement);
   const themeColor = normalizeHexColor(context.themeColor, "#FFFFFF");
   const lines: string[] = [];
   const backgroundNode = buildBrandBackgroundNode(config, width, height, themeColor);
@@ -168,23 +256,26 @@ export function buildBrandingOverlaySvg(
   const showLowerThird = config.lowerThirdEnabled && config.preset !== "MINIMAL_WATERMARK";
 
   if (showBase && showLowerThird && (hasPreacher || hasTitle || hasChurch)) {
-    lines.push(`<rect x="0" y="${layout.backgroundY}" width="${width}" height="${layout.backgroundHeight}" fill="#000000" fill-opacity="0.65" />`);
+    lines.push(`<rect x="${layout.backgroundX}" y="${layout.backgroundY}" width="${layout.backgroundWidth}" height="${layout.backgroundHeight}" rx="28" fill="#020617" fill-opacity="0.82" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="2" />`);
+    lines.push(`<rect x="${layout.backgroundX}" y="${layout.backgroundY}" width="8" height="${layout.backgroundHeight}" rx="4" fill="${themeColor}" fill-opacity="0.96" />`);
+    const textX = layout.backgroundX + 34;
+    const logoReservedCharacters = context.logoPath ? 10 : 0;
 
     if (hasPreacher) {
-      lines.push(buildTextNode({ text: context.preacherName.trim(), x: 48, y: layout.lineYs[0] ?? layout.backgroundY + 18, fontSize: layout.fontSizes[0] ?? 28, fill: themeColor, weight: 700 }));
+      lines.push(buildTextNode({ text: fitBrandText(context.preacherName, 42 - logoReservedCharacters), x: textX, y: layout.lineYs[0] ?? layout.backgroundY + 18, fontSize: layout.fontSizes[0] ?? 28, fill: themeColor, weight: 800 }));
     }
 
     if (hasTitle) {
-      lines.push(buildTextNode({ text: context.sermonTitle.trim(), x: 48, y: layout.lineYs[1] ?? layout.backgroundY + 62, fontSize: layout.fontSizes[1] ?? 22, fill: themeColor, opacity: 0.85, weight: 700 }));
+      lines.push(buildTextNode({ text: fitBrandText(context.sermonTitle, 54 - logoReservedCharacters), x: textX, y: layout.lineYs[1] ?? layout.backgroundY + 62, fontSize: layout.fontSizes[1] ?? 22, fill: "#FFFFFF", opacity: 0.94, weight: 700 }));
     }
 
     if (hasChurch) {
-      lines.push(buildTextNode({ text: context.churchName.trim(), x: 48, y: layout.lineYs[2] ?? layout.backgroundY + 100, fontSize: layout.fontSizes[2] ?? 17, fill: "#FFFFFF", opacity: 0.7, weight: 600 }));
+      lines.push(buildTextNode({ text: fitBrandText(context.churchName, 58 - logoReservedCharacters), x: textX, y: layout.lineYs[2] ?? layout.backgroundY + 100, fontSize: layout.fontSizes[2] ?? 17, fill: "#FFFFFF", opacity: 0.72, weight: 650 }));
     }
   }
 
   if (showBase && (config.watermarkEnabled || config.preset === "MINIMAL_WATERMARK")) {
-    const watermarkText = context.churchName.trim();
+    const watermarkText = context.logoPath ? "" : context.churchName.trim();
     if (watermarkText) {
       const position = buildWatermarkPosition(context.watermarkPosition, width, height);
       lines.push(
@@ -240,9 +331,53 @@ export async function renderBrandingOverlayPng(
     return false;
   }
 
-  const svg = buildBrandingOverlaySvg(config, context, layer);
+  const logoRequested = config.watermarkEnabled || config.preset === "MINIMAL_WATERMARK";
+  const hasLogo = Boolean(
+    logoRequested
+    && context.logoPath?.trim()
+    && (layer === "all" || layer === "base")
+    && await fileExists(context.logoPath.trim()),
+  );
+  const renderContext = {
+    ...context,
+    logoPath: hasLogo ? context.logoPath?.trim() ?? null : null,
+  };
+  const svg = buildBrandingOverlaySvg(config, renderContext, layer);
   const sharp = await getSharp();
-  await sharp(Buffer.from(svg)).png().toFile(/* turbopackIgnore: true */ outputPath);
+  const overlay = sharp(Buffer.from(svg));
+
+  if (hasLogo && renderContext.logoPath) {
+    const logoMaxWidth = Math.round(context.width * (context.height >= 1600 ? 0.18 : 0.14));
+    const logoMaxHeight = context.height >= 1600 ? 124 : 88;
+    const logoBuffer = await sharp(/* turbopackIgnore: true */ renderContext.logoPath)
+      .resize({
+        width: logoMaxWidth,
+        height: logoMaxHeight,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .png()
+      .toBuffer();
+    const logoMetadata = await sharp(logoBuffer).metadata();
+    const logoWidth = logoMetadata.width ?? logoMaxWidth;
+    const logoHeight = logoMetadata.height ?? logoMaxHeight;
+    const placement = resolveLogoPlacement({
+      position: context.watermarkPosition,
+      width: context.width,
+      height: context.height,
+      logoWidth,
+      logoHeight,
+      lowerThirdPlacement: context.lowerThirdPlacement ?? "BOTTOM",
+    });
+
+    await overlay
+      .composite([{ input: logoBuffer, left: placement.left, top: placement.top }])
+      .png()
+      .toFile(/* turbopackIgnore: true */ outputPath);
+    return true;
+  }
+
+  await overlay.png().toFile(/* turbopackIgnore: true */ outputPath);
   return true;
 }
 
@@ -258,4 +393,5 @@ export async function fileExists(filePath: string): Promise<boolean> {
 export const __brandingOverlayTestUtils = {
   buildBrandingOverlaySvg,
   overlayDimensions: getBrandingOverlayDimensions,
+  resolveLogoPlacement,
 };

@@ -4,6 +4,7 @@ import {
   hasPreviewMetadata,
   isFreshRemotePreview,
   listBestPreviewCandidates,
+  resolveClipPreviewRecovery,
   resolveBestPreviewCandidate,
 } from "@/lib/clipPreview";
 
@@ -97,5 +98,32 @@ describe("clip preview helpers", () => {
         renderFreshness: "NEEDS_REGENERATION",
       }),
     ).toBe(false);
+  });
+
+  it("offers a real recovery action for a missing or failed suggested preview", () => {
+    expect(resolveClipPreviewRecovery({
+      clipStatus: "SUGGESTED",
+      renderStatus: "FAILED",
+    })).toEqual({
+      action: "render",
+      disabled: false,
+      label: "Create preview",
+    });
+  });
+
+  it("rebuilds completed previews and does not duplicate active renders", () => {
+    expect(resolveClipPreviewRecovery({
+      clipStatus: "SUGGESTED",
+      renderStatus: "COMPLETED",
+    }).action).toBe("rerender");
+
+    expect(resolveClipPreviewRecovery({
+      clipStatus: "APPROVED",
+      renderStatus: "RENDERING",
+    })).toEqual({
+      action: null,
+      disabled: true,
+      label: "Creating preview…",
+    });
   });
 });

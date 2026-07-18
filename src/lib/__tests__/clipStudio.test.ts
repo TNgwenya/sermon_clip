@@ -20,9 +20,12 @@ import {
   formatSocialScore,
   formatTranscriptExcerpt,
   hasCaptionPackage,
+  inferBrollCardTone,
+  labelForBrollTone,
   normalizeBrollLayerConfig,
   normalizeHookOverlayForClipDuration,
   renderStatusLabel,
+  resolveNextBrollCardStart,
 } from "@/lib/clipStudio";
 
 // ─── Caption Package ────────────────────────────────────────────────────────
@@ -484,6 +487,36 @@ describe("Studio on-video caption settings", () => {
         ],
       }, 20),
     ).toEqual({ enabled: false, cards: [] });
+  });
+
+  it("chooses an appropriate visual treatment from the card text", () => {
+    expect(inferBrollCardTone("John 3:16 reminds us that God loved the world")).toBe("scripture");
+    expect(inferBrollCardTone("Remember to pray before you respond")).toBe("application");
+    expect(inferBrollCardTone("Because the church was scattered, the message travelled")).toBe("context");
+    expect(inferBrollCardTone("Grace meets you here")).toBe("quote");
+    expect(labelForBrollTone("application")).toBe("Put it into practice");
+  });
+
+  it("uses the playhead when available and spaces cards when playback has not started", () => {
+    expect(resolveNextBrollCardStart({
+      clipDurationSeconds: 30,
+      previewSeconds: 12.4,
+      cards: [],
+    })).toBe(12.4);
+
+    const firstStart = resolveNextBrollCardStart({
+      clipDurationSeconds: 30,
+      previewSeconds: 0,
+      cards: [],
+    });
+    const secondStart = resolveNextBrollCardStart({
+      clipDurationSeconds: 30,
+      previewSeconds: 0,
+      cards: [{ startSeconds: firstStart, durationSeconds: 5 }],
+    });
+
+    expect(firstStart).toBe(8.4);
+    expect(secondStart).toBeGreaterThan(firstStart + 5);
   });
 });
 

@@ -57,6 +57,7 @@ export function SermonDetailPreviewCard({
   canPreviewVideo,
 }: SermonDetailPreviewCardProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const hoverPreviewRef = useRef(false);
   const [isHoverPreviewing, setIsHoverPreviewing] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
   const canPreview = canPreviewVideo && !previewFailed;
@@ -77,12 +78,15 @@ export function SermonDetailPreviewCard({
       ? `/sermons/${sermonId}/clips/${clip.id}/studio`
       : `/sermons/${sermonId}/review#clip-${clip.id}`;
 
-  function stopPreview() {
+  function stopHoverPreview() {
+    if (!hoverPreviewRef.current) return;
+
     const video = videoRef.current;
     if (video) {
       video.pause();
       video.currentTime = 0;
     }
+    hoverPreviewRef.current = false;
     setIsHoverPreviewing(false);
   }
 
@@ -90,11 +94,13 @@ export function SermonDetailPreviewCard({
     if (!canPreview || !supportsHoverPreview()) return;
 
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !video.paused) return;
 
     video.currentTime = 0;
+    hoverPreviewRef.current = true;
     setIsHoverPreviewing(true);
     void video.play().catch(() => {
+      hoverPreviewRef.current = false;
       setIsHoverPreviewing(false);
       setPreviewFailed(true);
     });
@@ -102,19 +108,16 @@ export function SermonDetailPreviewCard({
 
   function onTimeUpdate() {
     const video = videoRef.current;
-    if (video && video.currentTime >= HOVER_PREVIEW_SECONDS) {
-      stopPreview();
+    if (video && hoverPreviewRef.current && video.currentTime >= HOVER_PREVIEW_SECONDS) {
+      stopHoverPreview();
     }
   }
 
   return (
-    <Link
-      href={actionHref}
+    <article
       className="sermon-preview-card"
-      aria-label={`${actionLabel}: ${clip.title}`}
       onPointerEnter={onPointerEnter}
-      onPointerLeave={stopPreview}
-      onBlur={stopPreview}
+      onPointerLeave={stopHoverPreview}
     >
       <div className="video-card-shell sermon-detail-preview-media">
         {canPreview ? (
@@ -122,11 +125,18 @@ export function SermonDetailPreviewCard({
             ref={videoRef}
             className={`review-video sermon-detail-hover-preview${isHoverPreviewing ? " is-playing" : ""}`}
             muted
+            controls
             playsInline
-            preload="none"
+            preload="metadata"
             poster={`/api/clips/${clip.id}/thumbnail`}
             src={`/api/clips/${clip.id}/preview?variant=best`}
             onTimeUpdate={onTimeUpdate}
+            onPointerDown={() => {
+              hoverPreviewRef.current = false;
+            }}
+            onPlay={() => setIsHoverPreviewing(true)}
+            onPause={() => setIsHoverPreviewing(false)}
+            onEnded={() => setIsHoverPreviewing(false)}
             onError={() => setPreviewFailed(true)}
           />
         ) : (
@@ -158,11 +168,11 @@ export function SermonDetailPreviewCard({
         ) : null}
         <div className="sermon-preview-meta-row">
           {warningLabel ? <span className="status-pill quality-needs-editing">{warningLabel}</span> : null}
-          <span className="text-link">
+          <Link href={actionHref} className="text-link" aria-label={`${actionLabel}: ${clip.title}`}>
             {actionLabel} <span aria-hidden="true">→</span>
-          </span>
+          </Link>
         </div>
       </div>
-    </Link>
+    </article>
   );
 }

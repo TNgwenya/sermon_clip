@@ -43,6 +43,7 @@ export const SELECTABLE_BRANDING_PRESETS: BrandingPreset[] = [
 // ─── Config types ─────────────────────────────────────────────────────────────
 
 export type WatermarkPosition = "TOP_LEFT" | "TOP_RIGHT" | "BOTTOM_LEFT" | "BOTTOM_RIGHT" | "CENTER";
+export type BrandingLowerThirdPlacement = "TOP" | "BOTTOM";
 
 export type ClipBrandingConfig = {
   enabled: boolean;
@@ -87,15 +88,27 @@ export const DEFAULT_CLIP_BRANDING: ClipBrandingConfig = {
 };
 
 /**
- * Prepared clips let burned-in captions own the lower safe area. Keep this
- * rule shared with Studio preview logic so the preview does not promise a
- * lower third that the final compositor will intentionally suppress.
+ * Burned-in captions own their chosen safe area. Branding should move away
+ * from that area instead of disappearing, so the church identity remains
+ * visible in both Studio and the prepared video.
  */
 export function shouldBrandingLowerThirdYieldToCaptions(input: {
   applyCaptionsToClip: boolean;
   captionCueCount: number;
 }): boolean {
   return input.applyCaptionsToClip && input.captionCueCount > 0;
+}
+
+export function resolveBrandingLowerThirdPlacement(input: {
+  applyCaptionsToClip: boolean;
+  captionCueCount: number;
+  captionPosition?: "top" | "middle" | "lower";
+}): BrandingLowerThirdPlacement {
+  if (!shouldBrandingLowerThirdYieldToCaptions(input)) {
+    return "BOTTOM";
+  }
+
+  return input.captionPosition === "top" ? "BOTTOM" : "TOP";
 }
 
 export function resolveBrandBackgroundOpacity(style: BrandBackgroundStyle): number {
@@ -445,4 +458,5 @@ export const __clipBrandingTestUtils = {
   escapeDrawtext,
   isValidBrandingPreset,
   normalizeBrandingDurationSeconds,
+  resolveBrandingLowerThirdPlacement,
 };

@@ -7,10 +7,41 @@ import {
   isStaleActiveProcessingJob,
   pastorFailedStepMessage,
   pastorJobStepLabel,
+  resolvePastorProcessingStepStatus,
   selectUnresolvedPastorFailedJobs,
 } from "@/lib/pastorWorkflow";
 
 describe("pastor workflow", () => {
+  it("shows a durable completed step despite an older failed retry", () => {
+    expect(resolvePastorProcessingStepStatus({
+      complete: true,
+      completionEvidenceAt: new Date("2026-07-18T10:01:00.000Z"),
+      jobStatus: "FAILED",
+      jobStartedAt: new Date("2026-07-18T10:00:00.000Z"),
+      staleActiveJob: false,
+    })).toBe("Complete");
+  });
+
+  it("shows a newer failed retry when its only output is from an older attempt", () => {
+    expect(resolvePastorProcessingStepStatus({
+      complete: true,
+      completionEvidenceAt: new Date("2026-07-18T09:00:00.000Z"),
+      jobStatus: "FAILED",
+      jobStartedAt: new Date("2026-07-18T10:00:00.000Z"),
+      staleActiveJob: false,
+    })).toBe("Failed");
+  });
+
+  it("shows a newer running retry instead of masking it with older output", () => {
+    expect(resolvePastorProcessingStepStatus({
+      complete: true,
+      completionEvidenceAt: new Date("2026-07-18T09:00:00.000Z"),
+      jobStatus: "RUNNING",
+      jobStartedAt: new Date("2026-07-18T10:00:00.000Z"),
+      staleActiveJob: false,
+    })).toBe("Current / Running");
+  });
+
   it.each([
     {
       label: "publishes exported work despite historical failures and live analysis",

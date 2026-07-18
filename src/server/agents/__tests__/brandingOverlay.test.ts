@@ -38,4 +38,28 @@ describe("branding overlay layers", () => {
     expect(outro).toContain("Reflect · Share");
     expect(outro).not.toContain(">Outro<");
   });
+
+  it("renders a caption-safe top brand rail without dropping church identity", () => {
+    const svg = __brandingOverlayTestUtils.buildBrandingOverlaySvg(
+      config,
+      { ...context, lowerThirdPlacement: "TOP", logoPath: "/managed/church-logo.png" },
+      "base",
+    );
+
+    expect(svg).toContain('y="92"');
+    expect(svg).toContain("Faith in the Waiting");
+    expect(svg).toContain("Hope Church");
+  });
+
+  it("places the logo in the safe brand rail area", () => {
+    expect(__brandingOverlayTestUtils.resolveLogoPlacement({
+      position: "BOTTOM_RIGHT",
+      width: 1080,
+      height: 1920,
+      logoWidth: 160,
+      logoHeight: 100,
+      lowerThirdPlacement: "TOP",
+    })).toEqual({ left: 868, top: 52 });
+  });
+
 });

@@ -22,6 +22,12 @@ export type ClipPreviewPaths = {
 
 export type ClipPreviewVariant = "exported" | "captioned" | "overlay" | "rendered";
 
+export type ClipPreviewRecovery = {
+  action: "render" | "rerender" | null;
+  disabled: boolean;
+  label: string;
+};
+
 type ClipPreviewCandidateConfig = {
   variant: ClipPreviewVariant;
   pathKey: keyof Pick<ClipPreviewPaths, "exportedFilePath" | "captionedVideoPath" | "overlayVideoPath" | "renderedFilePath">;
@@ -98,4 +104,23 @@ export function listBestPreviewCandidates(paths: ClipPreviewPaths): string[] {
 
 export function hasPreviewMetadata(paths: ClipPreviewPaths): boolean {
   return isFreshRemotePreview(paths) || resolveBestPreviewCandidate(paths) !== null;
+}
+
+export function resolveClipPreviewRecovery(input: {
+  clipStatus: "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
+  renderStatus: "NOT_RENDERED" | "QUEUED" | "RENDERING" | "COMPLETED" | "FAILED";
+}): ClipPreviewRecovery {
+  if (input.clipStatus === "REJECTED") {
+    return { action: null, disabled: true, label: "Preview unavailable" };
+  }
+
+  if (input.renderStatus === "QUEUED" || input.renderStatus === "RENDERING") {
+    return { action: null, disabled: true, label: "Creating preview…" };
+  }
+
+  if (input.renderStatus === "COMPLETED") {
+    return { action: "rerender", disabled: false, label: "Rebuild preview" };
+  }
+
+  return { action: "render", disabled: false, label: "Create preview" };
 }

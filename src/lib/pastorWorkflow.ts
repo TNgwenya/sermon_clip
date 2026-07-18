@@ -64,6 +64,8 @@ export type PastorProcessingJobRetryView = {
   heartbeatAt?: Date | null;
 };
 
+export type PastorProcessingStepStatus = "Complete" | "Failed" | "Stuck / retry" | "Current / Running" | "Pending";
+
 export const STALE_ACTIVE_PROCESSING_JOB_MS = 2 * 60 * 60 * 1000;
 
 const failedStepMessages: Record<string, string> = {
@@ -111,6 +113,50 @@ export function selectUnresolvedPastorFailedJobs<T extends PastorProcessingJobRe
   return [...latestByType.values()]
     .filter((job) => job.status === "FAILED" || isStaleActiveProcessingJob(job))
     .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime());
+}
+
+export function resolvePastorProcessingStepStatus(input: {
+  complete: boolean;
+  completionEvidenceAt?: Date | null;
+  jobStatus?: string;
+  jobStartedAt?: Date | null;
+  staleActiveJob: boolean;
+}): PastorProcessingStepStatus {
+  const jobNeedsCurrentAttention = input.jobStatus === "FAILED"
+    || input.jobStatus === "RUNNING"
+    || input.staleActiveJob;
+  const completionCameFromLatestAttempt = Boolean(
+    input.complete
+    && input.completionEvidenceAt
+    && input.jobStartedAt
+    && input.completionEvidenceAt.getTime() >= input.jobStartedAt.getTime(),
+  );
+
+  if (input.complete && (!jobNeedsCurrentAttention || completionCameFromLatestAttempt)) {
+    return "Complete";
+  }
+
+  if (input.jobStatus === "FAILED") {
+    return "Failed";
+  }
+
+  if (input.staleActiveJob) {
+    return "Stuck / retry";
+  }
+
+  if (input.jobStatus === "RUNNING") {
+    return "Current / Running";
+  }
+
+  if (input.jobStatus === "SUCCEEDED") {
+    return "Complete";
+  }
+
+  if (input.complete) {
+    return "Complete";
+  }
+
+  return "Pending";
 }
 
 export function isStaleActiveProcessingJob(

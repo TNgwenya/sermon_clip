@@ -39,7 +39,10 @@ import {
   type CaptionMaxLines,
   type CaptionPosition,
   type HookOverlayConfig,
+  inferBrollCardTone,
+  labelForBrollTone,
   normalizeHookOverlayForClipDuration,
+  resolveNextBrollCardStart,
   type SpeechCleanupIntensity,
   type SpeechCleanupSettings,
 } from "@/lib/clipStudio";
@@ -112,9 +115,9 @@ const BROLL_TONE_OPTIONS: Array<{ value: BrollCardTone; label: string }> = [
   { value: "context", label: "Context" },
 ];
 const BROLL_POSITION_OPTIONS: Array<{ value: BrollCardPosition; label: string }> = [
-  { value: "full", label: "Full" },
-  { value: "upper", label: "Upper" },
-  { value: "lower", label: "Lower" },
+  { value: "full", label: "Center feature" },
+  { value: "upper", label: "Upper cutaway" },
+  { value: "lower", label: "Lower cutaway" },
 ];
 
 type CreatorReviewStatus = "ready" | "warning" | "needs-work";
@@ -1518,18 +1521,22 @@ export function ClipStudioEditor({
 
   function addBrollCard() {
     const clipDurationSeconds = timingPreview.durationSeconds ?? 60;
-    const currentPreviewSecond = Math.max(0, Math.min(previewClock.currentSeconds || 0, Math.max(0, clipDurationSeconds - 1)));
-    const startSeconds = Math.min(Math.max(0, currentPreviewSecond), Math.max(0, clipDurationSeconds - 1));
+    const startSeconds = resolveNextBrollCardStart({
+      clipDurationSeconds,
+      previewSeconds: previewClock.currentSeconds,
+      cards: brollLayer.cards,
+    });
     const durationSeconds = Math.min(5, Math.max(1, clipDurationSeconds - startSeconds));
     const seedText = getBrollSeedText();
+    const tone = inferBrollCardTone(seedText);
     const nextCard: BrollCardConfig = {
       id: `broll-${Date.now().toString(36)}`,
       enabled: true,
       text: seedText,
-      label: focusedSegment ? "Selected line" : "Key moment",
+      label: focusedSegment ? "Selected line" : labelForBrollTone(tone),
       startSeconds: Number(startSeconds.toFixed(1)),
       durationSeconds: Number(durationSeconds.toFixed(1)),
-      tone: "quote",
+      tone,
       position: "full",
     };
 
@@ -1538,7 +1545,7 @@ export function ClipStudioEditor({
       cards: [nextCard, ...current.cards].slice(0, 4),
     }));
     setStatusSuccess(true);
-    setStatusMessage("B-roll card added to the preview.");
+    setStatusMessage(`Visual cutaway added at ${formatSecondsForPastorView(startSeconds)}.`);
   }
 
   function updateBrollCard(cardId: string, updates: Partial<BrollCardConfig>) {
@@ -3103,13 +3110,17 @@ export function ClipStudioEditor({
           <section className="clip-studio-broll-panel" aria-labelledby="clip-broll-heading">
             <div className="section-heading-row compact">
               <div>
-                <p className="kicker">B-roll cards</p>
-                <h3 id="clip-broll-heading">Visual emphasis</h3>
+                <p className="kicker">Visual cutaways</p>
+                <h3 id="clip-broll-heading">B-roll emphasis cards</h3>
               </div>
               <StatusBadge tone={brollLayer.enabled && brollLayer.cards.length > 0 ? "success" : "neutral"}>
                 {brollLayer.enabled && brollLayer.cards.length > 0 ? `${brollLayer.cards.length} card${brollLayer.cards.length === 1 ? "" : "s"}` : "Off"}
               </StatusBadge>
             </div>
+
+            <p className="muted small clip-studio-broll-description">
+              Add a polished scripture, quote, context, or application card at the playhead. Cards are timed cutaways—not stock footage—and remain translucent so the speaker and captions stay readable.
+            </p>
 
             <div className="clip-studio-broll-actions">
               <label className="clip-studio-toggle-row">
@@ -3121,7 +3132,7 @@ export function ClipStudioEditor({
                   disabled={isPending || brollLayer.cards.length === 0}
                 />
                 <span>
-                  <strong>Show visual cards</strong>
+                  <strong>Show cutaway cards</strong>
                 </span>
               </label>
               <button
@@ -3130,7 +3141,7 @@ export function ClipStudioEditor({
                 onClick={addBrollCard}
                 disabled={isPending || brollLayer.cards.length >= 4}
               >
-                Add card
+                Add at playhead
               </button>
             </div>
 
@@ -3148,7 +3159,7 @@ export function ClipStudioEditor({
                           disabled={isPending || !brollLayer.enabled}
                         />
                         <span>
-                          <strong>Card {index + 1}</strong>
+                          <strong>Cutaway {index + 1} · {formatSecondsForPastorView(card.startSeconds)}</strong>
                         </span>
                       </label>
                       <button
@@ -3167,8 +3178,11 @@ export function ClipStudioEditor({
                         className="clip-studio-caption-textarea"
                         value={card.text}
                         onChange={(event) => updateBrollCard(card.id, { text: event.target.value })}
+                        maxLength={140}
+                        rows={3}
                         disabled={isPending || !brollLayer.enabled || !card.enabled}
                       />
+                      <span className="muted small">{card.text.length}/140 · keep this to one memorable thought</span>
                     </label>
 
                     <div className="clip-studio-broll-grid">
@@ -3234,7 +3248,7 @@ export function ClipStudioEditor({
             ) : (
               <div className="clip-studio-broll-empty">
                 <button type="button" className="button secondary" onClick={addBrollCard} disabled={isPending}>
-                  Add first card
+                  Add first cutaway
                 </button>
               </div>
             )}

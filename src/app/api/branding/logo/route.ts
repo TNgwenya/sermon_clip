@@ -4,7 +4,10 @@ import path from "node:path";
 import { NextResponse } from "next/server";
 
 import { getBrandingSettings } from "@/server/branding/settings";
-import { getConfiguredStorageRoot } from "@/server/media/portableStoragePath";
+import {
+  isPathInsideRoot,
+  resolveAvailableBrandingLogoPath,
+} from "@/server/branding/logoStorage";
 
 export const runtime = "nodejs";
 
@@ -16,22 +19,11 @@ const CONTENT_TYPES: Record<string, string> = {
   ".webp": "image/webp",
 };
 
-function isInside(parentPath: string, childPath: string): boolean {
-  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
-  return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-}
-
 export async function GET(): Promise<NextResponse> {
   const settings = await getBrandingSettings().catch(() => null);
-  const logoPath = settings?.churchLogoPath?.trim();
-  if (!logoPath || !path.isAbsolute(logoPath)) {
+  const logoPath = await resolveAvailableBrandingLogoPath(settings?.churchLogoPath);
+  if (!logoPath) {
     return NextResponse.json({ error: "Branding logo is not available." }, { status: 404 });
-  }
-
-  const legacyBrandingRoot = path.join(process.cwd(), "public", "uploads", "branding");
-  const durableBrandingRoot = path.join(getConfiguredStorageRoot(), "branding");
-  if (!isInside(legacyBrandingRoot, logoPath) && !isInside(durableBrandingRoot, logoPath)) {
-    return NextResponse.json({ error: "Branding logo path is outside managed storage." }, { status: 404 });
   }
 
   const extension = path.extname(logoPath).toLowerCase();
@@ -51,4 +43,4 @@ export async function GET(): Promise<NextResponse> {
   });
 }
 
-export const __brandingLogoRouteTestUtils = { isInside };
+export const __brandingLogoRouteTestUtils = { isInside: isPathInsideRoot };

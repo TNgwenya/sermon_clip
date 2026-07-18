@@ -106,6 +106,35 @@ export function shouldShowHookOverlay(hookOverlay: HookOverlayConfig, previewSec
   return previewSeconds >= startSeconds && previewSeconds <= endSeconds;
 }
 
+export type HookOverlayAnimationFrame = {
+  opacity: number;
+  translateXPercent: number;
+  translateYPercent: number;
+};
+
+/**
+ * Mirrors the short intro/outro windows used by the FFmpeg hook overlay.
+ * Keeping this pure lets the Studio preview and final render share the same
+ * visible animation state instead of approximating it with unrelated CSS.
+ */
+export function resolveHookOverlayAnimationFrame(
+  hookOverlay: HookOverlayConfig,
+  previewSeconds: number,
+): HookOverlayAnimationFrame {
+  const startSeconds = Number.isFinite(hookOverlay.startSeconds) ? Math.max(0, hookOverlay.startSeconds) : 0;
+  const durationSeconds = Number.isFinite(hookOverlay.durationSeconds) ? Math.max(1, hookOverlay.durationSeconds) : 6;
+  const endSeconds = startSeconds + durationSeconds;
+  const fadeDuration = Math.min(0.35, Math.max(0.12, durationSeconds / 6));
+  const introProgress = clampPreviewSeconds((previewSeconds - startSeconds) / fadeDuration, 0, 1);
+  const outroProgress = clampPreviewSeconds((endSeconds - previewSeconds) / fadeDuration, 0, 1);
+
+  return {
+    opacity: hookOverlay.animation === "fade" ? Math.min(introProgress, outroProgress) : 1,
+    translateXPercent: hookOverlay.animation === "pan-in" && introProgress < 1 ? -12.5 * (1 - introProgress) : 0,
+    translateYPercent: hookOverlay.animation === "pop" && introProgress < 1 ? 8 * (1 - introProgress) : 0,
+  };
+}
+
 export function resolveActiveCaptionCueText({
   applyCaptionsToClip,
   captionCues,

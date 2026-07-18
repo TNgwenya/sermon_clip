@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import type { AssetFreshness, ClipRenderStatus, ClipStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import { isFreshRemotePreview } from "@/lib/clipPreview";
+import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
 import { appendPipelineLog } from "@/server/agents/storage";
 import { renderApprovedClip } from "@/server/agents/clipRenderService";
 import {
@@ -17,11 +17,17 @@ type ReviewAssetClip = {
   isAiGenerated: boolean;
   renderStatus: ClipRenderStatus;
   renderedFilePath: string | null;
+  captionedVideoPath: string | null;
+  overlayVideoPath: string | null;
+  exportedFilePath: string | null;
   renderedSizeBytes: number | null;
   renderedAt: Date | null;
   remotePreviewUrl: string | null;
   remotePreviewUploadedAt: Date | null;
   renderFreshness: AssetFreshness;
+  captionBurnFreshness: AssetFreshness;
+  overlayFreshness: AssetFreshness;
+  exportFreshness: AssetFreshness;
   exportLayoutStrategy: "CENTER_CROP" | "LEFT_FOCUS" | "RIGHT_FOCUS" | "FIT_BLURRED_BACKGROUND" | "SMART_CROP" | null;
 };
 
@@ -32,17 +38,26 @@ export type ClipReviewAssetSummary = {
   skipped: number;
 };
 
-function shouldPreparePreview(clip: Pick<ReviewAssetClip, "renderStatus">, force?: boolean): boolean {
+function shouldPreparePreview(
+  clip: Pick<ReviewAssetClip, "renderStatus">,
+  force?: boolean,
+  previewMediaIsUsable = clip.renderStatus === "COMPLETED",
+): boolean {
   const renderInProgress = clip.renderStatus === "QUEUED" || clip.renderStatus === "RENDERING";
-  const previewAlreadyReady = clip.renderStatus === "COMPLETED";
+  const previewAlreadyReady = previewMediaIsUsable;
   return !renderInProgress && (Boolean(force) || !previewAlreadyReady);
 }
 
 function shouldRenderReviewPreview(
   clip: Pick<ReviewAssetClip, "status" | "isAiGenerated" | "renderStatus">,
   force?: boolean,
+  previewMediaIsUsable?: boolean,
 ): boolean {
-  return clip.status === "SUGGESTED" && clip.isAiGenerated && shouldPreparePreview(clip, force);
+  return (
+    (clip.status === "SUGGESTED" || clip.status === "APPROVED") &&
+    clip.isAiGenerated &&
+    shouldPreparePreview(clip, force, previewMediaIsUsable)
+  );
 }
 
 function shouldUploadRemotePreview(
@@ -71,6 +86,39 @@ async function resolveFileSize(filePath: string, knownSize: number | null): Prom
   } catch {
     return null;
   }
+}
+
+async function reviewPreviewMediaIsUsable(clip: Pick<
+  ReviewAssetClip,
+  | "renderStatus"
+  | "renderedFilePath"
+  | "captionedVideoPath"
+  | "overlayVideoPath"
+  | "exportedFilePath"
+  | "remotePreviewUrl"
+  | "remotePreviewUploadedAt"
+  | "renderedAt"
+  | "renderFreshness"
+  | "captionBurnFreshness"
+  | "overlayFreshness"
+  | "exportFreshness"
+>): Promise<boolean> {
+  if (isFreshRemotePreview(clip)) {
+    return true;
+  }
+
+  for (const candidatePath of listBestPreviewCandidates(clip)) {
+    try {
+      const fileStat = await stat(/* turbopackIgnore: true */ candidatePath);
+      if (fileStat.isFile() && fileStat.size > 0) {
+        return true;
+      }
+    } catch {
+      // Keep checking lower-priority preview artifacts.
+    }
+  }
+
+  return false;
 }
 
 async function renderReviewPreviewWithFallback(sermonId: string, clip: ReviewAssetClip, force?: boolean): Promise<{
@@ -172,14 +220,14 @@ export async function prepareGeneratedClipReviewAssets(input: {
       sermonId: input.sermonId,
       ...(input.onlyFailed
         ? {
-            status: "SUGGESTED",
+            status: { in: ["SUGGESTED", "APPROVED"] },
             isAiGenerated: true,
             renderStatus: "FAILED",
           }
         : {
             OR: [
               {
-                status: "SUGGESTED",
+                status: { in: ["SUGGESTED", "APPROVED"] },
                 isAiGenerated: true,
               },
               {
@@ -197,11 +245,17 @@ export async function prepareGeneratedClipReviewAssets(input: {
       isAiGenerated: true,
       renderStatus: true,
       renderedFilePath: true,
+      captionedVideoPath: true,
+      overlayVideoPath: true,
+      exportedFilePath: true,
       renderedSizeBytes: true,
       renderedAt: true,
       remotePreviewUrl: true,
       remotePreviewUploadedAt: true,
       renderFreshness: true,
+      captionBurnFreshness: true,
+      overlayFreshness: true,
+      exportFreshness: true,
       exportLayoutStrategy: true,
     },
   });
@@ -218,7 +272,8 @@ export async function prepareGeneratedClipReviewAssets(input: {
   await appendPipelineLog(input.sermonId, `Preparing preview assets for ${clips.length} clip(s).`);
 
   for (const clip of clips) {
-    if (!shouldRenderReviewPreview(clip, input.force)) {
+    const previewIsUsable = await reviewPreviewMediaIsUsable(clip);
+    if (!shouldRenderReviewPreview(clip, input.force, previewIsUsable)) {
       if (shouldUploadRemotePreview(clip, input.force) && clip.renderedFilePath) {
         const uploaded = await uploadRemotePreviewBestEffort({
           sermonId: input.sermonId,
@@ -235,7 +290,15 @@ export async function prepareGeneratedClipReviewAssets(input: {
     }
 
     try {
-      const renderResult = await renderReviewPreviewWithFallback(input.sermonId, clip, input.force);
+      // A completed database status can outlive its local file after a move or
+      // cleanup. Let the renderer repair that stale record instead of skipping
+      // it forever and leaving every browser preview blank.
+      const repairStaleCompletedPreview = clip.renderStatus === "COMPLETED" && !previewIsUsable;
+      const renderResult = await renderReviewPreviewWithFallback(
+        input.sermonId,
+        clip,
+        Boolean(input.force) || repairStaleCompletedPreview,
+      );
       prepared += 1;
       if (await uploadRemotePreviewBestEffort({
         sermonId: input.sermonId,

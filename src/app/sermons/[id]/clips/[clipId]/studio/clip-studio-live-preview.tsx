@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { type CSSProperties, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmptyState, StatusBadge } from "@/components/ui";
@@ -8,6 +9,7 @@ import {
   DEFAULT_INTRO_DURATION_SECONDS,
   DEFAULT_OUTRO_DURATION_SECONDS,
   normalizeBrandingDurationSeconds,
+  resolveBrandingLowerThirdPlacement,
   resolveBrandBackgroundOpacity,
   shouldBrandingLowerThirdYieldToCaptions,
 } from "@/lib/clipBranding";
@@ -20,6 +22,7 @@ import {
   resolveActiveCaptionCueText,
   resolveActiveCaptionWordIndex,
   resolveCompositionPreviewDuration,
+  resolveHookOverlayAnimationFrame,
   resolveSpeechCleanupJumpTarget,
   shouldShowHookOverlay,
   synchronizePreviewBackdropMedia,
@@ -135,6 +138,19 @@ function dispatchOverlayPosition(detail: ClipStudioOverlayPositionDetail) {
   window.dispatchEvent(new CustomEvent(CLIP_STUDIO_OVERLAY_POSITION_EVENT, { detail }));
 }
 
+function colorWithOpacity(hexColor: string, opacity: number): string {
+  const normalized = hexColor.replace(/^#/, "");
+  const red = Number.parseInt(normalized.slice(0, 2), 16);
+  const green = Number.parseInt(normalized.slice(2, 4), 16);
+  const blue = Number.parseInt(normalized.slice(4, 6), 16);
+
+  if (![red, green, blue].every(Number.isFinite)) {
+    return hexColor;
+  }
+
+  return `rgb(${red} ${green} ${blue} / ${Math.max(0, Math.min(1, opacity))})`;
+}
+
 export function ClipStudioLivePreview({
   hasPreview,
   previewSrc,
@@ -157,6 +173,7 @@ export function ClipStudioLivePreview({
     churchName,
     sermonTitle,
     preacherName,
+    logoSrc,
     updatePreviewClock,
   } = useClipStudioPreview();
   const frameRef = useRef<HTMLDivElement | null>(null);
@@ -172,16 +189,23 @@ export function ClipStudioLivePreview({
   const [retryNonce, setRetryNonce] = useState(0);
   const [playbackNotice, setPlaybackNotice] = useState<string | null>(null);
   const brandingEnabled = brandingConfig.enabled && brandingConfig.preset !== "NO_BRANDING";
-  const captionsOverrideBranding = shouldBrandingLowerThirdYieldToCaptions({
+  const captionsRequireSafeBrandingPlacement = shouldBrandingLowerThirdYieldToCaptions({
     applyCaptionsToClip: editPreview.applyCaptionsToClip,
     captionCueCount: editPreview.captionCues.length,
   });
-  const showWatermark = brandingEnabled && (brandingConfig.watermarkEnabled || brandingConfig.preset === "MINIMAL_WATERMARK");
+  const lowerThirdPlacement = resolveBrandingLowerThirdPlacement({
+    applyCaptionsToClip: editPreview.applyCaptionsToClip,
+    captionCueCount: editPreview.captionCues.length,
+    captionPosition: editPreview.captionPosition,
+  });
+  const showLogo = brandingEnabled
+    && Boolean(logoSrc)
+    && (brandingConfig.watermarkEnabled || brandingConfig.preset === "MINIMAL_WATERMARK");
+  const showWatermark = brandingEnabled && !showLogo && (brandingConfig.watermarkEnabled || brandingConfig.preset === "MINIMAL_WATERMARK");
   const lowerThirdRequested =
     brandingEnabled && brandingConfig.lowerThirdEnabled && brandingConfig.preset !== "MINIMAL_WATERMARK";
-  const showLowerThird =
-    lowerThirdRequested && !captionsOverrideBranding;
-  const lowerThirdYieldedToCaptions = lowerThirdRequested && captionsOverrideBranding;
+  const showLowerThird = lowerThirdRequested;
+  const lowerThirdMovedForCaptions = lowerThirdRequested && captionsRequireSafeBrandingPlacement;
   const captionStyle = resolveCaptionStylePreset(editPreview.captionStylePresetId);
   const activePreviewSrc = sourcePreviewSrc ?? previewSrc;
   const canPreview = hasPreview || Boolean(sourcePreviewSrc);
@@ -277,6 +301,7 @@ export function ClipStudioLivePreview({
         };
   }, [editPreview.hookOverlay, speechCleanupPreviewPlan]);
   const showTimedHook = shouldShowHookOverlay(hookOverlay, previewSeconds);
+  const hookAnimationFrame = resolveHookOverlayAnimationFrame(hookOverlay, previewSeconds);
   const activeBrollCard = useMemo(() => {
     if (!editPreview.brollLayer.enabled) {
       return null;
@@ -322,10 +347,34 @@ export function ClipStudioLivePreview({
       previewSeconds: sourcePreviewSeconds,
     });
   }, [editPreview.applyCaptionsToClip, editPreview.captionCues, editPreview.onVideoCaptionText, sourcePreviewSeconds]);
-  const captionDisplayText = editPreview.captionAppearance.uppercase ? captionPreviewText.toUpperCase() : captionPreviewText;
+  const captionDisplayText = editPreview.captionAppearance.uppercase || captionStyle.visual.uppercase
+    ? captionPreviewText.toUpperCase()
+    : captionPreviewText;
   const captionWords = useMemo(() => captionDisplayText.split(/\s+/).filter(Boolean), [captionDisplayText]);
+  const captionVisualVariables = {
+    "--caption-card-background": colorWithOpacity(captionStyle.visual.backgroundColor, captionStyle.visual.backgroundOpacity),
+    "--caption-card-border": colorWithOpacity(captionStyle.visual.borderColor, captionStyle.visual.borderOpacity),
+    "--caption-card-border-width": `${captionStyle.visual.borderWidth}px`,
+    "--caption-card-radius": `${captionStyle.visual.borderRadius}px`,
+    "--caption-text-color": captionStyle.visual.textColor,
+    "--caption-active-color": captionStyle.visual.activeTextColor,
+    "--caption-font-family": captionStyle.visual.fontFamily === "serif"
+      ? 'Georgia, "Times New Roman", serif'
+      : "Arial, Helvetica, sans-serif",
+    "--caption-font-weight": String(captionStyle.visual.fontWeight),
+    "--caption-text-stroke": captionStyle.visual.textStrokeWidth > 0
+      ? `${Math.max(0.35, captionStyle.visual.textStrokeWidth / 6).toFixed(2)}px ${captionStyle.visual.textStrokeColor}`
+      : "0 transparent",
+  } as CSSProperties;
   const captionAppearanceStyle = {
+    ...captionVisualVariables,
     "--caption-offset-y": `${editPreview.captionAppearance.verticalOffset}px`,
+  } as CSSProperties;
+  const hookAppearanceStyle = {
+    ...captionVisualVariables,
+    fontWeight: hookOverlay.bold ? captionStyle.visual.fontWeight : 700,
+    opacity: hookAnimationFrame.opacity,
+    translate: `${hookAnimationFrame.translateXPercent}% ${hookAnimationFrame.translateYPercent}%`,
   } as CSSProperties;
   const manualCropPreview = useMemo(
     () => resolveManualCropPreviewFrame(exportSettings.manualCropKeyframes, sourcePreviewSeconds),
@@ -755,8 +804,12 @@ export function ClipStudioLivePreview({
               <div className="clip-studio-live-brand-tint" aria-hidden="true" />
             ) : null}
 
-            {previewMediaReady && showWatermark ? (
-              <div className="clip-studio-live-watermark">{churchName || "Church"}</div>
+            {previewMediaReady && showLogo && logoSrc ? (
+              <div className={`clip-studio-live-watermark has-logo logo-placement-${lowerThirdPlacement.toLowerCase()}`}>
+                <Image src={logoSrc} alt={`${churchName || "Church"} logo`} width={68} height={68} unoptimized />
+              </div>
+            ) : previewMediaReady && showWatermark ? (
+              <div className="clip-studio-live-watermark">{(churchName || "Church").slice(0, 2).toUpperCase()}</div>
             ) : null}
 
             {previewMediaReady && showTimedIntro ? (
@@ -766,7 +819,7 @@ export function ClipStudioLivePreview({
             ) : null}
 
             {previewMediaReady && showLowerThird ? (
-              <div className="clip-studio-live-lower-third">
+              <div className={`clip-studio-live-lower-third brand-placement-${lowerThirdPlacement.toLowerCase()}`}>
                 <strong>{brandingConfig.showSermonTitle ? sermonTitle || "Sermon title" : "Clip"}</strong>
                 <span>
                   {brandingConfig.showPreacherName
@@ -796,14 +849,15 @@ export function ClipStudioLivePreview({
               <div
                 className={`clip-studio-live-hook hook-${hookOverlay.position} hook-${hookOverlay.animation} hook-${hookOverlay.size} ${
                   hookOverlay.bold ? "is-bold" : ""
-                }`}
+                }${showLowerThird && lowerThirdPlacement === "TOP" && hookOverlay.position === "top" ? " avoids-top-brand-rail" : ""}`}
+                style={hookAppearanceStyle}
                 onPointerDown={(event) => startOverlayDrag(event, "hook")}
                 onPointerMove={moveOverlayDrag}
                 onPointerUp={endOverlayDrag}
                 onPointerCancel={endOverlayDrag}
                 title="Drag hook overlay"
               >
-                {hookOverlay.text}
+                {captionStyle.visual.uppercase ? hookOverlay.text.toUpperCase() : hookOverlay.text}
               </div>
             ) : null}
 
@@ -877,9 +931,7 @@ export function ClipStudioLivePreview({
               {editPreview.applyCaptionsToClip ? <span>Captions On</span> : null}
               {brandingEnabled ? (
                 <span>
-                  {captionsOverrideBranding && showWatermark
-                    ? "Branding On"
-                    : BRANDING_PRESET_LABELS[brandingConfig.preset]}
+                  {BRANDING_PRESET_LABELS[brandingConfig.preset]}
                 </span>
               ) : null}
               {speechCleanupPreviewPlan.enabled ? <span>Dead Air Removed</span> : null}
@@ -903,9 +955,9 @@ export function ClipStudioLivePreview({
                 Timed brand cards use the same opening and closing windows in preview and preparation.
               </p>
             ) : null}
-            {lowerThirdYieldedToCaptions ? (
+            {lowerThirdMovedForCaptions ? (
               <p className="clip-studio-preview-truth-note">
-                The lower third is hidden because on-video captions use the same safe area. The final video follows this preview.
+                The brand rail moves away from the caption position, so both remain visible in the final video.
               </p>
             ) : null}
           </div>

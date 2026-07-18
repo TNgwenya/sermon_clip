@@ -55,6 +55,7 @@ import { resolveBrandingConfig } from "@/lib/clipBranding";
 import { buildClipAssetRecoveryPlan } from "@/lib/clipAssetRecovery";
 import { resolveClipStudioPreparationState } from "@/lib/clipStudioPrepare";
 import { getBrandingSettings } from "@/server/branding/settings";
+import { resolveAvailableBrandingLogoPath } from "@/server/branding/logoStorage";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import { isFreshRemotePreview, resolveBestPreviewCandidate } from "@/lib/clipPreview";
 import { extractSpeechCleanupEdits } from "@/lib/speechCleanupPlan";
@@ -335,7 +336,12 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     manualCropKeyframes: clip.manualCropKeyframes,
   });
   const brandingConfig = resolveBrandingConfig(clip.captionData);
-  const logoAvailable = Boolean(appBranding?.churchLogoPath && appBranding.churchLogoPath.trim().length > 0);
+  const brandChurchName = sermon.churchName.trim() || appBranding?.churchName.trim() || "";
+  const availableLogoPath = await resolveAvailableBrandingLogoPath(appBranding?.churchLogoPath);
+  const logoAvailable = Boolean(availableLogoPath);
+  const logoSrc = logoAvailable
+    ? `/api/branding/logo?v=${appBranding?.updatedAt.getTime() ?? 0}`
+    : null;
   const exportHistory = resolveExportHistory(clip.captionData);
   const latestExportHistory = exportHistory.filter((record) => record.isLatest).slice(0, 4);
   const [exportHistoryWithFileState, currentExportFileExists] = await Promise.all([
@@ -531,9 +537,10 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       initialExportSettings={exportSettings}
       initialBrandingConfig={brandingConfig}
       initialEditPreview={initialEditPreview}
-      churchName={sermon.churchName}
+      churchName={brandChurchName}
       sermonTitle={sermon.title}
       preacherName={sermon.speakerName}
+      logoSrc={logoSrc}
     >
       <main className="container clip-studio-shell stack-md">
         <header className="clip-studio-topbar" aria-labelledby="clip-studio-title">
@@ -717,10 +724,11 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
               <div className="stack-md">
                 <ClipStudioBranding
                   initialConfig={brandingConfig}
-                  churchName={sermon.churchName}
+                  churchName={brandChurchName}
                   sermonTitle={sermon.title}
                   preacherName={sermon.speakerName}
                   logoAvailable={logoAvailable}
+                  logoSrc={logoSrc}
                 />
                 <ClipStudioCoverFrame
                   clipId={clip.id}

@@ -2140,12 +2140,17 @@ type ValidatedClipBatch = {
 };
 
 class ClipSelectionResponseValidationError extends Error {
+  readonly rawResponse: string;
+  readonly validationError: unknown;
+
   constructor(
-    readonly rawResponse: string,
-    readonly validationError: unknown,
+    rawResponse: string,
+    validationError: unknown,
   ) {
     super(formatClipParseError(validationError));
     this.name = "ClipSelectionResponseValidationError";
+    this.rawResponse = rawResponse;
+    this.validationError = validationError;
   }
 }
 

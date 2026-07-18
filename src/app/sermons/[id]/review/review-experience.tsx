@@ -35,6 +35,7 @@ import {
   type ReviewRiskLevel,
   type ReviewSort,
 } from "@/lib/clipReview";
+import { resolveClipPreviewRecovery } from "@/lib/clipPreview";
 import {
   buildTranscriptReviewGuidance,
   type TranscriptReviewEvidenceView,
@@ -726,6 +727,10 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             });
             const previewRequestFailed = failedPreviewClipIds.includes(clip.id);
             const canPreviewVideo = clip.canPreviewVideo && !previewRequestFailed;
+            const previewRecovery = resolveClipPreviewRecovery({
+              clipStatus: clip.status,
+              renderStatus: clip.renderStatus,
+            });
             const isApprovedState = clip.status === "APPROVED" || clip.status === "EXPORTED";
             const isPostReady = clip.status === "EXPORTED" || clip.exportStatus === "COMPLETED";
             const contextLabel = clip.riskLevel !== "LOW" || clip.contextWarning
@@ -995,6 +1000,21 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                     <details className="review-card-more-actions">
                       <summary>More actions</summary>
                       <div className="review-feed-action-stack review-feed-action-stack-secondary">
+                        <button
+                          type="button"
+                          className="button secondary review-action-secondary"
+                          disabled={isPending || previewRecovery.disabled}
+                          onClick={() => {
+                            if (!previewRecovery.action) return;
+                            applySingleAction(() => (
+                              previewRecovery.action === "rerender"
+                              ? rerenderClipCandidateAction(clip.id)
+                              : renderClipCandidateAction(clip.id)
+                            ));
+                          }}
+                        >
+                          {previewRecovery.label}
+                        </button>
                         {clip.status === "APPROVED" ? (
                           <button
                             type="button"

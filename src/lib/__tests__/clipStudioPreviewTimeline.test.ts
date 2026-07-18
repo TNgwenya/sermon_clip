@@ -7,6 +7,7 @@ import {
   resolveActiveCaptionCueText,
   resolveActiveCaptionWordIndex,
   resolveCompositionPreviewDuration,
+  resolveHookOverlayAnimationFrame,
   resolveSpeechCleanupJumpTarget,
   shouldShowHookOverlay,
   synchronizePreviewBackdropMedia,
@@ -133,6 +134,20 @@ describe("shouldShowHookOverlay", () => {
   it("hides disabled or empty hooks", () => {
     expect(shouldShowHookOverlay({ ...baseHook, enabled: false }, 2)).toBe(false);
     expect(shouldShowHookOverlay({ ...baseHook, text: "  " }, 2)).toBe(false);
+  });
+});
+
+describe("resolveHookOverlayAnimationFrame", () => {
+  it("matches the rendered hook fade windows", () => {
+    expect(resolveHookOverlayAnimationFrame(baseHook, 1).opacity).toBe(0);
+    expect(resolveHookOverlayAnimationFrame(baseHook, 1.35).opacity).toBe(1);
+    expect(resolveHookOverlayAnimationFrame(baseHook, 7).opacity).toBe(0);
+  });
+
+  it("previews the same pan and pop travel used by the renderer", () => {
+    expect(resolveHookOverlayAnimationFrame({ ...baseHook, animation: "pan-in" }, 1).translateXPercent).toBe(-12.5);
+    expect(resolveHookOverlayAnimationFrame({ ...baseHook, animation: "pan-in" }, 1.35).translateXPercent).toBe(0);
+    expect(resolveHookOverlayAnimationFrame({ ...baseHook, animation: "pop" }, 1).translateYPercent).toBe(8);
   });
 });
 

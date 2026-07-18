@@ -42,6 +42,27 @@ describe("validateOverlayEligibility — successful overlay render eligibility",
   });
 });
 
+describe("hook and brand rail placement", () => {
+  it("moves a top hook below a top branding rail", () => {
+    const hook = {
+      text: "A message-safe hook",
+      position: "top" as const,
+      size: "medium" as const,
+      bold: true,
+      animation: "fade" as const,
+      startSeconds: 0,
+      durationSeconds: 6,
+      endSeconds: 6,
+      width: 900,
+      height: 220,
+      captionStylePresetId: "clean-lower" as const,
+    };
+
+    expect(__clipOverlayTestUtils.buildHookOverlayPosition(hook)).toContain("y=112");
+    expect(__clipOverlayTestUtils.buildHookOverlayPosition(hook, true)).toContain("y=328");
+  });
+});
+
 describe("validateOverlayEligibility — missing rendered clip failure", () => {
   it("blocks when rendered clip file does not exist", () => {
     const result = validateOverlayEligibility(validInput({ renderedClipExists: false }));
@@ -277,7 +298,12 @@ describe("buildOverlayFilter — metadata persistence", () => {
 });
 
 describe("buildHookOverlayFilter", () => {
-  const { buildHookOverlayFilter } = __clipOverlayTestUtils;
+  const {
+    buildHookOverlayFilter,
+    buildHookOverlayPosition,
+    buildHookOverlaySvg,
+    extractHookOverlaySpec,
+  } = __clipOverlayTestUtils;
 
   it("builds a timed drawtext filter for enabled hook overlays", () => {
     const filter = buildHookOverlayFilter({
@@ -367,6 +393,27 @@ describe("buildHookOverlayFilter", () => {
 
   it("returns null when hook overlay is disabled", () => {
     expect(buildHookOverlayFilter({ hookOverlay: { enabled: false, text: "Hidden" } })).toBeNull();
+  });
+
+  it("burns the hook with the selected caption preset visuals", () => {
+    const spec = extractHookOverlaySpec({
+      captionStylePresetId: "golden-hour",
+      hookOverlay: {
+        enabled: true,
+        text: "Hope is rising",
+        position: "top",
+        startSeconds: 0,
+        durationSeconds: 6,
+        animation: "pan-in",
+        size: "medium",
+        bold: true,
+      },
+    });
+
+    expect(spec?.captionStylePresetId).toBe("golden-hour");
+    expect(buildHookOverlaySvg(spec!)).toContain('fill="#1C1408"');
+    expect(buildHookOverlaySvg(spec!)).toContain('fill="#FFFBEB"');
+    expect(buildHookOverlayPosition(spec!)).toContain("*120");
   });
 });
 

@@ -123,7 +123,7 @@ import {
 } from "@/server/runtime/workerRuntime";
 import { assertMediaStorageCapacity } from "@/server/media/storageCapacity";
 import { formatSecondsForTimestampInput } from "@/lib/sermonSegment";
-import type { CaptionStylePresetId } from "@/lib/captionStylePresets";
+import { isCaptionStylePresetId, type CaptionStylePresetId } from "@/lib/captionStylePresets";
 import {
   normalizeBrollLayerConfig,
   normalizeHookOverlayForClipDuration,
@@ -2462,12 +2462,12 @@ export async function rerenderClipCandidateAction(clipId: string): Promise<Rende
   return runOperationWithLogging(
     { sermonId: clip.sermonId, operation: "rerender_clip", clipId: clip.id },
     async () => {
-      if (clip.status === "REJECTED" || clip.status === "SUGGESTED") {
+      if (clip.status === "REJECTED") {
         return {
           success: false,
           message: formatRecoveryGuidance(
-            "Preparing this video is blocked because the clip is not approved.",
-            "Approve the clip, then prepare the video again.",
+            "Preparing this video is blocked because the clip is not selected.",
+            "Move the clip back to review, then prepare the preview again.",
           ),
         };
       }
@@ -4168,22 +4168,7 @@ export async function updateClipCandidateAction(
 
 function normalizeClipStudioCaptionStylePresetId(value: string): CaptionStylePresetId | null {
   const trimmed = value.trim();
-  if (
-    trimmed === "bold-sermon" ||
-    trimmed === "kinetic-pop" ||
-    trimmed === "creator-highlight" ||
-    trimmed === "soft-bubble" ||
-    trimmed === "clean-lower" ||
-    trimmed === "high-contrast" ||
-    trimmed === "youth-social" ||
-    trimmed === "minimal-church" ||
-    trimmed === "scripture-focus" ||
-    trimmed === "cinematic-testimony"
-  ) {
-    return trimmed;
-  }
-
-  return null;
+  return isCaptionStylePresetId(trimmed) ? trimmed : null;
 }
 
 function normalizeClipStudioCaptionPosition(value: unknown): CaptionPosition {

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { type CSSProperties, useEffect, useMemo, useState } from "react";
 
 import { SectionCard, StatusBadge } from "@/components/ui";
@@ -22,6 +23,7 @@ type ClipStudioBrandingProps = {
   sermonTitle: string;
   preacherName: string;
   logoAvailable: boolean;
+  logoSrc: string | null;
 };
 
 export function ClipStudioBranding({
@@ -30,6 +32,7 @@ export function ClipStudioBranding({
   sermonTitle,
   preacherName,
   logoAvailable,
+  logoSrc,
 }: ClipStudioBrandingProps) {
   const isPending = false;
   const { updateBrandingConfig } = useClipStudioPreview();
@@ -106,14 +109,23 @@ export function ClipStudioBranding({
     >
       <div className="stack-md">
         <div className="clip-studio-effect-note">
-          <StatusBadge tone="success">Preview updated</StatusBadge>
+          <StatusBadge tone={enabled ? "success" : "neutral"}>{enabled ? "Brand active" : "Brand off"}</StatusBadge>
           <p>Branding choices update immediately. Save Draft keeps them; Prepare renders them into the final video.</p>
         </div>
 
-        <p className="muted small">
-          Prepared clips currently use your church name as the watermark.
-          {logoAvailable ? " Your saved logo remains available in Brand settings." : " You can still add a logo in Brand settings for future logo treatments."}
-        </p>
+        <div className="clip-studio-brand-kit-status">
+          <div className="clip-studio-brand-kit-mark" aria-hidden="true">
+            {logoSrc ? <Image src={logoSrc} alt="" width={48} height={48} unoptimized /> : <span>{(churchName || "Church").slice(0, 2).toUpperCase()}</span>}
+          </div>
+          <div>
+            <strong>{logoAvailable ? "Saved logo ready" : "No saved logo"}</strong>
+            <p className="muted small">
+              {logoAvailable
+                ? "The saved logo is applied automatically and kept clear of captions."
+                : "Add a logo in Brand settings; church-name branding still works without one."}
+            </p>
+          </div>
+        </div>
 
         <label className="review-checkbox-row">
           <input
@@ -141,8 +153,10 @@ export function ClipStudioBranding({
           <p className="muted small">{BRANDING_PRESET_DESCRIPTIONS[preset]}</p>
         </label>
 
-        <fieldset className="stack-sm" disabled={isPending || !enabled}>
+        <fieldset className="stack-sm clip-studio-brand-fields" disabled={isPending || !enabled}>
           <legend className="muted small">Branding fields</legend>
+
+          <div className="clip-studio-brand-toggle-grid">
 
           <label className="review-checkbox-row">
             <input
@@ -188,6 +202,10 @@ export function ClipStudioBranding({
             />
             <span>Add lower third</span>
           </label>
+
+          </div>
+
+          <div className="clip-studio-brand-timing-controls">
 
           <label className="review-checkbox-row">
             <input
@@ -236,6 +254,7 @@ export function ClipStudioBranding({
               <span className="muted small">{outroDurationSeconds.toFixed(1)} seconds before the clip ends</span>
             </label>
           ) : null}
+          </div>
         </fieldset>
 
         <label className="stack-sm">
@@ -254,23 +273,36 @@ export function ClipStudioBranding({
 
         <label className="stack-sm">
           Theme color
-          <input
-            type="text"
-            value={themeColor}
-            onChange={(event) => setThemeColor(event.target.value)}
-            placeholder="#0F766E"
-            disabled={isPending || !enabled}
-          />
+          <span className="clip-studio-brand-color-row">
+            <input
+              aria-label="Choose theme color"
+              type="color"
+              value={/^#[0-9A-Fa-f]{6}$/.test(themeColor) ? themeColor : "#0F766E"}
+              onChange={(event) => setThemeColor(event.target.value)}
+              disabled={isPending || !enabled}
+            />
+            <input
+              type="text"
+              value={themeColor}
+              onChange={(event) => setThemeColor(event.target.value)}
+              placeholder="#0F766E"
+              disabled={isPending || !enabled}
+            />
+          </span>
         </label>
 
         <div className={enabled ? "stack-sm clip-studio-brand-preview" : "stack-sm clip-studio-brand-preview is-disabled"}>
           <p className="muted small">Branding preview</p>
           <div className={`clip-studio-brand-frame background-${backgroundStyle.toLowerCase().replace(/_/g, "-")}`} style={previewStyle}>
             {enabled && previewConfig.introEnabled ? <div className="clip-studio-brand-intro">Opening · {introDurationSeconds.toFixed(1)}s</div> : null}
-            {enabled && watermarkEnabled ? (
-              <div className="clip-studio-brand-watermark">{churchName || "Church"}</div>
+            {enabled && logoSrc && (watermarkEnabled || preset === "MINIMAL_WATERMARK") ? (
+              <div className="clip-studio-brand-watermark has-logo">
+                <Image src={logoSrc} alt={`${churchName || "Church"} logo`} width={80} height={80} unoptimized />
+              </div>
+            ) : enabled && watermarkEnabled ? (
+              <div className="clip-studio-brand-watermark">{(churchName || "Church").slice(0, 2).toUpperCase()}</div>
             ) : null}
-            {enabled && lowerThirdEnabled ? (
+            {enabled && lowerThirdEnabled && preset !== "MINIMAL_WATERMARK" && preset !== "NO_BRANDING" ? (
               <div className="clip-studio-brand-lower-third">
                 <strong>{showSermonTitle ? sermonTitle || "Sermon title" : "Clip title"}</strong>
                 <span>{showPreacherName ? preacherName || "Preacher" : showChurchName ? churchName || "Church" : "Clean clip"}</span>
@@ -285,7 +317,7 @@ export function ClipStudioBranding({
             Church name: {churchName || "Not available"} · Sermon title: {sermonTitle || "Not available"} ·
             Preacher name: {preacherName || "Not available"}
           </p>
-          <p className="muted small">Brand logo saved: {logoAvailable ? "Yes" : "No"} · current prepared watermark uses church name text</p>
+          <p className="muted small">Brand logo: {logoAvailable ? "Applied automatically" : "Church-name fallback"} · captions keep their own safe area</p>
         </div>
       </div>
     </SectionCard>

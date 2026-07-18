@@ -20,6 +20,7 @@ import { spawn } from "node:child_process";
 import type { ClipCandidate, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { resolveCaptionStylePreset, type CaptionStylePresetId } from "@/lib/captionStylePresets";
 import {
   appendJobLog,
   createProcessingJob,
@@ -45,16 +46,19 @@ import {
   DEFAULT_INTRO_DURATION_SECONDS,
   DEFAULT_OUTRO_DURATION_SECONDS,
   normalizeBrandingDurationSeconds,
+  resolveBrandingLowerThirdPlacement,
   resolveBrandingConfig,
   type ClipBrandingConfig,
 } from "@/lib/clipBranding";
 import { getSharp } from "@/server/agents/sharpClient";
+import { resolveAvailableBrandingLogoPath } from "@/server/branding/logoStorage";
 import {
   extractSpeechCleanupCutPlan,
   remapTimelineRangeToCleanedTime,
 } from "@/lib/speechCleanupPlan";
 import {
   extractBrollLayerConfig,
+  extractCaptionPosition,
   type BrollCardPosition,
   type BrollCardTone,
 } from "@/lib/clipStudio";
@@ -99,6 +103,9 @@ type SermonMetadataForOverlay = {
 
 type BrandingForOverlay = {
   primaryBrandColor: string;
+  churchName?: string;
+  churchLogoPath?: string | null;
+  watermarkPosition?: "TOP_LEFT" | "TOP_RIGHT" | "BOTTOM_LEFT" | "BOTTOM_RIGHT" | "CENTER";
 } | null;
 
 type HookOverlaySpec = {
@@ -110,6 +117,7 @@ type HookOverlaySpec = {
   animation: "fade" | "pan-in" | "pop" | "none";
   size: "small" | "medium" | "large";
   bold: boolean;
+  captionStylePresetId?: CaptionStylePresetId;
   width: number;
   height: number;
 };
@@ -376,6 +384,11 @@ function extractHookOverlaySpec(captionData: unknown): HookOverlaySpec | null {
     return null;
   }
   const remappedDurationSeconds = remappedRange.endSeconds - remappedRange.startSeconds;
+  const captionStylePresetId = resolveCaptionStylePreset(
+    typeof (captionData as Record<string, unknown>)["captionStylePresetId"] === "string"
+      ? (captionData as Record<string, unknown>)["captionStylePresetId"] as string
+      : undefined,
+  ).id;
 
   return {
     text: record["text"].trim(),
@@ -386,6 +399,7 @@ function extractHookOverlaySpec(captionData: unknown): HookOverlaySpec | null {
     animation,
     size,
     bold: record["bold"] !== false,
+    captionStylePresetId,
     width: 960,
     height: size === "large" ? 260 : size === "small" ? 180 : 220,
   };
@@ -413,7 +427,7 @@ function escapeSvgText(value: string): string {
     .trim();
 }
 
-function wrapOverlayText(value: string, maxLineLength: number): string[] {
+function wrapOverlayText(value: string, maxLineLength: number, maxLines = 3): string[] {
   const words = value.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
   const lines: string[] = [];
   let current = "";
@@ -433,23 +447,38 @@ function wrapOverlayText(value: string, maxLineLength: number): string[] {
     lines.push(current);
   }
 
-  return lines.slice(0, 3);
+  if (lines.length <= maxLines) {
+    return lines;
+  }
+
+  const visibleLines = lines.slice(0, maxLines);
+  const lastIndex = visibleLines.length - 1;
+  const lastLine = visibleLines[lastIndex] ?? "";
+  visibleLines[lastIndex] = `${lastLine.slice(0, Math.max(1, maxLineLength - 1)).trimEnd()}…`;
+  return visibleLines;
 }
 
 function buildHookOverlaySvg(spec: HookOverlaySpec): string {
+  const visual = resolveCaptionStylePreset(spec.captionStylePresetId).visual;
   const fontSize = spec.size === "large" ? 56 : spec.size === "small" ? 34 : 44;
   const lineHeight = Math.round(fontSize * 1.18);
-  const lines = wrapOverlayText(spec.text, spec.size === "large" ? 26 : spec.size === "small" ? 38 : 32);
+  const displayText = visual.uppercase ? spec.text.toUpperCase() : spec.text;
+  const lines = wrapOverlayText(displayText, spec.size === "large" ? 26 : spec.size === "small" ? 38 : 32);
   const totalTextHeight = Math.max(lineHeight, lines.length * lineHeight);
   const firstY = Math.round((spec.height - totalTextHeight) / 2) + 4;
-  const fontWeight = spec.bold ? 900 : 700;
+  const fontWeight = spec.bold ? visual.fontWeight : 700;
+  const fontFamily = visual.fontFamily === "serif"
+    ? "Georgia, Times New Roman, serif"
+    : "Arial, Helvetica, sans-serif";
 
   return `
     <svg xmlns="http://www.w3.org/2000/svg" width="${spec.width}" height="${spec.height}" viewBox="0 0 ${spec.width} ${spec.height}">
-      <rect x="0" y="0" width="${spec.width}" height="${spec.height}" rx="34" fill="#000000" fill-opacity="0.66" />
-      <rect x="16" y="16" width="${spec.width - 32}" height="${spec.height - 32}" rx="26" fill="none" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="2" />
+      <rect x="0" y="0" width="${spec.width}" height="${spec.height}" rx="${visual.borderRadius}" fill="${visual.backgroundColor}" fill-opacity="${visual.backgroundOpacity}" />
+      ${visual.borderWidth > 0 && visual.borderOpacity > 0
+        ? `<rect x="${visual.borderWidth / 2}" y="${visual.borderWidth / 2}" width="${spec.width - visual.borderWidth}" height="${spec.height - visual.borderWidth}" rx="${Math.max(0, visual.borderRadius - visual.borderWidth / 2)}" fill="none" stroke="${visual.borderColor}" stroke-opacity="${visual.borderOpacity}" stroke-width="${visual.borderWidth}" />`
+        : ""}
       ${lines.map((line, index) => (
-        `<text x="${spec.width / 2}" y="${firstY + index * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="${fontWeight}" fill="#FFFFFF" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="#000000" stroke-width="7" stroke-linejoin="round">${escapeSvgText(line)}</text>`
+        `<text x="${spec.width / 2}" y="${firstY + index * lineHeight}" font-family="${fontFamily}" font-size="${fontSize}" font-weight="${fontWeight}" fill="${visual.textColor}" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="${visual.textStrokeColor}" stroke-width="${visual.textStrokeWidth}" stroke-linejoin="round">${escapeSvgText(line)}</text>`
       )).join("\n      ")}
     </svg>
   `;
@@ -460,16 +489,23 @@ async function renderHookOverlayPng(outputPath: string, spec: HookOverlaySpec): 
   await sharp(Buffer.from(buildHookOverlaySvg(spec))).png().toFile(/* turbopackIgnore: true */ outputPath);
 }
 
-function buildHookOverlayPosition(spec: HookOverlaySpec): string {
-  if (spec.position === "top") {
-    return "x=(W-w)/2:y=112";
-  }
+function buildHookOverlayPosition(spec: HookOverlaySpec, avoidsTopBrandRail = false): string {
+  const baseX = "(W-w)/2";
+  const baseY = spec.position === "top"
+    ? avoidsTopBrandRail ? "328" : "112"
+    : spec.position === "lower"
+      ? "H-h-360"
+      : "(H-h)/2";
+  const introWindow = Math.min(0.35, Math.max(0.12, spec.durationSeconds / 6));
+  const introEnd = spec.startSeconds + introWindow;
+  const x = spec.animation === "pan-in"
+    ? `'${baseX}-if(lt(t,${introEnd.toFixed(3)}),(1-((t-${spec.startSeconds.toFixed(3)})/${introWindow.toFixed(3)}))*120,0)'`
+    : baseX;
+  const y = spec.animation === "pop"
+    ? `'${baseY}+if(lt(t,${introEnd.toFixed(3)}),(1-((t-${spec.startSeconds.toFixed(3)})/${introWindow.toFixed(3)}))*18,0)'`
+    : baseY;
 
-  if (spec.position === "lower") {
-    return "x=(W-w)/2:y=H-h-360";
-  }
-
-  return "x=(W-w)/2:y=(H-h)/2";
+  return `x=${x}:y=${y}`;
 }
 
 function extractBrollOverlaySpecs(captionData: unknown): BrollCardOverlaySpec[] {
@@ -502,10 +538,10 @@ function extractBrollOverlaySpecs(captionData: unknown): BrollCardOverlaySpec[] 
       startSeconds: remappedRange.startSeconds,
       durationSeconds: remappedRange.endSeconds - remappedRange.startSeconds,
       endSeconds: remappedRange.endSeconds,
-      width: isFull ? 920 : 860,
-      height: isFull ? 620 : 300,
+      width: isFull ? 900 : 840,
+      height: isFull ? 520 : 260,
     }];
-  });
+  }).sort((left, right) => left.startSeconds - right.startSeconds);
 }
 
 function brollToneColors(tone: BrollCardTone): { background: string; border: string; accent: string } {
@@ -525,8 +561,8 @@ function brollToneColors(tone: BrollCardTone): { background: string; border: str
 function buildBrollCardSvg(spec: BrollCardOverlaySpec): string {
   const colors = brollToneColors(spec.tone);
   const isFull = spec.position === "full";
-  const fontSize = isFull ? 50 : 38;
-  const labelFontSize = isFull ? 22 : 18;
+  const fontSize = isFull ? 48 : 36;
+  const labelFontSize = isFull ? 21 : 17;
   const lineHeight = Math.round(fontSize * 1.16);
   const lines = wrapOverlayText(spec.text, isFull ? 26 : 34);
   const textBlockHeight = lines.length * lineHeight;
@@ -534,9 +570,10 @@ function buildBrollCardSvg(spec: BrollCardOverlaySpec): string {
 
   return `
     <svg xmlns="http://www.w3.org/2000/svg" width="${spec.width}" height="${spec.height}" viewBox="0 0 ${spec.width} ${spec.height}">
-      <rect x="0" y="0" width="${spec.width}" height="${spec.height}" rx="36" fill="${colors.background}" fill-opacity="0.86" />
-      <rect x="18" y="18" width="${spec.width - 36}" height="${spec.height - 36}" rx="28" fill="none" stroke="${colors.border}" stroke-opacity="0.52" stroke-width="3" />
-      <rect x="0" y="0" width="${spec.width}" height="${spec.height}" rx="36" fill="url(#cardSheen)" fill-opacity="0.18" />
+      <rect x="0" y="0" width="${spec.width}" height="${spec.height}" rx="36" fill="${colors.background}" fill-opacity="0.74" />
+      <rect x="18" y="18" width="${spec.width - 36}" height="${spec.height - 36}" rx="28" fill="none" stroke="${colors.border}" stroke-opacity="0.68" stroke-width="3" />
+      <rect x="0" y="0" width="${spec.width}" height="${spec.height}" rx="36" fill="url(#cardSheen)" fill-opacity="0.24" />
+      <rect x="${Math.round(spec.width * 0.34)}" y="${isFull ? 96 : 72}" width="${Math.round(spec.width * 0.32)}" height="5" rx="3" fill="${colors.accent}" fill-opacity="0.88" />
       <defs>
         <linearGradient id="cardSheen" x1="0" x2="1" y1="0" y2="1">
           <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.34" />
@@ -558,11 +595,11 @@ async function renderBrollOverlayPng(outputPath: string, spec: BrollCardOverlayS
 
 function buildBrollOverlayPosition(spec: BrollCardOverlaySpec): string {
   if (spec.position === "upper") {
-    return "x=(W-w)/2:y=180";
+    return "x=(W-w)/2:y=340";
   }
 
   if (spec.position === "lower") {
-    return "x=(W-w)/2:y=H-h-430";
+    return "x=(W-w)/2:y=H-h-610";
   }
 
   return "x=(W-w)/2:y=(H-h)/2";
@@ -579,6 +616,7 @@ function buildOverlayFilterComplex(input: {
   brollOverlayInputStartIndex: number | null;
   hookOverlaySpec: HookOverlaySpec | null;
   hookOverlayInputIndex: number | null;
+  hookAvoidsTopBrandRail?: boolean;
 }): string {
   const parts: string[] = [];
   let current = "[0:v]";
@@ -625,7 +663,7 @@ function buildOverlayFilterComplex(input: {
       : "format=rgba";
     parts.push(`[${input.hookOverlayInputIndex}:v]${hookFilters}${hookLabel}`);
     parts.push(
-      `${current}${hookLabel}overlay=${buildHookOverlayPosition(spec)}:enable='between(t,${spec.startSeconds.toFixed(3)},${spec.endSeconds.toFixed(3)})':eof_action=pass[hooked]`,
+      `${current}${hookLabel}overlay=${buildHookOverlayPosition(spec, input.hookAvoidsTopBrandRail)}:enable='between(t,${spec.startSeconds.toFixed(3)},${spec.endSeconds.toFixed(3)})':eof_action=pass[hooked]`,
     );
     current = "[hooked]";
   }
@@ -641,6 +679,7 @@ export const __clipOverlayTestUtils = {
   buildOverlayFilter,
   buildHookOverlayFilter,
   extractHookOverlaySpec,
+  buildHookOverlayPosition,
   extractBrollOverlaySpecs,
   shouldBrandingLowerThirdYieldToCaptions,
   buildHookOverlaySvg,
@@ -727,6 +766,9 @@ async function loadBrandingForOverlay(): Promise<BrandingForOverlay> {
     where: { id: "local" },
     select: {
       primaryBrandColor: true,
+      churchName: true,
+      churchLogoPath: true,
+      watermarkPosition: true,
     },
   });
 
@@ -1001,7 +1043,7 @@ export async function renderClipOverlay(
     const outroOverlayPath = getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".branding-outro.png");
     const hookOverlaySpec = extractHookOverlaySpec(clip.captionData);
     const brollOverlaySpecs = extractBrollOverlaySpecs(clip.captionData);
-    const captionsOverrideBranding = shouldBrandingLowerThirdYieldToCaptions(clip.captionData);
+    const captionsRequireSafeBrandingPlacement = shouldBrandingLowerThirdYieldToCaptions(clip.captionData);
     const brollOverlayPaths = brollOverlaySpecs.map((_, index) =>
       getTempOverlayPath(outputPath).replace(/\.mp4$/i, `.broll-${index + 1}.png`),
     );
@@ -1012,19 +1054,26 @@ export async function renderClipOverlay(
       clip.captionData,
       branding?.primaryBrandColor ?? null,
     );
+    const configuredLogoPath = await resolveAvailableBrandingLogoPath(branding?.churchLogoPath);
+    const logoAvailable = Boolean(configuredLogoPath);
     const brandingContext = {
       format: "VERTICAL_9_16" as const,
       sermonTitle: sermon.title,
       preacherName: sermon.speakerName,
-      churchName: sermon.churchName,
+      churchName: sermon.churchName.trim() || branding?.churchName?.trim() || "",
       themeColor: brandingConfig.themeColor ?? branding?.primaryBrandColor ?? null,
-      watermarkPosition: "BOTTOM_RIGHT" as const,
+      watermarkPosition: branding?.watermarkPosition ?? "TOP_RIGHT" as const,
       width: overlayDimensions.width,
       height: overlayDimensions.height,
+      logoPath: logoAvailable ? configuredLogoPath : null,
+      lowerThirdPlacement: resolveBrandingLowerThirdPlacement({
+        applyCaptionsToClip: captionsRequireSafeBrandingPlacement,
+        captionCueCount: captionsRequireSafeBrandingPlacement ? 1 : 0,
+        captionPosition: extractCaptionPosition(clip.captionData),
+      }),
     };
     const baseBrandingConfig: ClipBrandingConfig = {
       ...brandingConfig,
-      lowerThirdEnabled: brandingConfig.lowerThirdEnabled && !captionsOverrideBranding,
       introEnabled: false,
       outroEnabled: false,
     };
@@ -1103,6 +1152,14 @@ export async function renderClipOverlay(
       brollOverlayInputStartIndex,
       hookOverlaySpec,
       hookOverlayInputIndex,
+      hookAvoidsTopBrandRail: Boolean(
+        hookOverlaySpec?.position === "top"
+        && brandingConfig.enabled
+        && brandingConfig.lowerThirdEnabled
+        && brandingConfig.preset !== "MINIMAL_WATERMARK"
+        && brandingConfig.preset !== "NO_BRANDING"
+        && brandingContext.lowerThirdPlacement === "TOP"
+      ),
     });
 
     const tempOutputPath = getTempOverlayPath(outputPath);
@@ -1160,6 +1217,11 @@ export async function renderClipOverlay(
         hookOverlayApplied: Boolean(hookOverlaySpec),
         brollOverlayCount: brollOverlaySpecs.length,
         brandingApplied: overlayEnabled || timedBrandingLayers.length > 0,
+        logoApplied: Boolean(
+          brandingConfig.enabled
+          && logoAvailable
+          && (brandingConfig.watermarkEnabled || brandingConfig.preset === "MINIMAL_WATERMARK")
+        ),
         introDurationSeconds: timedBrandingLayers[0]?.startSeconds === 0
           ? timedBrandingLayers[0].endSeconds
           : null,

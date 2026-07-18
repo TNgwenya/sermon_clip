@@ -24,6 +24,7 @@ import {
   markCaptionBurnAssetFailed,
 } from "@/server/regeneration/dependencies";
 import {
+  isCaptionStylePresetId,
   resolveCaptionStylePreset,
   type CaptionStylePresetId,
 } from "@/lib/captionStylePresets";
@@ -241,6 +242,22 @@ function buildCaptionForceStyle(
     return applyAppearance(withCaptionPlacement(`${base},FontSize=20,PrimaryColour=&H00F8FAFC,OutlineColour=&H00111827,BackColour=&HAA111827,Outline=2,Shadow=2,Alignment=2,MarginV=54`, safeArea, captionPosition));
   }
 
+  if (preset.id === "golden-hour") {
+    return applyAppearance(withCaptionPlacement(`${boxedBase},FontSize=24,PrimaryColour=&H00EBFBFF,OutlineColour=&H0003141C,BackColour=&HDB08141C,Outline=2,Shadow=2,Alignment=2,MarginV=62`, safeArea, captionPosition));
+  }
+
+  if (preset.id === "royal-focus") {
+    return applyAppearance(withCaptionPlacement(`${boxedBase},FontSize=24,PrimaryColour=&H00FFF3F5,OutlineColour=&H0038131E,BackColour=&HE038131E,Outline=2,Shadow=2,Alignment=2,MarginV=62`, safeArea, captionPosition));
+  }
+
+  if (preset.id === "editorial-serif") {
+    return applyAppearance(withCaptionPlacement(`${boxedBase.replace("FontName=Arial", "FontName=Georgia")},FontSize=21,PrimaryColour=&H00121C24,OutlineColour=&H00E7F8FF,BackColour=&HF0E7F8FF,Outline=1,Shadow=1,Alignment=2,MarginV=56`, safeArea, captionPosition));
+  }
+
+  if (preset.id === "clean-outline") {
+    return applyAppearance(withCaptionPlacement(`${base},FontSize=25,PrimaryColour=&H00FFFFFF,OutlineColour=&H00170602,BackColour=&H75170602,Outline=5,Shadow=2,Alignment=2,MarginV=66`, safeArea, captionPosition));
+  }
+
   return applyAppearance(withCaptionPlacement(`${base},FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=3,Alignment=2,MarginV=64`, safeArea, captionPosition));
 }
 
@@ -284,22 +301,7 @@ function resolveClipCaptionStylePresetId(
   }
 
   const value = (captionData as Record<string, unknown>)["captionStylePresetId"];
-  if (
-    value === "bold-sermon" ||
-    value === "kinetic-pop" ||
-    value === "creator-highlight" ||
-    value === "soft-bubble" ||
-    value === "clean-lower" ||
-    value === "high-contrast" ||
-    value === "youth-social" ||
-    value === "minimal-church" ||
-    value === "scripture-focus" ||
-    value === "cinematic-testimony"
-  ) {
-    return value;
-  }
-
-  return fallback;
+  return isCaptionStylePresetId(value) ? value : fallback;
 }
 
 function shouldApplyCaptionsToClip(captionData: unknown): boolean {
@@ -507,19 +509,27 @@ function captionOverlayLineLength(appearance: CaptionAppearanceSettings): number
   return 34;
 }
 
-function formatCaptionOverlayText(value: string, appearance: CaptionAppearanceSettings): string {
+function formatCaptionOverlayText(
+  value: string,
+  appearance: CaptionAppearanceSettings,
+  presetId?: CaptionStylePresetId,
+): string {
   const normalized = value.replace(/\s+/g, " ").trim();
-  return appearance.uppercase ? normalized.toUpperCase() : normalized;
+  const preset = resolveCaptionStylePreset(presetId);
+  return appearance.uppercase || preset.visual.uppercase ? normalized.toUpperCase() : normalized;
 }
 
 function buildCaptionOverlaySvg(
   cue: CaptionCueOverlay,
   appearance: CaptionAppearanceSettings = DEFAULT_CAPTION_APPEARANCE_SETTINGS,
+  presetId?: CaptionStylePresetId,
 ): string {
   const width = 960;
+  const preset = resolveCaptionStylePreset(presetId);
+  const visual = preset.visual;
   const fontSize = captionOverlayFontSize(appearance);
   const maxLineLength = captionOverlayLineLength(appearance);
-  const displayText = formatCaptionOverlayText(cue.text, appearance);
+  const displayText = formatCaptionOverlayText(cue.text, appearance, preset.id);
   const wordLines = cue.activeWordIndex === undefined ? [] : wrapCaptionWords(displayText, maxLineLength, appearance.maxLines);
   const lines = wordLines.length > 0 ? [] : wrapCaptionText(displayText, maxLineLength, appearance.maxLines);
   const lineHeight = Math.round(fontSize * 1.22);
@@ -527,21 +537,27 @@ function buildCaptionOverlaySvg(
   const totalTextHeight = Math.max(lineHeight, lineCount * lineHeight);
   const height = Math.max(190, totalTextHeight + 62);
   const firstY = Math.round((height - totalTextHeight) / 2) + 8;
-  const activeFontSize = Math.round(fontSize * 1.08);
+  const activeFontSize = Math.round(fontSize * 1.04);
+  const fontFamily = visual.fontFamily === "serif"
+    ? "Georgia, Times New Roman, serif"
+    : "Arial, Helvetica, sans-serif";
 
   return `
     <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-      <rect x="0" y="0" width="${width}" height="${height}" rx="28" fill="#000000" fill-opacity="0.68" />
+      <rect x="0" y="0" width="${width}" height="${height}" rx="${visual.borderRadius}" fill="${visual.backgroundColor}" fill-opacity="${visual.backgroundOpacity}" />
+      ${visual.borderWidth > 0 && visual.borderOpacity > 0
+        ? `<rect x="${visual.borderWidth / 2}" y="${visual.borderWidth / 2}" width="${width - visual.borderWidth}" height="${height - visual.borderWidth}" rx="${Math.max(0, visual.borderRadius - visual.borderWidth / 2)}" fill="none" stroke="${visual.borderColor}" stroke-opacity="${visual.borderOpacity}" stroke-width="${visual.borderWidth}" />`
+        : ""}
       ${wordLines.length > 0
         ? wordLines.map((line, lineIndex) => (
-            `<text x="${width / 2}" y="${firstY + lineIndex * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="900" fill="#FFFFFF" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="#000000" stroke-width="5" stroke-linejoin="round">${line.map((word, wordIndex) => {
+            `<text x="${width / 2}" y="${firstY + lineIndex * lineHeight}" font-family="${fontFamily}" font-size="${fontSize}" font-weight="${visual.fontWeight}" fill="${visual.textColor}" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="${visual.textStrokeColor}" stroke-width="${visual.textStrokeWidth}" stroke-linejoin="round">${line.map((word, wordIndex) => {
               const isActive = word.index === cue.activeWordIndex;
               const prefix = wordIndex === 0 ? "" : " ";
-              return `<tspan fill="${isActive ? "#22C55E" : "#FFFFFF"}" font-size="${isActive ? activeFontSize : fontSize}">${escapeSvgText(`${prefix}${word.text}`)}</tspan>`;
+              return `<tspan fill="${isActive ? visual.activeTextColor : visual.textColor}" font-size="${isActive ? activeFontSize : fontSize}">${escapeSvgText(`${prefix}${word.text}`)}</tspan>`;
             }).join("")}</text>`
           )).join("\n      ")
         : lines.map((line, index) => (
-            `<text x="${width / 2}" y="${firstY + index * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="800" fill="#FFFFFF" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="#000000" stroke-width="5" stroke-linejoin="round">${escapeSvgText(line)}</text>`
+            `<text x="${width / 2}" y="${firstY + index * lineHeight}" font-family="${fontFamily}" font-size="${fontSize}" font-weight="${visual.fontWeight}" fill="${visual.textColor}" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="${visual.textStrokeColor}" stroke-width="${visual.textStrokeWidth}" stroke-linejoin="round">${escapeSvgText(line)}</text>`
           )).join("\n      ")}
     </svg>
   `;
@@ -800,13 +816,14 @@ async function createCaptionOverlayImages(input: {
   cues: CaptionCueOverlay[];
   outputPath: string;
   appearance?: CaptionAppearanceSettings;
+  captionStylePresetId?: CaptionStylePresetId;
 }): Promise<string[]> {
   const imagePaths: string[] = [];
   const sharp = await getSharp();
 
   for (const cue of input.cues) {
     const imagePath = input.outputPath.replace(/\.mp4$/i, `.cue-${String(cue.index).padStart(2, "0")}.png`);
-    await sharp(Buffer.from(buildCaptionOverlaySvg(cue, input.appearance))).png().toFile(imagePath);
+    await sharp(Buffer.from(buildCaptionOverlaySvg(cue, input.appearance, input.captionStylePresetId))).png().toFile(imagePath);
     imagePaths.push(imagePath);
   }
 
@@ -844,6 +861,7 @@ async function runFfmpegCaptionOverlayFallback(input: {
   cues: CaptionCueOverlay[];
   captionPosition?: CaptionPosition;
   appearance?: CaptionAppearanceSettings;
+  captionStylePresetId?: CaptionStylePresetId;
 }): Promise<void> {
   if (input.cues.length === 0) {
     throw new Error("Caption overlay fallback could not find any caption cues.");
@@ -853,6 +871,7 @@ async function runFfmpegCaptionOverlayFallback(input: {
     cues: input.cues,
     outputPath: input.outputPath,
     appearance: input.appearance,
+    captionStylePresetId: input.captionStylePresetId,
   });
 
   const command = commandFor(input.ffmpegPath);
@@ -1090,6 +1109,7 @@ async function burnCaptionsForClipCore(
       cues: wordHighlightCues,
       captionPosition,
       appearance: captionAppearance,
+      captionStylePresetId,
     });
   } else {
     if (wordHighlightCues.length > MAX_WORD_HIGHLIGHT_OVERLAY_CUES) {
@@ -1126,6 +1146,7 @@ async function burnCaptionsForClipCore(
         cues: renderCaptionCues,
         captionPosition,
         appearance: captionAppearance,
+        captionStylePresetId,
       });
     }
   }

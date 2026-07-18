@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   __clipBrandingTestUtils,
   resolveBrandBackgroundOpacity,
+  resolveBrandingLowerThirdPlacement,
   shouldBrandingLowerThirdYieldToCaptions,
 } from "@/lib/clipBranding";
 
@@ -32,6 +33,29 @@ describe("shouldBrandingLowerThirdYieldToCaptions", () => {
       applyCaptionsToClip: true,
       captionCueCount: 0,
     })).toBe(false);
+  });
+});
+
+describe("resolveBrandingLowerThirdPlacement", () => {
+  it("moves branding opposite the caption position instead of removing it", () => {
+    expect(resolveBrandingLowerThirdPlacement({
+      applyCaptionsToClip: true,
+      captionCueCount: 3,
+      captionPosition: "lower",
+    })).toBe("TOP");
+    expect(resolveBrandingLowerThirdPlacement({
+      applyCaptionsToClip: true,
+      captionCueCount: 3,
+      captionPosition: "top",
+    })).toBe("BOTTOM");
+  });
+
+  it("keeps the normal lower placement when captions are off", () => {
+    expect(resolveBrandingLowerThirdPlacement({
+      applyCaptionsToClip: false,
+      captionCueCount: 3,
+      captionPosition: "lower",
+    })).toBe("BOTTOM");
   });
 });
 
