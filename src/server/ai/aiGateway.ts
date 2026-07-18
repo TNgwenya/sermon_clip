@@ -7,6 +7,7 @@ import {
 import type { OpenAIReasoningEffort } from "@/server/ai/modelConfig";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
+import { createHash } from "node:crypto";
 import type { ChatCompletion } from "openai/resources/chat/completions";
 import type {
   Response,
@@ -44,6 +45,7 @@ type ValidatedLoggedChatCompletionInput<T> = LoggedChatCompletionInput & {
 const DEFAULT_CHAT_MAX_ATTEMPTS = 3;
 const DEFAULT_CHAT_RETRY_BASE_DELAY_MS = 1_500;
 const DEFAULT_VALIDATED_RESPONSE_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
+const MAX_PROMPT_CACHE_KEY_LENGTH = 64;
 const RETRYABLE_STATUS_CODES = new Set([408, 409, 429, 500, 502, 503, 504]);
 const inFlightRequests = new Map<string, Promise<unknown>>();
 
@@ -95,6 +97,19 @@ function resolvePositiveIntegerEnv(name: string, fallback: number): number {
 
   const value = Number(configured);
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+function buildPromptCacheKey(operation: string, promptVersion?: string | null): string {
+  const cacheKey = `${operation}:${promptVersion ?? "unversioned"}`;
+  if (cacheKey.length <= MAX_PROMPT_CACHE_KEY_LENGTH) {
+    return cacheKey;
+  }
+
+  // Preserve a readable prefix, while the hash avoids collisions between long
+  // operation/version combinations that share the same first characters.
+  const hash = createHash("sha256").update(cacheKey).digest("hex").slice(0, 12);
+  const prefixLength = MAX_PROMPT_CACHE_KEY_LENGTH - hash.length - 1;
+  return `${cacheKey.slice(0, prefixLength)}:${hash}`;
 }
 
 function usageFromResponse(response: Response): AiInvocationUsage {
@@ -261,7 +276,7 @@ export async function createLoggedChatCompletion<T>(
     reasoning: input.reasoningEffort ? { effort: input.reasoningEffort } : undefined,
     text: input.response_format ? { format: input.response_format } : undefined,
     input: input.messages,
-    prompt_cache_key: `${input.operation}:${input.promptVersion ?? "unversioned"}`,
+    prompt_cache_key: buildPromptCacheKey(input.operation, input.promptVersion),
     store: false,
     stream: false,
   };

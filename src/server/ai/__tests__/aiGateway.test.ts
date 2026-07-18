@@ -140,6 +140,27 @@ describe("createLoggedChatCompletion response validation", () => {
     }));
   });
 
+  it("uses a deterministic 64-character cache key for long prompt versions", async () => {
+    mocks.createResponse.mockResolvedValue(response);
+    const promptVersion = "content-multiplication-sermon-ideas-with-custom-audience-and-platform-v1";
+
+    await createLoggedChatCompletion({
+      ...baseInput(),
+      promptVersion,
+    });
+
+    const firstCacheKey = mocks.createResponse.mock.calls[0]?.[0]?.prompt_cache_key;
+    expect(firstCacheKey).toHaveLength(64);
+    expect(firstCacheKey).toMatch(/^sermon_intelligence:content-multiplication-sermon-i:[a-f0-9]{12}$/);
+
+    mocks.createResponse.mockClear();
+    await createLoggedChatCompletion({
+      ...baseInput(),
+      promptVersion,
+    });
+    expect(mocks.createResponse.mock.calls[0]?.[0]?.prompt_cache_key).toBe(firstCacheKey);
+  });
+
   it("reuses a validated cached result without making a provider request", async () => {
     mocks.findCachedResponse.mockResolvedValue({
       responseText: "{\"sectionType\":\"INTRODUCTION\"}",
