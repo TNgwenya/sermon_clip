@@ -5,9 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { appendPipelineLog } from "@/server/agents/storage";
 import {
   CONTENT_OPPORTUNITY_JSON_SHAPE,
+  CONTENT_OPPORTUNITY_TYPES,
   CONTENT_OPPORTUNITY_TYPE_LABELS,
   DEFAULT_CONTENT_OPPORTUNITY_QUANTITIES,
-  contentOpportunityResponseSchema,
+  contentOpportunitySchema,
   type ContentOpportunityCategory,
   type ContentOpportunityRecord,
   type ContentOpportunityType,
@@ -101,6 +102,147 @@ const TYPE_TO_CATEGORY: Record<PrismaContentOpportunityType, ContentOpportunityC
   CONTENT_CALENDAR_PLAN: "PROMOTION",
 };
 
+const CONTENT_OPPORTUNITY_TYPE_SET = new Set<string>(CONTENT_OPPORTUNITY_TYPES);
+const OPPORTUNITY_TYPE_PREFIXES = [
+  "CONTENTOPPORTUNITYTYPE.",
+  "CONTENTOPPORTUNITYTYPE:",
+  "CONTENT_OPPORTUNITY_TYPE.",
+  "CONTENT_OPPORTUNITY_TYPE:",
+  "OPPORTUNITYTYPE.",
+  "OPPORTUNITY_TYPE.",
+  "OPPORTUNITY_TYPE:",
+] as const;
+
+type ParsedGeneratedOpportunityBatch = {
+  opportunities: ContentOpportunityRecord[];
+  rejectedCount: number;
+};
+
+function unwrapScalarFormatting(value: string): string {
+  let unwrapped = value.trim();
+  const wrapperPairs = [
+    ['\\\"', '\\\"'],
+    ["\\'", "\\'"],
+    ['"', '"'],
+    ["'", "'"],
+    ["`", "`"],
+    ["“", "”"],
+    ["‘", "’"],
+  ] as const;
+
+  for (let layer = 0; layer < 3; layer += 1) {
+    const pair = wrapperPairs.find(([open, close]) => (
+      unwrapped.length >= open.length + close.length &&
+      unwrapped.startsWith(open) &&
+      unwrapped.endsWith(close)
+    ));
+    if (!pair) {
+      break;
+    }
+    unwrapped = unwrapped.slice(pair[0].length, -pair[1].length).trim();
+  }
+
+  return unwrapped;
+}
+
+function canonicalizeOpportunityType(value: unknown): PrismaContentOpportunityType | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  let token = unwrapScalarFormatting(value)
+    .replace(/[\s-]+/g, "_")
+    .toUpperCase();
+  const prefix = OPPORTUNITY_TYPE_PREFIXES.find((candidate) => token.startsWith(candidate));
+  if (prefix) {
+    token = unwrapScalarFormatting(token.slice(prefix.length)).replace(/^_+/, "");
+  }
+
+  return CONTENT_OPPORTUNITY_TYPE_SET.has(token)
+    ? token as PrismaContentOpportunityType
+    : null;
+}
+
+function describeReceivedEnumValue(value: unknown): string {
+  if (typeof value !== "string") {
+    return value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  }
+
+  const normalized = value.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+  if (/^[A-Za-z0-9_ .:'"`\\-]{1,64}$/.test(normalized)) {
+    return JSON.stringify(normalized);
+  }
+
+  return `string(length=${value.length})`;
+}
+
+function summarizeReceivedEnumValues(records: unknown[], field: "category" | "opportunityType"): string {
+  const samples = new Set<string>();
+  for (const record of records) {
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      samples.add(describeReceivedEnumValue(record));
+    } else {
+      samples.add(describeReceivedEnumValue((record as Record<string, unknown>)[field]));
+    }
+    if (samples.size >= 5) {
+      break;
+    }
+  }
+  return Array.from(samples).join(", ") || "none";
+}
+
+function parseGeneratedOpportunityPayload(payload: unknown): ParsedGeneratedOpportunityBatch {
+  const rawOpportunities = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as { opportunities?: unknown }).opportunities
+    : undefined;
+  if (!Array.isArray(rawOpportunities) || rawOpportunities.length > 120) {
+    throw new Error("AI output failed validation: opportunities must be an array with at most 120 records.");
+  }
+
+  const opportunities: ContentOpportunityRecord[] = [];
+  const rejectedIssueKeys = new Set<string>();
+
+  for (const record of rawOpportunities) {
+    const canonicalType = record && typeof record === "object" && !Array.isArray(record)
+      ? canonicalizeOpportunityType((record as Record<string, unknown>).opportunityType)
+      : null;
+    const candidate = canonicalType && record && typeof record === "object" && !Array.isArray(record)
+      ? {
+          ...record,
+          opportunityType: canonicalType,
+          category: TYPE_TO_CATEGORY[canonicalType],
+        }
+      : record;
+    const parsed = contentOpportunitySchema.safeParse(candidate);
+    if (parsed.success) {
+      opportunities.push(parsed.data);
+      continue;
+    }
+
+    for (const issue of parsed.error.issues) {
+      rejectedIssueKeys.add(`${issue.path.join(".") || "record"}:${issue.code}`);
+      if (rejectedIssueKeys.size >= 8) {
+        break;
+      }
+    }
+  }
+
+  const rejectedCount = rawOpportunities.length - opportunities.length;
+  if (opportunities.length === 0 || rejectedCount > 0) {
+    const categories = summarizeReceivedEnumValues(rawOpportunities, "category");
+    const types = summarizeReceivedEnumValues(rawOpportunities, "opportunityType");
+    const issues = Array.from(rejectedIssueKeys).join(", ") || "record:invalid";
+    throw new Error(
+      `AI output contained ${rejectedCount || rawOpportunities.length} invalid content opportunity record(s) ` +
+      `(${rawOpportunities.length} received); no partial batch was saved. ` +
+      `Received category samples: ${categories}. Received opportunityType samples: ${types}. ` +
+      `Validation issue kinds: ${issues}.`,
+    );
+  }
+
+  return { opportunities, rejectedCount };
+}
+
 function shouldPreserveOpportunityDuringRegeneration(opportunity: {
   status: "DRAFT" | "NEEDS_REVIEW" | "APPROVED" | "REJECTED" | "USED" | "ARCHIVED";
   isManuallyEdited: boolean;
@@ -186,7 +328,7 @@ function buildUserPrompt(
 ): string {
   const requestedLines = (Object.keys(requestedQuantities) as PrismaContentOpportunityType[])
     .filter((type) => requestedQuantities[type] > 0)
-    .map((type) => `${CONTENT_OPPORTUNITY_TYPE_LABELS[type as ContentOpportunityType]}: ${requestedQuantities[type]}`);
+    .map((type) => `${type} (${CONTENT_OPPORTUNITY_TYPE_LABELS[type as ContentOpportunityType]}): ${requestedQuantities[type]}`);
 
   const keyTakeaways = Array.isArray(context.intelligence?.keyTakeaways)
     ? context.intelligence?.keyTakeaways.filter((item): item is string => typeof item === "string")
@@ -332,7 +474,7 @@ async function callOpportunityModel(
     },
     missingKeyMessage: "OPENAI_API_KEY is missing. Add it to your environment before generating content opportunities.",
     bypassCache: options?.bypassCache,
-    validateResponse: (completion) => {
+    validateResponse: async (completion) => {
       const raw = completion.choices[0]?.message?.content ?? "";
       let parsed: unknown;
       try {
@@ -340,7 +482,7 @@ async function callOpportunityModel(
       } catch {
         throw new Error(`AI returned invalid JSON: ${raw.slice(0, 200)}`);
       }
-      return contentOpportunityResponseSchema.parse(parsed).opportunities;
+      return parseGeneratedOpportunityPayload(parsed).opportunities;
     },
   });
 }
@@ -671,6 +813,8 @@ export async function regenerateContentOpportunities(
 
 export const __contentMultiplicationTestUtils = {
   TYPE_TO_CATEGORY,
+  canonicalizeOpportunityType,
+  parseGeneratedOpportunityPayload,
   buildGroundingEvidence,
   buildUserPrompt,
   buildRequestedQuantities,

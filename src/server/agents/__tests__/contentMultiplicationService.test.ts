@@ -87,6 +87,82 @@ describe("content opportunity schema", () => {
 });
 
 describe("content multiplication service utils", () => {
+  it("canonicalizes only allowlisted opportunity type tokens", () => {
+    expect(__contentMultiplicationTestUtils.canonicalizeOpportunityType('"SHORT_FORM_CLIP_IDEA"'))
+      .toBe("SHORT_FORM_CLIP_IDEA");
+    expect(__contentMultiplicationTestUtils.canonicalizeOpportunityType("ContentOpportunityType.QUOTE_GRAPHIC"))
+      .toBe("QUOTE_GRAPHIC");
+    expect(__contentMultiplicationTestUtils.canonicalizeOpportunityType("Content opportunity type: Quote Graphic"))
+      .toBe("QUOTE_GRAPHIC");
+    expect(__contentMultiplicationTestUtils.canonicalizeOpportunityType("short-form clip idea"))
+      .toBe("SHORT_FORM_CLIP_IDEA");
+    expect(__contentMultiplicationTestUtils.canonicalizeOpportunityType("NOT_SHORT_FORM_CLIP_IDEA"))
+      .toBeNull();
+  });
+
+  it("derives category from a recognized type", () => {
+    const batch = __contentMultiplicationTestUtils.parseGeneratedOpportunityPayload({
+      opportunities: [
+        {
+          ...sampleOpportunity,
+          category: "UNTRUSTED_CATEGORY",
+          opportunityType: "ContentOpportunityType.SHORT_FORM_CLIP_IDEA",
+        },
+      ],
+    });
+
+    expect(batch.rejectedCount).toBe(0);
+    expect(batch.opportunities).toHaveLength(1);
+    expect(batch.opportunities[0]?.category).toBe("SOCIAL");
+    expect(batch.opportunities[0]?.opportunityType).toBe("SHORT_FORM_CLIP_IDEA");
+  });
+
+  it("rejects the whole batch with bounded diagnostics when any generated record is invalid", () => {
+    let message = "";
+    try {
+      __contentMultiplicationTestUtils.parseGeneratedOpportunityPayload({
+        opportunities: Array.from({ length: 25 }, (_, index) => ({
+          ...sampleOpportunity,
+          category: index === 0 ? "UNKNOWN_CATEGORY" : "SOCIAL",
+          opportunityType: index === 0 ? "UNKNOWN_TYPE" : "QUOTE_GRAPHIC",
+        })),
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("1 invalid content opportunity record(s) (25 received)");
+    expect(message).toContain("no partial batch was saved");
+    expect(message).toContain('Received opportunityType samples: "UNKNOWN_TYPE", "QUOTE_GRAPHIC"');
+    expect(message).toContain("opportunityType:invalid_value");
+    expect(message.length).toBeLessThan(700);
+  });
+
+  it("lists exact opportunity type tokens in the model prompt", () => {
+    const context = {
+      id: "sermon-1",
+      title: "Faith in the Storm",
+      speakerName: "Pastor Test",
+      churchName: "Test Church",
+      language: "English",
+      sermonDate: null,
+      transcriptFullText: "God is faithful in every storm.",
+      intelligence: null,
+      scriptures: [],
+      topics: [],
+      structureSections: [],
+      ministryMoments: [],
+      smartClips: [],
+    };
+    const quantities = __contentMultiplicationTestUtils.buildRequestedQuantities({
+      replaceDefaultQuantities: true,
+      quantities: { QUOTE_GRAPHIC: 1 },
+    });
+
+    expect(__contentMultiplicationTestUtils.buildUserPrompt(context, quantities))
+      .toContain("QUOTE_GRAPHIC (Quote graphic): 1");
+  });
+
   it("uses bounded clip and ministry evidence instead of the full transcript", () => {
     const fullTranscript = `opening ${"full-transcript-only ".repeat(2_000)} closing`;
     const context = {
