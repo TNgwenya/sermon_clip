@@ -101,25 +101,39 @@ export default async function OpportunitiesPage({
   searchParams: Promise<SearchParams>;
 }) {
   const filters = await searchParams;
-
   const category = asCategory(filters.category);
   const status = asStatus(filters.status);
   const opportunityType = asType(filters.type);
   const ministryMomentType = asMinistryMomentType(filters.ministryMomentType);
 
+  const sermons = await prisma.sermon.findMany({
+    select: { id: true, title: true },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+  const requestedSermonId = filters.sermonId?.trim();
+  const activeSermon = sermons.find((sermon) => sermon.id === requestedSermonId) ?? sermons[0] ?? null;
+  const activeSermonId = activeSermon?.id ?? null;
+  const activeSermonTitle = activeSermon?.title ?? null;
+  const scopedSermonId = activeSermonId ?? "__no_sermon__";
+
   const where: Prisma.ContentOpportunityWhereInput = {
     AND: [
-      filters.sermonId ? { sermonId: filters.sermonId } : {},
+      { sermonId: scopedSermonId },
       category ? { category } : {},
       opportunityType ? { opportunityType } : {},
-      status ? { status } : {},
-      filters.scripture ? { relatedScripture: { contains: filters.scripture } } : {},
+      status ? { status } : { status: { notIn: ["REJECTED", "ARCHIVED"] } },
+      filters.scripture
+        ? { relatedScripture: { contains: filters.scripture, mode: "insensitive" } }
+        : {},
       ministryMomentType ? { ministryMoment: { momentType: ministryMomentType } } : {},
-      filters.topic ? { sermon: { topicTags: { some: { topic: { contains: filters.topic } } } } } : {},
+      filters.topic
+        ? { sermon: { topicTags: { some: { topic: { contains: filters.topic, mode: "insensitive" } } } } }
+        : {},
     ],
   };
 
-  const [opportunities, sermons, momentTypes, preparedAssets] = await Promise.all([
+  const [opportunities, momentTypes, preparedAssets, topicSuggestions] = await Promise.all([
     prisma.contentOpportunity.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -151,14 +165,10 @@ export default async function OpportunitiesPage({
           },
         },
       },
-      take: 300,
-    }),
-    prisma.sermon.findMany({
-      select: { id: true, title: true },
-      orderBy: { createdAt: "desc" },
-      take: 100,
+      take: 150,
     }),
     prisma.ministryMoment.findMany({
+      where: { sermonId: scopedSermonId },
       select: { momentType: true },
       distinct: ["momentType"],
       take: 100,
@@ -166,7 +176,7 @@ export default async function OpportunitiesPage({
     prisma.contentAsset.findMany({
       where: {
         status: { not: "ARCHIVED" },
-        ...(filters.sermonId ? { sermonId: filters.sermonId } : {}),
+        sermonId: scopedSermonId,
         contentOpportunityId: { not: null },
       },
       orderBy: { updatedAt: "desc" },
@@ -183,16 +193,16 @@ export default async function OpportunitiesPage({
         hashtagsJson: true,
         callToAction: true,
       },
-      take: 300,
+      take: 150,
+    }),
+    prisma.sermonTopicTag.findMany({
+      where: { sermonId: scopedSermonId },
+      select: { topic: true },
+      distinct: ["topic"],
+      orderBy: { topic: "asc" },
+      take: 100,
     }),
   ]);
-
-  const topicSuggestions = await prisma.sermonTopicTag.findMany({
-    select: { topic: true },
-    distinct: ["topic"],
-    orderBy: { topic: "asc" },
-    take: 100,
-  });
 
   const normalized = opportunities.map((item) => ({
     id: item.id,
@@ -214,11 +224,7 @@ export default async function OpportunitiesPage({
     status: item.status,
     createdAt: item.createdAt.toISOString(),
   }));
-  const activeSermonId = filters.sermonId?.trim() || sermons[0]?.id || null;
-  const activeSermonTitle = sermons.find((sermon) => sermon.id === activeSermonId)?.title ?? null;
-  const hasIdeas = normalized.length > 0;
   const hasActiveFilters = Boolean(
-    filters.sermonId ||
     filters.category ||
     filters.type ||
     filters.status ||
@@ -226,32 +232,108 @@ export default async function OpportunitiesPage({
     filters.scripture ||
     filters.ministryMomentType,
   );
-  const opportunityStats = hasIdeas
-    ? [
-        { label: "Ideas shown", value: normalized.length },
-        ...(sermons.length > 0 ? [{ label: "Sermons available", value: sermons.length }] : []),
-        ...(momentTypes.length > 0 ? [{ label: "Moment types", value: momentTypes.length }] : []),
-      ]
-    : [];
+  const clearFiltersHref = activeSermonId
+    ? `/opportunities?sermonId=${encodeURIComponent(activeSermonId)}`
+    : "/opportunities";
+  const filterControls = activeSermon ? (
+    <details className="opportunities-filter-details" open={hasActiveFilters}>
+      <summary>
+        <span>
+          <strong>{hasActiveFilters ? "Filters applied" : "Narrow the idea library"}</strong>
+          <span className="muted small">Optional filters for type, status, scripture, topic, or ministry moment.</span>
+        </span>
+      </summary>
+      <form method="get" className="actions-row opportunities-filter-form">
+        <input type="hidden" name="sermonId" value={activeSermonId ?? ""} />
+
+        <select name="category" defaultValue={filters.category ?? ""} aria-label="Content category">
+          <option value="">All categories</option>
+          {CATEGORIES.map((item) => (
+            <option key={item} value={item}>{item.toLowerCase()}</option>
+          ))}
+        </select>
+
+        <select name="type" defaultValue={filters.type ?? ""} aria-label="Content type">
+          <option value="">All types</option>
+          {CONTENT_OPPORTUNITY_TYPES.map((type) => (
+            <option key={type} value={type}>{CONTENT_OPPORTUNITY_TYPE_LABELS[type]}</option>
+          ))}
+        </select>
+
+        <select name="status" defaultValue={filters.status ?? ""} aria-label="Review status">
+          <option value="">Active ideas</option>
+          {STATUSES.map((item) => (
+            <option key={item} value={item}>{formatStatusLabel(item)}</option>
+          ))}
+        </select>
+
+        <input name="topic" defaultValue={filters.topic ?? ""} placeholder="Topic" list="opportunity-topic-options" aria-label="Topic" />
+        <datalist id="opportunity-topic-options">
+          {topicSuggestions.map((topic) => (
+            <option key={topic.topic} value={topic.topic} />
+          ))}
+        </datalist>
+
+        <input name="scripture" defaultValue={filters.scripture ?? ""} placeholder="Scripture" aria-label="Scripture" />
+
+        <select name="ministryMomentType" defaultValue={filters.ministryMomentType ?? ""} aria-label="Ministry moment">
+          <option value="">All ministry moments</option>
+          {momentTypes.map((item) => (
+            <option key={item.momentType} value={item.momentType}>{item.momentType.replace(/_/g, " ").toLowerCase()}</option>
+          ))}
+        </select>
+
+        <button type="submit" className="button primary">Apply filters</button>
+        <Link href={clearFiltersHref} className="button tertiary">Clear filters</Link>
+      </form>
+    </details>
+  ) : null;
 
   return (
     <main className="secondary-media-shell stack-lg">
       <PageHeader
-        eyebrow="Publishing Ideas"
-        title="Create post ideas from sermons"
-        description="Generate sermon-based captions, devotionals, invitations, recaps, and prompts."
-        meta={(
-          <nav className="opportunities-quiet-links" aria-label="Ideas support links">
-            <Link href="/sermons">Sermon Library</Link>
-            <Link href="/knowledge-base">Knowledge Base</Link>
-          </nav>
-        )}
+        eyebrow="Content opportunities"
+        title="Turn this sermon into content for the week"
+        description="Start with the strongest idea, then review posts, devotionals, invitations, and ministry resources grounded in the message."
+        className="opportunities-page-header"
       />
+
+      <section className={`opportunities-sermon-context${activeSermon ? "" : " is-empty"}`}>
+        <div className="stack-sm">
+          <p className="kicker">Working from</p>
+          <h2>{activeSermonTitle ?? "Add your first sermon"}</h2>
+          {!activeSermon ? (
+            <p className="muted small">Upload or import a sermon to create clips, posts, devotionals, and follow-up resources.</p>
+          ) : null}
+        </div>
+        {activeSermon ? (
+          <details className="opportunities-sermon-change">
+            <summary>Change sermon</summary>
+            <form method="get" className="opportunities-sermon-picker">
+              <label className="sr-only" htmlFor="opportunities-sermon-select">Choose a sermon</label>
+              <div className="actions-row">
+                <select id="opportunities-sermon-select" name="sermonId" defaultValue={activeSermonId ?? ""}>
+                  {sermons.map((sermon) => (
+                    <option key={sermon.id} value={sermon.id}>{sermon.title}</option>
+                  ))}
+                </select>
+                <button type="submit" className="button secondary">Show content</button>
+              </div>
+            </form>
+          </details>
+        ) : (
+          <Link href="/sermons/new" className="button primary">Add a sermon</Link>
+        )}
+      </section>
 
       <OpportunitiesExperience
         opportunities={normalized}
         activeSermonId={activeSermonId}
         activeSermonTitle={activeSermonTitle}
+        hasActiveFilters={hasActiveFilters}
+        clearFiltersHref={clearFiltersHref}
+        includeInactive={status === "REJECTED" || status === "ARCHIVED"}
+        filterControls={filterControls}
         preparedAssets={preparedAssets.map((asset) => ({
           id: asset.id,
           contentOpportunityId: asset.contentOpportunityId,
@@ -265,74 +347,6 @@ export default async function OpportunitiesPage({
           callToAction: asset.callToAction,
         }))}
       />
-
-      {opportunityStats.length > 0 ? (
-        <section className="secondary-command-strip opportunities-stat-strip">
-          {opportunityStats.map((stat) => (
-            <article key={stat.label}>
-              <span className="muted small">{stat.label}</span>
-              <strong>{stat.value}</strong>
-            </article>
-          ))}
-        </section>
-      ) : null}
-
-      <details className="opportunities-filter-details" open={hasIdeas || hasActiveFilters}>
-        <summary>
-          <span>
-            <strong>{hasIdeas ? "Filter ideas" : "Choose a different sermon"}</strong>
-            <span className="muted small">Sermon, category, status, scripture, or ministry moment.</span>
-          </span>
-        </summary>
-        <form method="get" className="actions-row opportunities-filter-form">
-          <select name="sermonId" defaultValue={filters.sermonId ?? ""} style={{ minWidth: "14rem" }}>
-            <option value="">All sermons</option>
-            {sermons.map((sermon) => (
-              <option key={sermon.id} value={sermon.id}>{sermon.title}</option>
-            ))}
-          </select>
-
-          <select name="category" defaultValue={filters.category ?? ""} style={{ minWidth: "11rem" }}>
-            <option value="">All categories</option>
-            {CATEGORIES.map((category) => (
-              <option key={category} value={category}>{category.toLowerCase()}</option>
-            ))}
-          </select>
-
-          <select name="type" defaultValue={filters.type ?? ""} style={{ minWidth: "16rem" }}>
-            <option value="">All types</option>
-            {CONTENT_OPPORTUNITY_TYPES.map((type) => (
-              <option key={type} value={type}>{CONTENT_OPPORTUNITY_TYPE_LABELS[type]}</option>
-            ))}
-          </select>
-
-          <select name="status" defaultValue={filters.status ?? ""} style={{ minWidth: "12rem" }}>
-            <option value="">All statuses</option>
-            {STATUSES.map((status) => (
-              <option key={status} value={status}>{formatStatusLabel(status)}</option>
-            ))}
-          </select>
-
-          <input name="topic" defaultValue={filters.topic ?? ""} placeholder="Topic" list="opportunity-topic-options" style={{ minWidth: "10rem" }} />
-          <datalist id="opportunity-topic-options">
-            {topicSuggestions.map((topic) => (
-              <option key={topic.topic} value={topic.topic} />
-            ))}
-          </datalist>
-
-          <input name="scripture" defaultValue={filters.scripture ?? ""} placeholder="Scripture" style={{ minWidth: "10rem" }} />
-
-          <select name="ministryMomentType" defaultValue={filters.ministryMomentType ?? ""} style={{ minWidth: "14rem" }}>
-            <option value="">All ministry moment types</option>
-            {momentTypes.map((item) => (
-              <option key={item.momentType} value={item.momentType}>{item.momentType}</option>
-            ))}
-          </select>
-
-          <button type="submit" className="button primary">Apply</button>
-          <Link href="/opportunities" className="button tertiary">Clear</Link>
-        </form>
-      </details>
     </main>
   );
 }

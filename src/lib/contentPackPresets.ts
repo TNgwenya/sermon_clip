@@ -19,7 +19,7 @@ export const CONTENT_PACK_PRESETS: ContentPackPreset[] = [
   {
     id: "WEEKLY_CONTENT_PACK",
     label: "Weekly content pack",
-    description: "A reviewed week of quotes, platform copy, interaction, teaching, prayer, and invitation content.",
+    description: "A week of quote, platform, interaction, teaching, prayer, and invitation drafts ready for your review.",
     quantities: {
       SERMON_SUMMARY: 1,
       SUNDAY_RECAP: 1,
@@ -36,7 +36,7 @@ export const CONTENT_PACK_PRESETS: ContentPackPreset[] = [
   {
     id: "MINISTRY_DEPTH_PACK",
     label: "Ministry depth pack",
-    description: "Five-day discipleship material plus small-group, family, youth, and sermon-map outputs.",
+    description: "Five-day discipleship drafts plus small-group, family, youth, and sermon-map resources ready for review.",
     quantities: {
       DEVOTIONAL_GUIDE: 1,
       PRAYER_GUIDE: 1,
@@ -50,7 +50,7 @@ export const CONTENT_PACK_PRESETS: ContentPackPreset[] = [
   {
     id: "PRODUCTION_PACK",
     label: "Production pack",
-    description: "Approved copy arranged for branded graphics, carousel production, and publishing handoff.",
+    description: "Graphic, carousel, and publishing-handoff drafts arranged for your team to review and approve.",
     quantities: {
       QUOTE_GRAPHIC: 3,
       SCRIPTURE_GRAPHIC: 2,

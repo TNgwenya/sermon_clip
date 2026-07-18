@@ -10,7 +10,7 @@ test("pastor can reach the core content workflow", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Upload a recording" })).toBeVisible();
 
   await page.goto("/opportunities");
-  await expect(page.getByRole("heading", { name: "Create post ideas from sermons" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Turn this sermon into content for the week" })).toBeVisible();
 
   await page.goto("/weekly-plan");
   await expect(page.getByRole("heading", { name: "One reviewed ministry week" })).toBeVisible();

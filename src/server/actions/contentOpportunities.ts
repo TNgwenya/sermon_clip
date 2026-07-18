@@ -100,7 +100,7 @@ export async function generateContentPackAction(
     revalidateOpportunityPaths(sermonId);
     return {
       success: true,
-      message: `${preset.label}: generated ${result.opportunityCount} reviewed draft${result.opportunityCount === 1 ? "" : "s"}.`,
+      message: `${preset.label}: generated ${result.opportunityCount} draft${result.opportunityCount === 1 ? "" : "s"} ready for review.`,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Content pack generation failed.";
@@ -173,6 +173,7 @@ export async function updateContentOpportunityStatusAction(
       where: { id: opportunityId, sermonId },
       select: {
         id: true,
+        status: true,
         opportunityType: true,
         sourceTranscriptExcerpt: true,
         editedContent: true,
@@ -183,6 +184,17 @@ export async function updateContentOpportunityStatusAction(
 
     if (!current) {
       return { success: false, message: "Opportunity not found for this sermon." };
+    }
+
+    if (
+      parsedStatus.data === "USED" &&
+      current.status !== "APPROVED" &&
+      current.status !== "USED"
+    ) {
+      return {
+        success: false,
+        message: "Approve this opportunity before marking it as used.",
+      };
     }
 
     if (
