@@ -4,6 +4,7 @@ import {
   deriveDashboardWorkflow,
   derivePastorSermonWorkflow,
   deriveSermonWorkspaceAction,
+  isPastorChildPipelineFailureSuperseded,
   isStaleActiveProcessingJob,
   pastorFailedStepMessage,
   pastorJobStepLabel,
@@ -279,6 +280,156 @@ describe("pastor workflow", () => {
     expect(selectUnresolvedPastorFailedJobs(jobs).map((job) => job.id)).toEqual([
       "failed-transcribe",
       "failed-generate",
+    ]);
+  });
+
+  it.each([
+    "DOWNLOAD_VIDEO",
+    "EXTRACT_AUDIO",
+    "TRANSCRIBE_AUDIO",
+    "GENERATE_INTELLIGENCE",
+    "GENERATE_CLIPS",
+  ])("supersedes an older failed %s child after the full pipeline succeeds", (type) => {
+    const failedChild = {
+      id: `failed-${type}`,
+      sermonId: "sermon-a",
+      type,
+      status: "FAILED",
+      updatedAt: new Date("2026-07-18T10:00:00.000Z"),
+    };
+    const jobs = [
+      failedChild,
+      {
+        id: "successful-parent",
+        sermonId: "sermon-a",
+        type: "PROCESS_SERMON",
+        status: "SUCCEEDED",
+        updatedAt: new Date("2026-07-18T11:00:00.000Z"),
+      },
+    ];
+
+    expect(isPastorChildPipelineFailureSuperseded(failedChild, jobs)).toBe(true);
+    expect(selectUnresolvedPastorFailedJobs(jobs)).toEqual([]);
+  });
+
+  it("does not use child success to hide a parent failure", () => {
+    const jobs = [
+      {
+        id: "failed-parent",
+        sermonId: "sermon-a",
+        type: "PROCESS_SERMON",
+        status: "FAILED",
+        updatedAt: new Date("2026-07-18T10:00:00.000Z"),
+      },
+      {
+        id: "successful-child",
+        sermonId: "sermon-a",
+        type: "GENERATE_CLIPS",
+        status: "SUCCEEDED",
+        updatedAt: new Date("2026-07-18T11:00:00.000Z"),
+      },
+    ];
+
+    expect(isPastorChildPipelineFailureSuperseded(jobs[0], jobs)).toBe(false);
+    expect(selectUnresolvedPastorFailedJobs(jobs).map((job) => job.id)).toEqual(["failed-parent"]);
+  });
+
+  it("does not hide stale active work or failures from another sermon", () => {
+    const staleActiveChild = {
+      id: "stale-child",
+      sermonId: "sermon-a",
+      type: "TRANSCRIBE_AUDIO",
+      status: "RUNNING",
+      updatedAt: new Date(0),
+    };
+    const otherSermonFailure = {
+      id: "other-sermon-failure",
+      sermonId: "sermon-b",
+      type: "DOWNLOAD_VIDEO",
+      status: "FAILED",
+      updatedAt: new Date("2026-07-18T10:00:00.000Z"),
+    };
+    const jobs = [
+      staleActiveChild,
+      otherSermonFailure,
+      {
+        id: "successful-parent",
+        sermonId: "sermon-a",
+        type: "PROCESS_SERMON",
+        status: "SUCCEEDED",
+        updatedAt: new Date("2026-07-18T11:00:00.000Z"),
+      },
+    ];
+
+    expect(isPastorChildPipelineFailureSuperseded(staleActiveChild, jobs)).toBe(false);
+    expect(isPastorChildPipelineFailureSuperseded(otherSermonFailure, jobs)).toBe(false);
+    expect(selectUnresolvedPastorFailedJobs(jobs).map((job) => job.id)).toEqual([
+      "other-sermon-failure",
+      "stale-child",
+    ]);
+  });
+
+  it.each(["DOWNLOAD_VIDEO", "EXTRACT_AUDIO", "TRANSCRIBE_AUDIO"])(
+    "does not supersede a forced %s failure",
+    (type) => {
+      const failedForcedStep = {
+        id: `failed-forced-${type.toLowerCase()}`,
+        sermonId: "sermon-a",
+        type,
+        status: "FAILED",
+        updatedAt: new Date("2026-07-18T10:00:00.000Z"),
+        generationSummary: {
+          failure: {
+            details: { forceRequested: true },
+          },
+        },
+      };
+      const jobs = [
+        failedForcedStep,
+        {
+          id: "successful-parent",
+          sermonId: "sermon-a",
+          type: "PROCESS_SERMON",
+          status: "SUCCEEDED",
+          updatedAt: new Date("2026-07-18T11:00:00.000Z"),
+        },
+      ];
+
+      expect(isPastorChildPipelineFailureSuperseded(failedForcedStep, jobs)).toBe(false);
+      expect(selectUnresolvedPastorFailedJobs(jobs).map((job) => job.id)).toEqual([
+        failedForcedStep.id,
+      ]);
+    },
+  );
+
+  it.each([
+    { append: true },
+    { mode: "redo" },
+    { mode: "retry_generation" },
+    { mode: "repair_previews" },
+  ])("does not supersede a specialized clip-generation failure %#", (generationSummary) => {
+    const failedClipJob = {
+      id: "failed-specialized-clips",
+      sermonId: "sermon-a",
+      type: "GENERATE_CLIPS",
+      status: "FAILED",
+      updatedAt: new Date("2026-07-18T10:00:00.000Z"),
+      generationSummary,
+    };
+    const jobs = [
+      failedClipJob,
+      {
+        id: "successful-parent",
+        sermonId: "sermon-a",
+        type: "PROCESS_SERMON",
+        status: "SUCCEEDED",
+        updatedAt: new Date("2026-07-18T11:00:00.000Z"),
+      },
+    ];
+
+    expect(isPastorChildPipelineFailureSuperseded(failedClipJob, jobs)).toBe(false);
+    expect(selectUnresolvedPastorFailedJobs(jobs).map((job) => job.id)).toEqual([
+      "failed-specialized-clips",
     ]);
   });
 

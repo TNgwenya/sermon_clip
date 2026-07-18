@@ -40,6 +40,127 @@ describe("process sermon pipeline review asset preparation", () => {
     })).toBe(false);
   });
 
+  it("reuses a complete saved transcript unless a forced rerun was requested", () => {
+    const shouldReuse = __processSermonPipelineTestUtils.shouldReuseExistingTranscript;
+
+    expect(shouldReuse({
+      force: false,
+      transcriptId: "transcript-1",
+      transcriptSegmentCount: 12,
+      clipCandidateCount: 0,
+      sermonStatus: "TRANSCRIBED",
+    })).toBe(true);
+    expect(shouldReuse({
+      force: true,
+      transcriptId: "transcript-1",
+      transcriptSegmentCount: 12,
+      clipCandidateCount: 3,
+      sermonStatus: "FAILED",
+    })).toBe(false);
+    expect(shouldReuse({
+      force: false,
+      transcriptId: null,
+      transcriptSegmentCount: 12,
+      clipCandidateCount: 3,
+      sermonStatus: "FAILED",
+    })).toBe(false);
+    expect(shouldReuse({
+      force: false,
+      transcriptId: "transcript-1",
+      transcriptSegmentCount: 0,
+      clipCandidateCount: 3,
+      sermonStatus: "FAILED",
+    })).toBe(false);
+    expect(shouldReuse({
+      force: false,
+      transcriptId: "transcript-1",
+      transcriptSegmentCount: 12,
+      clipCandidateCount: 3,
+      sermonStatus: "FAILED",
+    })).toBe(true);
+    expect(shouldReuse({
+      force: false,
+      transcriptId: "transcript-1",
+      transcriptSegmentCount: 12,
+      clipCandidateCount: 0,
+      sermonStatus: "FAILED",
+    })).toBe(false);
+    expect(shouldReuse({
+      force: false,
+      transcriptId: "transcript-1",
+      transcriptSegmentCount: 12,
+      clipCandidateCount: 0,
+      sermonStatus: "AUDIO_EXTRACTED",
+    })).toBe(false);
+  });
+
+  it.each([
+    { sermonStatus: "CLIPS_GENERATED" as const, clipCandidateCount: 3 },
+    { sermonStatus: "REVIEWING" as const, clipCandidateCount: 3 },
+    { sermonStatus: "EXPORTED" as const, clipCandidateCount: 3 },
+    { sermonStatus: "FAILED" as const, clipCandidateCount: 3 },
+  ])("reuses durable clips without regressing a $sermonStatus sermon", (input) => {
+    expect(__processSermonPipelineTestUtils.isAdvancedSermonPipelineState(input)).toBe(true);
+    expect(__processSermonPipelineTestUtils.shouldReuseDurableClipCandidates({
+      force: false,
+      ...input,
+    })).toBe(true);
+    expect(__processSermonPipelineTestUtils.advancedSermonPipelineGuardMessage({
+      force: false,
+      ...input,
+    })).toBeNull();
+  });
+
+  it("stops an advanced sermon whose durable clip records are missing", () => {
+    const message = __processSermonPipelineTestUtils.advancedSermonPipelineGuardMessage({
+      force: false,
+      sermonStatus: "CLIPS_GENERATED",
+      clipCandidateCount: 0,
+    });
+
+    expect(message).toContain("clip records are missing");
+    expect(message).toContain("Repair the sermon data");
+    expect(__processSermonPipelineTestUtils.shouldReuseDurableClipCandidates({
+      force: false,
+      sermonStatus: "CLIPS_GENERATED",
+      clipCandidateCount: 0,
+    })).toBe(false);
+  });
+
+  it("rejects forced full-pipeline reruns after a sermon reaches advanced work", () => {
+    expect(__processSermonPipelineTestUtils.advancedSermonPipelineGuardMessage({
+      force: true,
+      sermonStatus: "REVIEWING",
+      clipCandidateCount: 3,
+    })).toContain("forced full-pipeline rerun is not safe");
+    expect(__processSermonPipelineTestUtils.shouldReuseDurableClipCandidates({
+      force: true,
+      sermonStatus: "REVIEWING",
+      clipCandidateCount: 3,
+    })).toBe(false);
+  });
+
+  it.each(["source", "audio"] as const)("protects advanced state when the %s artifact is missing", (artifact) => {
+    const message = __processSermonPipelineTestUtils.advancedSermonMissingMediaMessage({
+      advanced: true,
+      artifact,
+      usable: false,
+    });
+
+    expect(message).toContain("missing or unusable");
+    expect(message).toContain("workflow state was preserved");
+    expect(__processSermonPipelineTestUtils.advancedSermonMissingMediaMessage({
+      advanced: false,
+      artifact,
+      usable: false,
+    })).toBeNull();
+    expect(__processSermonPipelineTestUtils.advancedSermonMissingMediaMessage({
+      advanced: true,
+      artifact,
+      usable: true,
+    })).toBeNull();
+  });
+
   it("renders suggested clip previews before pastor review", () => {
     const plan = __processSermonPipelineTestUtils.buildGeneratedClipReviewAssetPlan({
       renderStatus: "NOT_RENDERED",

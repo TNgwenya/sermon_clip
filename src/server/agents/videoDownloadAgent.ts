@@ -386,7 +386,15 @@ export async function downloadSermonVideo(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown download error.";
     await removeTempDownloadFile(sourceVideoPath);
-    await markJobFailed(job.id, message, "Download failed.");
+    await markJobFailed(job.id, message, "Download failed.", {
+      error,
+      code: "VIDEO_DOWNLOAD_FAILED",
+      stage: "download",
+      retryable: true,
+      details: {
+        forceRequested: options?.force === true,
+      },
+    });
 
     try {
       await updateSermonStatus(sermon.id, "FAILED");

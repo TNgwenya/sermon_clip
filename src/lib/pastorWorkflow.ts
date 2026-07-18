@@ -58,10 +58,12 @@ export type DashboardWorkflow = {
 
 export type PastorProcessingJobRetryView = {
   id?: string;
+  sermonId?: string;
   type: string;
   status: string;
   updatedAt: Date;
   heartbeatAt?: Date | null;
+  generationSummary?: unknown;
 };
 
 export type PastorProcessingStepStatus = "Complete" | "Failed" | "Stuck / retry" | "Current / Running" | "Pending";
@@ -100,18 +102,80 @@ export function pastorFailedStepMessage(stepType: string): string {
   return failedStepMessages[stepType] ?? "One sermon step needs attention. Retry the next best step shown above.";
 }
 
+const PROCESS_SERMON_CHILD_JOB_TYPES = new Set([
+  "DOWNLOAD_VIDEO",
+  "EXTRACT_AUDIO",
+  "TRANSCRIBE_AUDIO",
+  "GENERATE_INTELLIGENCE",
+  "GENERATE_CLIPS",
+]);
+
+function asProcessingSummary(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+export function pastorChildFailureRequiresExplicitRetry(
+  job: PastorProcessingJobRetryView,
+): boolean {
+  const summary = asProcessingSummary(job.generationSummary);
+  if (
+    job.type === "DOWNLOAD_VIDEO"
+    || job.type === "EXTRACT_AUDIO"
+    || job.type === "TRANSCRIBE_AUDIO"
+  ) {
+    const failure = asProcessingSummary(summary?.["failure"]);
+    const details = asProcessingSummary(failure?.["details"]);
+    return details?.["forceRequested"] === true;
+  }
+
+  if (job.type === "GENERATE_CLIPS") {
+    const mode = summary?.["mode"];
+    return summary?.["append"] === true
+      || mode === "redo"
+      || mode === "retry_generation"
+      || mode === "repair_previews";
+  }
+
+  return false;
+}
+
+export function isPastorChildPipelineFailureSuperseded<T extends PastorProcessingJobRetryView>(
+  job: T,
+  jobs: readonly T[],
+): boolean {
+  if (
+    job.status !== "FAILED"
+    || !job.sermonId
+    || !PROCESS_SERMON_CHILD_JOB_TYPES.has(job.type)
+    || pastorChildFailureRequiresExplicitRetry(job)
+  ) {
+    return false;
+  }
+
+  return jobs.some((candidate) => (
+    candidate.sermonId === job.sermonId
+    && candidate.type === "PROCESS_SERMON"
+    && candidate.status === "SUCCEEDED"
+    && candidate.updatedAt.getTime() > job.updatedAt.getTime()
+  ));
+}
+
 export function selectUnresolvedPastorFailedJobs<T extends PastorProcessingJobRetryView>(jobs: T[]): T[] {
   const latestByType = new Map<string, T>();
 
   for (const job of jobs) {
-    const existing = latestByType.get(job.type);
+    const key = `${job.sermonId ?? "single-sermon"}:${job.type}`;
+    const existing = latestByType.get(key);
     if (!existing || job.updatedAt.getTime() > existing.updatedAt.getTime()) {
-      latestByType.set(job.type, job);
+      latestByType.set(key, job);
     }
   }
 
   return [...latestByType.values()]
     .filter((job) => job.status === "FAILED" || isStaleActiveProcessingJob(job))
+    .filter((job) => !isPastorChildPipelineFailureSuperseded(job, jobs))
     .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime());
 }
 

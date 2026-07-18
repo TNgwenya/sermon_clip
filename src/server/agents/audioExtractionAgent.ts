@@ -182,7 +182,15 @@ export async function extractSermonAudio(
     return { audioPath, reusedExistingFile: false };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown audio extraction error.";
-    await markJobFailed(job.id, message, "Audio extraction failed.");
+    await markJobFailed(job.id, message, "Audio extraction failed.", {
+      error,
+      code: "AUDIO_EXTRACTION_FAILED",
+      stage: "audio_extraction",
+      retryable: true,
+      details: {
+        forceRequested: options?.force === true,
+      },
+    });
 
     try {
       await updateSermonStatus(sermon.id, "FAILED");

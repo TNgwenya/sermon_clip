@@ -160,6 +160,7 @@ type SermonStatus =
 
 type ProcessingJobListItem = {
   id: string;
+  sermonId: string;
   type: string;
   status: string;
   startedAt: Date | null;
@@ -168,6 +169,7 @@ type ProcessingJobListItem = {
   heartbeatAt: Date | null;
   errorMessage: string | null;
   logs: string | null;
+  generationSummary: unknown;
 };
 
 type SermonDetailItem = {
@@ -904,6 +906,7 @@ export default async function SermonDetailPage({
         take: 25,
         select: {
           id: true,
+          sermonId: true,
           type: true,
           status: true,
           startedAt: true,
@@ -912,6 +915,7 @@ export default async function SermonDetailPage({
           heartbeatAt: true,
           errorMessage: true,
           logs: true,
+          generationSummary: true,
         },
       },
     },

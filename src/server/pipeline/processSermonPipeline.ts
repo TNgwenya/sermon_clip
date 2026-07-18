@@ -26,6 +26,7 @@ import {
   __clipReviewAssetServiceTestUtils,
   prepareGeneratedClipReviewAssets,
 } from "@/server/agents/clipReviewAssetService";
+import { updateSermonStatus } from "@/server/status/sermonStatus";
 
 export type ProcessSermonPipelineOptions = {
   force?: boolean;
@@ -152,6 +153,77 @@ function shouldMarkParentJobRunning(input: {
   return input.status !== "RUNNING" || input.attemptCount < 1;
 }
 
+export function shouldReuseExistingTranscript(input: {
+  force?: boolean;
+  transcriptId?: string | null;
+  transcriptSegmentCount: number;
+  clipCandidateCount: number;
+  sermonStatus: SermonStatus;
+}): boolean {
+  return input.force !== true
+    && Boolean(input.transcriptId)
+    && input.transcriptSegmentCount > 0
+    && (
+      input.clipCandidateCount > 0
+      || isAtOrAfter(input.sermonStatus, "TRANSCRIBED")
+    );
+}
+
+export function isAdvancedSermonPipelineState(input: {
+  sermonStatus: SermonStatus;
+  clipCandidateCount: number;
+}): boolean {
+  return input.clipCandidateCount > 0
+    || isAtOrAfter(input.sermonStatus, "CLIPS_GENERATED");
+}
+
+export function advancedSermonPipelineGuardMessage(input: {
+  force?: boolean;
+  sermonStatus: SermonStatus;
+  clipCandidateCount: number;
+}): string | null {
+  const advanced = isAdvancedSermonPipelineState(input);
+  if (input.force === true && advanced) {
+    return "A forced full-pipeline rerun is not safe after clips or later pastor work exist. Use the dedicated repair or redo tools instead; a deliberate full-workflow rewind is not available yet.";
+  }
+
+  if (
+    isAtOrAfter(input.sermonStatus, "CLIPS_GENERATED")
+    && input.clipCandidateCount === 0
+  ) {
+    return "This sermon is marked as clips generated or later, but its clip records are missing. Repair the sermon data before retrying the full workflow; automatic clip generation was stopped to protect the advanced workflow state.";
+  }
+
+  return null;
+}
+
+export function advancedSermonMissingMediaMessage(input: {
+  advanced: boolean;
+  artifact: "source" | "audio";
+  usable: boolean;
+}): string | null {
+  if (!input.advanced || input.usable) {
+    return null;
+  }
+
+  return input.artifact === "source"
+    ? "The saved source video is missing or unusable for this advanced sermon. Repair or re-upload the original media before retrying; the sermon workflow state was preserved."
+    : "The saved sermon audio is missing or unusable for this advanced sermon. Repair the media assets before retrying; the sermon workflow state was preserved.";
+}
+
+export function shouldReuseDurableClipCandidates(input: {
+  force?: boolean;
+  sermonStatus: SermonStatus;
+  clipCandidateCount: number;
+}): boolean {
+  return input.force !== true
+    && input.clipCandidateCount > 0
+    && (
+      input.sermonStatus === "FAILED"
+      || isAtOrAfter(input.sermonStatus, "CLIPS_GENERATED")
+    );
+}
+
 export function incompleteLocalUploadMessage(): string {
   return "Upload incomplete. The recording was not fully saved on the server. Re-upload the video and keep this page open until Sermon Clip confirms that the upload has finished.";
 }
@@ -203,9 +275,35 @@ export async function processSermonPipeline(
   await appendPipelineLog(sermon.id, "One-click sermon processing started.");
 
   try {
+    const advancedAtStart = isAdvancedSermonPipelineState({
+      sermonStatus: sermon.status,
+      clipCandidateCount: sermon._count.clipCandidates,
+    });
+    const pipelineGuardMessage = advancedSermonPipelineGuardMessage({
+      force: options?.force,
+      sermonStatus: sermon.status,
+      clipCandidateCount: sermon._count.clipCandidates,
+    });
+    if (pipelineGuardMessage) {
+      activeStepLabel = "Protect existing sermon work";
+      await appendJobLog(parentJob.id, pipelineGuardMessage);
+      throw new Error(pipelineGuardMessage);
+    }
+
     activeStepLabel = "Download video";
     const sourceVideoPath = getSourceVideoPath(sermon.id);
     const existingSource = await mediaFileIsUsable(sourceVideoPath);
+
+    const sourceProtectionMessage = advancedSermonMissingMediaMessage({
+      advanced: advancedAtStart,
+      artifact: "source",
+      usable: existingSource.usable,
+    });
+    if (sourceProtectionMessage) {
+      activeStepLabel = "Repair source video";
+      await appendJobLog(parentJob.id, sourceProtectionMessage);
+      throw new Error(sourceProtectionMessage);
+    }
 
     if (!existingSource.usable && isLocalUploadSourceUrl(sermon.youtubeUrl)) {
       activeStepLabel = "Upload media";
@@ -242,6 +340,17 @@ export async function processSermonPipeline(
     activeStepLabel = "Extract audio";
     const audioPath = getAudioPath(sermon.id);
     const existingAudio = await mediaFileIsUsable(audioPath);
+
+    const audioProtectionMessage = advancedSermonMissingMediaMessage({
+      advanced: advancedAtStart,
+      artifact: "audio",
+      usable: existingAudio.usable,
+    });
+    if (audioProtectionMessage) {
+      activeStepLabel = "Repair sermon audio";
+      await appendJobLog(parentJob.id, audioProtectionMessage);
+      throw new Error(audioProtectionMessage);
+    }
     const audioSkipped = !options?.force && existingAudio.usable;
 
     if (!existingAudio.usable && !options?.force && isAtOrAfter(afterDownload.status, "AUDIO_EXTRACTED") && Boolean(afterDownload.audioPath)) {
@@ -267,13 +376,29 @@ export async function processSermonPipeline(
     }
 
     activeStepLabel = "Transcribe audio";
-    const transcribeResult = await transcribeSermonAudio(sermon.id, { force: options?.force });
-    steps.push({
-      label: "Transcribe audio",
-      status: "SUCCEEDED",
-      message: transcribeResult.reusedExistingTranscript ? "Existing transcript reused." : "Audio transcribed.",
+    const transcriptSkipped = shouldReuseExistingTranscript({
+      force: options?.force,
+      transcriptId: afterAudio.transcript?.id,
+      transcriptSegmentCount: afterAudio._count.transcriptSegments,
+      clipCandidateCount: afterAudio._count.clipCandidates,
+      sermonStatus: afterAudio.status,
     });
-    await appendJobLog(parentJob.id, "Transcribe audio completed.");
+    if (transcriptSkipped) {
+      steps.push({
+        label: "Transcribe audio",
+        status: "SKIPPED",
+        message: "Existing transcript and timed segments reused.",
+      });
+      await appendJobLog(parentJob.id, "Transcribe audio skipped because a usable transcript already exists.");
+    } else {
+      const transcribeResult = await transcribeSermonAudio(sermon.id, { force: options?.force });
+      steps.push({
+        label: "Transcribe audio",
+        status: "SUCCEEDED",
+        message: transcribeResult.reusedExistingTranscript ? "Existing transcript reused." : "Audio transcribed.",
+      });
+      await appendJobLog(parentJob.id, "Transcribe audio completed.");
+    }
 
     const afterTranscript = await loadSermon(sermon.id);
     if (!afterTranscript) {
@@ -307,13 +432,42 @@ export async function processSermonPipeline(
     }
 
     activeStepLabel = "Generate clip suggestions";
-    const clipResult = await generateClipSuggestions(sermon.id, { force: options?.force });
-    steps.push({
-      label: "Generate clip suggestions",
-      status: "SUCCEEDED",
-      message: clipResult.reusedExistingSuggestions ? "Existing clip suggestions reused." : `Generated ${clipResult.clipCount} clip suggestions.`,
+    const clipGuardMessage = advancedAtStart && afterIntelligence._count.clipCandidates === 0
+      ? "This advanced sermon no longer has durable clip records. Repair the sermon data before retrying; automatic clip generation was stopped to preserve the workflow state."
+      : advancedSermonPipelineGuardMessage({
+          force: options?.force,
+          sermonStatus: afterIntelligence.status,
+          clipCandidateCount: afterIntelligence._count.clipCandidates,
+        });
+    if (clipGuardMessage) {
+      await appendJobLog(parentJob.id, clipGuardMessage);
+      throw new Error(clipGuardMessage);
+    }
+
+    const clipsReused = shouldReuseDurableClipCandidates({
+      force: options?.force,
+      sermonStatus: afterIntelligence.status,
+      clipCandidateCount: afterIntelligence._count.clipCandidates,
     });
-    await appendJobLog(parentJob.id, "Generate clip suggestions completed.");
+    if (clipsReused) {
+      if (afterIntelligence.status === "FAILED") {
+        await updateSermonStatus(sermon.id, "CLIPS_GENERATED");
+      }
+      steps.push({
+        label: "Generate clip suggestions",
+        status: "SKIPPED",
+        message: `Existing durable clip suggestions reused (${afterIntelligence._count.clipCandidates} available).`,
+      });
+      await appendJobLog(parentJob.id, "Generate clip suggestions skipped because durable clips already exist.");
+    } else {
+      const clipResult = await generateClipSuggestions(sermon.id, { force: options?.force });
+      steps.push({
+        label: "Generate clip suggestions",
+        status: "SUCCEEDED",
+        message: clipResult.reusedExistingSuggestions ? "Existing clip suggestions reused." : `Generated ${clipResult.clipCount} clip suggestions.`,
+      });
+      await appendJobLog(parentJob.id, "Generate clip suggestions completed.");
+    }
 
     activeStepLabel = "Prepare generated clip review assets";
     const previewResult = await prepareGeneratedClipReviewAssets({ sermonId: sermon.id, force: options?.force });
@@ -397,6 +551,11 @@ export async function processSermonPipeline(
 
 export const __processSermonPipelineTestUtils = {
   shouldMarkParentJobRunning,
+  shouldReuseExistingTranscript,
+  isAdvancedSermonPipelineState,
+  advancedSermonPipelineGuardMessage,
+  advancedSermonMissingMediaMessage,
+  shouldReuseDurableClipCandidates,
   incompleteLocalUploadMessage,
   PipelinePartialCompletionError,
   buildGeneratedClipReviewAssetPlan: (

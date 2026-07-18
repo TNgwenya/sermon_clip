@@ -302,6 +302,124 @@ describe("operations diagnostics", () => {
     expect(__operationsDiagnosticsTestUtils.isLatestUnresolvedFailedProcessingJobRetry(jobs[0], jobs)).toBe(false);
   });
 
+  it("removes failed child retries only after a later successful full pipeline", () => {
+    const failedChild = {
+      id: "failed-transcribe",
+      sermonId: "sermon-a",
+      type: "TRANSCRIBE_AUDIO" as const,
+      status: "FAILED" as const,
+      updatedAt: new Date("2026-07-18T10:00:00.000Z"),
+    };
+    const staleActiveChild = {
+      id: "stale-download",
+      sermonId: "sermon-a",
+      type: "DOWNLOAD_VIDEO" as const,
+      status: "RUNNING" as const,
+      updatedAt: new Date(0),
+    };
+    const otherSermonFailure = {
+      id: "other-sermon-clips",
+      sermonId: "sermon-b",
+      type: "GENERATE_CLIPS" as const,
+      status: "FAILED" as const,
+      updatedAt: new Date("2026-07-18T10:30:00.000Z"),
+    };
+    const jobs = [
+      failedChild,
+      staleActiveChild,
+      otherSermonFailure,
+      {
+        id: "successful-parent",
+        sermonId: "sermon-a",
+        type: "PROCESS_SERMON" as const,
+        status: "SUCCEEDED" as const,
+        updatedAt: new Date("2026-07-18T11:00:00.000Z"),
+      },
+    ];
+
+    expect(__operationsDiagnosticsTestUtils.countUnresolvedFailedProcessingJobs(jobs)).toBe(2);
+    expect(__operationsDiagnosticsTestUtils.selectUnresolvedFailedProcessingJobRetries(jobs, 10).map((job) => job.id)).toEqual([
+      "other-sermon-clips",
+      "stale-download",
+    ]);
+    expect(__operationsDiagnosticsTestUtils.isLatestUnresolvedFailedProcessingJobRetry(failedChild, jobs)).toBe(false);
+    expect(__operationsDiagnosticsTestUtils.isLatestUnresolvedFailedProcessingJobRetry(staleActiveChild, jobs)).toBe(true);
+  });
+
+  it("keeps a failed full pipeline unresolved after a later child succeeds", () => {
+    const failedParent = {
+      id: "failed-parent",
+      sermonId: "sermon-a",
+      type: "PROCESS_SERMON" as const,
+      status: "FAILED" as const,
+      updatedAt: new Date("2026-07-18T10:00:00.000Z"),
+    };
+    const jobs = [
+      failedParent,
+      {
+        id: "successful-child",
+        sermonId: "sermon-a",
+        type: "GENERATE_CLIPS" as const,
+        status: "SUCCEEDED" as const,
+        updatedAt: new Date("2026-07-18T11:00:00.000Z"),
+      },
+    ];
+
+    expect(__operationsDiagnosticsTestUtils.countUnresolvedFailedProcessingJobs(jobs)).toBe(1);
+    expect(__operationsDiagnosticsTestUtils.selectUnresolvedFailedProcessingJobRetries(jobs, 10).map((job) => job.id)).toEqual([
+      "failed-parent",
+    ]);
+    expect(__operationsDiagnosticsTestUtils.isLatestUnresolvedFailedProcessingJobRetry(failedParent, jobs)).toBe(true);
+  });
+
+  it("keeps forced media steps and specialized clip failures recoverable", () => {
+    const forcedMediaSteps = ([
+      "DOWNLOAD_VIDEO",
+      "EXTRACT_AUDIO",
+      "TRANSCRIBE_AUDIO",
+    ] as const).map((type, index) => ({
+      id: `forced-${type.toLowerCase()}`,
+      sermonId: "sermon-a",
+      type,
+      status: "FAILED" as const,
+      updatedAt: new Date(`2026-07-18T10:0${index}:00.000Z`),
+      generationSummary: {
+        failure: { details: { forceRequested: true } },
+      },
+    }));
+    const specializedClips = {
+      id: "redo-clips",
+      sermonId: "sermon-a",
+      type: "GENERATE_CLIPS" as const,
+      status: "FAILED" as const,
+      updatedAt: new Date("2026-07-18T10:05:00.000Z"),
+      generationSummary: { mode: "redo" },
+    };
+    const jobs = [
+      ...forcedMediaSteps,
+      specializedClips,
+      {
+        id: "successful-parent",
+        sermonId: "sermon-a",
+        type: "PROCESS_SERMON" as const,
+        status: "SUCCEEDED" as const,
+        updatedAt: new Date("2026-07-18T11:00:00.000Z"),
+      },
+    ];
+
+    expect(__operationsDiagnosticsTestUtils.countUnresolvedFailedProcessingJobs(jobs)).toBe(4);
+    expect(__operationsDiagnosticsTestUtils.selectUnresolvedFailedProcessingJobRetries(jobs, 10).map((job) => job.id)).toEqual([
+      "redo-clips",
+      "forced-transcribe_audio",
+      "forced-extract_audio",
+      "forced-download_video",
+    ]);
+    expect(forcedMediaSteps.every((job) => (
+      __operationsDiagnosticsTestUtils.isLatestUnresolvedFailedProcessingJobRetry(job, jobs)
+    ))).toBe(true);
+    expect(__operationsDiagnosticsTestUtils.isLatestUnresolvedFailedProcessingJobRetry(specializedClips, jobs)).toBe(true);
+  });
+
   it("returns checklist items", async () => {
     const service = __operationsDiagnosticsTestUtils.createOperationsDiagnosticsService(
       createRepositoryStub(),
