@@ -145,12 +145,19 @@ export function normalizeStructureSectionType(value: unknown): unknown {
 
 // ─── AI output schemas (validated before persistence) ─────────────────────────
 
+function nullToUndefined<T>(value: T | null | undefined): T | undefined {
+  return value ?? undefined;
+}
+
 export const aiScriptureRefSchema = z.object({
   reference: z.string().trim().min(1),
-  book: z.string().trim().optional(),
-  chapter: z.number().int().positive().optional(),
-  verseStart: z.number().int().positive().optional(),
-  verseEnd: z.number().int().positive().optional(),
+  // AI models often represent an unknown chapter or verse as `null`. Treat it
+  // the same as an omitted optional value so a partial reference does not
+  // invalidate an otherwise usable sermon analysis.
+  book: z.string().trim().nullish().transform(nullToUndefined),
+  chapter: z.number().int().positive().nullish().transform(nullToUndefined),
+  verseStart: z.number().int().positive().nullish().transform(nullToUndefined),
+  verseEnd: z.number().int().positive().nullish().transform(nullToUndefined),
   usageType: z.preprocess(normalizeScriptureUsageType, z.enum(scriptureUsageTypes)),
   isPrimary: z.boolean().default(false),
   frequencyCount: z.number().int().min(1).default(1),

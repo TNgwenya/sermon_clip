@@ -42,6 +42,27 @@ describe("aiScriptureRefSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("treats null optional scripture coordinates as unspecified", () => {
+    const result = aiScriptureRefSchema.safeParse({
+      reference: "Acts",
+      chapter: null,
+      verseStart: null,
+      verseEnd: null,
+      usageType: "REFERENCED",
+      confidenceScore: 0.8,
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      data: {
+        reference: "Acts",
+        chapter: undefined,
+        verseStart: undefined,
+        verseEnd: undefined,
+      },
+    });
+  });
+
   it("normalizes common usageType variants", () => {
     expect(aiScriptureRefSchema.safeParse({
       reference: "Psalm 23",
