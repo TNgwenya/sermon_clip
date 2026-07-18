@@ -5,6 +5,15 @@ export type ClipGenerationRetryMode =
   | typeof CLIP_GENERATION_PREVIEW_REPAIR_MODE
   | typeof CLIP_GENERATION_RETRY_MODE;
 
+export type ClipGenerationRetryPlan = {
+  retryMode: ClipGenerationRetryMode;
+  generationSummary: {
+    mode: ClipGenerationRetryMode | "redo";
+    existingActiveSuggestionCount: number;
+    append?: true;
+  };
+};
+
 function asSummary(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -42,10 +51,39 @@ export function resolveClipGenerationRetryMode(input: {
     : CLIP_GENERATION_RETRY_MODE;
 }
 
+export function buildClipGenerationRetryPlan(input: {
+  existingActiveSuggestionCount: number;
+  failedJobErrorMessage?: string | null;
+  failedJobGenerationSummary?: unknown;
+}): ClipGenerationRetryPlan {
+  const retryMode = resolveClipGenerationRetryMode(input);
+  const failedSummary = asSummary(input.failedJobGenerationSummary);
+
+  if (failedSummary?.["mode"] === "redo") {
+    return {
+      retryMode,
+      generationSummary: {
+        mode: "redo",
+        existingActiveSuggestionCount: input.existingActiveSuggestionCount,
+      },
+    };
+  }
+
+  return {
+    retryMode,
+    generationSummary: {
+      mode: retryMode,
+      existingActiveSuggestionCount: input.existingActiveSuggestionCount,
+      ...(failedSummary?.["append"] === true ? { append: true as const } : {}),
+    },
+  };
+}
+
 export function isClipGenerationPreviewRepairSummary(value: unknown): boolean {
   return asSummary(value)?.["mode"] === CLIP_GENERATION_PREVIEW_REPAIR_MODE;
 }
 
 export function isClipGenerationForcedRetrySummary(value: unknown): boolean {
-  return asSummary(value)?.["mode"] === CLIP_GENERATION_RETRY_MODE;
+  const summary = asSummary(value);
+  return summary?.["mode"] === CLIP_GENERATION_RETRY_MODE && summary["append"] !== true;
 }

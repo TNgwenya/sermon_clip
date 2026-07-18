@@ -83,12 +83,21 @@ function clamp01(value: number): number {
 }
 
 const INITIAL_MODEL_SAMPLE_INTERVAL_SECONDS = 1.5;
-const FRAME_EXTRACTION_BATCH_SIZE = 24;
+// Eight outputs keeps FFmpeg's peak memory practical on a 1 GiB free-tier EC2
+// even when the persistent Node worker and subject-detection model are resident.
+const FRAME_EXTRACTION_BATCH_SIZE = 8;
 
 type FrameExtractionRequest = {
   timeSeconds: number;
   outputPath: string;
 };
+
+function selectFallbackFrameRequests(
+  requests: FrameExtractionRequest[],
+  usableOutputPaths: ReadonlySet<string>,
+): FrameExtractionRequest[] {
+  return requests.filter((request) => !usableOutputPaths.has(request.outputPath));
+}
 
 function detectionCenterX(detection: PersonDetection): number {
   return detection.x + detection.width / 2;
@@ -344,6 +353,16 @@ async function extractFrame(input: {
   });
 }
 
+async function isUsableExtractedFrame(outputPath: string): Promise<boolean> {
+  try {
+    const sharp = await getSharp();
+    const metadata = await sharp(outputPath).metadata();
+    return Boolean(metadata.width && metadata.height);
+  } catch {
+    return false;
+  }
+}
+
 async function extractFramesInBatches(input: {
   sourceVideoPath: string;
   requests: FrameExtractionRequest[];
@@ -351,14 +370,46 @@ async function extractFramesInBatches(input: {
 }): Promise<void> {
   for (let index = 0; index < input.requests.length; index += FRAME_EXTRACTION_BATCH_SIZE) {
     const requests = input.requests.slice(index, index + FRAME_EXTRACTION_BATCH_SIZE);
-    await runFrameExtractionCommand({
-      args: buildFrameExtractionBatchArgs({
-        sourceVideoPath: input.sourceVideoPath,
-        requests,
-      }),
-      ffmpegPath: input.ffmpegPath,
-      failureLabel: "FFmpeg batched frame extraction failed",
-    });
+    try {
+      await runFrameExtractionCommand({
+        args: buildFrameExtractionBatchArgs({
+          sourceVideoPath: input.sourceVideoPath,
+          requests,
+        }),
+        ffmpegPath: input.ffmpegPath,
+        failureLabel: "FFmpeg batched frame extraction failed",
+      });
+    } catch (batchError) {
+      // Preserve compatibility with minimal FFmpeg builds without discarding
+      // successful earlier batches or re-decoding the full request set.
+      try {
+        const usableOutputPaths = new Set<string>();
+        for (const request of requests) {
+          if (await isUsableExtractedFrame(request.outputPath)) {
+            usableOutputPaths.add(request.outputPath);
+          }
+        }
+
+        for (const request of selectFallbackFrameRequests(requests, usableOutputPaths)) {
+          await extractFrame({
+            sourceVideoPath: input.sourceVideoPath,
+            timeSeconds: request.timeSeconds,
+            outputPath: request.outputPath,
+            ffmpegPath: input.ffmpegPath,
+          });
+          if (!await isUsableExtractedFrame(request.outputPath)) {
+            throw new Error(`FFmpeg reported success but did not create a usable frame at ${request.timeSeconds.toFixed(3)}s.`);
+          }
+        }
+      } catch (fallbackError) {
+        const batchMessage = batchError instanceof Error ? batchError.message : String(batchError);
+        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        throw new Error(
+          `Batched frame extraction failed (${batchMessage}); per-frame fallback also failed (${fallbackMessage}).`,
+          { cause: fallbackError },
+        );
+      }
+    }
   }
 }
 
@@ -632,25 +683,11 @@ async function inferModelTracks(input: {
         outputPath: path.join(tempDir, `${frameNamePrefix}-${index}.jpg`),
       }));
 
-      try {
-        await extractFramesInBatches({
-          sourceVideoPath: input.sourceVideoPath,
-          requests,
-          ffmpegPath: input.ffmpegPath,
-        });
-      } catch {
-        // Some older or minimal FFmpeg builds may reject a multi-output filter
-        // graph. Preserve the established one-frame path as a compatibility
-        // fallback before allowing the caller to use heuristic tracking.
-        for (const request of requests) {
-          await extractFrame({
-            sourceVideoPath: input.sourceVideoPath,
-            timeSeconds: request.timeSeconds,
-            outputPath: request.outputPath,
-            ffmpegPath: input.ffmpegPath,
-          });
-        }
-      }
+      await extractFramesInBatches({
+        sourceVideoPath: input.sourceVideoPath,
+        requests,
+        ffmpegPath: input.ffmpegPath,
+      });
 
       for (const [index, timeSeconds] of times.entries()) {
         const framePath = requests[index]?.outputPath;
@@ -697,6 +734,7 @@ async function inferModelTracks(input: {
 export const __videoSubjectTrackingTestUtils = {
   buildFrameExtractionBatchArgs,
   frameExtractionBatchSize: FRAME_EXTRACTION_BATCH_SIZE,
+  selectFallbackFrameRequests,
 };
 
 function makeBoxes(input: {

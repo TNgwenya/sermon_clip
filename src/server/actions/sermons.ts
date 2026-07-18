@@ -89,7 +89,7 @@ import {
   buildPrepareClipPlan,
 } from "@/lib/prepareWorkflow";
 import { getQueuedMediaAssetsForRemoteBatchAction } from "@/lib/clipReview";
-import { resolveClipGenerationRetryMode } from "@/lib/clipGenerationRetry";
+import { buildClipGenerationRetryPlan } from "@/lib/clipGenerationRetry";
 import { isStaleActiveProcessingJob } from "@/lib/pastorWorkflow";
 import { prunePostingPackageHistoryByClipIds } from "@/lib/postingPackages";
 import {
@@ -1938,13 +1938,11 @@ export async function generateClipSuggestionsAction(
   }
 
   if (!canRunLocalMediaProcessing()) {
-    const job = await queueSermonProcessingJob(sermonId, "GENERATE_CLIPS");
-    if (append) {
-      await prisma.processingJob.update({
-        where: { id: job.id },
-        data: { generationSummary: { append: true } },
-      });
-    }
+    const job = await queueSermonProcessingJob(
+      sermonId,
+      "GENERATE_CLIPS",
+      append ? { append: true } : undefined,
+    );
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath(`/sermons/${sermonId}/review`);
     revalidatePath("/");
@@ -2008,13 +2006,11 @@ export async function redoClipGenerationFromTranscriptAction(
   }
 
   if (!canRunLocalMediaProcessing()) {
-    const job = await queueSermonProcessingJob(sermonId, "GENERATE_CLIPS");
-    if (!job.reusedExisting) {
-      await prisma.processingJob.update({
-        where: { id: job.id },
-        data: { generationSummary: { mode: "redo" } },
-      });
-    }
+    const job = await queueSermonProcessingJob(
+      sermonId,
+      "GENERATE_CLIPS",
+      { mode: "redo" },
+    );
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath(`/sermons/${sermonId}/review`);
     revalidatePath("/ready-to-post");
@@ -2230,15 +2226,17 @@ export async function retryFailedProcessingJobById(input: {
           isAiGenerated: true,
         },
       });
-      const retryMode = resolveClipGenerationRetryMode({
+      const retryPlan = buildClipGenerationRetryPlan({
         existingActiveSuggestionCount,
         failedJobErrorMessage: job.errorMessage,
         failedJobGenerationSummary: job.generationSummary,
       });
-      const queuedJob = await queueSermonProcessingJob(sermonId, job.type, {
-        mode: retryMode,
-        existingActiveSuggestionCount,
-      });
+      const { retryMode } = retryPlan;
+      const queuedJob = await queueSermonProcessingJob(
+        sermonId,
+        job.type,
+        retryPlan.generationSummary,
+      );
       await appendPipelineLog(
         sermonId,
         retryMode === "repair_previews"

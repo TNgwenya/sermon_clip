@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildClipGenerationRetryPlan,
   CLIP_GENERATION_PREVIEW_REPAIR_MODE,
   CLIP_GENERATION_RETRY_MODE,
   isClipGenerationForcedRetrySummary,
@@ -36,17 +37,49 @@ describe("clip generation retry planning", () => {
     })).toBe(CLIP_GENERATION_RETRY_MODE);
   });
 
-  it("preserves explicit append and redo generation intent", () => {
-    expect(resolveClipGenerationRetryMode({
+  it("preserves append intent without turning the retry into a destructive forced replacement", () => {
+    const plan = buildClipGenerationRetryPlan({
       existingActiveSuggestionCount: 5,
       failedJobErrorMessage: "Preview prep failed.",
       failedJobGenerationSummary: { append: true },
-    })).toBe(CLIP_GENERATION_RETRY_MODE);
-    expect(resolveClipGenerationRetryMode({
+    });
+
+    expect(plan).toEqual({
+      retryMode: CLIP_GENERATION_RETRY_MODE,
+      generationSummary: {
+        mode: CLIP_GENERATION_RETRY_MODE,
+        existingActiveSuggestionCount: 5,
+        append: true,
+      },
+    });
+    expect(isClipGenerationForcedRetrySummary(plan.generationSummary)).toBe(false);
+  });
+
+  it("preserves redo intent in the summary written with the queued retry", () => {
+    expect(buildClipGenerationRetryPlan({
       existingActiveSuggestionCount: 5,
       failedJobErrorMessage: "Preview prep failed.",
       failedJobGenerationSummary: { mode: "redo" },
-    })).toBe(CLIP_GENERATION_RETRY_MODE);
+    })).toEqual({
+      retryMode: CLIP_GENERATION_RETRY_MODE,
+      generationSummary: {
+        mode: "redo",
+        existingActiveSuggestionCount: 5,
+      },
+    });
+  });
+
+  it("keeps a genuine generation retry forced when it is not an append", () => {
+    const plan = buildClipGenerationRetryPlan({
+      existingActiveSuggestionCount: 5,
+      failedJobErrorMessage: "AI clip selection timed out.",
+    });
+
+    expect(plan.generationSummary).toEqual({
+      mode: CLIP_GENERATION_RETRY_MODE,
+      existingActiveSuggestionCount: 5,
+    });
+    expect(isClipGenerationForcedRetrySummary(plan.generationSummary)).toBe(true);
   });
 
   it("does not treat malformed or unrelated job summaries as preview-only repairs", () => {

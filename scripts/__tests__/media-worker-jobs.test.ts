@@ -135,6 +135,28 @@ describe("media worker clip-generation outcomes", () => {
     })).resolves.toContain("Generated 3 clip suggestion(s).");
     expect(generateSuggestions).toHaveBeenCalledWith({ force: true, append: false });
   });
+
+  it("retries an append without replacing existing suggestions", async () => {
+    const generateSuggestions = vi.fn(async () => ({
+      clipCount: 2,
+      reusedExistingSuggestions: false,
+    }));
+    const preparePreviews = vi.fn(async () => ({
+      prepared: 2,
+      skipped: 0,
+      failed: 0,
+    }));
+
+    await expect(runClipGenerationWorkerJob({
+      previewRepairOnly: false,
+      forceGeneration: false,
+      append: true,
+    }, {
+      generateSuggestions,
+      preparePreviews,
+    })).resolves.toContain("Generated 2 new clip suggestion(s).");
+    expect(generateSuggestions).toHaveBeenCalledWith({ force: false, append: true });
+  });
 });
 
 describe("media worker quality-refresh outcomes", () => {

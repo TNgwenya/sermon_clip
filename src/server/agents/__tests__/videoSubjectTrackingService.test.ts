@@ -46,8 +46,7 @@ describe("video subject tracking service", () => {
   });
 
   it("keeps batches small enough for free-tier FFmpeg memory limits", () => {
-    expect(__videoSubjectTrackingTestUtils.frameExtractionBatchSize).toBeGreaterThanOrEqual(8);
-    expect(__videoSubjectTrackingTestUtils.frameExtractionBatchSize).toBeLessThanOrEqual(24);
+    expect(__videoSubjectTrackingTestUtils.frameExtractionBatchSize).toBe(8);
   });
 
   it("handles a one-frame batch without an unnecessary split graph", () => {
@@ -59,6 +58,21 @@ describe("video subject tracking service", () => {
 
     expect(filter).not.toContain("split=");
     expect(filter).toContain("[0:v]trim=start=0.000");
+  });
+
+  it("falls back only for outputs that the failed batch did not create successfully", () => {
+    const requests = [
+      { timeSeconds: 10, outputPath: "/tmp/frame-0.jpg" },
+      { timeSeconds: 11.5, outputPath: "/tmp/frame-1.jpg" },
+      { timeSeconds: 13.25, outputPath: "/tmp/frame-2.jpg" },
+    ];
+
+    expect(__videoSubjectTrackingTestUtils.selectFallbackFrameRequests(
+      requests,
+      new Set(["/tmp/frame-0.jpg", "/tmp/frame-2.jpg"]),
+    )).toEqual([
+      { timeSeconds: 11.5, outputPath: "/tmp/frame-1.jpg" },
+    ]);
   });
 
   it("creates face, body, and speaker-area tracks with normalized boxes", () => {
