@@ -1,6 +1,6 @@
-export const MOBILE_UPLOAD_INITIAL_CHUNK_BYTES = 8 * 1024 * 1024;
+export const MOBILE_UPLOAD_INITIAL_CHUNK_BYTES = 4 * 1024 * 1024;
 export const MOBILE_UPLOAD_MIN_CHUNK_BYTES = 512 * 1024;
-export const MOBILE_UPLOAD_MAX_CHUNK_ATTEMPTS = 4;
+export const MOBILE_UPLOAD_MAX_CHUNK_ATTEMPTS = 6;
 export const MOBILE_UPLOAD_SESSION_STORAGE_KEY = "sermon-clip:active-upload-session";
 
 export type MobileUploadSession = {
@@ -52,6 +52,14 @@ export function uploadChunkRetryDelayMs(failedAttempt: number): number {
 
 export function uploadResponseIsRetryable(status: number): boolean {
   return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+export function uploadFailureSuggestsSmallerChunk(status: number | null, chunkBytes: number): boolean {
+  if (chunkBytes <= MOBILE_UPLOAD_MIN_CHUNK_BYTES) {
+    return false;
+  }
+
+  return status === null || status === 408 || status === 413 || (status >= 502 && status <= 504);
 }
 
 export function resolveAcknowledgedUploadBytes(input: {

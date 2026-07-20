@@ -23,6 +23,7 @@ import {
   resolveAcknowledgedUploadBytes,
   smallerUploadChunkBytes,
   uploadChunkRetryDelayMs,
+  uploadFailureSuggestsSmallerChunk,
   uploadResponseIsRetryable,
 } from "@/lib/mobileUpload";
 import {
@@ -293,6 +294,7 @@ export function NewSermonForm({
         let chunkResponse: Response | null = null;
         let chunkResult: UploadApiResponse | null = null;
         let transportError: unknown = null;
+        let retryWithSmallerChunk = false;
 
         for (let attempt = 1; attempt <= MOBILE_UPLOAD_MAX_CHUNK_ATTEMPTS; attempt += 1) {
           try {
@@ -307,10 +309,20 @@ export function NewSermonForm({
             if (chunkResponse.ok || chunkResponse.status === 409 || !uploadResponseIsRetryable(chunkResponse.status)) {
               break;
             }
+
+            if (uploadFailureSuggestsSmallerChunk(chunkResponse.status, uploadChunkBytes)) {
+              retryWithSmallerChunk = true;
+              break;
+            }
           } catch (error) {
             transportError = error;
             chunkResponse = null;
             chunkResult = null;
+
+            if (uploadFailureSuggestsSmallerChunk(null, uploadChunkBytes)) {
+              retryWithSmallerChunk = true;
+              break;
+            }
           }
 
           if (attempt < MOBILE_UPLOAD_MAX_CHUNK_ATTEMPTS) {
@@ -318,11 +330,17 @@ export function NewSermonForm({
           }
         }
 
+        if (retryWithSmallerChunk) {
+          uploadChunkBytes = smallerUploadChunkBytes(uploadChunkBytes);
+          await waitForUploadRetry(uploadChunkRetryDelayMs(1));
+          continue;
+        }
+
         if (!chunkResponse || !chunkResult) {
           const reason = transportError instanceof Error ? transportError.message : "The network connection ended during the upload.";
           setUploadState({
             success: false,
-            message: `The upload did not finish after ${MOBILE_UPLOAD_MAX_CHUNK_ATTEMPTS} attempts. Reason: ${reason}`,
+            message: `The upload did not finish after switching to smaller transfer blocks and retrying ${MOBILE_UPLOAD_MAX_CHUNK_ATTEMPTS} times. Reason: ${reason}`,
             fieldErrors: { mediaFile: "The connection stayed unavailable. Keep the file on this device, reconnect to stable Wi-Fi, and try again." },
             createdSermonId: uploadSermonId,
           });
