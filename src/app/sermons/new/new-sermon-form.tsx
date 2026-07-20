@@ -15,6 +15,17 @@ import {
   uploadedMediaExceedsSizeLimit,
 } from "@/lib/sermonIntake";
 import {
+  MOBILE_UPLOAD_INITIAL_CHUNK_BYTES,
+  MOBILE_UPLOAD_MAX_CHUNK_ATTEMPTS,
+  MOBILE_UPLOAD_MIN_CHUNK_BYTES,
+  MOBILE_UPLOAD_SESSION_STORAGE_KEY,
+  parseMobileUploadSession,
+  resolveAcknowledgedUploadBytes,
+  smallerUploadChunkBytes,
+  uploadChunkRetryDelayMs,
+  uploadResponseIsRetryable,
+} from "@/lib/mobileUpload";
+import {
   createSermonAction,
   type CreateSermonFormState,
 } from "@/server/actions/sermons";
@@ -25,7 +36,10 @@ const initialCreateSermonState: CreateSermonFormState = {
 };
 
 type SermonSourceMode = "youtube" | "upload";
-const uploadChunkSize = 8 * 1024 * 1024;
+
+type UploadApiResponse = CreateSermonFormState & {
+  receivedBytes?: number;
+};
 
 const mobileMediaAcceptTypes = [
   "video/*",
@@ -52,33 +66,42 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
 }
 
-async function parseUploadResponse(response: Response): Promise<CreateSermonFormState> {
+async function parseUploadResponse(response: Response): Promise<UploadApiResponse> {
   return response.json().catch(() => ({
     success: false,
     message: "The upload ended before Sermon Clip received a normal response.",
     fieldErrors: { mediaFile: "The upload ended early. Try again or use a YouTube link." },
-  })) as Promise<CreateSermonFormState>;
+  })) as Promise<UploadApiResponse>;
+}
+
+function waitForUploadRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, delayMs));
 }
 
 function SubmitButton({
   sourceMode,
   uploadBlocked,
   isUploadSubmitting,
+  uploadProgressPercent,
 }: {
   sourceMode: SermonSourceMode;
   uploadBlocked: boolean;
   isUploadSubmitting: boolean;
+  uploadProgressPercent: number | null;
 }) {
   const { pending: actionPending } = useFormStatus();
   const pending = actionPending || isUploadSubmitting;
+  const label = !pending
+    ? "Analyze this sermon"
+    : sourceMode !== "upload"
+      ? "Starting analysis..."
+      : uploadProgressPercent === null
+        ? "Preparing upload..."
+        : `Uploading recording… ${uploadProgressPercent}%`;
 
   return (
     <button className="button primary command-cta" type="submit" disabled={pending || uploadBlocked}>
-      {pending
-        ? sourceMode === "upload"
-          ? "Uploading recording..."
-          : "Starting analysis..."
-        : "Analyze this sermon"}
+      {label}
     </button>
   );
 }
@@ -87,10 +110,12 @@ function UploadProgressTheater({
   sourceMode,
   selectedFileName,
   isUploadSubmitting,
+  uploadProgressPercent,
 }: {
   sourceMode: SermonSourceMode;
   selectedFileName: string | null;
   isUploadSubmitting: boolean;
+  uploadProgressPercent: number | null;
 }) {
   const { pending: actionPending } = useFormStatus();
   const pending = actionPending || isUploadSubmitting;
@@ -107,7 +132,7 @@ function UploadProgressTheater({
           <h2>{sourceMode === "upload" ? "Keep this tab open while the media uploads." : "Your sermon is being added to the studio."}</h2>
           <p className="muted">
             {sourceMode === "upload"
-              ? `${selectedFileName ?? "The selected recording"} will be checked before analysis begins.`
+              ? `${selectedFileName ?? "The selected recording"} is ${uploadProgressPercent ?? 0}% uploaded and will be checked before analysis begins.`
               : "Sermon Clip is saving the details and preparing the YouTube recording for analysis."}
             {" "}You will be taken to live progress automatically.
           </p>
@@ -160,6 +185,7 @@ export function NewSermonForm({
   const [youtubeUrl, setYoutubeUrl] = useState(initialYoutubeUrl);
   const [uploadState, setUploadState] = useState<CreateSermonFormState | null>(null);
   const [isUploadSubmitting, setIsUploadSubmitting] = useState(false);
+  const [uploadProgressPercent, setUploadProgressPercent] = useState<number | null>(null);
   const [selectedFile, setSelectedFile] = useState<{ name: string; size: number } | null>(null);
   const [selectedFileError, setSelectedFileError] = useState<string | null>(null);
   const displayState = uploadState ?? state;
@@ -206,6 +232,17 @@ export function NewSermonForm({
       return;
     }
 
+    const savedUploadSession = parseMobileUploadSession(
+      window.sessionStorage.getItem(MOBILE_UPLOAD_SESSION_STORAGE_KEY),
+    );
+    let uploadSermonId = savedUploadSession?.fileName === file.name
+      && savedUploadSession.fileSize === file.size
+      ? savedUploadSession.sermonId
+      : null;
+    if (!uploadSermonId) {
+      window.sessionStorage.removeItem(MOBILE_UPLOAD_SESSION_STORAGE_KEY);
+    }
+
     const formData = new FormData(form);
     const uploadUrl = new URL("/api/sermons/upload", window.location.origin);
     uploadUrl.searchParams.set("uploadMode", "start");
@@ -222,42 +259,116 @@ export function NewSermonForm({
 
     window.sessionStorage.setItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY, "true");
     setIsUploadSubmitting(true);
+    setUploadProgressPercent(0);
     try {
-      const startResponse = await fetch(uploadUrl, {
-        method: "POST",
-      });
-      const startResult = await parseUploadResponse(startResponse);
-      if (!startResponse.ok || !startResult.success || !startResult.createdSermonId) {
-        setUploadState(startResult);
-        return;
-      }
-
-      let uploadedBytes = 0;
-      while (uploadedBytes < file.size) {
-        const nextUploadedBytes = Math.min(uploadedBytes + uploadChunkSize, file.size);
-        const chunkUrl = new URL("/api/sermons/upload", window.location.origin);
-        chunkUrl.searchParams.set("uploadMode", "chunk");
-        chunkUrl.searchParams.set("sermonId", startResult.createdSermonId);
-        chunkUrl.searchParams.set("offset", String(uploadedBytes));
-        chunkUrl.searchParams.set("totalBytes", String(file.size));
-
-        const chunkResponse = await fetch(chunkUrl, {
+      if (!uploadSermonId) {
+        const startResponse = await fetch(uploadUrl, {
           method: "POST",
-          headers: { "content-type": file.type || "application/octet-stream" },
-          body: file.slice(uploadedBytes, nextUploadedBytes),
         });
-        const chunkResult = await parseUploadResponse(chunkResponse);
-        if (!chunkResponse.ok || !chunkResult.success) {
-          setUploadState(chunkResult);
+        const startResult = await parseUploadResponse(startResponse);
+        if (!startResponse.ok || !startResult.success || !startResult.createdSermonId) {
+          setUploadState(startResult);
           return;
         }
 
-        uploadedBytes = nextUploadedBytes;
+        uploadSermonId = startResult.createdSermonId;
+        window.sessionStorage.setItem(MOBILE_UPLOAD_SESSION_STORAGE_KEY, JSON.stringify({
+          sermonId: uploadSermonId,
+          fileName: file.name,
+          fileSize: file.size,
+        }));
+      }
+
+      let uploadedBytes = 0;
+      let uploadChunkBytes = MOBILE_UPLOAD_INITIAL_CHUNK_BYTES;
+      while (uploadedBytes < file.size) {
+        const nextUploadedBytes = Math.min(uploadedBytes + uploadChunkBytes, file.size);
+        const chunkUrl = new URL("/api/sermons/upload", window.location.origin);
+        chunkUrl.searchParams.set("uploadMode", "chunk");
+        chunkUrl.searchParams.set("sermonId", uploadSermonId);
+        chunkUrl.searchParams.set("offset", String(uploadedBytes));
+        chunkUrl.searchParams.set("chunkBytes", String(nextUploadedBytes - uploadedBytes));
+        chunkUrl.searchParams.set("totalBytes", String(file.size));
+
+        let chunkResponse: Response | null = null;
+        let chunkResult: UploadApiResponse | null = null;
+        let transportError: unknown = null;
+
+        for (let attempt = 1; attempt <= MOBILE_UPLOAD_MAX_CHUNK_ATTEMPTS; attempt += 1) {
+          try {
+            chunkResponse = await fetch(chunkUrl, {
+              method: "POST",
+              headers: { "content-type": file.type || "application/octet-stream" },
+              body: file.slice(uploadedBytes, nextUploadedBytes),
+            });
+            chunkResult = await parseUploadResponse(chunkResponse);
+            transportError = null;
+
+            if (chunkResponse.ok || chunkResponse.status === 409 || !uploadResponseIsRetryable(chunkResponse.status)) {
+              break;
+            }
+          } catch (error) {
+            transportError = error;
+            chunkResponse = null;
+            chunkResult = null;
+          }
+
+          if (attempt < MOBILE_UPLOAD_MAX_CHUNK_ATTEMPTS) {
+            await waitForUploadRetry(uploadChunkRetryDelayMs(attempt));
+          }
+        }
+
+        if (!chunkResponse || !chunkResult) {
+          const reason = transportError instanceof Error ? transportError.message : "The network connection ended during the upload.";
+          setUploadState({
+            success: false,
+            message: `The upload did not finish after ${MOBILE_UPLOAD_MAX_CHUNK_ATTEMPTS} attempts. Reason: ${reason}`,
+            fieldErrors: { mediaFile: "The connection stayed unavailable. Keep the file on this device, reconnect to stable Wi-Fi, and try again." },
+            createdSermonId: uploadSermonId,
+          });
+          return;
+        }
+
+        if (chunkResponse.status === 413 && uploadChunkBytes > MOBILE_UPLOAD_MIN_CHUNK_BYTES) {
+          uploadChunkBytes = smallerUploadChunkBytes(uploadChunkBytes);
+          continue;
+        }
+
+        const acknowledgedBytes = resolveAcknowledgedUploadBytes({
+          receivedBytes: chunkResult.receivedBytes,
+          currentBytes: uploadedBytes,
+          totalBytes: file.size,
+          allowRewind: chunkResponse.status === 409,
+        });
+
+        if (chunkResponse.status === 409 && acknowledgedBytes !== null) {
+          uploadedBytes = acknowledgedBytes;
+          setUploadProgressPercent(Math.floor((uploadedBytes / file.size) * 100));
+          continue;
+        }
+
+        if (!chunkResponse.ok || !chunkResult.success || acknowledgedBytes === null) {
+          if (chunkResponse.status === 404) {
+            window.sessionStorage.removeItem(MOBILE_UPLOAD_SESSION_STORAGE_KEY);
+          }
+          setUploadState(chunkResult.success && acknowledgedBytes === null
+            ? {
+                success: false,
+                message: "The server did not confirm how much of the recording was saved.",
+                fieldErrors: { mediaFile: "The upload could not be verified. Try again on a stable connection." },
+                createdSermonId: uploadSermonId,
+              }
+            : chunkResult);
+          return;
+        }
+
+        uploadedBytes = acknowledgedBytes;
+        setUploadProgressPercent(Math.min(99, Math.floor((uploadedBytes / file.size) * 100)));
       }
 
       const finishUrl = new URL("/api/sermons/upload", window.location.origin);
       finishUrl.searchParams.set("uploadMode", "finish");
-      finishUrl.searchParams.set("sermonId", startResult.createdSermonId);
+      finishUrl.searchParams.set("sermonId", uploadSermonId);
       finishUrl.searchParams.set("totalBytes", String(file.size));
 
       const finishResponse = await fetch(finishUrl, { method: "POST" });
@@ -265,7 +376,9 @@ export function NewSermonForm({
 
       setUploadState(result);
       if (finishResponse.ok && result.success && result.createdSermonId) {
+        setUploadProgressPercent(100);
         window.sessionStorage.removeItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY);
+        window.sessionStorage.removeItem(MOBILE_UPLOAD_SESSION_STORAGE_KEY);
         router.replace(`/sermons/${result.createdSermonId}`);
       }
     } catch (error) {
@@ -277,6 +390,7 @@ export function NewSermonForm({
       });
     } finally {
       setIsUploadSubmitting(false);
+      setUploadProgressPercent(null);
     }
   }
 
@@ -294,7 +408,7 @@ export function NewSermonForm({
           }
         }}
       >
-        <UploadProgressTheater sourceMode={sourceMode} selectedFileName={selectedFile?.name ?? null} isUploadSubmitting={isUploadSubmitting} />
+        <UploadProgressTheater sourceMode={sourceMode} selectedFileName={selectedFile?.name ?? null} isUploadSubmitting={isUploadSubmitting} uploadProgressPercent={uploadProgressPercent} />
         <section className="intake-form-section stack-md" aria-labelledby="sermon-source-heading">
           <div className="intake-section-heading">
             <span className="intake-section-number">01</span>
@@ -495,6 +609,7 @@ export function NewSermonForm({
             sourceMode={sourceMode}
             uploadBlocked={sourceMode === "upload" && (!canUploadMedia || Boolean(selectedFileError))}
             isUploadSubmitting={isUploadSubmitting}
+            uploadProgressPercent={uploadProgressPercent}
           />
           <p className="muted small">Analysis begins after your sermon is saved. You can leave while it works.</p>
         </div>

@@ -1,5 +1,5 @@
 import { createWriteStream } from "node:fs";
-import { rename, stat, unlink } from "node:fs/promises";
+import { rename, stat, truncate, unlink } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
@@ -24,6 +24,7 @@ import {
 } from "@/server/agents/storage";
 import { processSermonPipeline } from "@/server/pipeline/processSermonPipeline";
 import { mediaFileIsUsable } from "@/server/media/fileGuards";
+import { assertMediaStorageCapacity } from "@/server/media/storageCapacity";
 import {
   canRunLocalMediaProcessing,
   localMediaProcessingUnavailableMessage,
@@ -117,8 +118,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (uploadMode === "chunk") {
     const sermonId = url.searchParams.get("sermonId") ?? "";
     const offset = parseByteParam(url, "offset");
+    const chunkBytes = parseByteParam(url, "chunkBytes");
 
-    if (!sermonId || offset === null || totalBytes === null) {
+    if (!sermonId || offset === null || totalBytes === null || chunkBytes === null || chunkBytes === 0) {
       return NextResponse.json(
         { success: false, message: "The chunk upload request was missing required upload details.", fieldErrors: { mediaFile: "The upload could not continue. Try again." } },
         { status: 400 },
@@ -133,21 +135,54 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
+    const tempSourceVideoPath = getUploadedSourceTempPath(getSourceVideoPath(sermon.id));
+    let chunkWriteStarted = false;
     try {
       await ensureSermonFolders(sermon.id, sermon.title);
-      const tempSourceVideoPath = getUploadedSourceTempPath(getSourceVideoPath(sermon.id));
       const existingBytes = await stat(/* turbopackIgnore: true */ tempSourceVideoPath).then((fileStat) => fileStat.size).catch(() => 0);
       if (existingBytes !== offset) {
-        throw new Error(`The upload chunk arrived out of order. Expected offset ${existingBytes} but received ${offset}.`);
+        if (existingBytes === offset + chunkBytes) {
+          return NextResponse.json({
+            success: true,
+            message: "Upload chunk was already received.",
+            receivedBytes: existingBytes,
+            createdSermonId: sermon.id,
+          });
+        }
+
+        return NextResponse.json(
+          {
+            success: false,
+            message: `The server has ${existingBytes} durable upload bytes; resume from that position.`,
+            fieldErrors: { mediaFile: "The upload is resynchronizing with the server. Please keep this page open." },
+            receivedBytes: existingBytes,
+            createdSermonId: sermon.id,
+          },
+          { status: 409 },
+        );
       }
 
+      if (contentLength !== null && contentLength !== chunkBytes) {
+        throw new Error(`The upload chunk declared ${chunkBytes} bytes but the request contained ${contentLength} bytes.`);
+      }
+      if (offset + chunkBytes > totalBytes) {
+        throw new Error("The upload chunk exceeds the declared recording size.");
+      }
+
+      chunkWriteStarted = true;
       const finalBytes = await streamRequestBodyToFile(request, tempSourceVideoPath, offset === 0 ? "w" : "a");
-      if (contentLength !== null && finalBytes !== offset + contentLength) {
-        throw new Error(`The upload chunk ended early. Expected ${offset + contentLength} bytes but received ${finalBytes} bytes.`);
+      if (finalBytes !== offset + chunkBytes) {
+        throw new Error(`The upload chunk ended early. Expected ${offset + chunkBytes} bytes but received ${finalBytes} bytes.`);
+      }
+      if (finalBytes > totalBytes) {
+        throw new Error("The uploaded data exceeds the declared recording size.");
       }
 
       return NextResponse.json({ success: true, message: "Upload chunk received.", receivedBytes: finalBytes, createdSermonId: sermon.id });
     } catch (error) {
+      if (chunkWriteStarted) {
+        await truncate(/* turbopackIgnore: true */ tempSourceVideoPath, offset).catch(() => undefined);
+      }
       const reason = error instanceof Error ? error.message : "Unknown chunk upload error.";
       console.error(`Raw upload chunk failed for sermon ${sermon.id}: ${reason}`);
       return NextResponse.json(
@@ -245,6 +280,25 @@ export async function POST(request: Request): Promise<NextResponse> {
       { success: false, message: "Please correct the highlighted fields.", fieldErrors: fieldErrorsFromResult(result) },
       { status: 400 },
     );
+  }
+
+  if (uploadMode === "start") {
+    if (totalBytes === null || totalBytes === 0) {
+      return NextResponse.json(
+        { success: false, message: "The selected media file is empty or its size could not be read.", fieldErrors: { mediaFile: "Choose a non-empty media file and try again." } },
+        { status: 400 },
+      );
+    }
+
+    try {
+      await assertMediaStorageCapacity({ incomingBytes: totalBytes });
+    } catch (storageError) {
+      const reason = storageError instanceof Error ? storageError.message : "Unable to check local media storage capacity.";
+      return NextResponse.json(
+        { success: false, message: reason, fieldErrors: { mediaFile: reason } },
+        { status: 507 },
+      );
+    }
   }
 
   try {
