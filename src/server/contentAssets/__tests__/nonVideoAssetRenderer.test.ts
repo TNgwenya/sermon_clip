@@ -92,6 +92,27 @@ describe("approved non-video asset renderer", () => {
     });
   });
 
+  it("fits and renders a sermon-length quote across every social graphic variant", async () => {
+    const root = await makeTemporaryRoot();
+    const sermonQuote = "“Let us lay aside every weight and the sin which so easily ensnares us, and let us run with endurance the race that is set before us, looking unto Jesus.”";
+    const result = await renderApprovedNonVideoAssets(approvedInput({
+      title: "Looking unto Jesus",
+      approvedContent: sermonQuote,
+      sourceTranscriptExcerpt: sermonQuote,
+      relatedScripture: "Hebrews 12:1-2",
+    }), { outputRoot: root });
+
+    expect(result.preflight.ready).toBe(true);
+    expect(result.preflight.diagnostics).toEqual([]);
+    expect(result.preflight.plannedFiles).toHaveLength(4);
+    expect(result.preflight.plannedFiles.every((file) => (
+      !file.layout.truncated
+      && !file.layout.horizontalOverflow
+      && !file.layout.verticalOverflow
+    ))).toBe(true);
+    expect(result.files).toHaveLength(8);
+  });
+
   it("renders approved carousel copy as ordered portrait PNG and JPEG slides", async () => {
     const root = await makeTemporaryRoot();
     const result = await renderApprovedNonVideoAssets(approvedInput({

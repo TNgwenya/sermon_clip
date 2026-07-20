@@ -3,8 +3,8 @@ import path from "node:path";
 
 import {
   renderBrandedContentSvg,
+  resolveContentTextLayout,
   splitCarouselSlides,
-  wrapContentText,
   type ContentAssetBranding,
 } from "@/lib/contentAssetRenderer";
 import {
@@ -207,29 +207,14 @@ export function analyzeNonVideoTextLayout(
   content: string,
   width: number,
   height: number,
+  title = "Prepared content",
 ): TextLayoutAnalysis {
-  const portrait = height > width;
-  const maxCharactersPerLine = portrait ? 27 : 34;
-  const maxLines = portrait ? 10 : 7;
-  const lines = wrapContentText(content, maxCharactersPerLine, maxLines);
-  const normalized = normalizeText(content);
-  const visible = normalizeText(lines.join(" ").replace(/…$/, ""));
-  const fontSize = portrait ? Math.round(width * 0.066) : Math.round(width * 0.056);
-  const lineHeight = Math.round(fontSize * 1.25);
-  const contentHeight = lines.length * lineHeight;
-  const startY = Math.max(Math.round(height * 0.28), Math.round((height - contentHeight) / 2));
-  const padding = Math.round(width * 0.09);
-  const lastLineBottom = startY + Math.max(0, lines.length - 1) * lineHeight + Math.round(fontSize * 0.25);
-  const safeBottom = height - Math.round(padding * 1.4);
-
-  return {
-    lines,
-    maxCharactersPerLine,
-    maxLines,
-    truncated: normalized.length > visible.length && lines.at(-1)?.endsWith("…") === true,
-    horizontalOverflow: lines.some((line) => line.replace(/…$/, "").length > maxCharactersPerLine),
-    verticalOverflow: lastLineBottom > safeBottom,
-  };
+  return resolveContentTextLayout({
+    content,
+    width,
+    height,
+    hasTitle: Boolean(title.trim()),
+  });
 }
 
 function estimateSingleLineCapacity(
@@ -238,8 +223,12 @@ function estimateSingleLineCapacity(
   role: "title" | "scripture",
   titleScale = 0.64,
 ): number {
-  const portrait = height > width;
-  const baseFontSize = portrait ? Math.round(width * 0.066) : Math.round(width * 0.056);
+  const baseFontSize = resolveContentTextLayout({
+    content: "Content",
+    width,
+    height,
+    hasTitle: true,
+  }).baseFontSize;
   const fontSize = baseFontSize * (role === "title" ? titleScale : 0.45);
   const padding = Math.round(width * 0.09);
   const usableWidth = width - padding * 2.9;
@@ -276,7 +265,7 @@ function buildPlannedFiles(
       slideRole: slide.role,
       slideNumber: index + 1,
       slideCount: slides.length,
-      layout: analyzeNonVideoTextLayout(slide.body, 1080, 1350),
+      layout: analyzeNonVideoTextLayout(slide.body, 1080, 1350, slide.title),
     }));
   }
 
@@ -292,7 +281,7 @@ function buildPlannedFiles(
       title: input.title,
       scripture: input.relatedScripture,
       templateId: input.templateId ?? getDefaultTemplateId({ assetType: input.opportunityType }),
-      layout: analyzeNonVideoTextLayout(content, format.width, format.height),
+      layout: analyzeNonVideoTextLayout(content, format.width, format.height, input.title),
     };
   });
 }

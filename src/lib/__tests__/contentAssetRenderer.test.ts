@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { renderBrandedContentSvg, splitCarouselSlides, wrapContentText } from "@/lib/contentAssetRenderer";
+import {
+  renderBrandedContentSvg,
+  resolveContentTextLayout,
+  splitCarouselSlides,
+  wrapContentText,
+} from "@/lib/contentAssetRenderer";
 
 describe("content asset renderer", () => {
   it("wraps and truncates long content deterministically", () => {
@@ -10,6 +15,22 @@ describe("content asset renderer", () => {
     const svg = renderBrandedContentSvg({ title: "Faith & Hope", content: "God < fear", branding: { churchName: "Church", primaryColor: "#111111", secondaryColor: "#222222", fontFamily: "Arial" }, width: 1080, height: 1080 });
     expect(svg).toContain("FAITH &amp; HOPE");
     expect(svg).toContain("God &lt; fear");
+  });
+
+  it("shrinks compact landscape body copy without collapsing the title hierarchy", () => {
+    const layout = resolveContentTextLayout({
+      content: "“Let us lay aside every weight and the sin which so easily ensnares us, and let us run with endurance the race that is set before us, looking unto Jesus.”",
+      width: 1200,
+      height: 630,
+      hasTitle: true,
+    });
+
+    expect(layout.compactLandscape).toBe(true);
+    expect(layout.fontSize).toBeLessThan(layout.baseFontSize);
+    expect(layout.eyebrowY).toBeLessThan(layout.titleY);
+    expect(layout.titleY).toBeLessThan(layout.startY);
+    expect(layout.truncated).toBe(false);
+    expect(layout.verticalOverflow).toBe(false);
   });
 
   it("splits labelled carousel slides", () => {
