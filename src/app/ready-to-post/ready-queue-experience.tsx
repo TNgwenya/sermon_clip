@@ -109,6 +109,9 @@ const VIDEO_PREVIEW_LABELS: Record<VideoPreviewState, string> = {
   error: "Preview unavailable",
 };
 
+const DISPLAY_LOCALE = "en";
+const DEFAULT_DISPLAY_TIME_ZONE = "Africa/Johannesburg";
+
 const SCHEDULED_POST_STATUS_LABELS: Record<ScheduledPost["status"], string> = {
   PLANNED: "Planned",
   READY_FOR_MEDIA_TEAM: "Ready for upload",
@@ -343,12 +346,13 @@ function PublishingConfirmationDialog({
   }
 
   const scheduledLabel = confirmation.post.scheduledFor
-    ? new Intl.DateTimeFormat(undefined, {
+    ? new Intl.DateTimeFormat(DISPLAY_LOCALE, {
       weekday: "short",
       month: "short",
       day: "numeric",
       hour: "numeric",
       minute: "2-digit",
+      timeZone: confirmation.post.timezone ?? DEFAULT_DISPLAY_TIME_ZONE,
     }).format(new Date(confirmation.post.scheduledFor))
     : "No exact time";
 
@@ -484,11 +488,12 @@ function PublishingTechnicalDetails({ post }: { post: ScheduledPost }) {
         <div><dt>Attempts</dt><dd>{post.attemptCount}</dd></div>
         <div>
           <dt>Last attempt</dt>
-          <dd>{post.lastAttemptAt ? new Intl.DateTimeFormat(undefined, {
+          <dd>{post.lastAttemptAt ? new Intl.DateTimeFormat(DISPLAY_LOCALE, {
             month: "short",
             day: "numeric",
             hour: "numeric",
             minute: "2-digit",
+            timeZone: post.timezone ?? DEFAULT_DISPLAY_TIME_ZONE,
           }).format(new Date(post.lastAttemptAt)) : "Not attempted"}</dd>
         </div>
         <div><dt>Platform result</dt><dd>{post.finalPrivacyStatus ?? "Not reported"}</dd></div>
@@ -539,12 +544,13 @@ function formatPublishingServiceLastSeen(health: PublishingServiceHealth): strin
     return "No service signal recorded";
   }
 
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
     second: "2-digit",
+    timeZone: DEFAULT_DISPLAY_TIME_ZONE,
   }).format(new Date(health.lastSeenAt));
 }
 
@@ -673,35 +679,39 @@ function formatPackageCreatedAt(value: string): string {
     return "Date unavailable";
   }
 
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: DEFAULT_DISPLAY_TIME_ZONE,
   }).format(date);
 }
 
 function formatCalendarDayName(date: Date): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
     weekday: "short",
     month: "short",
     day: "numeric",
+    timeZone: DEFAULT_DISPLAY_TIME_ZONE,
   }).format(date);
 }
 
 function formatCalendarDayNumber(date: Date): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
     day: "numeric",
+    timeZone: DEFAULT_DISPLAY_TIME_ZONE,
   }).format(date);
 }
 
 function formatCalendarMonth(date: Date): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
     month: "short",
+    timeZone: DEFAULT_DISPLAY_TIME_ZONE,
   }).format(date);
 }
 
-function formatCalendarTime(value: string | null): string {
+function formatCalendarTime(value: string | null, timeZone = DEFAULT_DISPLAY_TIME_ZONE): string {
   if (!value) {
     return "No time";
   }
@@ -711,9 +721,10 @@ function formatCalendarTime(value: string | null): string {
     return "Time unavailable";
   }
 
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
     hour: "numeric",
     minute: "2-digit",
+    timeZone,
   }).format(date);
 }
 
@@ -1772,7 +1783,7 @@ export function ReadyQueueExperience({
                         <PlatformIcon platform={post.platform} />
                       </div>
                       <div className="social-calendar-post-copy">
-                        <strong>{formatCalendarTime(post.scheduledFor)} · {post.platform}</strong>
+                        <strong>{formatCalendarTime(post.scheduledFor, post.timezone ?? DEFAULT_DISPLAY_TIME_ZONE)} · {post.platform}</strong>
                         <span>{title}</span>
                         <small>{post.socialAccountLabel ?? "Media team handoff"}</small>
                         <div className="clip-badge-row">
@@ -2044,11 +2055,12 @@ export function ReadyQueueExperience({
                       </p>
                       {post.scheduledFor ? (
                         <p className="muted small">
-                          {post.automationMode === "AUTOMATIC" ? "Automatic" : "Manual"} · {new Intl.DateTimeFormat(undefined, {
+                          {post.automationMode === "AUTOMATIC" ? "Automatic" : "Manual"} · {new Intl.DateTimeFormat(DISPLAY_LOCALE, {
                             month: "short",
                             day: "numeric",
                             hour: "numeric",
                             minute: "2-digit",
+                            timeZone: post.timezone ?? DEFAULT_DISPLAY_TIME_ZONE,
                           }).format(new Date(post.scheduledFor))}
                         </p>
                       ) : (

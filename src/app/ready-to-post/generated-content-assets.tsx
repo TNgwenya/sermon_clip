@@ -74,6 +74,9 @@ const PLATFORM_OPTIONS: Array<{ value: ContentPublishingPlatform; label: string 
   { value: "YOUTUBE_SHORTS", label: "YouTube Shorts" },
 ];
 
+const DISPLAY_LOCALE = "en";
+const DEFAULT_DISPLAY_TIME_ZONE = "Africa/Johannesburg";
+
 function scheduleDefaultValue(): string {
   const date = new Date(Date.now() + 60 * 60_000);
   date.setMinutes(Math.ceil(date.getMinutes() / 15) * 15, 0, 0);
@@ -295,12 +298,13 @@ function formatScheduledTime(value: string | null): string {
   if (!value) return "Time pending";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Time pending";
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(DISPLAY_LOCALE, {
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: DEFAULT_DISPLAY_TIME_ZONE,
   }).format(date);
 }
 
