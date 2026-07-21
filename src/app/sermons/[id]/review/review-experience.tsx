@@ -49,6 +49,7 @@ type ClipReviewItem = {
   hashtags: string[];
   clipNotes: string | null;
   transcriptText: string;
+  startTimeSeconds: number;
   durationSeconds: number;
   score: number;
   finalQualityScore: number | null;
@@ -275,6 +276,8 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
     categoryFilter === "ALL" ? "All categories" : getQualityCategoryLabel(categoryFilter),
     sort === "HIGHEST_SCORE"
       ? "Best first"
+      : sort === "SERMON_ORDER"
+        ? "Sermon order (first to last)"
       : sort.toLowerCase().replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()),
   ].join(" / ");
 
@@ -554,6 +557,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                 Sort
                 <select value={sort} onChange={(event) => setSort(event.target.value as ReviewSort)} disabled={isPending}>
                   <option value="HIGHEST_SCORE">Best first</option>
+                  <option value="SERMON_ORDER">Sermon order — first to last</option>
                   <option value="NEWEST">Newest</option>
                   <option value="SHORTEST">Shortest duration</option>
                   <option value="LONGEST">Longest duration</option>
@@ -801,7 +805,10 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
 
                   <div className="review-feed-content-column stack-sm">
                     <div className="premium-review-card-heading">
-                      <p className="kicker">{clipCategory} · {toDurationLabel(clip.durationSeconds)}</p>
+                      <p className="kicker">
+                        {sort === "SERMON_ORDER" ? `Sermon ${toDurationLabel(clip.startTimeSeconds)} · ` : ""}
+                        {clipCategory} · {toDurationLabel(clip.durationSeconds)}
+                      </p>
                       <h3>{clip.title}</h3>
                       {draft.hook.trim() ? <p className="premium-review-hook">&ldquo;{draft.hook}&rdquo;</p> : null}
                     </div>

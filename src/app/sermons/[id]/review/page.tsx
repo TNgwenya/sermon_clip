@@ -20,6 +20,7 @@ type ReviewPageData = {
     suggestedCaption: string | null;
     hashtags: unknown;
     clipNotes: string | null;
+    startTimeSeconds: number;
     durationSeconds: number;
     score: number;
     finalQualityScore: number | null;
@@ -171,6 +172,7 @@ async function SermonReviewContent({ id }: { id: string }) {
           suggestedCaption: true,
           hashtags: true,
           clipNotes: true,
+          startTimeSeconds: true,
           durationSeconds: true,
           score: true,
           finalQualityScore: true,

@@ -5562,6 +5562,38 @@ function resolveClipStudioFormats(input: PrepareClipStudioForPostingInput): {
   };
 }
 
+function isPrismaTransactionTimeout(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "P2028",
+  );
+}
+
+async function runClipStudioDraftSaveStep<T>(input: {
+  clipId: string;
+  step: "clip edits" | "format and framing" | "branding";
+  operation: () => Promise<T>;
+}): Promise<{ completed: true; value: T } | { completed: false; state: PrepareClipStudioForPostingState }> {
+  try {
+    return { completed: true, value: await input.operation() };
+  } catch (error) {
+    console.error(`Clip Studio draft save failed for ${input.clipId} during ${input.step}.`, error);
+
+    return {
+      completed: false,
+      state: {
+        success: false,
+        message: isPrismaTransactionTimeout(error)
+          ? "The database took too long while saving this Studio draft. Your browser draft is still available. Please try Save draft again."
+          : "Studio could not finish saving this draft. Your browser draft is still available. Please try Save draft again.",
+        results: [],
+      },
+    };
+  }
+}
+
 export async function saveClipStudioDraftAction(
   input: PrepareClipStudioForPostingInput,
 ): Promise<PrepareClipStudioForPostingState> {
@@ -5624,27 +5656,33 @@ export async function saveClipStudioDraftAction(
 
   const { primaryFormat, formats: selectedFormats } = resolveClipStudioFormats(input);
 
-  const editResult = await updateClipStudioEditsAction({
+  const editStep = await runClipStudioDraftSaveStep({
     clipId,
-    startTimestamp: formatSecondsForTimestampInput(startSeconds),
-    endTimestamp: formatSecondsForTimestampInput(endSeconds),
-    title: input.editPreview.title,
-    mainCaption: input.editPreview.mainCaption,
-    shortCaption: input.editPreview.shortCaption,
-    platformCaption: input.editPreview.platformCaption,
-    hashtags: input.editPreview.hashtags,
-    captionCues: input.editPreview.captionCues,
-    applyCaptionsToClip: input.editPreview.applyCaptionsToClip,
-    captionStylePresetId: input.editPreview.captionStylePresetId,
-    captionPosition: input.editPreview.captionPosition,
-    captionAppearance: input.editPreview.captionAppearance,
-    hook: input.editPreview.editorialHook,
-    hookOverlay: input.editPreview.hookOverlay,
-    brollLayer: input.editPreview.brollLayer,
-    speechCleanup: input.editPreview.speechCleanup,
-    speechCleanupEdits: input.editPreview.speechCleanupEdits,
-    confirmTranscriptReviewed: false,
+    step: "clip edits",
+    operation: () => updateClipStudioEditsAction({
+      clipId,
+      startTimestamp: formatSecondsForTimestampInput(startSeconds),
+      endTimestamp: formatSecondsForTimestampInput(endSeconds),
+      title: input.editPreview.title,
+      mainCaption: input.editPreview.mainCaption,
+      shortCaption: input.editPreview.shortCaption,
+      platformCaption: input.editPreview.platformCaption,
+      hashtags: input.editPreview.hashtags,
+      captionCues: input.editPreview.captionCues,
+      applyCaptionsToClip: input.editPreview.applyCaptionsToClip,
+      captionStylePresetId: input.editPreview.captionStylePresetId,
+      captionPosition: input.editPreview.captionPosition,
+      captionAppearance: input.editPreview.captionAppearance,
+      hook: input.editPreview.editorialHook,
+      hookOverlay: input.editPreview.hookOverlay,
+      brollLayer: input.editPreview.brollLayer,
+      speechCleanup: input.editPreview.speechCleanup,
+      speechCleanupEdits: input.editPreview.speechCleanupEdits,
+      confirmTranscriptReviewed: false,
+    }),
   });
+  if (!editStep.completed) return editStep.state;
+  const editResult = editStep.value;
 
   if (!editResult.success) {
     return {
@@ -5656,15 +5694,21 @@ export async function saveClipStudioDraftAction(
     };
   }
 
-  const exportResult = await updateClipExportSettingsAction({
+  const exportStep = await runClipStudioDraftSaveStep({
     clipId,
-    platformPreset: input.exportSettings.platformPreset,
-    primaryFormat,
-    framingMode: input.exportSettings.framingMode,
-    framingPersonality: input.exportSettings.framingPersonality,
-    selectedFormats,
-    manualCropKeyframes: input.exportSettings.manualCropKeyframes,
+    step: "format and framing",
+    operation: () => updateClipExportSettingsAction({
+      clipId,
+      platformPreset: input.exportSettings.platformPreset,
+      primaryFormat,
+      framingMode: input.exportSettings.framingMode,
+      framingPersonality: input.exportSettings.framingPersonality,
+      selectedFormats,
+      manualCropKeyframes: input.exportSettings.manualCropKeyframes,
+    }),
   });
+  if (!exportStep.completed) return exportStep.state;
+  const exportResult = exportStep.value;
 
   if (!exportResult.success) {
     return {
@@ -5676,22 +5720,28 @@ export async function saveClipStudioDraftAction(
     };
   }
 
-  const brandingResult = await updateClipBrandingAction({
+  const brandingStep = await runClipStudioDraftSaveStep({
     clipId,
-    enabled: input.brandingConfig.enabled,
-    preset: input.brandingConfig.preset,
-    showChurchName: input.brandingConfig.showChurchName,
-    showSermonTitle: input.brandingConfig.showSermonTitle,
-    showPreacherName: input.brandingConfig.showPreacherName,
-    watermarkEnabled: input.brandingConfig.watermarkEnabled,
-    lowerThirdEnabled: input.brandingConfig.lowerThirdEnabled,
-    introEnabled: input.brandingConfig.introEnabled,
-    outroEnabled: input.brandingConfig.outroEnabled,
-    introDurationSeconds: input.brandingConfig.introDurationSeconds,
-    outroDurationSeconds: input.brandingConfig.outroDurationSeconds,
-    backgroundStyle: input.brandingConfig.backgroundStyle,
-    themeColor: input.brandingConfig.themeColor,
+    step: "branding",
+    operation: () => updateClipBrandingAction({
+      clipId,
+      enabled: input.brandingConfig.enabled,
+      preset: input.brandingConfig.preset,
+      showChurchName: input.brandingConfig.showChurchName,
+      showSermonTitle: input.brandingConfig.showSermonTitle,
+      showPreacherName: input.brandingConfig.showPreacherName,
+      watermarkEnabled: input.brandingConfig.watermarkEnabled,
+      lowerThirdEnabled: input.brandingConfig.lowerThirdEnabled,
+      introEnabled: input.brandingConfig.introEnabled,
+      outroEnabled: input.brandingConfig.outroEnabled,
+      introDurationSeconds: input.brandingConfig.introDurationSeconds,
+      outroDurationSeconds: input.brandingConfig.outroDurationSeconds,
+      backgroundStyle: input.brandingConfig.backgroundStyle,
+      themeColor: input.brandingConfig.themeColor,
+    }),
   });
+  if (!brandingStep.completed) return brandingStep.state;
+  const brandingResult = brandingStep.value;
 
   if (!brandingResult.success) {
     return {

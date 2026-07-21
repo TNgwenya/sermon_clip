@@ -53,11 +53,13 @@ describe("clip review helpers", () => {
 
   it("supports batch sort modes", () => {
     const clips: ReviewClipModel[] = [
-      { ...baseClip, id: "clip-1", score: 5, durationSeconds: 50, createdAt: new Date("2026-06-15") },
-      { ...baseClip, id: "clip-2", score: 9, durationSeconds: 20, createdAt: new Date("2026-06-18") },
+      { ...baseClip, id: "clip-1", score: 5, startTimeSeconds: 420, durationSeconds: 50, createdAt: new Date("2026-06-15") },
+      { ...baseClip, id: "clip-2", score: 9, startTimeSeconds: 90, durationSeconds: 20, createdAt: new Date("2026-06-18") },
+      { ...baseClip, id: "clip-3", score: 4, durationSeconds: 35, createdAt: new Date("2026-06-10") },
     ];
 
     expect(sortClips(clips, "HIGHEST_SCORE")[0].id).toBe("clip-2");
+    expect(sortClips(clips, "SERMON_ORDER").map((clip) => clip.id)).toEqual(["clip-2", "clip-1", "clip-3"]);
     expect(sortClips(clips, "NEWEST")[0].id).toBe("clip-2");
     expect(sortClips(clips, "SHORTEST")[0].id).toBe("clip-2");
     expect(sortClips(clips, "LONGEST")[0].id).toBe("clip-1");

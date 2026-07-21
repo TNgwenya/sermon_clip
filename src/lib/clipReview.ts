@@ -10,7 +10,7 @@ export type ReviewQualityCategory = "ENCOURAGEMENT" | "SCRIPTURE_TEACHING" | "AL
 export type ReviewProfessionalQualityLabel = "POST_READY" | "GOOD_NEEDS_REVIEW" | "NEEDS_EDITING" | "REJECT";
 
 export type ReviewFilter = "ALL" | "APPROVED" | "REJECTED" | "PENDING" | "RENDERED" | "NOT_RENDERED";
-export type ReviewSort = "HIGHEST_SCORE" | "NEWEST" | "SHORTEST" | "LONGEST";
+export type ReviewSort = "HIGHEST_SCORE" | "SERMON_ORDER" | "NEWEST" | "SHORTEST" | "LONGEST";
 export type ReviewBatchAction = "approve" | "reject" | "pending" | "render" | "caption" | "burn" | "overlay" | "export" | "prepare";
 export type ReviewQueuedMediaAsset = "render" | "caption" | "captionBurn" | "overlay" | "export";
 
@@ -45,6 +45,7 @@ export type ReviewClipModel = {
   qualityWarnings?: string[];
   riskLevel?: ReviewRiskLevel;
   contextWarning?: boolean;
+  startTimeSeconds?: number | null;
   durationSeconds: number;
   createdAt: Date;
   renderStatus: ReviewRenderStatus;
@@ -103,6 +104,22 @@ export function sortClips<T extends ReviewClipModel>(clips: T[], sort: ReviewSor
 
   if (sort === "NEWEST") {
     return copy.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  if (sort === "SERMON_ORDER") {
+    return copy.sort((a, b) => {
+      const aStart = typeof a.startTimeSeconds === "number" && Number.isFinite(a.startTimeSeconds)
+        ? a.startTimeSeconds
+        : Number.POSITIVE_INFINITY;
+      const bStart = typeof b.startTimeSeconds === "number" && Number.isFinite(b.startTimeSeconds)
+        ? b.startTimeSeconds
+        : Number.POSITIVE_INFINITY;
+      if (aStart !== bStart) {
+        return aStart < bStart ? -1 : 1;
+      }
+
+      return a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id);
+    });
   }
 
   if (sort === "SHORTEST") {

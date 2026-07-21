@@ -182,16 +182,18 @@ export async function upsertActiveClipEditPlanForClip(input: {
   });
   const nextVersion = (latestVersion?.version ?? 0) + 1;
 
-  const plan = await prisma.$transaction(async (tx) => {
-    await tx.clipEditPlan.updateMany({
+  // Keep the supersede/create pair atomic without an interactive transaction.
+  // Interactive transactions expire after five seconds by default, which is
+  // too brittle when the hosted database pool needs to wake or reconnect.
+  const [, plan] = await prisma.$transaction([
+    prisma.clipEditPlan.updateMany({
       where: {
         clipCandidateId: clip.id,
         status: "ACTIVE",
       },
       data: { status: "SUPERSEDED" },
-    });
-
-    return tx.clipEditPlan.create({
+    }),
+    prisma.clipEditPlan.create({
       data: {
         clipCandidateId: clip.id,
         sermonId: clip.sermonId,
@@ -209,8 +211,8 @@ export async function upsertActiveClipEditPlanForClip(input: {
         createdBy: input.createdBy ?? "system",
         createdReason: input.createdReason ?? null,
       },
-    });
-  });
+    }),
+  ]);
 
   return {
     plan,
