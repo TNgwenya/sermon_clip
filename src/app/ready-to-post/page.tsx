@@ -1,7 +1,8 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import type { Prisma } from "@prisma/client";
 
-import { prisma } from "@/lib/prisma";
+import { databaseReadBatch, prisma } from "@/lib/prisma";
 import { listPostingDrafts } from "@/lib/postingDrafts";
 import { listPostingPackageHistory } from "@/lib/postingPackages";
 import { buildReadyQueueStatus, formatRecommendedNextAction, sanitizePastorFacingQualityText } from "@/lib/readyToPost";
@@ -65,8 +66,30 @@ function formatPreparationFailureMessage(message: string | null): string {
   return message.length > 180 ? `${message.slice(0, 177).trimEnd()}...` : message;
 }
 
-export default async function ReadyToPostPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
-  const params = await searchParams;
+function ReadyToPostLoading() {
+  return (
+    <main className="ready-page-shell premium-ready-page stack-lg" aria-busy="true" aria-live="polite">
+      <header className="ready-publishing-header premium-ready-header">
+        <div className="ready-title-block">
+          <p className="kicker">Publishing desk</p>
+          <h1>From finished clip to published post.</h1>
+          <p className="muted">Your publishing desk is open. Prepared media, generated posts, and the calendar are arriving next.</p>
+        </div>
+      </header>
+      <section className="panel stack-md" role="status">
+        <span className="route-loading-line" aria-hidden="true" />
+        <span className="route-loading-line short" aria-hidden="true" />
+        <div className="route-loading-grid" aria-hidden="true">
+          <span className="route-loading-panel" />
+          <span className="route-loading-panel" />
+        </div>
+        <span className="sr-only">Loading publishing content.</span>
+      </section>
+    </main>
+  );
+}
+
+async function ReadyToPostContent({ params }: { params: SearchParams }) {
   const controlPanelMode = process.env.VERCEL === "1" || process.env.CONTROL_PANEL_MODE === "true";
   const sermonId = params.sermonId?.trim() || null;
   const clipId = params.clipId?.trim() || null;
@@ -120,22 +143,27 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
     ],
   };
   const [
-    clipRecords,
+    [
+      clipRecords,
+      metaPublishingAccountRecords,
+      preparingClipCount,
+      approvedWaitingClipCount,
+      failedPreparationClipCount,
+      approvedWaitingClips,
+      contentAssetRecords,
+    ],
     drafts,
     packageHistory,
     socialAccounts,
-    metaPublishingAccountRecords,
     scheduledPosts,
     publishingServiceHealth,
-    preparingClipCount,
-    approvedWaitingClipCount,
-    failedPreparationClipCount,
-    approvedWaitingClips,
     focusedSermon,
     focusedClip,
-    contentAssetRecords,
   ] = await Promise.all([
-    prisma.clipCandidate.findMany({
+    // The read batch uses pooled concurrency when available and one transaction
+    // for the direct fallback. Non-database work still runs concurrently.
+    databaseReadBatch([
+      prisma.clipCandidate.findMany({
       where: clipWhere,
       orderBy: { exportedAt: "desc" },
       select: {
@@ -184,11 +212,8 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         },
       },
       take: 50,
-    }),
-    listPostingDrafts(),
-    listPostingPackageHistory(),
-    listSocialAccounts(),
-    prisma.socialAccount.findMany({
+      }),
+      prisma.socialAccount.findMany({
       where: {
         status: "CONNECTED",
         OR: [
@@ -219,19 +244,17 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           },
         },
       },
-    }),
-    listScheduledPosts(),
-    getPublishingServiceHealth(),
-    prisma.clipCandidate.count({
-      where: preparingWhere,
-    }),
-    prisma.clipCandidate.count({
-      where: approvedWaitingWhere,
-    }),
-    prisma.clipCandidate.count({
-      where: failedPreparationWhere,
-    }),
-    prisma.clipCandidate.findMany({
+      }),
+      prisma.clipCandidate.count({
+        where: preparingWhere,
+      }),
+      prisma.clipCandidate.count({
+        where: approvedWaitingWhere,
+      }),
+      prisma.clipCandidate.count({
+        where: failedPreparationWhere,
+      }),
+      prisma.clipCandidate.findMany({
       where: approvedWaitingWhere,
       orderBy: [{ score: "desc" }, { updatedAt: "desc" }],
       take: 6,
@@ -260,32 +283,8 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           },
         },
       },
-    }),
-    sermonId
-      ? prisma.sermon.findUnique({
-          where: { id: sermonId },
-          select: { title: true },
-        })
-      : Promise.resolve(null),
-    clipId
-      ? prisma.clipCandidate.findFirst({
-          where: {
-            id: clipId,
-            ...(sermonId ? { sermonId } : {}),
-          },
-          select: {
-            id: true,
-            title: true,
-            sermon: {
-              select: {
-                id: true,
-                title: true,
-              },
-            },
-          },
-        })
-      : Promise.resolve(null),
-    prisma.contentAsset.findMany({
+      }),
+      prisma.contentAsset.findMany({
       where: contentAssetId
         ? { id: contentAssetId }
         : {
@@ -332,7 +331,37 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
           },
         },
       },
-    }),
+      }),
+    ]),
+    listPostingDrafts(),
+    listPostingPackageHistory(),
+    listSocialAccounts(),
+    listScheduledPosts(),
+    getPublishingServiceHealth(),
+    sermonId
+      ? prisma.sermon.findUnique({
+          where: { id: sermonId },
+          select: { title: true },
+        })
+      : Promise.resolve(null),
+    clipId
+      ? prisma.clipCandidate.findFirst({
+          where: {
+            id: clipId,
+            ...(sermonId ? { sermonId } : {}),
+          },
+          select: {
+            id: true,
+            title: true,
+            sermon: {
+              select: {
+                id: true,
+                title: true,
+              },
+            },
+          },
+        })
+      : Promise.resolve(null),
   ]);
   const clips = await Promise.all(
     clipRecords.map(async (clip) => {
@@ -649,5 +678,15 @@ export default async function ReadyToPostPage({ searchParams }: { searchParams: 
         />
       </div>
     </main>
+  );
+}
+
+export default async function ReadyToPostPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
+  const params = await searchParams;
+
+  return (
+    <Suspense fallback={<ReadyToPostLoading />}>
+      <ReadyToPostContent params={params} />
+    </Suspense>
   );
 }

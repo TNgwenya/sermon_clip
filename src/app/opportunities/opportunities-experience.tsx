@@ -29,6 +29,7 @@ import {
   OPPORTUNITY_OUTCOME_LABELS,
   OPPORTUNITY_OUTCOMES,
   rankOpportunitiesForValue,
+  selectNextOpportunity,
   summarizeOpportunityValue,
   type OpportunityOutcome,
 } from "@/lib/opportunityValue";
@@ -100,16 +101,6 @@ type Feedback = {
   tone: "success" | "danger";
 };
 
-const CATEGORY_LABELS: Record<string, string> = {
-  SOCIAL: "Social posts",
-  DEVOTIONAL: "Devotionals",
-  DISCIPLESHIP: "Discipleship resources",
-  PROMOTION: "Invitations & promotion",
-  WRITTEN: "Long-form content",
-  ENGAGEMENT: "Conversation starters",
-  RECAP: "Sermon recaps",
-};
-
 const OUTCOME_DESCRIPTIONS: Record<OpportunityOutcome, string> = {
   POST_NOW: "Captions, graphics, hooks, and short-form ideas you can use quickly.",
   EXTEND_MESSAGE: "Recaps and written pieces that carry the sermon beyond Sunday.",
@@ -178,6 +169,7 @@ export function OpportunitiesExperience({
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [selectedType, setSelectedType] = useState<"ALL" | ContentOpportunityType>("ALL");
   const [selectedOutcome, setSelectedOutcome] = useState<"ALL" | OpportunityOutcome>("ALL");
+  const [visibleIdeaCount, setVisibleIdeaCount] = useState(6);
   const [openEditorId, setOpenEditorId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [composerOpportunityId, setComposerOpportunityId] = useState<string | null>(null);
@@ -211,27 +203,26 @@ export function OpportunitiesExperience({
     () => includeInactive ? opportunities : rankedOpportunities,
     [includeInactive, opportunities, rankedOpportunities],
   );
+  const featuredOpportunity = useMemo(
+    () => selectNextOpportunity(opportunities, preparedOpportunityIds),
+    [opportunities, preparedOpportunityIds],
+  );
+  const browsableLibrary = useMemo(
+    () => visibleLibrary.filter((item) => item.id !== featuredOpportunity?.id),
+    [featuredOpportunity?.id, visibleLibrary],
+  );
   const outcomeFilteredLibrary = useMemo(
     () => selectedOutcome === "ALL"
-      ? visibleLibrary
-      : visibleLibrary.filter((item) => getOpportunityOutcome(item) === selectedOutcome),
-    [selectedOutcome, visibleLibrary],
+      ? browsableLibrary
+      : browsableLibrary.filter((item) => getOpportunityOutcome(item) === selectedOutcome),
+    [browsableLibrary, selectedOutcome],
   );
-  const groupedByCategory = useMemo(() => {
-    const groups = new Map<string, OpportunityItem[]>();
-    for (const item of outcomeFilteredLibrary) {
-      const current = groups.get(item.category) ?? [];
-      current.push(item);
-      groups.set(item.category, current);
-    }
-    return groups;
-  }, [outcomeFilteredLibrary]);
+  const visibleIdeas = outcomeFilteredLibrary.slice(0, visibleIdeaCount);
+  const hiddenIdeaCount = Math.max(0, outcomeFilteredLibrary.length - visibleIdeas.length);
   const valueSummary = useMemo(
     () => summarizeOpportunityValue(opportunities, preparedOpportunityIds),
     [opportunities, preparedOpportunityIds],
   );
-  const recommendations = rankedOpportunities.slice(0, 3);
-  const featuredOpportunity = recommendations[0] ?? null;
   const featuredAsset = featuredOpportunity
     ? preparedAssetByOpportunityId.get(featuredOpportunity.id) ?? null
     : null;
@@ -399,6 +390,74 @@ export function OpportunitiesExperience({
     );
   }
 
+  function renderReviewEditor(item: OpportunityItem) {
+    if (openEditorId !== item.id) return null;
+
+    const draft = drafts[item.id] ?? {
+      title: item.title,
+      shortDescription: item.shortDescription ?? "",
+      content: item.editedContent ?? item.bodyContent,
+    };
+
+    return (
+      <div className="opportunity-review-editor stack-md">
+        <div className="stack-sm">
+          <p className="kicker">Review</p>
+          <h4>Shape the idea, then approve it</h4>
+          <p className="muted small">Check the meaning and wording. Approval records the exact content your team reviewed.</p>
+        </div>
+        <label className="stack-sm">
+          Title
+          <input
+            value={draft.title}
+            onChange={(event) => setDrafts((current) => ({
+              ...current,
+              [item.id]: { ...draft, title: event.target.value },
+            }))}
+            disabled={isPending}
+          />
+        </label>
+        <label className="stack-sm">
+          Short description
+          <input
+            value={draft.shortDescription}
+            onChange={(event) => setDrafts((current) => ({
+              ...current,
+              [item.id]: { ...draft, shortDescription: event.target.value },
+            }))}
+            disabled={isPending}
+          />
+        </label>
+        <label className="stack-sm">
+          Content
+          <textarea
+            value={draft.content}
+            onChange={(event) => setDrafts((current) => ({
+              ...current,
+              [item.id]: { ...draft, content: event.target.value },
+            }))}
+            disabled={isPending}
+            rows={8}
+          />
+        </label>
+        <div className="opportunity-review-actions">
+          <button type="button" className="button secondary" disabled={isPending} onClick={() => saveEdit(item)}>
+            {pendingAction === `save:${item.id}` ? "Saving…" : "Save changes"}
+          </button>
+          <button type="button" className="button primary" disabled={isPending} onClick={() => approveEdit(item)}>
+            {pendingAction === `status:${item.id}:APPROVED` ? "Approving…" : "Approve idea"}
+          </button>
+          <button type="button" className="button danger" disabled={isPending} onClick={() => updateStatus(item, "REJECTED")}>
+            Reject
+          </button>
+          <button type="button" className="button tertiary" disabled={isPending} onClick={() => setOpenEditorId(null)}>
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!activeSermonId) {
     return null;
   }
@@ -471,129 +530,81 @@ export function OpportunitiesExperience({
       ) : null}
 
       {featuredOpportunity ? (
-        <section className="opportunities-value-hero">
-          <div className="opportunities-value-copy stack-sm">
-            <p className="kicker">Best next step</p>
-            <div className="opportunities-featured-labels">
-              <StatusBadge tone={statusTone(featuredOpportunity.status)}>{formatStatus(featuredOpportunity.status)}</StatusBadge>
-              <span>{CONTENT_OPPORTUNITY_TYPE_LABELS[featuredOpportunity.opportunityType]}</span>
-              {featuredOpportunity.suggestedPlatform ? <span>{featuredOpportunity.suggestedPlatform}</span> : null}
+        <section className="opportunities-focus-grid">
+          <article id={`opportunity-${featuredOpportunity.id}`} className="opportunities-value-hero">
+            <div className="opportunities-value-copy stack-sm">
+              <div className="opportunities-focus-label">
+                <p className="kicker">Recommended next</p>
+                <StatusBadge tone={statusTone(featuredOpportunity.status)}>{formatStatus(featuredOpportunity.status)}</StatusBadge>
+              </div>
+              <span className="muted small">{CONTENT_OPPORTUNITY_TYPE_LABELS[featuredOpportunity.opportunityType]}</span>
+              <h2>{featuredOpportunity.title}</h2>
+              <p className="opportunities-featured-preview">{previewText(featuredOpportunity, featuredAsset, 300)}</p>
+              <div className="opportunities-featured-meta">
+                <span>{OPPORTUNITY_OUTCOME_LABELS[getOpportunityOutcome(featuredOpportunity)]}</span>
+                {featuredOpportunity.relatedScripture ? <span>{featuredOpportunity.relatedScripture}</span> : null}
+                {featuredOpportunity.suggestedPlatform ? <span>{featuredOpportunity.suggestedPlatform}</span> : null}
+              </div>
             </div>
-            <h2>{featuredAsset
-              ? "A publishing version is ready to open"
-              : featuredOpportunity.status === "APPROVED" || featuredOpportunity.status === "USED"
-                ? "Turn this approved idea into your next post"
-                : "Review the strongest idea first"}</h2>
-            <h3>{featuredOpportunity.title}</h3>
-            <p className="opportunities-featured-preview">{previewText(featuredOpportunity, featuredAsset, 360)}</p>
-            <div className="opportunities-featured-meta">
-              {featuredOpportunity.relatedScripture ? <span>Scripture: {featuredOpportunity.relatedScripture}</span> : null}
-              <span>{OPPORTUNITY_OUTCOME_LABELS[getOpportunityOutcome(featuredOpportunity)]}</span>
+            <div className="opportunities-next-action">
+              {renderPrimaryAction(featuredOpportunity)}
+              <button
+                type="button"
+                className="button tertiary"
+                onClick={() => copyOpportunity(featuredOpportunity)}
+                aria-label={`Copy ${featuredAsset ? "ready caption" : "content"} for ${featuredOpportunity.title}`}
+              >
+                {copiedId === featuredOpportunity.id ? "Copied" : "Copy"}
+              </button>
             </div>
-          </div>
-          <div className="opportunities-next-action stack-sm">
-            {renderPrimaryAction(featuredOpportunity)}
-            <button
-              type="button"
-              className="button tertiary"
-              onClick={() => copyOpportunity(featuredOpportunity)}
-              aria-label={`Copy ${featuredAsset ? "ready caption" : "content"} for ${featuredOpportunity.title}`}
-            >
-              {copiedId === featuredOpportunity.id
-                ? "Copied"
-                : featuredAsset
-                  ? "Copy ready caption"
-                  : featuredOpportunity.status === "APPROVED"
-                    ? "Copy approved copy"
-                    : "Copy draft"}
-            </button>
-            <span className="muted small">
-              {featuredAsset
-                ? "A prepared version already exists in Ready to Post."
-                : featuredOpportunity.status === "APPROVED" || featuredOpportunity.status === "USED"
-                  ? "The human review gate is complete."
-                  : "Nothing publishes until you approve it."}
-            </span>
-          </div>
-        </section>
-      ) : null}
+            {renderReviewEditor(featuredOpportunity)}
+          </article>
 
-      <section className="opportunities-value-stats" aria-label="Content workflow summary">
-        <article>
-          <span>Needs your review</span>
-          <strong>{valueSummary.needsReview}</strong>
-          <small>Draft ideas waiting for a decision</small>
-        </article>
-        <article>
-          <span>Approved to prepare</span>
-          <strong>{valueSummary.approvedToPrepare}</strong>
-          <small>Ready to turn into publishing assets</small>
-        </article>
-        <article>
-          <span>In Ready to Post</span>
-          <strong>{valueSummary.readyAssets}</strong>
-          <small>Prepared versions your team can open</small>
-        </article>
-      </section>
-
-      {filterControls}
-
-      {recommendations.length > 1 ? (
-        <section className="opportunities-recommendations stack-md" aria-labelledby="opportunities-recommendations-title">
-          <div className="opportunities-section-heading stack-sm">
-            <p className="kicker">Use these next</p>
-            <h2 id="opportunities-recommendations-title">Strongest opportunities from this sermon</h2>
-            <p className="muted">The most actionable ideas rise to the top; the complete library stays below.</p>
-          </div>
-          <div className="opportunities-quick-grid">
-            {recommendations.map((item) => {
-              const asset = preparedAssetByOpportunityId.get(item.id);
-              return (
-                <article className="opportunities-quick-card" key={item.id}>
-                  <div className="opportunities-quick-card-topline">
-                    <StatusBadge tone={statusTone(item.status)}>{formatStatus(item.status)}</StatusBadge>
-                    <span>{OPPORTUNITY_OUTCOME_LABELS[getOpportunityOutcome(item)]}</span>
-                  </div>
-                  <div className="stack-sm">
-                    <span className="muted small">{CONTENT_OPPORTUNITY_TYPE_LABELS[item.opportunityType]}</span>
-                    <h3>{item.title}</h3>
-                    <p>{previewText(item, asset, 190)}</p>
-                  </div>
-                  <div className="opportunities-quick-actions">
-                    {renderPrimaryAction(item, "button secondary")}
-                    <button
-                      type="button"
-                      className="button tertiary"
-                      onClick={() => copyOpportunity(item)}
-                      aria-label={`Copy content for ${item.title}`}
-                    >
-                      {copiedId === item.id ? "Copied" : asset ? "Copy caption" : "Copy"}
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+          <aside className="opportunities-queue-card" aria-label="Content workflow summary">
+            <div className="stack-sm">
+              <p className="kicker">Your workflow</p>
+              <h2>Keep the week moving</h2>
+            </div>
+            <div className="opportunities-queue-list">
+              <div><strong>{valueSummary.needsReview}</strong><span>to review</span></div>
+              <div><strong>{valueSummary.approvedToPrepare}</strong><span>approved</span></div>
+              <div><strong>{valueSummary.readyAssets}</strong><span>ready to post</span></div>
+            </div>
+            <p className="muted small">
+              {valueSummary.approvedToPrepare > 0
+                ? "Prepare approved ideas first, then continue reviewing."
+                : valueSummary.needsReview > 0
+                  ? "Review one useful idea at a time. Nothing publishes without approval."
+                  : "Your current ideas have been handled."}
+            </p>
+            {valueSummary.readyAssets > 0 ? <a className="text-link small" href="/ready-to-post">Open Ready to Post</a> : null}
+          </aside>
         </section>
       ) : null}
 
       <section className="opportunities-library stack-md" aria-labelledby="opportunities-library-title">
-        <div className="opportunities-section-heading stack-sm">
-          <p className="kicker">Idea library</p>
-          <h2 id="opportunities-library-title">Find content by what you want to do</h2>
-          <p className="muted">Choose an outcome, then review or use the idea that fits today.</p>
+        <div className="opportunities-library-heading">
+          <div className="stack-sm">
+            <p className="kicker">More ideas</p>
+            <h2 id="opportunities-library-title">What do you want to create?</h2>
+            <p className="muted">Choose a goal. We’ll keep the list short and put the most useful ideas first.</p>
+          </div>
+          <span className="muted small">{browsableLibrary.length} more {browsableLibrary.length === 1 ? "idea" : "ideas"}</span>
         </div>
         <div className="opportunities-outcome-filters" role="group" aria-label="Filter ideas by outcome">
           <button
             type="button"
             className={selectedOutcome === "ALL" ? "is-active" : ""}
             aria-pressed={selectedOutcome === "ALL"}
-            onClick={() => setSelectedOutcome("ALL")}
+            onClick={() => {
+              setSelectedOutcome("ALL");
+              setVisibleIdeaCount(6);
+            }}
           >
-            All useful ideas <span>{visibleLibrary.length}</span>
+            All <span>{browsableLibrary.length}</span>
           </button>
           {OPPORTUNITY_OUTCOMES.map((outcome) => {
-            const count = visibleLibrary.filter((item) => getOpportunityOutcome(item) === outcome).length;
+            const count = browsableLibrary.filter((item) => getOpportunityOutcome(item) === outcome).length;
             if (count === 0) return null;
             return (
               <button
@@ -602,7 +613,10 @@ export function OpportunitiesExperience({
                 className={selectedOutcome === outcome ? "is-active" : ""}
                 aria-pressed={selectedOutcome === outcome}
                 title={OUTCOME_DESCRIPTIONS[outcome]}
-                onClick={() => setSelectedOutcome(outcome)}
+                onClick={() => {
+                  setSelectedOutcome(outcome);
+                  setVisibleIdeaCount(6);
+                }}
               >
                 {OPPORTUNITY_OUTCOME_LABELS[outcome]} <span>{count}</span>
               </button>
@@ -610,19 +624,11 @@ export function OpportunitiesExperience({
           })}
         </div>
 
-        {Array.from(groupedByCategory.entries()).map(([category, items]) => (
-          <section className="opportunities-category-group stack-md" key={category}>
-            <div className="opportunities-category-heading">
-              <h3>{CATEGORY_LABELS[category] ?? formatEnumLabel(category)}</h3>
-              <span>{items.length} {items.length === 1 ? "idea" : "ideas"}</span>
-            </div>
-            <div className="opportunities-library-list">
-              {items.map((item) => {
-                const draft = drafts[item.id] ?? {
-                  title: item.title,
-                  shortDescription: item.shortDescription ?? "",
-                  content: item.editedContent ?? item.bodyContent,
-                };
+        {filterControls}
+
+        {visibleIdeas.length > 0 ? (
+          <div className="opportunities-library-list">
+              {visibleIdeas.map((item) => {
                 const preparedAsset = preparedAssetByOpportunityId.get(item.id);
 
                 return (
@@ -639,8 +645,9 @@ export function OpportunitiesExperience({
                       {item.relatedScripture ? <span className="opportunities-scripture">{item.relatedScripture}</span> : null}
                     </div>
 
-                    {item.shortDescription ? <p className="muted">{item.shortDescription}</p> : null}
-                    <p className="opportunities-library-preview">{previewText(item, preparedAsset)}</p>
+                    <p className="opportunities-library-preview">
+                      {item.shortDescription?.trim() || previewText(item, preparedAsset, 180)}
+                    </p>
 
                     <div className="opportunities-card-actions">
                       {renderPrimaryAction(item)}
@@ -650,80 +657,22 @@ export function OpportunitiesExperience({
                         onClick={() => copyOpportunity(item)}
                         aria-label={`Copy content for ${item.title}`}
                       >
-                        {copiedId === item.id ? "Copied" : preparedAsset ? "Copy caption" : item.status === "APPROVED" ? "Copy approved copy" : "Copy draft"}
+                        {copiedId === item.id ? "Copied" : "Copy"}
                       </button>
                     </div>
 
                     {preparedAsset ? (
                       <div className="content-asset-ready-note">
                         <span className="status-pill status-exported">{preparedAsset.status.toLowerCase()}</span>
-                        <span className="small muted">
-                          A prepared {CONTENT_ASSET_TYPE_LABELS[preparedAsset.assetType].toLowerCase()} version is connected to Ready to Post.
-                        </span>
-                        <a className="text-link small" href={`/ready-to-post?contentAssetId=${preparedAsset.id}`}>Open asset</a>
+                        <span className="small muted">Prepared in Ready to Post</span>
+                        <a className="text-link small" href={`/ready-to-post?contentAssetId=${preparedAsset.id}`}>Open</a>
                       </div>
                     ) : null}
 
-                    {openEditorId === item.id ? (
-                      <div className="opportunity-review-editor stack-md">
-                        <div className="stack-sm">
-                          <p className="kicker">Human review</p>
-                          <h4>Check the meaning, edit the wording, then decide</h4>
-                          <p className="muted small">Saving changes sends the item back to review. Approval records the exact content you checked.</p>
-                        </div>
-                        <label className="stack-sm">
-                          Title
-                          <input
-                            value={draft.title}
-                            onChange={(event) => setDrafts((current) => ({
-                              ...current,
-                              [item.id]: { ...draft, title: event.target.value },
-                            }))}
-                            disabled={isPending}
-                          />
-                        </label>
-                        <label className="stack-sm">
-                          Short description
-                          <input
-                            value={draft.shortDescription}
-                            onChange={(event) => setDrafts((current) => ({
-                              ...current,
-                              [item.id]: { ...draft, shortDescription: event.target.value },
-                            }))}
-                            disabled={isPending}
-                          />
-                        </label>
-                        <label className="stack-sm">
-                          Content
-                          <textarea
-                            value={draft.content}
-                            onChange={(event) => setDrafts((current) => ({
-                              ...current,
-                              [item.id]: { ...draft, content: event.target.value },
-                            }))}
-                            disabled={isPending}
-                            rows={8}
-                          />
-                        </label>
-                        <div className="opportunity-review-actions">
-                          <button type="button" className="button secondary" disabled={isPending} onClick={() => saveEdit(item)}>
-                            {pendingAction === `save:${item.id}` ? "Saving…" : "Save changes"}
-                          </button>
-                          <button type="button" className="button primary" disabled={isPending} onClick={() => approveEdit(item)}>
-                            {pendingAction === `status:${item.id}:APPROVED` ? "Approving…" : "Approve this idea"}
-                          </button>
-                          <button type="button" className="button danger" disabled={isPending} onClick={() => updateStatus(item, "REJECTED")}>
-                            Reject
-                          </button>
-                          <button type="button" className="button tertiary" disabled={isPending} onClick={() => setOpenEditorId(null)}>
-                            Close review
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
+                    {renderReviewEditor(item)}
 
                     <details className="opportunities-more-details">
-                      <summary>Why this fits the sermon & more actions</summary>
+                      <summary>Details & more actions</summary>
                       <div className="stack-md">
                         <div className="opportunities-grounding-grid">
                           <div>
@@ -783,9 +732,23 @@ export function OpportunitiesExperience({
                   </article>
                 );
               })}
-            </div>
-          </section>
-        ))}
+          </div>
+        ) : (
+          <div className="opportunities-library-empty">
+            <strong>No more ideas in this view</strong>
+            <span className="muted small">Try another goal or clear the filters.</span>
+          </div>
+        )}
+
+        {hiddenIdeaCount > 0 ? (
+          <button
+            type="button"
+            className="button tertiary opportunities-show-more"
+            onClick={() => setVisibleIdeaCount((count) => count + 6)}
+          >
+            Show 6 more <span className="muted">({hiddenIdeaCount} remaining)</span>
+          </button>
+        ) : null}
       </section>
 
       <details className="opportunities-create-more">

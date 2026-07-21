@@ -150,6 +150,24 @@ export function rankOpportunitiesForValue<T extends OpportunityValueItem>(
 }
 
 /**
+ * Picks the next piece of useful work instead of resurfacing work that is
+ * already finished. Approved ideas come first, followed by review drafts.
+ * A prepared asset is only returned when there is nothing left to action.
+ */
+export function selectNextOpportunity<T extends OpportunityValueItem>(
+  items: readonly T[],
+  preparedAssetOpportunityIds: Iterable<string>,
+): T | null {
+  const preparedIds = new Set(preparedAssetOpportunityIds);
+  const ranked = rankOpportunitiesForValue(items, []);
+  const actionable = ranked.find((item) => !preparedIds.has(item.id) && item.status !== "USED");
+
+  if (actionable) return actionable;
+
+  return rankOpportunitiesForValue(items, preparedIds)[0] ?? null;
+}
+
+/**
  * Summarizes mutually exclusive workflow value for the visible opportunity
  * set. Duplicate item and prepared-asset IDs are counted once.
  */

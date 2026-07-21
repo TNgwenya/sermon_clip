@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   getOpportunityOutcome,
   rankOpportunitiesForValue,
+  selectNextOpportunity,
   summarizeOpportunityValue,
   type OpportunityValueItem,
 } from "@/lib/opportunityValue";
@@ -88,6 +89,34 @@ describe("rankOpportunitiesForValue", () => {
     rankOpportunitiesForValue(source, []);
 
     expect(source.map(({ id }) => id)).toEqual(["review", "approved"]);
+  });
+});
+
+describe("selectNextOpportunity", () => {
+  it("chooses unfinished work before an already prepared asset", () => {
+    const selected = selectNextOpportunity([
+      item("prepared", "APPROVED", 1),
+      item("review", "NEEDS_REVIEW", 0.9),
+      item("approved", "APPROVED", 0.7),
+    ], ["prepared"]);
+
+    expect(selected?.id).toBe("approved");
+  });
+
+  it("falls back to a prepared asset when the queue is complete", () => {
+    const selected = selectNextOpportunity([
+      item("used", "USED", 0.8),
+      item("prepared", "APPROVED", 0.7),
+    ], ["prepared"]);
+
+    expect(selected?.id).toBe("prepared");
+  });
+
+  it("returns null for an empty or inactive set", () => {
+    expect(selectNextOpportunity([], [])).toBeNull();
+    expect(selectNextOpportunity([
+      item("rejected", "REJECTED", 1),
+    ], [])).toBeNull();
   });
 });
 

@@ -83,15 +83,39 @@ function resolveStaleAfterMs(): number {
     : 120_000;
 }
 
+const HEARTBEAT_SCHEMA_AVAILABLE_TTL_MS = 5 * 60_000;
+const HEARTBEAT_SCHEMA_MISSING_TTL_MS = 30_000;
+let heartbeatSchemaAvailability: { available: boolean; expiresAt: number } | null = null;
+let heartbeatSchemaAvailabilityRead: Promise<boolean> | null = null;
+
 async function workerHeartbeatStorageAvailable(): Promise<boolean> {
-  try {
-    const rows = await prisma.$queryRaw<Array<{ exists: boolean }>>`
-      SELECT to_regclass('public."WorkerHeartbeat"') IS NOT NULL AS "exists"
-    `;
-    return rows[0]?.exists === true;
-  } catch {
-    return false;
+  const now = Date.now();
+  if (heartbeatSchemaAvailability && heartbeatSchemaAvailability.expiresAt > now) {
+    return heartbeatSchemaAvailability.available;
   }
+
+  if (!heartbeatSchemaAvailabilityRead) {
+    heartbeatSchemaAvailabilityRead = (async () => {
+      try {
+        const rows = await prisma.$queryRaw<Array<{ exists: boolean }>>`
+          SELECT to_regclass('public."WorkerHeartbeat"') IS NOT NULL AS "exists"
+        `;
+        return rows[0]?.exists === true;
+      } catch {
+        return false;
+      }
+    })().then((available) => {
+      heartbeatSchemaAvailability = {
+        available,
+        expiresAt: Date.now() + (available ? HEARTBEAT_SCHEMA_AVAILABLE_TTL_MS : HEARTBEAT_SCHEMA_MISSING_TTL_MS),
+      };
+      return available;
+    }).finally(() => {
+      heartbeatSchemaAvailabilityRead = null;
+    });
+  }
+
+  return heartbeatSchemaAvailabilityRead;
 }
 
 function normalizeWorkerCapabilities(value: unknown): PublishingWorkerCapabilities | null {

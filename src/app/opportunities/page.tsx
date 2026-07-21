@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import type {
   ContentOpportunityCategory,
   ContentOpportunityStatus,
@@ -10,7 +11,7 @@ import type {
 import {
   PageHeader,
 } from "@/components/ui";
-import { prisma } from "@/lib/prisma";
+import { databaseReadBatch, prisma } from "@/lib/prisma";
 import { normalizeContentHashtags } from "@/lib/contentPublishing";
 import { OpportunitiesExperience } from "@/app/opportunities/opportunities-experience";
 import {
@@ -95,26 +96,19 @@ function asMinistryMomentType(value?: string): MinistryMomentType | null {
     : null;
 }
 
-export default async function OpportunitiesPage({
-  searchParams,
+async function OpportunityResults({
+  filters,
+  activeSermonId,
+  activeSermonTitle,
 }: {
-  searchParams: Promise<SearchParams>;
+  filters: SearchParams;
+  activeSermonId: string | null;
+  activeSermonTitle: string | null;
 }) {
-  const filters = await searchParams;
   const category = asCategory(filters.category);
   const status = asStatus(filters.status);
   const opportunityType = asType(filters.type);
   const ministryMomentType = asMinistryMomentType(filters.ministryMomentType);
-
-  const sermons = await prisma.sermon.findMany({
-    select: { id: true, title: true },
-    orderBy: { createdAt: "desc" },
-    take: 100,
-  });
-  const requestedSermonId = filters.sermonId?.trim();
-  const activeSermon = sermons.find((sermon) => sermon.id === requestedSermonId) ?? sermons[0] ?? null;
-  const activeSermonId = activeSermon?.id ?? null;
-  const activeSermonTitle = activeSermon?.title ?? null;
   const scopedSermonId = activeSermonId ?? "__no_sermon__";
 
   const where: Prisma.ContentOpportunityWhereInput = {
@@ -133,7 +127,9 @@ export default async function OpportunitiesPage({
     ],
   };
 
-  const [opportunities, momentTypes, preparedAssets, topicSuggestions] = await Promise.all([
+  // A pooled runtime can run these reads concurrently. The direct fallback
+  // keeps them on one transaction to avoid opening several remote connections.
+  const [opportunities, momentTypes, preparedAssets, topicSuggestions] = await databaseReadBatch([
     prisma.contentOpportunity.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -235,12 +231,12 @@ export default async function OpportunitiesPage({
   const clearFiltersHref = activeSermonId
     ? `/opportunities?sermonId=${encodeURIComponent(activeSermonId)}`
     : "/opportunities";
-  const filterControls = activeSermon ? (
+  const filterControls = activeSermonId ? (
     <details className="opportunities-filter-details" open={hasActiveFilters}>
       <summary>
         <span>
-          <strong>{hasActiveFilters ? "Filters applied" : "Narrow the idea library"}</strong>
-          <span className="muted small">Optional filters for type, status, scripture, topic, or ministry moment.</span>
+          <strong>{hasActiveFilters ? "Filters applied" : "More filters"}</strong>
+          <span className="muted small">Type, status, scripture, topic, or ministry moment</span>
         </span>
       </summary>
       <form method="get" className="actions-row opportunities-filter-form">
@@ -290,17 +286,74 @@ export default async function OpportunitiesPage({
   ) : null;
 
   return (
-    <main className="secondary-media-shell stack-lg">
-      <PageHeader
-        eyebrow="Content opportunities"
-        title="Turn this sermon into content for the week"
-        description="Start with the strongest idea, then review posts, devotionals, invitations, and ministry resources grounded in the message."
-        className="opportunities-page-header"
-      />
+    <OpportunitiesExperience
+      opportunities={normalized}
+      activeSermonId={activeSermonId}
+      activeSermonTitle={activeSermonTitle}
+      hasActiveFilters={hasActiveFilters}
+      clearFiltersHref={clearFiltersHref}
+      includeInactive={status === "REJECTED" || status === "ARCHIVED"}
+      filterControls={filterControls}
+      preparedAssets={preparedAssets.map((asset) => ({
+        id: asset.id,
+        contentOpportunityId: asset.contentOpportunityId,
+        assetType: asset.assetType,
+        status: asset.status,
+        platform: asset.platform,
+        title: asset.title,
+        bodyContent: asset.bodyContent,
+        caption: asset.caption,
+        hashtags: normalizeContentHashtags(Array.isArray(asset.hashtagsJson) ? asset.hashtagsJson.filter((item): item is string => typeof item === "string") : []),
+        callToAction: asset.callToAction,
+      }))}
+    />
+  );
+}
 
+function OpportunityResultsLoading({ sermonTitle }: { sermonTitle: string | null }) {
+  return (
+    <section className="panel stack-md" aria-busy="true" aria-live="polite">
+      <div className="stack-sm">
+        <p className="kicker">Finding the strongest ideas</p>
+        <h2>{sermonTitle ? `Shaping content from ${sermonTitle}` : "Preparing your content ideas"}</h2>
+        <p className="muted">The page is ready. Sermon Clip is bringing in the ideas, prepared graphics, and filters next.</p>
+      </div>
+      <div className="route-loading-grid" aria-hidden="true">
+        <span className="route-loading-panel" />
+        <span className="route-loading-panel" />
+      </div>
+    </section>
+  );
+}
+
+function OpportunityWorkspaceLoading() {
+  return (
+    <section className="opportunities-sermon-context" aria-busy="true" aria-live="polite">
+      <div className="stack-sm">
+        <span className="route-loading-line" aria-hidden="true" />
+        <span className="route-loading-line short" aria-hidden="true" />
+        <span className="sr-only">Loading your latest sermon.</span>
+      </div>
+    </section>
+  );
+}
+
+async function OpportunityWorkspace({ filters }: { filters: SearchParams }) {
+  const sermons = await prisma.sermon.findMany({
+    select: { id: true, title: true },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+  const requestedSermonId = filters.sermonId?.trim();
+  const activeSermon = sermons.find((sermon) => sermon.id === requestedSermonId) ?? sermons[0] ?? null;
+  const activeSermonId = activeSermon?.id ?? null;
+  const activeSermonTitle = activeSermon?.title ?? null;
+
+  return (
+    <>
       <section className={`opportunities-sermon-context${activeSermon ? "" : " is-empty"}`}>
-        <div className="stack-sm">
-          <p className="kicker">Working from</p>
+        <div className="opportunities-sermon-title">
+          <span className="muted small">Ideas from</span>
           <h2>{activeSermonTitle ?? "Add your first sermon"}</h2>
           {!activeSermon ? (
             <p className="muted small">Upload or import a sermon to create clips, posts, devotionals, and follow-up resources.</p>
@@ -326,27 +379,36 @@ export default async function OpportunitiesPage({
         )}
       </section>
 
-      <OpportunitiesExperience
-        opportunities={normalized}
-        activeSermonId={activeSermonId}
-        activeSermonTitle={activeSermonTitle}
-        hasActiveFilters={hasActiveFilters}
-        clearFiltersHref={clearFiltersHref}
-        includeInactive={status === "REJECTED" || status === "ARCHIVED"}
-        filterControls={filterControls}
-        preparedAssets={preparedAssets.map((asset) => ({
-          id: asset.id,
-          contentOpportunityId: asset.contentOpportunityId,
-          assetType: asset.assetType,
-          status: asset.status,
-          platform: asset.platform,
-          title: asset.title,
-          bodyContent: asset.bodyContent,
-          caption: asset.caption,
-          hashtags: normalizeContentHashtags(Array.isArray(asset.hashtagsJson) ? asset.hashtagsJson.filter((item): item is string => typeof item === "string") : []),
-          callToAction: asset.callToAction,
-        }))}
+      <Suspense fallback={<OpportunityResultsLoading sermonTitle={activeSermonTitle} />}>
+        <OpportunityResults
+          filters={filters}
+          activeSermonId={activeSermonId}
+          activeSermonTitle={activeSermonTitle}
+        />
+      </Suspense>
+    </>
+  );
+}
+
+export default async function OpportunitiesPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>;
+}) {
+  const filters = await searchParams;
+
+  return (
+    <main className="secondary-media-shell stack-lg">
+      <PageHeader
+        eyebrow="Content ideas"
+        title="Choose what to create next"
+        description="Start with one recommended idea. Review it, shape it, and move it into your publishing plan."
+        className="opportunities-page-header"
       />
+
+      <Suspense fallback={<OpportunityWorkspaceLoading />}>
+        <OpportunityWorkspace filters={filters} />
+      </Suspense>
     </main>
   );
 }

@@ -6869,6 +6869,365 @@ textarea::placeholder {
   }
 }
 
+/* Content ideas: keep one decision in focus and reveal the library gradually. */
+.opportunities-page-header {
+  max-width: 58rem;
+}
+
+.opportunities-sermon-context {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  border-color: rgba(255, 255, 255, 0.09);
+  background: #101014;
+  padding: 0.72rem 0.85rem;
+}
+
+.opportunities-sermon-title {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.6rem;
+}
+
+.opportunities-sermon-title h2 {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.98rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.opportunities-sermon-change {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding-inline: 0.2rem;
+}
+
+.opportunities-sermon-change > summary {
+  min-height: 2.2rem;
+  color: #d0d0d6;
+}
+
+.opportunities-focus-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 0.34fr);
+  gap: 0.75rem;
+  align-items: stretch;
+}
+
+.opportunities-value-hero {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1.1rem;
+  border-color: rgba(110, 231, 216, 0.25);
+  background:
+    radial-gradient(circle at 4% 0%, rgba(110, 231, 216, 0.1), transparent 35%),
+    #111116;
+  padding: clamp(1rem, 2.2vw, 1.4rem);
+  scroll-margin-block: 5rem;
+}
+
+.opportunities-value-copy h2 {
+  max-width: 34ch;
+  font-size: clamp(1.55rem, 2.8vw, 2.35rem);
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+}
+
+.opportunities-focus-label,
+.opportunities-library-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.opportunities-next-action {
+  display: flex;
+  min-width: min(14rem, 25vw);
+  align-self: end;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.opportunities-next-action .button {
+  width: auto;
+}
+
+.opportunities-next-action .button.primary {
+  flex: 1 1 auto;
+}
+
+.opportunities-value-hero > .opportunity-review-editor {
+  grid-column: 1 / -1;
+}
+
+.opportunities-queue-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #101014;
+  padding: 1rem;
+}
+
+.opportunities-queue-card h2 {
+  font-size: 1.15rem;
+  line-height: 1.2;
+}
+
+.opportunities-queue-card > .text-link {
+  margin-top: auto;
+}
+
+.opportunities-queue-list {
+  display: grid;
+  border-block: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.opportunities-queue-list > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 0;
+}
+
+.opportunities-queue-list > div + div {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.opportunities-queue-list strong {
+  color: #fff;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.opportunities-queue-list span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.opportunities-library {
+  gap: 1rem;
+  padding: clamp(1rem, 2vw, 1.35rem);
+}
+
+.opportunities-library-heading h2 {
+  font-size: clamp(1.35rem, 2.3vw, 1.9rem);
+  line-height: 1.12;
+}
+
+.opportunities-library-heading > span {
+  flex: 0 0 auto;
+}
+
+.opportunities-library .opportunities-filter-details {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.opportunities-filter-details > summary::after,
+.opportunities-create-more > summary::after {
+  content: "+";
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 1.15rem;
+  font-weight: 500;
+}
+
+.opportunities-filter-details[open] > summary::after,
+.opportunities-create-more[open] > summary::after {
+  content: "−";
+}
+
+.opportunities-library-list {
+  grid-template-columns: 1fr;
+  gap: 0.6rem;
+}
+
+.opportunities-library-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(11rem, auto);
+  gap: 0.7rem 1rem;
+  background: #131318;
+  padding: 0.9rem 1rem;
+}
+
+.opportunities-library-card-head,
+.opportunities-library-preview {
+  grid-column: 1;
+}
+
+.opportunities-library-card-head {
+  gap: 0.55rem;
+}
+
+.opportunities-library-preview {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: #cfcfd6;
+  font-size: 0.86rem;
+  line-height: 1.48;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.opportunities-card-actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  grid-template-columns: 1fr;
+  align-self: center;
+  min-width: 11rem;
+}
+
+.opportunities-card-actions .button {
+  width: 100%;
+  justify-content: center;
+}
+
+.opportunities-library-card > .content-asset-ready-note,
+.opportunities-library-card > .opportunity-review-editor,
+.opportunities-library-card > .opportunities-more-details {
+  grid-column: 1 / -1;
+}
+
+.opportunities-more-details {
+  padding-top: 0.45rem;
+}
+
+.opportunities-more-details > summary {
+  color: #aaaab3;
+  font-weight: 750;
+}
+
+.opportunities-library-empty {
+  display: grid;
+  justify-items: center;
+  gap: 0.3rem;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 1.5rem;
+  text-align: center;
+}
+
+.opportunities-show-more {
+  justify-self: center;
+  min-width: min(100%, 18rem);
+}
+
+@media (max-width: 900px) {
+  .opportunities-focus-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .opportunities-queue-card {
+    display: grid;
+    grid-template-columns: minmax(10rem, 0.5fr) minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .opportunities-queue-card > p,
+  .opportunities-queue-card > .text-link {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 720px) {
+  .opportunities-sermon-context {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .opportunities-sermon-change {
+    width: auto;
+  }
+
+  .opportunities-value-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .opportunities-next-action {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .opportunities-next-action .button {
+    flex: 1 1 auto;
+  }
+
+  .opportunities-library-card {
+    grid-template-columns: 1fr;
+  }
+
+  .opportunities-card-actions {
+    grid-column: 1;
+    grid-row: auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-width: 0;
+  }
+
+  .opportunities-library-card > .content-asset-ready-note,
+  .opportunities-library-card > .opportunity-review-editor,
+  .opportunities-library-card > .opportunities-more-details {
+    grid-column: 1;
+  }
+}
+
+@media (max-width: 560px) {
+  .opportunities-sermon-title h2 {
+    max-width: 100%;
+  }
+
+  .opportunities-sermon-change > summary {
+    font-size: 0;
+  }
+
+  .opportunities-sermon-change > summary::after {
+    content: "Change";
+    font-size: 0.78rem;
+  }
+
+  .opportunities-focus-label,
+  .opportunities-library-heading {
+    align-items: flex-start;
+  }
+
+  .opportunities-library-heading > span {
+    display: none;
+  }
+
+  .opportunities-queue-card {
+    display: flex;
+  }
+
+  .opportunities-queue-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .opportunities-queue-list > div {
+    display: grid;
+    justify-items: center;
+    gap: 0.25rem;
+    text-align: center;
+  }
+
+  .opportunities-queue-list > div + div {
+    border-top: 0;
+    border-left: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .opportunities-card-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
 .content-asset-ready-note,
 .content-asset-composer-summary,
 .generated-content-asset-meta {

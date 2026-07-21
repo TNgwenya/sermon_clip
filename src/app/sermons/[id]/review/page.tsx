@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 
 import { prisma } from "@/lib/prisma";
 import { hasPreviewMetadata, isFreshRemotePreview } from "@/lib/clipPreview";
@@ -128,8 +129,30 @@ function canAttemptClipPreview(
   return localMediaAvailable && hasPreviewMetadata(clip);
 }
 
-export default async function SermonReviewPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+function SermonReviewLoading() {
+  return (
+    <main className="media-workspace stack-lg" aria-busy="true" aria-live="polite">
+      <header className="workspace-topbar">
+        <div className="stack-sm">
+          <p className="kicker">Pastor review</p>
+          <h1>Opening the strongest sermon moments.</h1>
+          <p className="muted">The review controls are ready. Clip evidence and previews are arriving next.</p>
+        </div>
+      </header>
+      <section className="panel stack-md" role="status">
+        <span className="route-loading-line" aria-hidden="true" />
+        <span className="route-loading-line short" aria-hidden="true" />
+        <div className="route-loading-grid" aria-hidden="true">
+          <span className="route-loading-panel" />
+          <span className="route-loading-panel" />
+        </div>
+        <span className="sr-only">Loading sermon clips for review.</span>
+      </section>
+    </main>
+  );
+}
+
+async function SermonReviewContent({ id }: { id: string }) {
   const localMediaAvailable = canRunLocalMediaProcessing();
 
   const sermon: ReviewPageData | null = await prisma.sermon.findUnique({
@@ -266,5 +289,15 @@ export default async function SermonReviewPage({ params }: { params: Promise<{ i
         <Link href={`/sermons/${sermon.id}`} className="text-link">Back to sermon detail</Link>
       </div>
     </>
+  );
+}
+
+export default async function SermonReviewPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+
+  return (
+    <Suspense fallback={<SermonReviewLoading />}>
+      <SermonReviewContent id={id} />
+    </Suspense>
   );
 }

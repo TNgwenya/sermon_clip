@@ -61,7 +61,10 @@ OPENAI_VALIDATED_RESPONSE_CACHE_TTL_SECONDS=2592000
 OPENAI_CLIP_SELECTION_MAX_WINDOWS=24
 OPENAI_TRANSCRIPTION_MAX_ATTEMPTS=4
 OPENAI_TRANSCRIPTION_RETRY_BASE_DELAY_MS=2000
+# Direct connection for migrations and fallback runtime access.
 DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require
+# Pooled Neon connection used by the running app and workers.
+DATABASE_POOL_URL=postgresql://USER:PASSWORD@POOLER_HOST/DB?sslmode=require
 
 The browser smoke suite deliberately uses an isolated local PostgreSQL database instead of the app's configured database. Create `sermon_clip_codex_test`, apply the current schema, and run the suite with:
 
@@ -289,7 +292,7 @@ After connecting YouTube in Social Settings, stored OAuth credentials are prefer
 
 The generated-content desk also includes a reusable Design Studio, an operational mixed-content weekly planner at `/weekly-plan`, WhatsApp/Story/HTML-email handoff packs, and branded ministry-guide PDFs. Weekly-plan bulk scheduling remains a reviewed manual handoff by design.
 
-For Neon/Vercel setup, create the Neon database and set `DATABASE_URL` in Vercel and locally. Vercel uses `npm run deploy:build`, which safely baselines an empty database from the current PostgreSQL schema and uses `prisma migrate deploy` for databases that already have migration history. The migration preflight retries transient Neon connection and cold-start failures with bounded exponential backoff; authentication, schema, and migration errors still fail immediately, and an unreachable database never causes migrations to be skipped. The defaults can be tuned with `PRISMA_DEPLOY_MAX_ATTEMPTS`, `PRISMA_DEPLOY_RETRY_BASE_DELAY_MS`, and `PRISMA_DEPLOY_RETRY_MAX_DELAY_MS`. To copy existing local SQLite rows into Neon, run:
+For Neon/Vercel setup, create the Neon database and set both connection URLs in Vercel and locally: keep `DATABASE_URL` on Neon's direct endpoint for migrations, and set `DATABASE_POOL_URL` to the matching `-pooler` endpoint for the running app and workers. If `DATABASE_POOL_URL` is absent, the runtime safely falls back to `DATABASE_URL`. Vercel uses `npm run deploy:build`, which safely baselines an empty database from the current PostgreSQL schema and uses `prisma migrate deploy` for databases that already have migration history. The migration preflight retries transient Neon connection and cold-start failures with bounded exponential backoff; authentication, schema, and migration errors still fail immediately, and an unreachable database never causes migrations to be skipped. The defaults can be tuned with `PRISMA_DEPLOY_MAX_ATTEMPTS`, `PRISMA_DEPLOY_RETRY_BASE_DELAY_MS`, and `PRISMA_DEPLOY_RETRY_MAX_DELAY_MS`. To copy existing local SQLite rows into Neon, run:
 
 ```bash
 SQLITE_DATABASE_PATH=prisma/dev.db npm run import:sqlite-to-postgres

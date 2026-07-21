@@ -94,6 +94,9 @@ const RESTORABLE_PUBLISHING_STATUSES: RestorablePublishingStatus[] = [
 ];
 const SCHEDULED_POST_ACTIONS: ScheduledPostAction[] = ["POST_NOW", "RESTORE_PREVIOUS"];
 const STALE_POSTING_CLAIM_MS = 15 * 60_000;
+const STALE_POSTING_RECOVERY_READ_INTERVAL_MS = 60_000;
+let lastStalePostingRecoveryReadAt = 0;
+let stalePostingRecoveryRead: Promise<number> | null = null;
 const POSTING_PLATFORM_CREDENTIAL_PROVIDER: Partial<Record<PrismaPostingPlatform, SocialConnectorProvider>> = {
   FACEBOOK: "META_FACEBOOK",
   INSTAGRAM: "META_INSTAGRAM",
@@ -274,8 +277,30 @@ function toScheduledPost(input: {
   };
 }
 
+async function recoverStaleScheduledPostClaimsForRead(): Promise<void> {
+  const now = Date.now();
+  if (stalePostingRecoveryRead) {
+    await stalePostingRecoveryRead;
+    return;
+  }
+
+  if (now - lastStalePostingRecoveryReadAt < STALE_POSTING_RECOVERY_READ_INTERVAL_MS) {
+    return;
+  }
+
+  lastStalePostingRecoveryReadAt = now;
+  stalePostingRecoveryRead = recoverStaleScheduledPostClaims(new Date(now))
+    .finally(() => {
+      stalePostingRecoveryRead = null;
+    });
+
+  await stalePostingRecoveryRead;
+}
+
 export async function listScheduledPosts(): Promise<ScheduledPost[]> {
-  await recoverStaleScheduledPostClaims();
+  // Worker-facing queue reads still recover every time. Pastor-facing list
+  // reads only need to run the 15-minute stale-claim repair once per minute.
+  await recoverStaleScheduledPostClaimsForRead();
   const posts = await prisma.scheduledPost.findMany({
     include: {
       socialAccount: {
