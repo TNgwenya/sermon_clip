@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -24,6 +24,7 @@ import {
   type ContentAssetTypeValue,
   type ContentPublishingPlatform,
 } from "@/lib/contentPublishing";
+import { isDesignableContentAssetType } from "@/lib/contentGraphicTemplates";
 import {
   getOpportunityOutcome,
   OPPORTUNITY_OUTCOME_LABELS,
@@ -153,6 +154,74 @@ function copyText(item: OpportunityItem, draft: EditDraft, asset?: PreparedAsset
   return draft.content.trim() || sourceText(item);
 }
 
+function previewActionLabel(item: OpportunityItem, asset?: PreparedAssetSummary | null): string {
+  if (asset) {
+    return isDesignableContentAssetType(asset.assetType)
+      ? "Preview design"
+      : "Preview ready post";
+  }
+
+  return item.status === "APPROVED" || item.status === "USED"
+    ? "Preview & prepare"
+    : "Preview & review";
+}
+
+function ContentIdeaPreview({
+  item,
+  asset,
+  full = false,
+}: {
+  item: OpportunityItem;
+  asset?: PreparedAssetSummary | null;
+  full?: boolean;
+}) {
+  const assetType = asset?.assetType ?? mapOpportunityTypeToContentAssetType(item.opportunityType);
+  const isGraphic = assetType === "QUOTE_GRAPHIC" || assetType === "SCRIPTURE_GRAPHIC";
+  const isCarousel = assetType === "CAROUSEL";
+  const isArtwork = isDesignableContentAssetType(assetType);
+  const content = (asset && isArtwork
+    ? asset.bodyContent?.trim() || asset.caption?.trim() || sourceText(item, asset)
+    : sourceText(item, asset)).trim();
+  const previewLength = isGraphic ? 280 : 520;
+  const visibleContent = full || content.length <= previewLength
+    ? content
+    : `${content.slice(0, previewLength).trimEnd()}…`;
+  const showFullContent = !full && visibleContent !== content;
+
+  return (
+    <div className={`opportunities-content-preview${isGraphic ? " is-graphic" : isCarousel ? " is-carousel" : " is-copy"}`}>
+      <div className="opportunities-preview-canvas">
+        <div className="opportunities-preview-brandline">
+          <span>{CONTENT_ASSET_TYPE_LABELS[assetType]}</span>
+          <span>{item.sermonTitle}</span>
+        </div>
+        {isGraphic ? (
+          <blockquote>{visibleContent}</blockquote>
+        ) : (
+          <p>{visibleContent}</p>
+        )}
+        <div className="opportunities-preview-footer">
+          <span>{item.relatedScripture || OPPORTUNITY_OUTCOME_LABELS[getOpportunityOutcome(item)]}</span>
+          <span>{isCarousel ? "Swipe to continue" : item.suggestedPlatform || "Publishing copy"}</span>
+        </div>
+      </div>
+      <div className="opportunities-preview-caption">
+        <span className="muted small">
+          {isArtwork
+            ? "Copy preview · choose the final template and format in Design Studio"
+            : "Full content preview · edit the wording before it reaches the calendar"}
+        </span>
+        {showFullContent ? (
+          <details>
+            <summary>Read full content</summary>
+            <p>{content}</p>
+          </details>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function OpportunitiesExperience({
   opportunities,
   activeSermonId,
@@ -169,8 +238,9 @@ export function OpportunitiesExperience({
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [selectedType, setSelectedType] = useState<"ALL" | ContentOpportunityType>("ALL");
   const [selectedOutcome, setSelectedOutcome] = useState<"ALL" | OpportunityOutcome>("ALL");
-  const [visibleIdeaCount, setVisibleIdeaCount] = useState(6);
+  const [visibleIdeaCount, setVisibleIdeaCount] = useState(4);
   const [openEditorId, setOpenEditorId] = useState<string | null>(null);
+  const [previewOpportunityId, setPreviewOpportunityId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [composerOpportunityId, setComposerOpportunityId] = useState<string | null>(null);
 
@@ -226,6 +296,11 @@ export function OpportunitiesExperience({
   const featuredAsset = featuredOpportunity
     ? preparedAssetByOpportunityId.get(featuredOpportunity.id) ?? null
     : null;
+  const journeyStep = featuredAsset
+    ? 3
+    : featuredOpportunity && (featuredOpportunity.status === "APPROVED" || featuredOpportunity.status === "USED")
+      ? 2
+      : 1;
   const composerOpportunity = composerOpportunityId
     ? opportunities.find((item) => item.id === composerOpportunityId) ?? null
     : null;
@@ -233,6 +308,14 @@ export function OpportunitiesExperience({
     ? preparedAssetByOpportunityId.get(composerOpportunity.id) ?? null
     : null;
   const downloadEligibleCount = opportunities.filter((item) => item.status === "APPROVED" || item.status === "USED").length;
+
+  useEffect(() => {
+    if (!openEditorId) return;
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(`opportunity-editor-title-${openEditorId}`)?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [openEditorId]);
 
   function buildComposerInitialValue(item: OpportunityItem): ContentAssetComposerInitialValue {
     const asset = preparedAssetByOpportunityId.get(item.id);
@@ -249,6 +332,7 @@ export function OpportunitiesExperience({
       sermonId: item.sermonId,
       sermonTitle: item.sermonTitle,
       opportunityId: item.id,
+      assetType,
       assetTypeLabel: CONTENT_ASSET_TYPE_LABELS[assetType],
       status: asset?.status ?? null,
       title: asset?.title ?? draft?.title ?? item.title,
@@ -322,9 +406,17 @@ export function OpportunitiesExperience({
   }
 
   function openReview(itemId: string) {
+    setPreviewOpportunityId(itemId);
     setOpenEditorId(itemId);
     requestAnimationFrame(() => {
       document.getElementById(`opportunity-${itemId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
+
+  function closeReview(itemId: string) {
+    setOpenEditorId(null);
+    requestAnimationFrame(() => {
+      document.getElementById(`opportunity-primary-action-${itemId}`)?.focus();
     });
   }
 
@@ -352,13 +444,18 @@ export function OpportunitiesExperience({
     const assetLocked = Boolean(asset && ["SCHEDULED", "PUBLISHED", "ARCHIVED"].includes(asset.status));
 
     if (asset) {
+      const isDesignable = isDesignableContentAssetType(asset.assetType);
       return (
         <a
           className={className}
-          href={`/ready-to-post?contentAssetId=${asset.id}`}
-          aria-label={`Open Ready to Post asset for ${item.title}`}
+          href={isDesignable
+            ? `/ready-to-post/content-assets/${asset.id}/studio`
+            : `/ready-to-post?contentAssetId=${asset.id}`}
+          aria-label={`${isDesignable ? "Preview and edit design" : "Open Ready to Post asset"} for ${item.title}`}
         >
-          {assetLocked ? "Open publishing version" : "Open Ready to Post"}
+          {isDesignable
+            ? assetLocked ? "View final design" : "Preview & edit design"
+            : assetLocked ? "Open publishing version" : "Continue to scheduling"}
         </a>
       );
     }
@@ -367,6 +464,7 @@ export function OpportunitiesExperience({
       return (
         <button
           type="button"
+          id={`opportunity-primary-action-${item.id}`}
           className={className}
           disabled={isPending}
           onClick={() => setComposerOpportunityId(item.id)}
@@ -380,6 +478,7 @@ export function OpportunitiesExperience({
     return (
       <button
         type="button"
+        id={`opportunity-primary-action-${item.id}`}
         className={className}
         disabled={isPending}
         onClick={() => openReview(item.id)}
@@ -400,15 +499,16 @@ export function OpportunitiesExperience({
     };
 
     return (
-      <div className="opportunity-review-editor stack-md">
+      <section className="opportunity-review-editor stack-md" aria-labelledby={`opportunity-editor-heading-${item.id}`}>
         <div className="stack-sm">
           <p className="kicker">Review</p>
-          <h4>Shape the idea, then approve it</h4>
+          <h4 id={`opportunity-editor-heading-${item.id}`}>Shape the idea, then approve it</h4>
           <p className="muted small">Check the meaning and wording. Approval records the exact content your team reviewed.</p>
         </div>
-        <label className="stack-sm">
+        <label className="stack-sm" htmlFor={`opportunity-editor-title-${item.id}`}>
           Title
           <input
+            id={`opportunity-editor-title-${item.id}`}
             value={draft.title}
             onChange={(event) => setDrafts((current) => ({
               ...current,
@@ -450,11 +550,11 @@ export function OpportunitiesExperience({
           <button type="button" className="button danger" disabled={isPending} onClick={() => updateStatus(item, "REJECTED")}>
             Reject
           </button>
-          <button type="button" className="button tertiary" disabled={isPending} onClick={() => setOpenEditorId(null)}>
+          <button type="button" className="button tertiary" disabled={isPending} onClick={() => closeReview(item.id)}>
             Close
           </button>
         </div>
-      </div>
+      </section>
     );
   }
 
@@ -529,6 +629,12 @@ export function OpportunitiesExperience({
         </div>
       ) : null}
 
+      <ol className="opportunities-journey" aria-label="Content planning steps">
+        <li className={journeyStep === 1 ? "is-active" : "is-complete"} aria-current={journeyStep === 1 ? "step" : undefined}><strong>1</strong> Preview & approve</li>
+        <li className={journeyStep === 2 ? "is-active" : journeyStep > 2 ? "is-complete" : ""} aria-current={journeyStep === 2 ? "step" : undefined}><strong>2</strong> Prepare content</li>
+        <li className={journeyStep === 3 ? "is-active" : ""} aria-current={journeyStep === 3 ? "step" : undefined}><strong>3</strong> Design & schedule</li>
+      </ol>
+
       {featuredOpportunity ? (
         <section className="opportunities-focus-grid">
           <article id={`opportunity-${featuredOpportunity.id}`} className="opportunities-value-hero">
@@ -539,7 +645,7 @@ export function OpportunitiesExperience({
               </div>
               <span className="muted small">{CONTENT_OPPORTUNITY_TYPE_LABELS[featuredOpportunity.opportunityType]}</span>
               <h2>{featuredOpportunity.title}</h2>
-              <p className="opportunities-featured-preview">{previewText(featuredOpportunity, featuredAsset, 300)}</p>
+              <ContentIdeaPreview item={featuredOpportunity} asset={featuredAsset} />
               <div className="opportunities-featured-meta">
                 <span>{OPPORTUNITY_OUTCOME_LABELS[getOpportunityOutcome(featuredOpportunity)]}</span>
                 {featuredOpportunity.relatedScripture ? <span>{featuredOpportunity.relatedScripture}</span> : null}
@@ -547,6 +653,7 @@ export function OpportunitiesExperience({
               </div>
             </div>
             <div className="opportunities-next-action">
+              <span className="muted small">Recommended next step</span>
               {renderPrimaryAction(featuredOpportunity)}
               <button
                 type="button"
@@ -554,7 +661,7 @@ export function OpportunitiesExperience({
                 onClick={() => copyOpportunity(featuredOpportunity)}
                 aria-label={`Copy ${featuredAsset ? "ready caption" : "content"} for ${featuredOpportunity.title}`}
               >
-                {copiedId === featuredOpportunity.id ? "Copied" : "Copy"}
+                {copiedId === featuredOpportunity.id ? "Copied" : "Copy content"}
               </button>
             </div>
             {renderReviewEditor(featuredOpportunity)}
@@ -598,7 +705,7 @@ export function OpportunitiesExperience({
             aria-pressed={selectedOutcome === "ALL"}
             onClick={() => {
               setSelectedOutcome("ALL");
-              setVisibleIdeaCount(6);
+              setVisibleIdeaCount(4);
             }}
           >
             All <span>{browsableLibrary.length}</span>
@@ -615,7 +722,7 @@ export function OpportunitiesExperience({
                 title={OUTCOME_DESCRIPTIONS[outcome]}
                 onClick={() => {
                   setSelectedOutcome(outcome);
-                  setVisibleIdeaCount(6);
+                  setVisibleIdeaCount(4);
                 }}
               >
                 {OPPORTUNITY_OUTCOME_LABELS[outcome]} <span>{count}</span>
@@ -630,15 +737,16 @@ export function OpportunitiesExperience({
           <div className="opportunities-library-list">
               {visibleIdeas.map((item) => {
                 const preparedAsset = preparedAssetByOpportunityId.get(item.id);
+                const isPreviewOpen = previewOpportunityId === item.id;
 
                 return (
-                  <article id={`opportunity-${item.id}`} key={item.id} className="opportunities-library-card stack-sm">
+                  <article id={`opportunity-${item.id}`} key={item.id} className={`opportunities-library-card stack-sm${isPreviewOpen ? " is-previewing" : ""}`}>
                     <div className="opportunities-library-card-head">
                       <div className="stack-sm">
                         <div className="opportunities-featured-labels">
                           <StatusBadge tone={statusTone(item.status)}>{formatStatus(item.status)}</StatusBadge>
                           <span>{CONTENT_OPPORTUNITY_TYPE_LABELS[item.opportunityType]}</span>
-                          {item.suggestedPlatform ? <span>{item.suggestedPlatform}</span> : null}
+                          {preparedAsset ? <span>Prepared</span> : item.suggestedPlatform ? <span>{item.suggestedPlatform}</span> : null}
                         </div>
                         <h3>{item.title}</h3>
                       </div>
@@ -650,22 +758,49 @@ export function OpportunitiesExperience({
                     </p>
 
                     <div className="opportunities-card-actions">
-                      {renderPrimaryAction(item)}
                       <button
                         type="button"
-                        className="button tertiary"
-                        onClick={() => copyOpportunity(item)}
-                        aria-label={`Copy content for ${item.title}`}
+                        id={`opportunity-preview-toggle-${item.id}`}
+                        className="button secondary"
+                        aria-expanded={isPreviewOpen}
+                        aria-controls={`opportunity-preview-${item.id}`}
+                        onClick={() => {
+                          setPreviewOpportunityId((current) => current === item.id ? null : item.id);
+                          if (isPreviewOpen) setOpenEditorId(null);
+                        }}
                       >
-                        {copiedId === item.id ? "Copied" : "Copy"}
+                        {isPreviewOpen ? "Close preview" : previewActionLabel(item, preparedAsset)}
                       </button>
                     </div>
 
-                    {preparedAsset ? (
-                      <div className="content-asset-ready-note">
-                        <span className="status-pill status-exported">{preparedAsset.status.toLowerCase()}</span>
-                        <span className="small muted">Prepared in Ready to Post</span>
-                        <a className="text-link small" href={`/ready-to-post?contentAssetId=${preparedAsset.id}`}>Open</a>
+                    {isPreviewOpen ? (
+                      <div
+                        id={`opportunity-preview-${item.id}`}
+                        className="opportunities-inline-preview"
+                        role="region"
+                        aria-label={`Preview of ${item.title}`}
+                      >
+                        <ContentIdeaPreview item={item} asset={preparedAsset} full />
+                        <div className="opportunities-inline-preview-actions">
+                          <div className="stack-sm">
+                            <p className="kicker">Next step</p>
+                            <strong>{preparedAsset
+                              ? isDesignableContentAssetType(preparedAsset.assetType) ? "Refine the design" : "Choose when to publish"
+                              : item.status === "APPROVED" || item.status === "USED" ? "Prepare the post package" : "Edit and approve the idea"}</strong>
+                            <span className="muted small">Nothing is published until you schedule and confirm it.</span>
+                          </div>
+                          <div className="actions-row">
+                            {renderPrimaryAction(item)}
+                            <button
+                              type="button"
+                              className="button tertiary"
+                              onClick={() => copyOpportunity(item)}
+                              aria-label={`Copy content for ${item.title}`}
+                            >
+                              {copiedId === item.id ? "Copied" : "Copy content"}
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     ) : null}
 
@@ -703,7 +838,10 @@ export function OpportunitiesExperience({
                             type="button"
                             className="button secondary"
                             disabled={isPending}
-                            onClick={() => setOpenEditorId((current) => current === item.id ? null : item.id)}
+                            onClick={() => {
+                              if (openEditorId === item.id) closeReview(item.id);
+                              else openReview(item.id);
+                            }}
                           >
                             {openEditorId === item.id ? "Close editor" : "View or edit full content"}
                           </button>
@@ -744,9 +882,9 @@ export function OpportunitiesExperience({
           <button
             type="button"
             className="button tertiary opportunities-show-more"
-            onClick={() => setVisibleIdeaCount((count) => count + 6)}
+            onClick={() => setVisibleIdeaCount((count) => count + 4)}
           >
-            Show 6 more <span className="muted">({hiddenIdeaCount} remaining)</span>
+            Show 4 more <span className="muted">({hiddenIdeaCount} remaining)</span>
           </button>
         ) : null}
       </section>
@@ -785,49 +923,49 @@ export function OpportunitiesExperience({
           ) : (
             <p className="muted small">Approve at least one idea to unlock the production-pack download.</p>
           )}
-        </div>
-      </details>
 
-      <details className="advanced-details opportunities-advanced">
-        <summary>Advanced generation tools</summary>
-        <div className="advanced-details-body stack-md">
-          <p className="muted small">Regenerate every active draft for this sermon, or choose one specific content type.</p>
-          <div className="actions-row">
-            <button
-              type="button"
-              className="button secondary"
-              disabled={isPending}
-              onClick={() => runAction("regenerate:all", () => regenerateContentOpportunitiesAction(activeSermonId))}
-            >
-              {pendingAction === "regenerate:all" ? "Regenerating…" : "Regenerate current sermon"}
-            </button>
-            <select
-              value={selectedType}
-              disabled={isPending}
-              onChange={(event) => setSelectedType(event.target.value as "ALL" | ContentOpportunityType)}
-              aria-label="Opportunity type to regenerate"
-            >
-              <option value="ALL">Choose a content type</option>
-              {CONTENT_OPPORTUNITY_TYPES.map((type) => (
-                <option key={type} value={type}>{CONTENT_OPPORTUNITY_TYPE_LABELS[type]}</option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="button secondary"
-              disabled={isPending || selectedType === "ALL"}
-              onClick={() => {
-                if (selectedType !== "ALL") {
-                  runAction(
-                    `regenerate-type:${selectedType}`,
-                    () => regenerateContentOpportunityTypeAction(activeSermonId, selectedType),
-                  );
-                }
-              }}
-            >
-              {selectedType !== "ALL" && pendingAction === `regenerate-type:${selectedType}` ? "Regenerating…" : "Regenerate selected type"}
-            </button>
-          </div>
+          <details className="advanced-details opportunities-advanced">
+            <summary>Advanced generation tools</summary>
+            <div className="advanced-details-body stack-md">
+              <p className="muted small">Regenerate every active draft for this sermon, or choose one specific content type.</p>
+              <div className="actions-row">
+                <button
+                  type="button"
+                  className="button secondary"
+                  disabled={isPending}
+                  onClick={() => runAction("regenerate:all", () => regenerateContentOpportunitiesAction(activeSermonId))}
+                >
+                  {pendingAction === "regenerate:all" ? "Regenerating…" : "Regenerate current sermon"}
+                </button>
+                <select
+                  value={selectedType}
+                  disabled={isPending}
+                  onChange={(event) => setSelectedType(event.target.value as "ALL" | ContentOpportunityType)}
+                  aria-label="Opportunity type to regenerate"
+                >
+                  <option value="ALL">Choose a content type</option>
+                  {CONTENT_OPPORTUNITY_TYPES.map((type) => (
+                    <option key={type} value={type}>{CONTENT_OPPORTUNITY_TYPE_LABELS[type]}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="button secondary"
+                  disabled={isPending || selectedType === "ALL"}
+                  onClick={() => {
+                    if (selectedType !== "ALL") {
+                      runAction(
+                        `regenerate-type:${selectedType}`,
+                        () => regenerateContentOpportunityTypeAction(activeSermonId, selectedType),
+                      );
+                    }
+                  }}
+                >
+                  {selectedType !== "ALL" && pendingAction === `regenerate-type:${selectedType}` ? "Regenerating…" : "Regenerate selected type"}
+                </button>
+              </div>
+            </div>
+          </details>
         </div>
       </details>
 

@@ -353,7 +353,7 @@ async function OpportunityWorkspace({ filters }: { filters: SearchParams }) {
     <>
       <section className={`opportunities-sermon-context${activeSermon ? "" : " is-empty"}`}>
         <div className="opportunities-sermon-title">
-          <span className="muted small">Ideas from</span>
+          <span className="muted small">Planning from</span>
           <h2>{activeSermonTitle ?? "Add your first sermon"}</h2>
           {!activeSermon ? (
             <p className="muted small">Upload or import a sermon to create clips, posts, devotionals, and follow-up resources.</p>
@@ -401,8 +401,8 @@ export default async function OpportunitiesPage({
     <main className="secondary-media-shell stack-lg">
       <PageHeader
         eyebrow="Content ideas"
-        title="Choose what to create next"
-        description="Start with one recommended idea. Review it, shape it, and move it into your publishing plan."
+        title="Plan, preview, then publish"
+        description="Choose one idea at a time. Preview the content, edit the wording, and only move it to Design Studio or the calendar when it is ready."
         className="opportunities-page-header"
       />
 

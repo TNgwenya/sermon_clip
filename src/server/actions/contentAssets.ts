@@ -1,8 +1,6 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import os from "node:os";
-import path from "node:path";
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
@@ -15,7 +13,12 @@ import {
   normalizeContentHashtags,
   normalizeSuggestedPostingPlatform,
 } from "@/lib/contentPublishing";
-import { getBrandingSettings } from "@/server/branding/settings";
+import {
+  buildCarouselStudioSlides,
+  isDesignableContentAssetType,
+  readContentDesignStudioDocument,
+  type CarouselStudioSlide,
+} from "@/lib/contentGraphicTemplates";
 import {
   runContentPublishingPreflight,
   selectContentPublishingFiles,
@@ -23,14 +26,7 @@ import {
 import { fromPrismaPostingPlatform } from "@/lib/postingDrafts";
 import { isValidIanaTimeZone, resolveScheduledInstant } from "@/lib/postingSchedule";
 import { getPublishingServiceHealth } from "@/lib/publishingServiceHealth";
-import {
-  renderApprovedNonVideoAssets,
-  toContentAssetFilePersistenceInput,
-} from "@/server/contentAssets/nonVideoAssetRenderer";
-import {
-  uploadContentAssetFilesWhenConfigured,
-  uploadContentAssetFileToR2,
-} from "@/server/contentAssets/contentAssetPublicStorage";
+import { uploadContentAssetFileToR2 } from "@/server/contentAssets/contentAssetPublicStorage";
 
 const contentPublishingPlatformSchema = z.enum(["TIKTOK", "INSTAGRAM", "YOUTUBE_SHORTS", "FACEBOOK"]);
 const contentAssetTypeSchema = z.enum(CONTENT_ASSET_TYPES);
@@ -91,6 +87,31 @@ function immutableContentAssetComposerMessage(status: string): string | null {
   return null;
 }
 
+function asMetadataRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {};
+}
+
+function rebuildCarouselSlidesWithSavedDesign(input: {
+  content: string;
+  title: string;
+  savedSlides: CarouselStudioSlide[];
+}): CarouselStudioSlide[] {
+  return buildCarouselStudioSlides(input.content, input.title).map((slide, index) => {
+    const saved = input.savedSlides[index];
+    return saved
+      ? {
+          ...slide,
+          id: saved.id,
+          role: saved.role,
+          templateId: saved.templateId,
+          scripture: saved.scripture,
+        }
+      : slide;
+  });
+}
+
 export async function prepareContentOpportunityForPublishingAction(
   input: ContentAssetComposerInput,
 ): Promise<ContentAssetActionResult> {
@@ -111,6 +132,9 @@ export async function prepareContentOpportunityForPublishingAction(
             status: true,
             contentOpportunityId: true,
             assetType: true,
+            title: true,
+            bodyContent: true,
+            metadataJson: true,
           },
         })
       : null;
@@ -168,6 +192,9 @@ export async function prepareContentOpportunityForPublishingAction(
             status: true,
             contentOpportunityId: true,
             assetType: true,
+            title: true,
+            bodyContent: true,
+            metadataJson: true,
           },
         })
       : null);
@@ -186,13 +213,56 @@ export async function prepareContentOpportunityForPublishingAction(
       ?? (opportunity ? mapOpportunityTypeToContentAssetType(opportunity.opportunityType) : "TEXT_POST"),
     );
     const now = new Date();
-    const status = "READY" as const;
+    const isDesignable = isDesignableContentAssetType(assetType);
+    const artworkChanged = !existingAsset
+      || parsed.data.title.trim() !== existingAsset.title.trim()
+      || parsed.data.bodyContent.trim() !== (existingAsset.bodyContent?.trim() ?? "");
+    const shouldInvalidateArtwork = isDesignable && artworkChanged;
+    const status: "PREPARED" | "READY" = isDesignable
+      ? shouldInvalidateArtwork || existingAsset?.status !== "READY" ? "PREPARED" : "READY"
+      : "READY";
+    const existingMetadata = asMetadataRecord(existingAsset?.metadataJson);
+    const designDocument = isDesignable
+      ? readContentDesignStudioDocument({
+          metadata: existingMetadata,
+          assetType,
+          title: existingAsset?.title ?? parsed.data.title,
+          bodyContent: existingAsset?.bodyContent ?? parsed.data.bodyContent,
+        })
+      : null;
+    const bodyChanged = parsed.data.bodyContent.trim() !== (existingAsset?.bodyContent?.trim() ?? "");
+    const designSlides = assetType === "CAROUSEL"
+      ? bodyChanged
+        ? rebuildCarouselSlidesWithSavedDesign({
+            content: parsed.data.bodyContent,
+            title: parsed.data.title,
+            savedSlides: designDocument?.slides ?? [],
+          })
+        : designDocument?.slides ?? buildCarouselStudioSlides(parsed.data.bodyContent, parsed.data.title)
+      : designDocument?.slides ?? [];
+    const existingDesignMetadata = asMetadataRecord(existingMetadata.designStudio);
     const metadataJson = {
+      ...existingMetadata,
       manualHandoffRequired: true,
-      sourceOpportunityType: opportunity?.opportunityType ?? null,
-      relatedScripture: opportunity?.relatedScripture ?? null,
-      sourceTranscriptExcerpt: opportunity?.sourceTranscriptExcerpt ?? null,
-      groundingNote: opportunity?.aiReason ?? null,
+      sourceOpportunityType: opportunity?.opportunityType ?? existingMetadata.sourceOpportunityType ?? null,
+      relatedScripture: Object.prototype.hasOwnProperty.call(existingMetadata, "relatedScripture")
+        ? existingMetadata.relatedScripture ?? null
+        : opportunity?.relatedScripture ?? null,
+      sourceTranscriptExcerpt: opportunity?.sourceTranscriptExcerpt ?? existingMetadata.sourceTranscriptExcerpt ?? null,
+      groundingNote: opportunity?.aiReason ?? existingMetadata.groundingNote ?? null,
+      ...(shouldInvalidateArtwork && designDocument
+        ? {
+            designStudio: {
+              ...existingDesignMetadata,
+              version: 1,
+              templateId: designDocument.templateId,
+              slides: designSlides,
+              updatedAt: now.toISOString(),
+              renderRequired: true,
+              renderedAt: null,
+            },
+          }
+        : {}),
     };
     const data = {
       sermonId: parsed.data.sermonId,
@@ -208,92 +278,22 @@ export async function prepareContentOpportunityForPublishingAction(
       metadataJson,
       approvedAt: now,
       preparedAt: now,
-      readyAt: status === "READY" ? now : undefined,
-    } as const;
+      ...(shouldInvalidateArtwork
+        ? { readyAt: null }
+        : !isDesignable
+          ? { readyAt: now }
+          : {}),
+    };
 
-    const shouldRenderGraphics = opportunity
-      ? ["QUOTE_GRAPHIC", "SCRIPTURE_GRAPHIC", "CAROUSEL_IDEA"].includes(opportunity.opportunityType)
-      : false;
     const contentAssetId = existingAsset?.id ?? randomUUID();
-    const renderedFiles = shouldRenderGraphics && opportunity
-      ? await (async () => {
-          const branding = await getBrandingSettings();
-          const rendered = await renderApprovedNonVideoAssets({
-            sermonId: parsed.data.sermonId,
-            opportunityId: opportunity.id,
-            opportunityType: opportunity.opportunityType,
-            status: opportunity.status,
-            title: parsed.data.title,
-            approvedContent: parsed.data.bodyContent,
-            relatedScripture: opportunity.relatedScripture,
-            sourceTranscriptExcerpt: opportunity.sourceTranscriptExcerpt,
-            branding: {
-              churchName: branding.churchName,
-              primaryColor: branding.primaryBrandColor,
-              secondaryColor: branding.secondaryBrandColor,
-              fontFamily: branding.defaultFontFamily,
-            },
-          }, {
-            // An isolated attempt keeps a failed rerender from overwriting the
-            // local fallback files of the currently publishable asset version.
-            ...(process.env.VERCEL
-              ? { outputRoot: path.join(os.tmpdir(), "sermon-clip-content-assets", parsed.data.sermonId) }
-              : {}),
-            storageKey: `render-${contentAssetId}-${randomUUID()}`,
-          });
-          return rendered.files.map((file) => ({
-            id: randomUUID(),
-            ...toContentAssetFilePersistenceInput(file),
-          }));
-        })()
-      : [];
-
-    let persistedFiles = renderedFiles;
-    if (renderedFiles.length > 0) {
-      try {
-        const uploadedByFileId = await uploadContentAssetFilesWhenConfigured({
-          contentAssetId,
-          files: renderedFiles.map((file) => ({
-            id: file.id,
-            fileName: file.fileName,
-            filePath: file.filePath,
-            mimeType: file.mimeType,
-          })),
-        });
-        persistedFiles = renderedFiles.map((file) => {
-          const uploaded = uploadedByFileId.get(file.id);
-          return uploaded
-            ? {
-                ...file,
-                objectKey: uploaded.objectKey,
-                publicUrl: uploaded.publicUrl,
-                sizeBytes: BigInt(uploaded.sizeBytes),
-              }
-            : file;
-        });
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : "The media upload failed.";
-        throw new Error(`Durable media storage failed, so this content was not marked ready. ${detail}`);
-      }
-    }
-
     const contentAsset = existingAsset
       ? await prisma.contentAsset.update({
           where: { id: existingAsset.id },
           data: {
             ...data,
-            ...(shouldRenderGraphics
-              ? {
-                  files: {
-                    deleteMany: {},
-                    create: persistedFiles,
-                  },
-                }
-              : {
-                  // Composer changes invalidate any previously generated PDF
-                  // or other derived files until they are generated again.
-                  files: { deleteMany: {} },
-                }),
+            // Artwork-source changes invalidate production files. Caption,
+            // hashtag, platform and CTA edits preserve every existing output.
+            ...(artworkChanged ? { files: { deleteMany: {} } } : {}),
           },
           select: { id: true },
         })
@@ -301,7 +301,6 @@ export async function prepareContentOpportunityForPublishingAction(
           data: {
             id: contentAssetId,
             ...data,
-            ...(persistedFiles.length > 0 ? { files: { create: persistedFiles } } : {}),
           },
           select: { id: true },
         });
@@ -309,7 +308,11 @@ export async function prepareContentOpportunityForPublishingAction(
     revalidateContentPublishingPaths(parsed.data.sermonId, contentAsset.id);
     return {
       success: true,
-      message: "Content prepared and added to Ready to Post.",
+      message: shouldInvalidateArtwork
+        ? "Draft saved. Choose a design, preview every format, then render the final artwork."
+        : isDesignable
+          ? "Post details saved. The current artwork remains ready."
+        : "Content prepared and added to Ready to Post.",
       contentAssetId: contentAsset.id,
       readyToPostHref: `/ready-to-post?contentAssetId=${contentAsset.id}`,
     };

@@ -176,7 +176,7 @@ beforeEach(() => {
   mocks.contentAssetCreate.mockResolvedValue({ id: "asset-1" });
   mocks.contentAssetFileUpdate.mockResolvedValue({});
   mocks.scheduledPostCreate.mockResolvedValue({ id: "scheduled-1" });
-  mocks.contentAssetUpdate.mockResolvedValue({});
+  mocks.contentAssetUpdate.mockResolvedValue({ id: "asset-1" });
   mocks.transaction.mockImplementation(async (callback: (tx: unknown) => unknown) => callback({
     scheduledPost: { create: mocks.scheduledPostCreate },
     contentAsset: { update: mocks.contentAssetUpdate },
@@ -287,7 +287,7 @@ describe("content asset composer lifecycle locks", () => {
     },
   );
 
-  it("does not expose a new graphic as ready when required durable storage fails", async () => {
+  it("defers graphic rendering and upload until the user chooses a design", async () => {
     mocks.contentOpportunityFindFirst.mockResolvedValue({
       id: "opportunity-1",
       opportunityType: "QUOTE_GRAPHIC",
@@ -298,42 +298,6 @@ describe("content asset composer lifecycle locks", () => {
       aiReason: "Direct sermon quote",
     });
     mocks.contentAssetFindFirst.mockResolvedValue(null);
-    mocks.uploadContentAssetFilesWhenConfigured.mockRejectedValue(new Error("R2 unavailable"));
-
-    const result = await prepareContentOpportunityForPublishingAction({
-      sermonId: "sermon-1",
-      opportunityId: "opportunity-1",
-      platform: "INSTAGRAM",
-      title: "Faithful steps",
-      bodyContent: "Faithful steps matter.",
-      caption: "Faithful steps matter.",
-    });
-
-    expect(result).toMatchObject({ success: false });
-    expect(result.message).toContain("not marked ready");
-    expect(mocks.contentAssetCreate).not.toHaveBeenCalled();
-    expect(mocks.contentAssetUpdate).not.toHaveBeenCalled();
-  });
-
-  it("persists durable object fields before exposing a rendered graphic as ready", async () => {
-    mocks.contentOpportunityFindFirst.mockResolvedValue({
-      id: "opportunity-1",
-      opportunityType: "QUOTE_GRAPHIC",
-      status: "APPROVED",
-      sourceTranscriptExcerpt: "Faithful steps matter.",
-      suggestedPlatform: "INSTAGRAM",
-      relatedScripture: "Proverbs 3:5",
-      aiReason: "Direct sermon quote",
-    });
-    mocks.contentAssetFindFirst.mockResolvedValue(null);
-    mocks.uploadContentAssetFilesWhenConfigured.mockImplementation(async (input: {
-      files: Array<{ id: string }>;
-    }) => new Map([[input.files[0].id, {
-      objectKey: `content-assets/asset-1/publishing/${input.files[0].id}.jpg`,
-      publicUrl: `https://media.example.com/content-assets/asset-1/publishing/${input.files[0].id}.jpg`,
-      uploadedAt: new Date("2026-07-16T10:00:00.000Z"),
-      sizeBytes: 42_000,
-    }]]));
 
     const result = await prepareContentOpportunityForPublishingAction({
       sermonId: "sermon-1",
@@ -345,20 +309,168 @@ describe("content asset composer lifecycle locks", () => {
     });
 
     expect(result).toMatchObject({ success: true, contentAssetId: "asset-1" });
+    expect(result.message).toContain("Choose a design");
+    expect(mocks.renderApprovedNonVideoAssets).not.toHaveBeenCalled();
+    expect(mocks.uploadContentAssetFilesWhenConfigured).not.toHaveBeenCalled();
     expect(mocks.contentAssetCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        status: "READY",
-        files: {
-          create: [expect.objectContaining({
-            objectKey: expect.stringContaining("content-assets/asset-1/publishing/"),
-            publicUrl: expect.stringContaining("https://media.example.com/content-assets/asset-1/publishing/"),
-          })],
-        },
+        status: "PREPARED",
+        readyAt: null,
+        metadataJson: expect.objectContaining({
+          designStudio: expect.objectContaining({
+            templateId: "quote-emphasis",
+            renderRequired: true,
+            renderedAt: null,
+          }),
+        }),
       }),
       select: { id: true },
     });
-    expect(mocks.uploadContentAssetFilesWhenConfigured.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.contentAssetCreate.mock.invocationCallOrder[0],
-    );
+  });
+
+  it("preserves a chosen Studio design when graphic copy is edited", async () => {
+    mocks.contentOpportunityFindFirst.mockResolvedValue({
+      id: "opportunity-1",
+      opportunityType: "QUOTE_GRAPHIC",
+      status: "APPROVED",
+      sourceTranscriptExcerpt: "Faithful steps matter.",
+      suggestedPlatform: "INSTAGRAM",
+      relatedScripture: "Proverbs 3:5",
+      aiReason: "Direct sermon quote",
+    });
+    mocks.contentAssetFindFirst.mockResolvedValue({
+      id: "asset-1",
+      status: "READY",
+      contentOpportunityId: "opportunity-1",
+      assetType: "QUOTE_GRAPHIC",
+      title: "Faithful steps",
+      bodyContent: "Faithful steps matter.",
+      metadataJson: {
+        campaignId: "campaign-1",
+        designStudio: {
+          version: 1,
+          templateId: "quote-radiant",
+          slides: [],
+          renderRequired: false,
+          renderedAt: "2026-07-16T10:00:00.000Z",
+        },
+      },
+    });
+
+    const result = await prepareContentOpportunityForPublishingAction({
+      assetId: "asset-1",
+      sermonId: "sermon-1",
+      opportunityId: "opportunity-1",
+      platform: "INSTAGRAM",
+      title: "Faithful steps",
+      bodyContent: "Faithful steps still matter.",
+      caption: "Faithful steps still matter.",
+    });
+
+    expect(result).toMatchObject({ success: true, contentAssetId: "asset-1" });
+    expect(mocks.contentAssetUpdate).toHaveBeenCalledWith({
+      where: { id: "asset-1" },
+      data: expect.objectContaining({
+        status: "PREPARED",
+        bodyContent: "Faithful steps still matter.",
+        readyAt: null,
+        files: { deleteMany: {} },
+        metadataJson: expect.objectContaining({
+          campaignId: "campaign-1",
+          designStudio: expect.objectContaining({
+            templateId: "quote-radiant",
+            renderRequired: true,
+            renderedAt: null,
+          }),
+        }),
+      }),
+      select: { id: true },
+    });
+    expect(mocks.renderApprovedNonVideoAssets).not.toHaveBeenCalled();
+    expect(mocks.uploadContentAssetFilesWhenConfigured).not.toHaveBeenCalled();
+  });
+
+  it("keeps rendered artwork ready when only publishing details change", async () => {
+    mocks.contentOpportunityFindFirst.mockResolvedValue({
+      id: "opportunity-1",
+      opportunityType: "QUOTE_GRAPHIC",
+      status: "APPROVED",
+      sourceTranscriptExcerpt: "Faithful steps matter.",
+      suggestedPlatform: "INSTAGRAM",
+      relatedScripture: "Proverbs 3:5",
+      aiReason: "Direct sermon quote",
+    });
+    mocks.contentAssetFindFirst.mockResolvedValue({
+      id: "asset-1",
+      status: "READY",
+      contentOpportunityId: "opportunity-1",
+      assetType: "QUOTE_GRAPHIC",
+      title: "Faithful steps",
+      bodyContent: "Faithful steps matter.",
+      metadataJson: {
+        designStudio: {
+          version: 1,
+          templateId: "quote-radiant",
+          slides: [],
+          renderRequired: false,
+          renderedAt: "2026-07-16T10:00:00.000Z",
+        },
+      },
+    });
+
+    const result = await prepareContentOpportunityForPublishingAction({
+      assetId: "asset-1",
+      sermonId: "sermon-1",
+      opportunityId: "opportunity-1",
+      platform: "FACEBOOK",
+      title: "Faithful steps",
+      bodyContent: "Faithful steps matter.",
+      caption: "A revised social caption.",
+      hashtags: ["faith"],
+      callToAction: "Join us Sunday",
+    });
+
+    expect(result).toMatchObject({ success: true });
+    expect(result.message).toContain("artwork remains ready");
+    const update = mocks.contentAssetUpdate.mock.calls[0]?.[0];
+    expect(update.data).toMatchObject({
+      status: "READY",
+      platform: "FACEBOOK",
+      caption: "A revised social caption.",
+      metadataJson: expect.objectContaining({
+        designStudio: expect.objectContaining({
+          templateId: "quote-radiant",
+          renderRequired: false,
+        }),
+      }),
+    });
+    expect(update.data.files).toBeUndefined();
+    expect(update.data.readyAt).toBeUndefined();
+  });
+
+  it("preserves non-graphic files when only publishing details change", async () => {
+    mocks.contentAssetFindFirst.mockResolvedValue({
+      id: "asset-1",
+      status: "READY",
+      contentOpportunityId: null,
+      assetType: "GUIDE",
+      title: "Small group guide",
+      bodyContent: "Discuss the next faithful step.",
+      metadataJson: {},
+    });
+
+    const result = await prepareContentOpportunityForPublishingAction({
+      assetId: "asset-1",
+      sermonId: "sermon-1",
+      platform: "FACEBOOK",
+      title: "Small group guide",
+      bodyContent: "Discuss the next faithful step.",
+      caption: "A revised introduction for group leaders.",
+      hashtags: ["discipleship"],
+    });
+
+    expect(result).toMatchObject({ success: true });
+    const update = mocks.contentAssetUpdate.mock.calls[0]?.[0];
+    expect(update.data.files).toBeUndefined();
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { PostingAutomationMode, PostingDraft, PostingPlatform } from "@/lib/postingDrafts";
@@ -55,7 +55,7 @@ function platformCopyLimits(platform: PostingPlatform): { title: number; caption
 }
 
 function formatPlanTime(date: Date, timezone: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en", {
     timeZone: timezone,
     weekday: "short",
     month: "short",
@@ -269,6 +269,14 @@ export function ScheduleDraftModal({
     const copy = platformCopyByClipId[clipId]?.[platform];
     return !copy?.title.trim() || !copy.caption.trim();
   }));
+  const [copyDetailsOpen, setCopyDetailsOpen] = useState(hasMissingPlatformCopy);
+  const previouslyMissingCopy = useRef(hasMissingPlatformCopy);
+  useEffect(() => {
+    if (hasMissingPlatformCopy && !previouslyMissingCopy.current) {
+      setCopyDetailsOpen(true);
+    }
+    previouslyMissingCopy.current = hasMissingPlatformCopy;
+  }, [hasMissingPlatformCopy]);
   const schedulePreview = useMemo(() => {
     const start = resolveScheduledInstant(scheduledFor, timezone);
     if (automationMode !== "AUTOMATIC" || !start) {
@@ -276,7 +284,7 @@ export function ScheduleDraftModal({
     }
 
     const interval = orderedClipIds.length > 1 ? scheduleIntervalMinutes : 0;
-    return orderedClipIds.slice(0, 8).map((clipId, index) => ({
+    return orderedClipIds.slice(0, 4).map((clipId, index) => ({
       clipId,
       label: platformCopyByClipId[clipId]?.[selectedPlatforms[0] ?? "TikTok"]?.title
         || clipDetailsById.get(clipId)?.title
@@ -559,14 +567,18 @@ export function ScheduleDraftModal({
           </div>
         ) : null}
 
-        <div className="schedule-fieldset bulk-scheduler-sequence">
-          <div className="bulk-scheduler-heading">
+        <details
+          className="schedule-fieldset bulk-scheduler-sequence"
+          open={copyDetailsOpen}
+          onToggle={(event) => setCopyDetailsOpen(event.currentTarget.open)}
+        >
+          <summary className="bulk-scheduler-heading">
             <div>
-              <p className="small muted">{orderedClipIds.length > 1 ? "Posting sequence" : "Post copy"}</p>
-              <strong>{orderedClipIds.length > 1 ? "Arrange order and review captions" : "Review caption before scheduling"}</strong>
+              <p className="small muted">{orderedClipIds.length > 1 ? "Posting sequence and copy" : "Post copy"}</p>
+              <strong>{orderedClipIds.length > 1 ? "Review order and edit captions" : "Preview or edit the caption"}</strong>
             </div>
-            {orderedClipIds.length > 1 ? <span className="status-pill">Order controls scheduling</span> : null}
-          </div>
+            <span className="status-pill">Review & edit</span>
+          </summary>
           <div className="bulk-scheduler-list">
             {orderedClipIds.map((clipId, index) => {
               const clip = clipDetailsById.get(clipId);
@@ -633,7 +645,7 @@ export function ScheduleDraftModal({
               );
             })}
           </div>
-        </div>
+        </details>
 
         <div className="schedule-fieldset schedule-two-column">
           <label htmlFor="postingSlot">
@@ -656,20 +668,6 @@ export function ScheduleDraftModal({
             </label>
           ) : null}
         </div>
-
-        {automationMode === "AUTOMATIC" ? (
-          <div className="schedule-fieldset">
-            <label htmlFor="timezone">
-              Timezone
-              <input
-                id="timezone"
-                value={timezone}
-                onChange={(event) => setTimezone(event.target.value)}
-                placeholder="Africa/Johannesburg"
-              />
-            </label>
-          </div>
-        ) : null}
 
         {automationMode === "AUTOMATIC" && orderedClipIds.length > 1 ? (
           <div className="schedule-fieldset">
@@ -707,7 +705,20 @@ export function ScheduleDraftModal({
         ) : null}
 
         <details className="schedule-optional-fields">
-          <summary>Optional media team note</summary>
+          <summary>{automationMode === "AUTOMATIC" ? `Timezone: ${timezone} · optional team note` : "Optional media team note"}</summary>
+          {automationMode === "AUTOMATIC" ? (
+            <div className="schedule-fieldset">
+              <label htmlFor="timezone">
+                Timezone
+                <input
+                  id="timezone"
+                  value={timezone}
+                  onChange={(event) => setTimezone(event.target.value)}
+                  placeholder="Africa/Johannesburg"
+                />
+              </label>
+            </div>
+          ) : null}
           <div className="schedule-fieldset">
             <label htmlFor="draftNote">Media team note</label>
             <textarea

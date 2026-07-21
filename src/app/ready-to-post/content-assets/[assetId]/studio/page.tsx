@@ -15,6 +15,11 @@ function readMetadataString(value: unknown, key: string): string | null {
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
 }
 
+function hasMetadataKey(value: unknown, key: string): boolean {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value)
+    && Object.prototype.hasOwnProperty.call(value, key));
+}
+
 export default async function ContentAssetStudioPage({
   params,
 }: {
@@ -62,18 +67,18 @@ export default async function ContentAssetStudioPage({
     title: asset.title,
     bodyContent: asset.bodyContent,
   });
-  const relatedScripture = readMetadataString(asset.metadataJson, "relatedScripture")
-    ?? asset.contentOpportunity?.relatedScripture
-    ?? null;
+  const relatedScripture = hasMetadataKey(asset.metadataJson, "relatedScripture")
+    ? readMetadataString(asset.metadataJson, "relatedScripture")
+    : asset.contentOpportunity?.relatedScripture ?? null;
 
   return (
     <main className="page-shell stack-lg">
       <header className="page-header">
         <div className="stack-sm">
           <p className="kicker">Content Design Studio</p>
-          <h1>{asset.assetType === "CAROUSEL" ? "Build the carousel" : "Design the publishing graphic"}</h1>
+          <h1>{asset.assetType === "CAROUSEL" ? "Build the carousel" : "Create artwork people want to share"}</h1>
           <p className="muted">
-            Edit the approved copy, apply church templates, preview every format, and rerender production-ready artwork.
+            Edit the approved words, choose a distinctive church-branded look, and preview every social size before rendering.
           </p>
         </div>
         <nav className="actions-row" aria-label="Design studio navigation">

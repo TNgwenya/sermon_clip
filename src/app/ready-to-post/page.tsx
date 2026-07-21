@@ -94,9 +94,14 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
   const sermonId = params.sermonId?.trim() || null;
   const clipId = params.clipId?.trim() || null;
   const contentAssetId = params.contentAssetId?.trim() || null;
+  const contentAssetOnlyFocus = Boolean(contentAssetId && !sermonId && !clipId);
   const scopeWhere: Prisma.ClipCandidateWhereInput = {
     ...(sermonId ? { sermonId } : {}),
-    ...(clipId ? { id: clipId } : {}),
+    ...(clipId
+      ? { id: clipId }
+      : contentAssetOnlyFocus
+        ? { id: "__content_asset_focus_has_no_clip__" }
+        : {}),
   };
   const clipWhere: Prisma.ClipCandidateWhereInput = {
     ...scopeWhere,
@@ -421,7 +426,7 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
     ? packageHistory.filter((item) => hasClipOverlap(item.clipIds, scopedClipIdSet))
     : packageHistory;
   const visibleScheduledPosts = contentAssetId
-    ? scheduledPosts.filter((post) => post.contentAssets?.some((asset) => asset.id === contentAssetId))
+    ? scheduledPosts
     : scopeIsActive
       ? scheduledPosts.filter((post) => (
           hasClipOverlap(post.clipIds, scopedClipIdSet)
@@ -483,6 +488,10 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
   const reviewHref = reviewSermonId ? `/sermons/${reviewSermonId}/review` : "/sermons";
   const downloadableClipCount = clips.filter((clip) => clip.mediaReady).length;
   const editoriallyPostReadyClipCount = clips.filter(isEditoriallyPostReady).length;
+  const preparedGeneratedPostCount = contentAssets.filter((asset) => !["PUBLISHED", "ARCHIVED"].includes(asset.status)).length;
+  const readyGeneratedPostCount = contentAssets.filter((asset) => ["READY", "SCHEDULED"].includes(asset.status)).length;
+  const preparedItemCount = downloadableClipCount + preparedGeneratedPostCount;
+  const readyToPostItemCount = editoriallyPostReadyClipCount + readyGeneratedPostCount;
   const blockedReadyClips = clips.filter((clip) => !clip.mediaReady);
   const blockedReadyClipCount = blockedReadyClips.length;
   const firstBlockedClip = blockedReadyClips[0] ?? null;
@@ -498,7 +507,7 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
       <header className="ready-publishing-header premium-ready-header">
         <div className="ready-title-block">
           <p className="kicker">Publishing desk</p>
-          <h1>From finished clip to published post.</h1>
+          <h1>{focusedContentAsset ? "Review, refine, and plan this post." : "From finished clip to published post."}</h1>
           <p className="muted">
             {focusedContentAsset
               ? `Prepare ${focusedContentAsset.title} from ${focusedContentAsset.sermonTitle}, then download it or place it on the calendar.`
@@ -515,8 +524,8 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
             </div>
           ) : null}
           <div className="premium-ready-summary" aria-label="Publishing summary">
-            <div><strong>{downloadableClipCount}</strong><span>Prepared</span></div>
-            <div><strong>{editoriallyPostReadyClipCount}</strong><span>Ready to post</span></div>
+            <div><strong>{preparedItemCount}</strong><span>Prepared items</span></div>
+            <div><strong>{readyToPostItemCount}</strong><span>Ready to post</span></div>
             <div><strong>{visibleScheduledPosts.length}</strong><span>Scheduled</span></div>
             <details>
               <summary>Queue details</summary>
@@ -543,26 +552,28 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
           ) : null}
         </nav>
 
-        <ol className="premium-ready-steps" aria-label="Ready-to-post workflow">
-          <li className={clipId || contentAssetId ? "is-complete" : "is-current"}>
-            <span>1</span>
-            <div><strong>Choose</strong><small>Select the message you want to share.</small></div>
-          </li>
-          <li className={clipId || contentAssetId ? "is-current" : ""}>
-            <span>2</span>
-            <div><strong>Prepare</strong><small>Check the final video and platform copy.</small></div>
-          </li>
-          <li>
-            <span>3</span>
-            <div><strong>Download or schedule</strong><small>Hand it off or place it on the calendar.</small></div>
-          </li>
-        </ol>
+        {!focusedContentAsset ? (
+          <ol className="premium-ready-steps" aria-label="Ready-to-post workflow">
+            <li className={clipId ? "is-complete" : "is-current"}>
+              <span>1</span>
+              <div><strong>Choose</strong><small>Select the message you want to share.</small></div>
+            </li>
+            <li className={clipId ? "is-current" : ""}>
+              <span>2</span>
+              <div><strong>Prepare</strong><small>Check the final video and platform copy.</small></div>
+            </li>
+            <li>
+              <span>3</span>
+              <div><strong>Download or schedule</strong><small>Hand it off or place it on the calendar.</small></div>
+            </li>
+          </ol>
+        ) : null}
 
         <nav className="premium-ready-view-nav" aria-label="Publishing desk sections">
-          <a href="#ready-clips">Clips</a>
-          <a href="#generated-content-assets">Other content</a>
+          {!focusedContentAsset ? <a href="#ready-clips">Clips</a> : null}
+          <a href="#generated-content-assets">Generated posts</a>
           <a href="#posting-calendar">Calendar</a>
-          <a href="#publishing-support">History</a>
+          {!focusedContentAsset ? <a href="#publishing-support">History</a> : null}
         </nav>
       </header>
 
@@ -667,7 +678,8 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
         <ReadyQueueLiveRefresh status={queueStatus} />
         <ReadyQueueExperience
           clips={clips}
-          clipScopeIds={scopeIsActive ? scopeClipIds : null}
+          clipScopeIds={scopeIsActive && !focusedContentAsset ? scopeClipIds : null}
+          contentAssetScopeIds={sermonId ? contentAssets.map((asset) => asset.id) : null}
           approvedWaitingCount={approvedWaitingClipCount}
           initialDrafts={visibleDrafts}
           packageHistory={visiblePackageHistory}
@@ -675,6 +687,7 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
           initialScheduledPosts={visibleScheduledPosts}
           initialPublishingServiceHealth={publishingServiceHealth}
           controlPanelMode={controlPanelMode}
+          contentAssetFocus={Boolean(focusedContentAsset)}
         />
       </div>
     </main>

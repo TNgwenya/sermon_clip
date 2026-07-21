@@ -1,8 +1,11 @@
 "use client";
 
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
+
+import styles from "@/app/ready-to-post/generated-content-assets.module.css";
 
 import {
   CONTENT_ASSET_TYPE_LABELS,
@@ -110,7 +113,7 @@ function ContentAssetScheduleModal({
   const [title, setTitle] = useState(asset.title);
   const [caption, setCaption] = useState(() => buildContentAssetHandoffText(asset));
   const [note, setNote] = useState("");
-  const [message, setMessage] = useState("");
+  const [feedback, setFeedback] = useState<{ message: string; success: boolean } | null>(null);
   const supportsManualWithoutMedia = supportsManualContentHandoffWithoutMedia(asset.assetType);
   const automaticAccounts = metaPublishingAccounts.filter((account) => account.platform === platform);
   const publishingFiles = selectContentPublishingFiles({
@@ -147,7 +150,7 @@ function ContentAssetScheduleModal({
   if (!open || typeof document === "undefined") return null;
 
   function schedule() {
-    setMessage("");
+    setFeedback(null);
     startTransition(async () => {
       const result = await scheduleContentAssetAction({
         assetId: asset.id,
@@ -161,7 +164,7 @@ function ContentAssetScheduleModal({
         automationMode,
         socialAccountId: automationMode === "AUTOMATIC" ? socialAccountId : undefined,
       });
-      setMessage(result.message);
+      setFeedback({ message: result.message, success: result.success });
       if (!result.success) return;
       router.refresh();
       onClose();
@@ -201,7 +204,7 @@ function ContentAssetScheduleModal({
               onChange={(event) => {
                 const nextMode = event.target.value as ContentAssetAutomationMode;
                 setAutomationMode(nextMode);
-                setMessage("");
+                setFeedback(null);
                 if (nextMode === "AUTOMATIC" && platform !== "INSTAGRAM" && platform !== "FACEBOOK") {
                   const fallbackPlatform = metaPublishingAccounts.some((account) => account.platform === "INSTAGRAM")
                     ? "INSTAGRAM"
@@ -224,7 +227,7 @@ function ContentAssetScheduleModal({
                 const nextPlatform = event.target.value as ContentPublishingPlatform;
                 setPlatform(nextPlatform);
                 setSocialAccountId(onlyAccountIdForPlatform(metaPublishingAccounts, nextPlatform));
-                setMessage("");
+                setFeedback(null);
               }}
               disabled={isPending}
             >
@@ -275,7 +278,7 @@ function ContentAssetScheduleModal({
         </div>
 
         {automaticBlocker ? <p className="error-banner">{automaticBlocker}</p> : null}
-        {message ? <p className={message.toLowerCase().includes("could not") || message.toLowerCase().includes("before") || message.toLowerCase().includes("choose") || message.toLowerCase().includes("connect") ? "error-banner" : "success-banner"}>{message}</p> : null}
+        {feedback ? <p className={feedback.success ? "success-banner" : "error-banner"}>{feedback.message}</p> : null}
 
         <div className="feature-modal-footer">
           <button type="button" className="button secondary" onClick={onClose} disabled={isPending}>Cancel</button>
@@ -306,6 +309,19 @@ function formatScheduledTime(value: string | null): string {
     minute: "2-digit",
     timeZone: DEFAULT_DISPLAY_TIME_ZONE,
   }).format(date);
+}
+
+function selectPreviewFile(asset: ReadyContentAsset): ReadyContentAsset["files"][number] | null {
+  const imageFiles = asset.files.filter((file) => file.mimeType.startsWith("image/"));
+  if (imageFiles.length === 0) return null;
+
+  return imageFiles.find((file) => /(?:^|\/)portrait\.jpe?g$/i.test(file.fileName))
+    ?? imageFiles.find((file) => /(?:^|\/)square\.jpe?g$/i.test(file.fileName))
+    ?? imageFiles.find((file) => /(?:^|\/)portrait\.png$/i.test(file.fileName))
+    ?? imageFiles.find((file) => /(?:^|\/)square\.png$/i.test(file.fileName))
+    ?? imageFiles.find((file) => /\.jpe?g$/i.test(file.fileName) && file.width && file.height && file.height >= file.width)
+    ?? imageFiles.find((file) => file.width && file.height && file.height >= file.width)
+    ?? imageFiles[0];
 }
 
 export function GeneratedContentAssets({
@@ -352,9 +368,9 @@ export function GeneratedContentAssets({
     <section id="generated-content-assets" className="generated-content-assets-panel stack-md" aria-label="Prepared generated content">
       <div className="generated-content-assets-heading">
         <div className="stack-sm">
-          <p className="kicker">Prepared generated content</p>
-          <h2>Quotes, carousels, prayers and posts</h2>
-          <p className="muted">Review the post package, download production files, or schedule a manual handoff or eligible automatic Meta post.</p>
+          <p className="kicker">Your publishing workspace</p>
+          <h2>Review the post, refine it, then choose when to share it</h2>
+          <p className="muted">The artwork and copy stay together here, so your team can plan confidently before anything reaches the calendar.</p>
         </div>
         <label>
           Status
@@ -368,6 +384,12 @@ export function GeneratedContentAssets({
         </label>
       </div>
 
+      <ol className={styles.workflow} aria-label="Generated content publishing steps">
+        <li className={styles.currentStep}><span>1</span><div><strong>Preview</strong><small>See the finished artwork and copy.</small></div></li>
+        <li><span>2</span><div><strong>Refine</strong><small>Edit words or polish the design.</small></div></li>
+        <li><span>3</span><div><strong>Schedule</strong><small>Choose a date only when it is ready.</small></div></li>
+      </ol>
+
       <div className="generated-content-asset-grid">
         {visibleAssets.map((asset) => {
           const latestSchedule = asset.scheduledPosts[0] ?? null;
@@ -375,6 +397,8 @@ export function GeneratedContentAssets({
           const canExportGuidePdf = ["DEVOTIONAL", "PRAYER", "DISCUSSION", "GUIDE", "SERMON_RECAP"].includes(asset.assetType);
           const isVersionLocked = ["SCHEDULED", "PUBLISHED", "ARCHIVED"].includes(asset.status);
           const supportsManualWithoutMedia = supportsManualContentHandoffWithoutMedia(asset.assetType);
+          const previewFile = selectPreviewFile(asset);
+          const isDesignable = isDesignableContentAssetType(asset.assetType);
           return (
             <article key={asset.id} className={`generated-content-asset-card ${asset.id === focusedAssetId ? "is-focused" : ""}`}>
               <div className="generated-content-asset-card-head">
@@ -389,67 +413,74 @@ export function GeneratedContentAssets({
                   </span>
                 </div>
               </div>
-              <p>{(asset.caption?.trim() || asset.bodyContent?.trim() || "Copy pending").slice(0, 280)}{(asset.caption?.length ?? asset.bodyContent?.length ?? 0) > 280 ? "..." : ""}</p>
-              <div className="generated-content-asset-meta">
-                <span>{formatContentPublishingPlatform(asset.platform)}</span>
-                <span>{asset.files.length > 0
-                  ? `${asset.files.length} production file${asset.files.length === 1 ? "" : "s"}`
-                  : supportsManualWithoutMedia
-                    ? "Manual document/text handoff"
-                    : "Media render required"}</span>
-                {latestSchedule ? <span>{formatScheduledTime(latestSchedule.scheduledFor)}</span> : null}
+              <div className={styles.assetWorkspace}>
+                <div className={styles.previewColumn}>
+                  {previewFile ? (
+                    <a
+                      className={styles.previewLink}
+                      href={isDesignable
+                        ? `/ready-to-post/content-assets/${asset.id}/studio`
+                        : `/api/content-assets/${asset.id}/files/${previewFile.id}`}
+                      aria-label={isDesignable ? `Review the design for ${asset.title}` : `Open the preview for ${asset.title}`}
+                    >
+                      <Image
+                        className={styles.previewImage}
+                        src={`/api/content-assets/${asset.id}/files/${previewFile.id}`}
+                        alt={`Preview of ${asset.title}`}
+                        width={previewFile.width ?? 1080}
+                        height={previewFile.height ?? 1350}
+                        loading={asset.id === focusedAssetId ? "eager" : "lazy"}
+                        unoptimized
+                      />
+                      <span>{isDesignable ? "Review design" : "Open preview"}</span>
+                    </a>
+                  ) : (
+                    <div className={styles.previewPlaceholder}>
+                      <span>{CONTENT_ASSET_TYPE_LABELS[asset.assetType]}</span>
+                      <strong>{supportsManualWithoutMedia ? "Copy ready to review" : "Artwork needs rendering"}</strong>
+                      <small>{supportsManualWithoutMedia ? "Review the words before scheduling." : "Open the design tools to create the final preview."}</small>
+                    </div>
+                  )}
+                </div>
+
+                <div className={styles.reviewColumn}>
+                  <div>
+                    <span className={styles.sectionLabel}>Post copy</span>
+                    <p className={styles.copyPreview}>{(asset.caption?.trim() || asset.bodyContent?.trim() || "Copy pending").slice(0, 420)}{(asset.caption?.length ?? asset.bodyContent?.length ?? 0) > 420 ? "..." : ""}</p>
+                  </div>
+                  <div className="generated-content-asset-meta">
+                    <span>{formatContentPublishingPlatform(asset.platform)}</span>
+                    <span>{asset.files.length > 0
+                      ? `${asset.files.length} production file${asset.files.length === 1 ? "" : "s"}`
+                      : supportsManualWithoutMedia
+                        ? "Manual document/text handoff"
+                        : "Media render required"}</span>
+                    {latestSchedule ? <span>{formatScheduledTime(latestSchedule.scheduledFor)}</span> : null}
+                  </div>
+                  {asset.assetType === "STORY" ? (
+                    <p className="status-help">Native poll, quiz, slider, and question-box stickers are added manually in the platform app.</p>
+                  ) : null}
+                  {isVersionLocked ? (
+                    <p className="status-help">
+                      {asset.status === "SCHEDULED"
+                        ? "This scheduled version is protected. Remove its planned post to edit it, or make a fresh version from Content Ideas."
+                        : "This version preserves what was published. Make a fresh version from Content Ideas for future changes."}
+                    </p>
+                  ) : null}
+                </div>
               </div>
-              {asset.assetType === "STORY" ? (
-                <p className="status-help">Native poll, quiz, slider, and question-box stickers are added manually in the platform app.</p>
-              ) : null}
-              {isVersionLocked ? (
-                <p className="status-help">
-                  {asset.status === "SCHEDULED"
-                    ? "This version is locked while scheduled. Cancel its scheduled posts before changing the copy."
-                    : "This version preserves what was published. Create a new asset from the sermon’s Content Ideas for future changes."}
-                </p>
-              ) : null}
-              {asset.files.length > 0 ? (
-                <details className="content-asset-file-list">
-                  <summary>Production files</summary>
-                  <ul>
-                    {asset.files.map((file) => (
-                      <li key={file.id}>
-                        <span>{file.fileName}{file.width && file.height ? ` · ${file.width}×${file.height}` : ""}</span>
-                        {file.publicUrl ? <a className="text-link small" href={file.publicUrl} target="_blank" rel="noreferrer">Open</a> : null}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              ) : null}
-              <div className="actions-row">
-                {isDesignableContentAssetType(asset.assetType) ? (
+
+              <div className={styles.primaryActions}>
+                {isDesignable ? (
                   <a className="button secondary" href={`/ready-to-post/content-assets/${asset.id}/studio`}>
-                    Open Design Studio
+                    {previewFile ? "Review design" : "Create artwork"}
                   </a>
                 ) : null}
                 {isVersionLocked ? (
-                  <a className="button secondary" href={`/opportunities?sermonId=${asset.sermonId}`}>Create a new asset</a>
+                  <a className="button secondary" href={`/opportunities?sermonId=${asset.sermonId}`}>Create a fresh version</a>
                 ) : (
-                  <button type="button" className="button secondary" onClick={() => setComposerAssetId(asset.id)}>Edit post package</button>
+                  <button type="button" className="button secondary" onClick={() => setComposerAssetId(asset.id)}>Edit words &amp; details</button>
                 )}
-                <button
-                  type="button"
-                  className="button tertiary"
-                  onClick={async () => {
-                    await navigator.clipboard.writeText(copyText);
-                    setCopiedAssetId(asset.id);
-                  }}
-                >
-                  {copiedAssetId === asset.id ? "Copied" : "Copy handoff"}
-                </button>
-                <a className="button tertiary" href={`/api/content-assets/${asset.id}/download`}>Download asset</a>
-                <a className="button tertiary" href={`/api/content-assets/${asset.id}/handoff/whatsapp`}>WhatsApp pack</a>
-                <a className="button tertiary" href={`/api/content-assets/${asset.id}/handoff/story`}>Story pack</a>
-                <a className="button tertiary" href={`/api/content-assets/${asset.id}/handoff/email`}>HTML email</a>
-                {canExportGuidePdf ? (
-                  <a className="button tertiary" href={`/api/content-assets/${asset.id}/guide-pdf`}>Branded PDF</a>
-                ) : null}
                 <button
                   type="button"
                   className="button primary"
@@ -457,12 +488,45 @@ export function GeneratedContentAssets({
                   disabled={!(["READY", "SCHEDULED"] as ReadyContentAsset["status"][]).includes(asset.status)}
                 >
                   {asset.status === "SCHEDULED"
-                    ? "Schedule another post"
+                    ? "Plan another time"
                     : asset.status === "PREPARED"
-                      ? "Rerender before scheduling"
-                      : "Schedule post"}
+                      ? "Finish artwork to schedule"
+                      : "Choose date & time"}
                 </button>
               </div>
+
+              <details className={styles.handoffDetails}>
+                <summary>Download or hand off</summary>
+                <div className={styles.handoffActions}>
+                  <button
+                    type="button"
+                    className="button tertiary"
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(copyText);
+                      setCopiedAssetId(asset.id);
+                    }}
+                  >
+                    {copiedAssetId === asset.id ? "Copied" : "Copy post copy"}
+                  </button>
+                  <a className="button tertiary" href={`/api/content-assets/${asset.id}/download`}>Download production files</a>
+                  <a className="button tertiary" href={`/api/content-assets/${asset.id}/handoff/whatsapp`}>WhatsApp pack</a>
+                  <a className="button tertiary" href={`/api/content-assets/${asset.id}/handoff/story`}>Story pack</a>
+                  <a className="button tertiary" href={`/api/content-assets/${asset.id}/handoff/email`}>HTML email</a>
+                  {canExportGuidePdf ? (
+                    <a className="button tertiary" href={`/api/content-assets/${asset.id}/guide-pdf`}>Branded PDF</a>
+                  ) : null}
+                </div>
+                {asset.files.length > 0 ? (
+                  <ul className={styles.fileList}>
+                    {asset.files.map((file) => (
+                      <li key={file.id}>
+                        <span>{file.fileName}{file.width && file.height ? ` · ${file.width}×${file.height}` : ""}</span>
+                        <a className="text-link small" href={`/api/content-assets/${asset.id}/files/${file.id}`} target="_blank" rel="noreferrer">Open</a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </details>
             </article>
           );
         })}
@@ -474,11 +538,13 @@ export function GeneratedContentAssets({
         <ContentAssetComposer
           key={composerAsset.id}
           open
+          navigateToReadyOnSave={isDesignableContentAssetType(composerAsset.assetType)}
           initialValue={{
             assetId: composerAsset.id,
             sermonId: composerAsset.sermonId,
             sermonTitle: composerAsset.sermonTitle,
             opportunityId: composerAsset.contentOpportunityId,
+            assetType: composerAsset.assetType,
             assetTypeLabel: CONTENT_ASSET_TYPE_LABELS[composerAsset.assetType],
             status: composerAsset.status,
             title: composerAsset.title,

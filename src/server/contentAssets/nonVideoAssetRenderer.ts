@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import {
+  estimateContentSingleLineCapacity,
   renderBrandedContentSvg,
   resolveContentTextLayout,
   splitCarouselSlides,
@@ -217,24 +218,6 @@ export function analyzeNonVideoTextLayout(
   });
 }
 
-function estimateSingleLineCapacity(
-  width: number,
-  height: number,
-  role: "title" | "scripture",
-  titleScale = 0.64,
-): number {
-  const baseFontSize = resolveContentTextLayout({
-    content: "Content",
-    width,
-    height,
-    hasTitle: true,
-  }).baseFontSize;
-  const fontSize = baseFontSize * (role === "title" ? titleScale : 0.45);
-  const padding = Math.round(width * 0.09);
-  const usableWidth = width - padding * 2.9;
-  return Math.max(1, Math.floor(usableWidth / (fontSize * 0.58)));
-}
-
 function buildPlannedFiles(
   input: ApprovedNonVideoAssetInput,
   variants: NonVideoRasterVariant[],
@@ -259,7 +242,7 @@ function buildPlannedFiles(
       order: index,
       content: slide.body,
       title: slide.title,
-      scripture: slide.scripture ?? input.relatedScripture,
+      scripture: slide.scripture,
       templateId: slide.templateId,
       slideId: slide.id,
       slideRole: slide.role,
@@ -319,12 +302,12 @@ function pushLayoutDiagnostics(
   }
 
   const template = getContentGraphicTemplate(planned.templateId);
-  const titleCapacity = estimateSingleLineCapacity(
-    planned.width,
-    planned.height,
-    "title",
-    template.surface === "BOLD" ? 0.82 : 0.64,
-  );
+  const titleCapacity = estimateContentSingleLineCapacity({
+    width: planned.width,
+    height: planned.height,
+    role: "title",
+    titleScale: template.surface === "BOLD" ? 0.82 : 0.64,
+  });
   if (normalizeText(planned.title).length > titleCapacity) {
     diagnostics.push({
       code: "TITLE_MAY_OVERFLOW",
@@ -336,8 +319,16 @@ function pushLayoutDiagnostics(
     });
   }
 
-  const scripture = normalizeText(planned.scripture ?? input.relatedScripture ?? "");
-  const scriptureCapacity = estimateSingleLineCapacity(planned.width, planned.height, "scripture");
+  const scripture = normalizeText(
+    planned.variant === "CAROUSEL_SLIDE"
+      ? planned.scripture ?? ""
+      : planned.scripture ?? input.relatedScripture ?? "",
+  );
+  const scriptureCapacity = estimateContentSingleLineCapacity({
+    width: planned.width,
+    height: planned.height,
+    role: "scripture",
+  });
   if (scripture.length > scriptureCapacity) {
     diagnostics.push({
       code: "SCRIPTURE_MAY_OVERFLOW",
@@ -507,7 +498,9 @@ export async function renderApprovedNonVideoAssets(
     const svg = renderBrandedContentSvg({
       title: planned.title,
       content: planned.content,
-      scripture: planned.scripture ?? input.relatedScripture,
+      scripture: planned.variant === "CAROUSEL_SLIDE"
+        ? planned.scripture
+        : planned.scripture ?? input.relatedScripture,
       branding: input.branding,
       width: planned.width,
       height: planned.height,
@@ -547,7 +540,9 @@ export async function renderApprovedNonVideoAssets(
     const svg = renderBrandedContentSvg({
       title: planned.title,
       content: planned.content,
-      scripture: planned.scripture ?? input.relatedScripture,
+      scripture: planned.variant === "CAROUSEL_SLIDE"
+        ? planned.scripture
+        : planned.scripture ?? input.relatedScripture,
       branding: input.branding,
       width: planned.width,
       height: planned.height,

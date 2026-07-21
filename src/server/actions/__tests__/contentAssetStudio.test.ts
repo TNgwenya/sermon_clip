@@ -53,6 +53,8 @@ describe("content asset Design Studio actions", () => {
       sermonId: "sermon-1",
       assetType: "CAROUSEL",
       status: "READY",
+      title: "Existing carousel",
+      bodyContent: "Existing carousel copy",
       metadataJson: { manualHandoffRequired: true },
       contentOpportunityId: "opportunity-1",
       contentOpportunity: {
@@ -99,6 +101,8 @@ describe("content asset Design Studio actions", () => {
       sermonId: "sermon-1",
       assetType: "CAROUSEL",
       status: "PREPARED",
+      title: "Existing carousel",
+      bodyContent: "Existing carousel copy",
       metadataJson: {},
       contentOpportunityId: "opportunity-1",
       contentOpportunity: {
@@ -142,6 +146,85 @@ describe("content asset Design Studio actions", () => {
       }),
     }));
     expect(revalidatePathMock).toHaveBeenCalledWith("/ready-to-post/content-assets/asset-1/studio");
+  });
+
+  it("honors an explicitly cleared reference line", async () => {
+    prismaMock.contentAsset.findUnique.mockResolvedValue({
+      id: "asset-1",
+      sermonId: "sermon-1",
+      assetType: "QUOTE_GRAPHIC",
+      status: "PREPARED",
+      title: "Faithful steps",
+      bodyContent: "Faithful steps matter.",
+      metadataJson: { relatedScripture: "Proverbs 3:5" },
+      contentOpportunityId: "opportunity-1",
+      contentOpportunity: {
+        opportunityType: "QUOTE_GRAPHIC",
+        status: "APPROVED",
+        relatedScripture: "Proverbs 3:5",
+        sourceTranscriptExcerpt: "Faithful steps matter.",
+      },
+    });
+    prismaMock.contentAsset.update.mockResolvedValue({ id: "asset-1" });
+
+    const result = await saveContentAssetDesignAction({
+      assetId: "asset-1",
+      title: "Faithful steps",
+      templateId: "quote-radiant",
+      bodyContent: "Faithful steps matter.",
+      relatedScripture: null,
+      slides: [],
+      rerender: false,
+    });
+
+    expect(result.success).toBe(true);
+    expect(prismaMock.contentAsset.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        metadataJson: expect.objectContaining({ relatedScripture: null }),
+      }),
+    }));
+  });
+
+  it("leaves current production files intact when a draft save has no changes", async () => {
+    prismaMock.contentAsset.findUnique.mockResolvedValue({
+      id: "asset-1",
+      sermonId: "sermon-1",
+      assetType: "QUOTE_GRAPHIC",
+      status: "READY",
+      title: "Faithful steps",
+      bodyContent: "Faithful steps matter.",
+      metadataJson: {
+        relatedScripture: "Proverbs 3:5",
+        designStudio: {
+          version: 1,
+          templateId: "quote-radiant",
+          slides: [],
+          renderRequired: false,
+          renderedAt: "2026-07-16T10:00:00.000Z",
+        },
+      },
+      contentOpportunityId: "opportunity-1",
+      contentOpportunity: {
+        opportunityType: "QUOTE_GRAPHIC",
+        status: "APPROVED",
+        relatedScripture: "Proverbs 3:5",
+        sourceTranscriptExcerpt: "Faithful steps matter.",
+      },
+    });
+
+    const result = await saveContentAssetDesignAction({
+      assetId: "asset-1",
+      title: "Faithful steps",
+      templateId: "quote-radiant",
+      bodyContent: "Faithful steps matter.",
+      relatedScripture: "Proverbs 3:5",
+      slides: [],
+      rerender: false,
+    });
+
+    expect(result).toMatchObject({ success: true, message: "No design changes to save." });
+    expect(prismaMock.contentAsset.update).not.toHaveBeenCalled();
+    expect(renderMock).not.toHaveBeenCalled();
   });
 
   it.each(["GENERATED", "APPROVED", "SCHEDULED", "PUBLISHED", "ARCHIVED"])(

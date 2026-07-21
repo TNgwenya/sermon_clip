@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import {
   CONTENT_GRAPHIC_TEMPLATE_IDS,
   isDesignableContentAssetType,
+  readContentDesignStudioDocument,
   serializeCarouselStudioBody,
   type CarouselStudioSlide,
 } from "@/lib/contentGraphicTemplates";
@@ -80,6 +81,8 @@ export async function saveContentAssetDesignAction(
         sermonId: true,
         assetType: true,
         status: true,
+        title: true,
+        bodyContent: true,
         metadataJson: true,
         contentOpportunityId: true,
         contentOpportunity: {
@@ -128,10 +131,34 @@ export async function saveContentAssetDesignAction(
       ? serializeCarouselStudioBody(slides)
       : parsed.data.bodyContent?.trim() ?? "";
     const currentMetadata = asMetadataRecord(asset.metadataJson);
-    const relatedScripture = parsed.data.relatedScripture?.trim()
-      || (typeof currentMetadata.relatedScripture === "string" ? currentMetadata.relatedScripture : null)
-      || asset.contentOpportunity?.relatedScripture
-      || null;
+    const existingRelatedScripture = Object.prototype.hasOwnProperty.call(currentMetadata, "relatedScripture")
+      ? typeof currentMetadata.relatedScripture === "string"
+        ? currentMetadata.relatedScripture.trim() || null
+        : null
+      : asset.contentOpportunity?.relatedScripture || null;
+    const relatedScripture = parsed.data.relatedScripture !== undefined
+      ? parsed.data.relatedScripture?.trim() || null
+      : existingRelatedScripture;
+    const existingDesign = readContentDesignStudioDocument({
+      metadata: currentMetadata,
+      assetType: asset.assetType,
+      title: asset.title,
+      bodyContent: asset.bodyContent,
+    });
+    const designChanged = parsed.data.title !== asset.title
+      || bodyContent !== (asset.bodyContent?.trim() ?? "")
+      || relatedScripture !== existingRelatedScripture
+      || parsed.data.templateId !== existingDesign.templateId
+      || JSON.stringify(slides) !== JSON.stringify(existingDesign.slides);
+
+    if (!parsed.data.rerender && !designChanged) {
+      return {
+        success: true,
+        message: "No design changes to save.",
+        contentAssetId: asset.id,
+        renderedFileCount: 0,
+      };
+    }
     const updatedAt = new Date();
     const metadataJson = {
       ...currentMetadata,

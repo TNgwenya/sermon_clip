@@ -139,6 +139,27 @@ describe("approved non-video asset renderer", () => {
     });
   });
 
+  it("keeps an intentionally blank carousel reference blank instead of inheriting the global reference", () => {
+    const preflight = preflightApprovedNonVideoAssets(approvedInput({
+      opportunityType: "CAROUSEL_IDEA",
+      relatedScripture: "A deliberately long inherited reference that should not appear on this individual slide",
+      carouselSlides: [{
+        id: "cover",
+        role: "COVER",
+        templateId: "carousel-cover",
+        title: "Choose faith",
+        body: "Take the next faithful step.",
+        scripture: null,
+      }],
+    }));
+
+    expect(preflight.plannedFiles[0]?.scripture).toBeNull();
+    expect(preflight.diagnostics).not.toContainEqual(expect.objectContaining({
+      code: "SCRIPTURE_MAY_OVERFLOW",
+      slideNumber: 1,
+    }));
+  });
+
   it("can isolate a render attempt without changing the source opportunity metadata", async () => {
     const root = await makeTemporaryRoot();
     const result = await renderApprovedNonVideoAssets(approvedInput(), {

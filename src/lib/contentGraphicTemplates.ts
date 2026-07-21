@@ -1,6 +1,10 @@
 export const CONTENT_GRAPHIC_TEMPLATE_IDS = [
   "quote-emphasis",
+  "quote-minimal",
+  "quote-radiant",
   "scripture-focus",
+  "scripture-editorial",
+  "scripture-calm",
   "prayer-calm",
   "devotional-reflection",
   "invitation-bold",
@@ -11,6 +15,13 @@ export const CONTENT_GRAPHIC_TEMPLATE_IDS = [
 
 export type ContentGraphicTemplateId = (typeof CONTENT_GRAPHIC_TEMPLATE_IDS)[number];
 export type CarouselSlideRole = "COVER" | "CONTENT" | "CTA";
+export type ContentGraphicArtDirection =
+  | "EDITORIAL"
+  | "MINIMAL"
+  | "LUMINOUS"
+  | "SERENE"
+  | "JOURNAL"
+  | "CELEBRATION";
 
 export type ContentGraphicTemplate = {
   id: ContentGraphicTemplateId;
@@ -21,28 +32,82 @@ export type ContentGraphicTemplate = {
   alignment: "LEFT" | "CENTER";
   surface: "GLASS" | "PANEL" | "MINIMAL" | "BOLD";
   showQuoteMark: boolean;
+  artDirection: ContentGraphicArtDirection;
+  tone: string;
 };
 
 export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
   {
     id: "quote-emphasis",
-    label: "Quote emphasis",
-    description: "A strong sermon quote with a distinctive quotation mark and source line.",
+    label: "Editorial quote",
+    description: "Magazine-style framing, confident type, and a strong quotation mark.",
     eyebrow: "FROM THE MESSAGE",
     role: "QUOTE",
     alignment: "LEFT",
     surface: "GLASS",
     showQuoteMark: true,
+    artDirection: "EDITORIAL",
+    tone: "Confident",
+  },
+  {
+    id: "quote-minimal",
+    label: "Quiet statement",
+    description: "Generous space and restrained details for a short, memorable line.",
+    eyebrow: "FROM THE MESSAGE",
+    role: "QUOTE",
+    alignment: "CENTER",
+    surface: "MINIMAL",
+    showQuoteMark: true,
+    artDirection: "MINIMAL",
+    tone: "Refined",
+  },
+  {
+    id: "quote-radiant",
+    label: "Radiant quote",
+    description: "A warm focal glow that makes an encouraging quote feel uplifting.",
+    eyebrow: "FROM THE MESSAGE",
+    role: "QUOTE",
+    alignment: "CENTER",
+    surface: "GLASS",
+    showQuoteMark: true,
+    artDirection: "LUMINOUS",
+    tone: "Uplifting",
   },
   {
     id: "scripture-focus",
-    label: "Scripture focus",
-    description: "A centred, reverent treatment that gives Scripture room to breathe.",
+    label: "Sacred light",
+    description: "A luminous, centred composition that gives the verse room to breathe.",
     eyebrow: "SCRIPTURE",
     role: "SCRIPTURE",
     alignment: "CENTER",
     surface: "MINIMAL",
     showQuoteMark: false,
+    artDirection: "LUMINOUS",
+    tone: "Reverent",
+  },
+  {
+    id: "scripture-editorial",
+    label: "Verse editorial",
+    description: "A bold, modern layout for clear teaching and easy social reading.",
+    eyebrow: "SCRIPTURE",
+    role: "SCRIPTURE",
+    alignment: "LEFT",
+    surface: "PANEL",
+    showQuoteMark: false,
+    artDirection: "EDITORIAL",
+    tone: "Modern",
+  },
+  {
+    id: "scripture-calm",
+    label: "Still waters",
+    description: "Soft organic layers for reflective, devotional Scripture moments.",
+    eyebrow: "SCRIPTURE",
+    role: "SCRIPTURE",
+    alignment: "CENTER",
+    surface: "GLASS",
+    showQuoteMark: false,
+    artDirection: "SERENE",
+    tone: "Peaceful",
   },
   {
     id: "prayer-calm",
@@ -53,6 +118,8 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     alignment: "CENTER",
     surface: "GLASS",
     showQuoteMark: false,
+    artDirection: "SERENE",
+    tone: "Peaceful",
   },
   {
     id: "devotional-reflection",
@@ -63,6 +130,8 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     alignment: "LEFT",
     surface: "PANEL",
     showQuoteMark: false,
+    artDirection: "JOURNAL",
+    tone: "Thoughtful",
   },
   {
     id: "invitation-bold",
@@ -73,6 +142,8 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     alignment: "CENTER",
     surface: "BOLD",
     showQuoteMark: false,
+    artDirection: "CELEBRATION",
+    tone: "Energetic",
   },
   {
     id: "carousel-cover",
@@ -83,6 +154,8 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     alignment: "LEFT",
     surface: "BOLD",
     showQuoteMark: false,
+    artDirection: "CELEBRATION",
+    tone: "Bold",
   },
   {
     id: "carousel-content",
@@ -93,6 +166,8 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     alignment: "LEFT",
     surface: "PANEL",
     showQuoteMark: false,
+    artDirection: "EDITORIAL",
+    tone: "Clear",
   },
   {
     id: "carousel-cta",
@@ -103,6 +178,8 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     alignment: "CENTER",
     surface: "GLASS",
     showQuoteMark: false,
+    artDirection: "LUMINOUS",
+    tone: "Inviting",
   },
 ] as const;
 
@@ -132,9 +209,31 @@ export function getContentGraphicTemplate(id: ContentGraphicTemplateId): Content
 }
 
 export function getTemplatesForSlideRole(role: CarouselSlideRole): ContentGraphicTemplate[] {
-  return CONTENT_GRAPHIC_TEMPLATES.filter((template) => template.role === role || (
-    role === "CONTENT" && !["COVER", "CTA"].includes(template.role)
-  ));
+  return CONTENT_GRAPHIC_TEMPLATES.filter((template) => template.role === role);
+}
+
+const TEMPLATE_ROLE_BY_ASSET_TYPE: Record<string, ContentGraphicTemplate["role"]> = {
+  QUOTE_GRAPHIC: "QUOTE",
+  SCRIPTURE_GRAPHIC: "SCRIPTURE",
+  PRAYER: "PRAYER",
+  PRAYER_GUIDE: "PRAYER",
+  DEVOTIONAL: "DEVOTIONAL",
+  DEVOTIONAL_SUMMARY: "DEVOTIONAL",
+  DEVOTIONAL_GUIDE: "DEVOTIONAL",
+  STORY: "DEVOTIONAL",
+  INVITATION: "INVITATION",
+  NEXT_SERVICE_PROMOTION: "INVITATION",
+  INVITATION_CONTENT: "INVITATION",
+  ALTAR_CALL_FOLLOW_UP_CONTENT: "INVITATION",
+  EVENT_FOLLOW_UP_CONTENT: "INVITATION",
+};
+
+export function getTemplatesForAssetType(assetType: string): ContentGraphicTemplate[] {
+  const role = TEMPLATE_ROLE_BY_ASSET_TYPE[assetType];
+  if (!role) {
+    return CONTENT_GRAPHIC_TEMPLATES.filter((template) => !["COVER", "CONTENT", "CTA"].includes(template.role));
+  }
+  return CONTENT_GRAPHIC_TEMPLATES.filter((template) => template.role === role);
 }
 
 export function getDefaultTemplateId(input: {
@@ -153,6 +252,7 @@ export function getDefaultTemplateId(input: {
     case "DEVOTIONAL":
     case "DEVOTIONAL_SUMMARY":
     case "DEVOTIONAL_GUIDE": return "devotional-reflection";
+    case "STORY": return "devotional-reflection";
     case "INVITATION":
     case "NEXT_SERVICE_PROMOTION":
     case "INVITATION_CONTENT":

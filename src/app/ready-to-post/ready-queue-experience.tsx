@@ -73,6 +73,7 @@ export type ReadyQueueClip = {
 type ReadyQueueExperienceProps = {
   clips: ReadyQueueClip[];
   clipScopeIds?: string[] | null;
+  contentAssetScopeIds?: string[] | null;
   approvedWaitingCount?: number;
   initialDrafts: PostingDraft[];
   packageHistory: PostingPackageHistoryItem[];
@@ -80,6 +81,7 @@ type ReadyQueueExperienceProps = {
   initialScheduledPosts: ScheduledPost[];
   initialPublishingServiceHealth: PublishingServiceHealth;
   controlPanelMode?: boolean;
+  contentAssetFocus?: boolean;
 };
 
 type VideoPreviewState = "poster" | "loading" | "ready" | "playing" | "paused" | "error";
@@ -156,8 +158,9 @@ const QUALITY_LABELS: Record<ClipQualityLabel, string> = {
 
 const PLATFORMS: ScheduledPost["platform"][] = ["TikTok", "Instagram", "YouTube Shorts", "Facebook"];
 const INTERNAL_QUALITY_WARNINGS = new Set(["AI_REVIEW_FAILED", "FALLBACK_REVIEW"]);
-const DESKTOP_CALENDAR_DAY_COUNT = 14;
-const COMPACT_CALENDAR_DAY_COUNT = 7;
+const DEFAULT_CALENDAR_DAY_COUNT = 7;
+const EXPANDED_CALENDAR_DAY_COUNT = 14;
+const COLLAPSED_CALENDAR_POST_LIMIT = 2;
 const ACTIVE_CALENDAR_STATUSES = new Set<ScheduledPost["status"]>([
   "PLANNED",
   "READY_FOR_MEDIA_TEAM",
@@ -600,6 +603,16 @@ function hasClipOverlap(clipIds: string[], scopeClipIds: Set<string> | null): bo
   return clipIds.some((clipId) => scopeClipIds.has(clipId));
 }
 
+function hasScheduledPostScope(
+  post: ScheduledPost,
+  scopeClipIds: Set<string> | null,
+  scopeContentAssetIds: Set<string> | null,
+): boolean {
+  if (!scopeClipIds && !scopeContentAssetIds) return true;
+  return Boolean(scopeClipIds && post.clipIds.some((clipId) => scopeClipIds.has(clipId)))
+    || Boolean(post.contentAssets?.some((asset) => scopeContentAssetIds?.has(asset.id)));
+}
+
 function getScheduledPostGroupKey(post: ScheduledPost): string {
   return [
     post.platform,
@@ -770,9 +783,14 @@ function getCalendarPostToneClass(post: ScheduledPost): string {
   return "is-planned";
 }
 
+export function selectVisibleCalendarPosts<T>(posts: T[], expanded: boolean): T[] {
+  return expanded ? posts : posts.slice(0, COLLAPSED_CALENDAR_POST_LIMIT);
+}
+
 export function ReadyQueueExperience({
   clips,
   clipScopeIds = null,
+  contentAssetScopeIds = null,
   approvedWaitingCount = 0,
   initialDrafts,
   packageHistory,
@@ -780,6 +798,7 @@ export function ReadyQueueExperience({
   initialScheduledPosts,
   initialPublishingServiceHealth,
   controlPanelMode = false,
+  contentAssetFocus = false,
 }: ReadyQueueExperienceProps) {
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<PostingDraft[]>(initialDrafts);
@@ -802,7 +821,8 @@ export function ReadyQueueExperience({
     date.setHours(0, 0, 0, 0);
     return date;
   });
-  const [compactPlanner, setCompactPlanner] = useState(false);
+  const [plannerExpanded, setPlannerExpanded] = useState(false);
+  const [expandedCalendarDays, setExpandedCalendarDays] = useState<Set<string>>(() => new Set());
   const [calendarPlatformFilter, setCalendarPlatformFilter] = useState<CalendarPlatformFilter>("ALL");
   const [calendarStatusFilter, setCalendarStatusFilter] = useState<CalendarStatusFilter>("ACTIVE");
   const [calendarScheduleIntent, setCalendarScheduleIntent] = useState<{
@@ -826,6 +846,10 @@ export function ReadyQueueExperience({
     }
   }, []);
   const clipScopeIdSet = useMemo(() => clipScopeIds ? new Set(clipScopeIds) : null, [clipScopeIds]);
+  const contentAssetScopeIdSet = useMemo(
+    () => contentAssetScopeIds ? new Set(contentAssetScopeIds) : null,
+    [contentAssetScopeIds],
+  );
   const scheduledClipIds = useMemo(() => {
     const ids = new Set<string>();
     scheduledPosts.forEach((post) => {
@@ -914,8 +938,12 @@ export function ReadyQueueExperience({
     [clipScopeIdSet, packageHistory],
   );
   const scopedScheduledPosts = useMemo(
-    () => scheduledPosts.filter((post) => hasClipOverlap(post.clipIds, clipScopeIdSet)),
-    [clipScopeIdSet, scheduledPosts],
+    () => scheduledPosts.filter((post) => hasScheduledPostScope(
+      post,
+      clipScopeIdSet,
+      contentAssetScopeIdSet,
+    )),
+    [clipScopeIdSet, contentAssetScopeIdSet, scheduledPosts],
   );
   const postedCount = scopedScheduledPosts.filter((post) => post.status === "POSTED").length;
   const filteredScheduledPosts = scopedScheduledPosts.filter((post) => post.status === publishingFilter);
@@ -927,7 +955,7 @@ export function ReadyQueueExperience({
     && matchesCalendarStatus(post, calendarStatusFilter)
     && matchesCalendarPlatform(post, calendarPlatformFilter)
   )), [calendarPlatformFilter, calendarStatusFilter, scopedScheduledPosts]);
-  const calendarDayCount = compactPlanner ? COMPACT_CALENDAR_DAY_COUNT : DESKTOP_CALENDAR_DAY_COUNT;
+  const calendarDayCount = plannerExpanded ? EXPANDED_CALENDAR_DAY_COUNT : DEFAULT_CALENDAR_DAY_COUNT;
   const calendarDays = useMemo(() => buildPostingCalendarDays(calendarPosts, {
     startDate: calendarStartDate,
     dayCount: calendarDayCount,
@@ -937,11 +965,13 @@ export function ReadyQueueExperience({
     && matchesCalendarStatus(post, calendarStatusFilter)
     && matchesCalendarPlatform(post, calendarPlatformFilter)
   )), [calendarPlatformFilter, calendarStatusFilter, scopedScheduledPosts]);
-  const calendarClipIds = selectedDownloadableClipIds.length > 0
-    ? selectedDownloadableClipIds
-    : selectedClip && selectedClip.mediaReady
-      ? [selectedClip.id]
-      : [];
+  const calendarClipIds = contentAssetFocus
+    ? []
+    : selectedDownloadableClipIds.length > 0
+      ? selectedDownloadableClipIds
+      : selectedClip && selectedClip.mediaReady
+        ? [selectedClip.id]
+        : [];
   const calendarClipDetails = calendarClipIds
     .map((clipId) => clips.find((clip) => clip.id === clipId))
     .filter((clip): clip is ReadyQueueClip => Boolean(clip))
@@ -951,15 +981,9 @@ export function ReadyQueueExperience({
   const calendarPlannedCount = calendarWindowPosts.filter((post) => ACTIVE_CALENDAR_STATUSES.has(post.status)).length;
   const calendarPostedCount = calendarWindowPosts.filter((post) => post.status === "POSTED").length;
   const calendarGeneratedContentCount = calendarWindowPosts.filter((post) => (post.contentAssets?.length ?? 0) > 0).length;
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia("(max-width: 760px)");
-    const syncPlannerMode = () => setCompactPlanner(mediaQuery.matches);
-
-    syncPlannerMode();
-    mediaQuery.addEventListener("change", syncPlannerMode);
-    return () => mediaQuery.removeEventListener("change", syncPlannerMode);
-  }, []);
+  const nextCalendarPost = calendarWindowPosts.find((post) => ACTIVE_CALENDAR_STATUSES.has(post.status))
+    ?? calendarWindowPosts[0]
+    ?? null;
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -999,6 +1023,23 @@ export function ReadyQueueExperience({
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     setCalendarStartDate(today);
+  }
+
+  function setPlannerWindow(expanded: boolean) {
+    setPlannerExpanded(expanded);
+    setExpandedCalendarDays(new Set());
+  }
+
+  function toggleCalendarDay(dayKey: string) {
+    setExpandedCalendarDays((current) => {
+      const next = new Set(current);
+      if (next.has(dayKey)) {
+        next.delete(dayKey);
+      } else {
+        next.add(dayKey);
+      }
+      return next;
+    });
   }
 
   function openCalendarSchedule(day: { key: string; date: Date; posts: ScheduledPost[] }) {
@@ -1291,7 +1332,8 @@ export function ReadyQueueExperience({
 
   return (
     <>
-      <section id="ready-clips" className="publishing-desk-grid ready-master-detail premium-ready-workspace" aria-label="Publishing workspace">
+      {!contentAssetFocus ? (
+        <section id="ready-clips" className="publishing-desk-grid ready-master-detail premium-ready-workspace" aria-label="Publishing workspace">
         <div className="publishing-board-panel premium-ready-clip-picker">
           <div className="publishing-section-head">
             <div>
@@ -1647,7 +1689,8 @@ export function ReadyQueueExperience({
             />
           )}
         </aside>
-      </section>
+        </section>
+      ) : null}
 
       <section id="posting-calendar" className="social-calendar-panel premium-ready-calendar premium-ready-secondary-surface" aria-label="Publishing calendar">
         <div className="social-calendar-header">
@@ -1655,22 +1698,37 @@ export function ReadyQueueExperience({
             <p className="kicker">Calendar</p>
             <h2>Plan what goes out next</h2>
             <p className="muted small">
-              See scheduled clips and other church content after you finish the post above.
+              {contentAssetFocus
+                ? "See this generated post alongside the rest of your upcoming church content."
+                : "See scheduled clips and other church content after you finish the post above."}
             </p>
           </div>
-          <div className="social-calendar-window-controls" aria-label="Calendar window controls">
-            <button type="button" className="button tertiary" onClick={() => moveCalendarWindow(-calendarDayCount)}>
-              Previous
-            </button>
-            <button type="button" className="button tertiary" onClick={resetCalendarWindow}>
-              Today
-            </button>
-            <button type="button" className="button tertiary" onClick={() => moveCalendarWindow(calendarDayCount)}>
-              Next
-            </button>
-            <button type="button" className="button secondary" onClick={refreshScheduledPosts}>
-              Refresh
-            </button>
+          <div className="social-calendar-header-actions">
+            {!contentAssetFocus ? (
+              <button
+                type="button"
+                className="button primary social-calendar-primary-action"
+                onClick={() => calendarDays[0] && openCalendarSchedule(calendarDays[0])}
+                disabled={calendarClipIds.length === 0 || calendarDays.length === 0}
+                title={calendarClipIds.length === 0 ? "Select a prepared clip above to schedule it" : undefined}
+              >
+                {calendarClipIds.length > 1 ? `Plan ${calendarClipIds.length} selected clips` : "Plan selected clip"}
+              </button>
+            ) : null}
+            <div className="social-calendar-window-controls" aria-label="Calendar window controls">
+              <button type="button" className="button tertiary" onClick={() => moveCalendarWindow(-calendarDayCount)}>
+                Previous
+              </button>
+              <button type="button" className="button tertiary" onClick={resetCalendarWindow}>
+                Today
+              </button>
+              <button type="button" className="button tertiary" onClick={() => moveCalendarWindow(calendarDayCount)}>
+                Next
+              </button>
+              <button type="button" className="button secondary" onClick={refreshScheduledPosts}>
+                Refresh
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1701,9 +1759,32 @@ export function ReadyQueueExperience({
           <div className="social-calendar-summary">
             <strong>{calendarWindowLabel}</strong>
             <span>
-              {calendarPlannedCount} active · {calendarPostedCount} posted · {calendarGeneratedContentCount} generated post{calendarGeneratedContentCount === 1 ? "" : "s"}
-              {calendarClipIds.length > 0 ? ` · ${calendarClipIds.length} clip${calendarClipIds.length === 1 ? "" : "s"} selected` : ""}
+              {nextCalendarPost
+                ? `Next: ${formatCalendarTime(nextCalendarPost.scheduledFor, nextCalendarPost.timezone ?? DEFAULT_DISPLAY_TIME_ZONE)} · ${nextCalendarPost.platform} · ${buildScheduledPostTitle(nextCalendarPost, clips)}`
+                : "No posts in this window yet."}
             </span>
+            <small>
+              {calendarPlannedCount} active · {calendarPostedCount} posted · {calendarGeneratedContentCount} generated
+              {calendarClipIds.length > 0 ? ` · ${calendarClipIds.length} selected` : ""}
+            </small>
+          </div>
+          <div className="social-calendar-view-toggle" role="group" aria-label="Planner range">
+            <button
+              type="button"
+              className={!plannerExpanded ? "is-active" : ""}
+              aria-pressed={!plannerExpanded}
+              onClick={() => setPlannerWindow(false)}
+            >
+              7 days
+            </button>
+            <button
+              type="button"
+              className={plannerExpanded ? "is-active" : ""}
+              aria-pressed={plannerExpanded}
+              onClick={() => setPlannerWindow(true)}
+            >
+              14 days
+            </button>
           </div>
           <label className="ready-select-field">
             <span>Platform</span>
@@ -1729,9 +1810,13 @@ export function ReadyQueueExperience({
           onCorrect={(postId, status, expectedCurrentStatus) => void correctPublishingStatus(postId, status, expectedCurrentStatus)}
         />
 
-        <div className="social-calendar-grid" aria-label="Upcoming social media posts">
-          {calendarDays.map((day) => (
-            <article
+        <div className={`social-calendar-grid ${plannerExpanded ? "is-expanded" : ""}`} aria-label="Upcoming social media posts">
+          {calendarDays.map((day) => {
+            const isDayExpanded = expandedCalendarDays.has(day.key);
+            const visiblePosts = selectVisibleCalendarPosts(day.posts, isDayExpanded);
+
+            return (
+              <article
               key={day.key}
               className={`social-calendar-day ${day.isToday ? "is-today" : ""} ${day.isPast ? "is-past" : ""}`}
             >
@@ -1750,19 +1835,22 @@ export function ReadyQueueExperience({
                 </div>
               </div>
 
-              <button
-                type="button"
-                className="button tertiary social-calendar-schedule-button"
-                onClick={() => openCalendarSchedule(day)}
-                disabled={calendarClipIds.length === 0}
-              >
-                Schedule here
-              </button>
+              {!contentAssetFocus ? (
+                <button
+                  type="button"
+                  className="button tertiary social-calendar-schedule-button"
+                  onClick={() => openCalendarSchedule(day)}
+                  disabled={calendarClipIds.length === 0}
+                  title={calendarClipIds.length === 0 ? "Select a prepared clip above to schedule it" : undefined}
+                >
+                  {day.posts.length === 0 ? "Use this open slot" : "Add another post"}
+                </button>
+              ) : null}
 
               <div className="social-calendar-post-list">
                 {day.posts.length === 0 ? (
-                  <p className="muted small">No posts planned for this day.</p>
-                ) : day.posts.slice(0, 5).map((post) => {
+                  <p className="social-calendar-open-slot">Nothing planned yet.</p>
+                ) : visiblePosts.map((post) => {
                   const title = buildScheduledPostTitle(post, clips);
                   const captionText = buildScheduledPostCaption(post, clips);
                   const isPending = pendingScheduledPostId === post.id;
@@ -1803,69 +1891,82 @@ export function ReadyQueueExperience({
                         ) : null}
                         {post.automationMode === "AUTOMATIC" ? <PublishingTechnicalDetails post={post} /> : null}
                       </div>
-                      <div className="social-calendar-post-actions">
-                        <label className="social-calendar-reschedule-field" htmlFor={`reschedule-${post.id}`}>
-                          <span>Time</span>
-                          <input
-                            id={`reschedule-${post.id}`}
-                            type="datetime-local"
-                            value={rescheduleValues[post.id] ?? (post.scheduledFor
-                              ? toDateTimeInputValueInTimeZone(
-                                  new Date(post.scheduledFor),
-                                  post.timezone ?? "Africa/Johannesburg",
-                                )
-                              : "")}
-                            onChange={(event) => updateRescheduleValue(post, event.target.value)}
+                      <details className="social-calendar-post-details">
+                        <summary>{publishingLocked ? "Publishing in progress" : "Manage post"}</summary>
+                        <div className="social-calendar-post-actions">
+                          <label className="social-calendar-reschedule-field" htmlFor={`reschedule-${post.id}`}>
+                            <span>Date and time</span>
+                            <input
+                              id={`reschedule-${post.id}`}
+                              type="datetime-local"
+                              value={rescheduleValues[post.id] ?? (post.scheduledFor
+                                ? toDateTimeInputValueInTimeZone(
+                                    new Date(post.scheduledFor),
+                                    post.timezone ?? DEFAULT_DISPLAY_TIME_ZONE,
+                                  )
+                                : "")}
+                              onChange={(event) => updateRescheduleValue(post, event.target.value)}
+                              disabled={isPending || publishingLocked || !canReschedule}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="button tertiary"
+                            onClick={() => reschedulePost(post)}
                             disabled={isPending || publishingLocked || !canReschedule}
-                          />
-                        </label>
-                        <button
-                          type="button"
-                          className="button tertiary"
-                          onClick={() => reschedulePost(post)}
-                          disabled={isPending || publishingLocked || !canReschedule}
-                        >
-                          {isPending ? "Saving..." : "Save time"}
-                        </button>
-                        {canQueueForPublishing ? (
+                          >
+                            {isPending ? "Saving..." : "Save new time"}
+                          </button>
+                          {canQueueForPublishing ? (
+                            <button
+                              type="button"
+                              className="button tertiary"
+                              onClick={() => requestPublishingConfirmation(post, "QUEUE")}
+                              disabled={isPending}
+                            >
+                              {isPending ? queuePendingLabel : queueActionLabel}
+                            </button>
+                          ) : null}
+                          <CopyCaptionButton label="Copy caption" text={captionText || "Caption pending"} />
                           <button
                             type="button"
                             className="button tertiary"
-                            onClick={() => requestPublishingConfirmation(post, "QUEUE")}
-                            disabled={isPending}
+                            onClick={() => requestPublishingConfirmation(post, "MARK_POSTED")}
+                            disabled={isPending || publishingLocked || post.status === "POSTED"}
                           >
-                            {isPending ? queuePendingLabel : queueActionLabel}
+                            {isPending ? "Updating..." : "Mark posted"}
                           </button>
-                        ) : null}
-                        <CopyCaptionButton label="Copy caption" text={captionText || "Caption pending"} />
-                        <button
-                          type="button"
-                          className="button tertiary"
-                          onClick={() => requestPublishingConfirmation(post, "MARK_POSTED")}
-                          disabled={isPending || publishingLocked || post.status === "POSTED"}
-                        >
-                          {isPending ? "Updating..." : "Mark posted"}
-                        </button>
-                        {canCancel ? (
-                          <button
-                            type="button"
-                            className="button tertiary"
-                            onClick={() => requestPublishingConfirmation(post, "CANCEL")}
-                            disabled={isPending || publishingLocked}
-                          >
-                            Cancel
-                          </button>
-                        ) : null}
-                      </div>
+                          {canCancel ? (
+                            <button
+                              type="button"
+                              className="button tertiary"
+                              onClick={() => requestPublishingConfirmation(post, "CANCEL")}
+                              disabled={isPending || publishingLocked}
+                            >
+                              Remove from plan
+                            </button>
+                          ) : null}
+                        </div>
+                      </details>
                     </div>
                   );
                 })}
-                {day.posts.length > 5 ? (
-                  <p className="muted small">+ {day.posts.length - 5} more post{day.posts.length - 5 === 1 ? "" : "s"} this day</p>
+                {day.posts.length > COLLAPSED_CALENDAR_POST_LIMIT ? (
+                  <button
+                    type="button"
+                    className="button tertiary social-calendar-more-button"
+                    onClick={() => toggleCalendarDay(day.key)}
+                    aria-expanded={isDayExpanded}
+                  >
+                    {isDayExpanded
+                      ? "Show fewer posts"
+                      : `Show ${day.posts.length - COLLAPSED_CALENDAR_POST_LIMIT} more`}
+                  </button>
                 ) : null}
               </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </div>
 
         {unscheduledCalendarPosts.length > 0 ? (
@@ -1901,7 +2002,8 @@ export function ReadyQueueExperience({
       </section>
 
       <section id="publishing-support" className="ready-support-grid premium-ready-support" aria-label="Publishing support">
-        <details className="posting-draft-panel compact-panel ready-support-details">
+        {!contentAssetFocus ? (
+          <details className="posting-draft-panel compact-panel ready-support-details">
           <summary>
             <div>
               <p className="kicker">Support</p>
@@ -1968,7 +2070,8 @@ export function ReadyQueueExperience({
             onSocialAccountsSynced={syncSocialAccounts}
             controlPanelMode={controlPanelMode}
           />
-        </details>
+          </details>
+        ) : null}
 
         <details className="posting-draft-panel compact-panel ready-support-details">
           <summary>
