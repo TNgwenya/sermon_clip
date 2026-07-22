@@ -14,6 +14,10 @@ export type ClipGenerationRetryPlan = {
     sermonStartSeconds?: number | null;
     sermonEndSeconds?: number | null;
     analyzeFullRecording?: boolean;
+    previewClipIds?: string[];
+    forcePreviewRender?: boolean;
+    onlyFailedPreviews?: boolean;
+    forceGeneration?: boolean;
   };
 };
 
@@ -34,6 +38,12 @@ type RedoClipGenerationWindowIntent = {
   sermonStartSeconds: number | null;
   sermonEndSeconds: number | null;
   analyzeFullRecording: boolean;
+};
+
+type PreviewRepairIntent = {
+  previewClipIds: string[] | null;
+  forcePreviewRender: boolean;
+  onlyFailedPreviews: boolean;
 };
 
 function finiteSecondsOrNull(value: unknown): number | null {
@@ -67,6 +77,40 @@ function preservedRedoClipGenerationWindow(value: unknown): Partial<RedoClipGene
     ...(typeof summary["analyzeFullRecording"] === "boolean"
       ? { analyzeFullRecording: summary["analyzeFullRecording"] }
       : {}),
+  };
+}
+
+function resolvePreviewRepairIntent(value: unknown): PreviewRepairIntent | null {
+  const summary = asSummary(value);
+  if (summary?.["mode"] !== CLIP_GENERATION_PREVIEW_REPAIR_MODE) return null;
+  const hasClipScope = Object.prototype.hasOwnProperty.call(summary, "previewClipIds");
+  const previewClipIds = Array.isArray(summary["previewClipIds"])
+    ? Array.from(new Set(
+        summary["previewClipIds"]
+          .filter((clipId): clipId is string => typeof clipId === "string")
+          .map((clipId) => clipId.trim())
+          .filter(Boolean),
+      )).sort()
+    : null;
+
+  return {
+    previewClipIds: hasClipScope ? (previewClipIds ?? []) : null,
+    forcePreviewRender: summary["forcePreviewRender"] === true,
+    onlyFailedPreviews: summary["onlyFailedPreviews"] === true,
+  };
+}
+
+function preservedPreviewRepairIntent(value: unknown): {
+  previewClipIds?: string[];
+  forcePreviewRender?: true;
+  onlyFailedPreviews?: true;
+} {
+  const intent = resolvePreviewRepairIntent(value);
+  if (!intent) return {};
+  return {
+    ...(intent.previewClipIds !== null ? { previewClipIds: intent.previewClipIds } : {}),
+    ...(intent.forcePreviewRender ? { forcePreviewRender: true } : {}),
+    ...(intent.onlyFailedPreviews ? { onlyFailedPreviews: true } : {}),
   };
 }
 
@@ -122,6 +166,7 @@ export function buildClipGenerationRetryPlan(input: {
       generationSummary: {
         mode: retryMode,
         existingActiveSuggestionCount: input.existingActiveSuggestionCount,
+        ...preservedPreviewRepairIntent(input.failedJobGenerationSummary),
       },
     };
   }
@@ -153,7 +198,8 @@ export function isClipGenerationPreviewRepairSummary(value: unknown): boolean {
 
 export function isClipGenerationForcedRetrySummary(value: unknown): boolean {
   const summary = asSummary(value);
-  return summary?.["mode"] === CLIP_GENERATION_RETRY_MODE && summary["append"] !== true;
+  return summary?.["forceGeneration"] === true
+    || (summary?.["mode"] === CLIP_GENERATION_RETRY_MODE && summary["append"] !== true);
 }
 
 export function resolveClipGenerationIntent(value: unknown): ClipGenerationIntent {
@@ -173,9 +219,19 @@ export function clipGenerationIntentsMatch(existing: unknown, requested: unknown
   const existingIntent = resolveClipGenerationIntent(existing);
   const requestedIntent = resolveClipGenerationIntent(requested);
   if (existingIntent !== requestedIntent) return false;
-  if (existingIntent !== "redo") return true;
-  return JSON.stringify(resolveRedoClipGenerationWindowIntent(existing))
-    === JSON.stringify(resolveRedoClipGenerationWindowIntent(requested));
+  if (existingIntent === "redo") {
+    return JSON.stringify(resolveRedoClipGenerationWindowIntent(existing))
+      === JSON.stringify(resolveRedoClipGenerationWindowIntent(requested));
+  }
+  if (existingIntent === CLIP_GENERATION_PREVIEW_REPAIR_MODE) {
+    return JSON.stringify(resolvePreviewRepairIntent(existing))
+      === JSON.stringify(resolvePreviewRepairIntent(requested));
+  }
+  if (existingIntent === "default" || existingIntent === "append") {
+    return isClipGenerationForcedRetrySummary(existing)
+      === isClipGenerationForcedRetrySummary(requested);
+  }
+  return true;
 }
 
 export function buildClipGenerationPreviewCheckpoint(value: unknown): Record<string, unknown> {

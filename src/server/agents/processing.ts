@@ -20,6 +20,12 @@ const PROCESSING_JOB_DB_RETRY_DELAYS_MS = [500, 1_500, 3_000];
 const MAX_PROCESSING_JOB_LOG_CHARACTERS = 120_000;
 const MAX_PROCESSING_JOB_LOG_ENTRY_CHARACTERS = 8_000;
 const MAX_PROCESSING_ERROR_STACK_CHARACTERS = 4_000;
+const MEDIA_ASSET_ORCHESTRATION_JOB_TYPES = new Set<ProcessingJobType>([
+  "EXPORT_CLIPS",
+  "GENERATE_SUBTITLES",
+  "BURN_SUBTITLES",
+  "RENDER_OVERLAY",
+]);
 
 export type ProcessingFailureDiagnostics = {
   error?: unknown;
@@ -144,8 +150,64 @@ function queuedJobResult(input: {
           input.existingGenerationSummary,
           input.requestedGenerationSummary,
         )
-      : requestedIntentKey !== null && existingIntentKey !== requestedIntentKey,
+      : MEDIA_ASSET_ORCHESTRATION_JOB_TYPES.has(input.type)
+        ? existingIntentKey !== requestedIntentKey
+        : requestedIntentKey !== null && existingIntentKey !== requestedIntentKey,
   };
+}
+
+async function queueMediaAssetProcessingJob(
+  sermonId: string,
+  type: ProcessingJobType,
+  generationSummary?: Prisma.InputJsonValue,
+): Promise<QueuedProcessingJobResult> {
+  const lockKey = `processing-job:${sermonId}:${type}`;
+
+  return retryProcessingJobDbWrite(() => prisma.$transaction(async (transaction) => {
+    // Media job types deliberately allow a running parent plus same-type child
+    // records, so the existing active-job partial index cannot cover them.
+    // Serialize the short pending-successor check/create section instead.
+    await transaction.$queryRaw`
+      SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))::text AS "lock"
+    `;
+
+    const pendingJobs = await transaction.processingJob.findMany({
+      where: {
+        sermonId,
+        type,
+        status: "PENDING",
+        workerId: null,
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, generationSummary: true },
+    });
+
+    const matchingJob = pendingJobs.find((job) => !queuedJobResult({
+      id: job.id,
+      type,
+      existingGenerationSummary: job.generationSummary,
+      requestedGenerationSummary: generationSummary,
+    }).intentConflict);
+    if (matchingJob) {
+      return queuedJobResult({
+        id: matchingJob.id,
+        type,
+        existingGenerationSummary: matchingJob.generationSummary,
+        requestedGenerationSummary: generationSummary,
+      });
+    }
+
+    const created = await transaction.processingJob.create({
+      data: {
+        sermonId,
+        type,
+        status: "PENDING",
+        ...(generationSummary === undefined ? {} : { generationSummary }),
+      },
+      select: { id: true },
+    });
+    return { id: created.id, reusedExisting: false, intentConflict: false };
+  }));
 }
 
 export async function queueSermonProcessingJob(
@@ -153,6 +215,10 @@ export async function queueSermonProcessingJob(
   type: ProcessingJobType,
   generationSummary?: Prisma.InputJsonValue,
 ): Promise<QueuedProcessingJobResult> {
+  if (MEDIA_ASSET_ORCHESTRATION_JOB_TYPES.has(type)) {
+    return queueMediaAssetProcessingJob(sermonId, type, generationSummary);
+  }
+
   // One retry closes the narrow race where the unique-index winner completes
   // between our failed insert and the active-row re-read.
   for (let createAttempt = 0; createAttempt < 2; createAttempt += 1) {
@@ -167,12 +233,13 @@ export async function queueSermonProcessingJob(
     });
 
     if (existing) {
-      return queuedJobResult({
+      const existingResult = queuedJobResult({
         id: existing.id,
         type,
         existingGenerationSummary: existing.generationSummary,
         requestedGenerationSummary: generationSummary,
       });
+      return existingResult;
     }
 
     try {

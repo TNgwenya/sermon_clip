@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
+  findMany: vi.fn(),
   findFirst: vi.fn(),
+  queryRaw: vi.fn(),
+  transaction: vi.fn(),
   updateMany: vi.fn(),
   executeRaw: vi.fn(),
 }));
@@ -11,8 +14,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     $executeRaw: mocks.executeRaw,
+    $transaction: mocks.transaction,
     processingJob: {
       create: mocks.create,
+      findMany: mocks.findMany,
       findFirst: mocks.findFirst,
       updateMany: mocks.updateMany,
     },
@@ -51,6 +56,13 @@ function processingJob(overrides: Partial<ProcessingJob> = {}): ProcessingJob {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.transaction.mockImplementation(async (callback) => callback({
+    $queryRaw: mocks.queryRaw,
+    processingJob: {
+      create: mocks.create,
+      findMany: mocks.findMany,
+    },
+  }));
 });
 
 describe("createProcessingJob", () => {
@@ -112,6 +124,147 @@ describe("createProcessingJob", () => {
 });
 
 describe("queueSermonProcessingJob", () => {
+  it("creates a pending successor when an asset worker may already have snapshotted its work", async () => {
+    const created = processingJob({
+      id: "job-successor",
+      type: "EXPORT_CLIPS",
+      status: "PENDING",
+      workerId: null,
+    });
+    mocks.findMany.mockResolvedValueOnce([]);
+    mocks.create.mockResolvedValueOnce(created);
+
+    await expect(queueSermonProcessingJob("sermon-1", "EXPORT_CLIPS")).resolves.toEqual({
+      id: "job-successor",
+      reusedExisting: false,
+      intentConflict: false,
+    });
+    expect(mocks.findMany).toHaveBeenCalledWith({
+      where: {
+        sermonId: "sermon-1",
+        type: "EXPORT_CLIPS",
+        status: "PENDING",
+        workerId: null,
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, generationSummary: true },
+    });
+  });
+
+  it("queues a separate targeted asset successor when a pending intent differs", async () => {
+    const pending = processingJob({
+      id: "job-pending-a",
+      type: "EXPORT_CLIPS",
+      status: "PENDING",
+      workerId: null,
+      generationSummary: { intentKey: "media-assets:EXPORT_CLIPS:normal:clip-a" },
+    });
+    const successor = processingJob({
+      id: "job-pending-b",
+      type: "EXPORT_CLIPS",
+      status: "PENDING",
+      workerId: null,
+      generationSummary: { intentKey: "media-assets:EXPORT_CLIPS:normal:clip-b" },
+    });
+    mocks.findMany.mockResolvedValueOnce([pending]);
+    mocks.create.mockResolvedValueOnce(successor);
+
+    await expect(queueSermonProcessingJob("sermon-1", "EXPORT_CLIPS", {
+      intentKey: "media-assets:EXPORT_CLIPS:normal:clip-b",
+      mediaAssetClipIds: ["clip-b"],
+    })).resolves.toEqual({
+      id: "job-pending-b",
+      reusedExisting: false,
+      intentConflict: false,
+    });
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse a targeted pending asset job for a later broad request", async () => {
+    const pending = processingJob({
+      id: "job-pending-targeted",
+      type: "EXPORT_CLIPS",
+      status: "PENDING",
+      workerId: null,
+      generationSummary: { intentKey: "media-assets:EXPORT_CLIPS:normal:clip-a" },
+    });
+    const successor = processingJob({
+      id: "job-pending-broad",
+      type: "EXPORT_CLIPS",
+      status: "PENDING",
+      workerId: null,
+      generationSummary: null,
+    });
+    mocks.findMany.mockResolvedValueOnce([pending]);
+    mocks.create.mockResolvedValueOnce(successor);
+
+    await expect(queueSermonProcessingJob("sermon-1", "EXPORT_CLIPS")).resolves.toEqual({
+      id: "job-pending-broad",
+      reusedExisting: false,
+      intentConflict: false,
+    });
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse a broad pending asset job for a later targeted request", async () => {
+    const pending = processingJob({
+      id: "job-pending-broad",
+      type: "EXPORT_CLIPS",
+      status: "PENDING",
+      workerId: null,
+      generationSummary: null,
+    });
+    const successor = processingJob({
+      id: "job-pending-targeted",
+      type: "EXPORT_CLIPS",
+      status: "PENDING",
+      workerId: null,
+      generationSummary: { intentKey: "media-assets:EXPORT_CLIPS:normal:clip-a" },
+    });
+    mocks.findMany.mockResolvedValueOnce([pending]);
+    mocks.create.mockResolvedValueOnce(successor);
+
+    await expect(queueSermonProcessingJob("sermon-1", "EXPORT_CLIPS", {
+      intentKey: "media-assets:EXPORT_CLIPS:normal:clip-a",
+      mediaAssetClipIds: ["clip-a"],
+    })).resolves.toEqual({
+      id: "job-pending-targeted",
+      reusedExisting: false,
+      intentConflict: false,
+    });
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses the matching media intent even when a newer different successor exists", async () => {
+    const pendingA = processingJob({
+      id: "job-pending-a",
+      type: "EXPORT_CLIPS",
+      status: "PENDING",
+      workerId: null,
+      generationSummary: { intentKey: "media-assets:EXPORT_CLIPS:normal:clip-a" },
+    });
+    const pendingB = processingJob({
+      id: "job-pending-b",
+      type: "EXPORT_CLIPS",
+      status: "PENDING",
+      workerId: null,
+      generationSummary: { intentKey: "media-assets:EXPORT_CLIPS:normal:clip-b" },
+    });
+    mocks.findMany.mockResolvedValueOnce([pendingB, pendingA]);
+
+    await expect(queueSermonProcessingJob("sermon-1", "EXPORT_CLIPS", {
+      intentKey: "media-assets:EXPORT_CLIPS:normal:clip-a",
+      mediaAssetClipIds: ["clip-a"],
+    })).resolves.toEqual({
+      id: "job-pending-a",
+      reusedExisting: true,
+      intentConflict: false,
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.transaction).toHaveBeenCalledTimes(1);
+    expect(mocks.queryRaw).toHaveBeenCalledTimes(1);
+  });
+
   it("reuses an active job only when its clip-generation intent is compatible", async () => {
     mocks.findFirst.mockResolvedValueOnce(processingJob({
       type: "GENERATE_CLIPS",

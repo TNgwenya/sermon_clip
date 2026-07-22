@@ -104,6 +104,38 @@ describe("clip generation retry planning", () => {
     expect(isClipGenerationForcedRetrySummary(plan.generationSummary)).toBe(true);
   });
 
+  it("preserves an explicit forced generation request through queue matching", () => {
+    expect(isClipGenerationForcedRetrySummary({ forceGeneration: true })).toBe(true);
+    expect(isClipGenerationForcedRetrySummary({ append: true, forceGeneration: true })).toBe(true);
+    expect(clipGenerationIntentsMatch(
+      { append: true },
+      { append: true, forceGeneration: true },
+    )).toBe(false);
+    expect(clipGenerationIntentsMatch(
+      { forceGeneration: true },
+      { forceGeneration: true },
+    )).toBe(true);
+  });
+
+  it("preserves targeted preview repair metadata across a retry", () => {
+    expect(buildClipGenerationRetryPlan({
+      existingActiveSuggestionCount: 5,
+      failedJobErrorMessage: "Worker lease expired during preview preparation.",
+      failedJobGenerationSummary: {
+        mode: CLIP_GENERATION_PREVIEW_REPAIR_MODE,
+        previewClipIds: ["clip-b", "clip-a"],
+        forcePreviewRender: true,
+        onlyFailedPreviews: true,
+      },
+    }).generationSummary).toEqual({
+      mode: CLIP_GENERATION_PREVIEW_REPAIR_MODE,
+      existingActiveSuggestionCount: 5,
+      previewClipIds: ["clip-a", "clip-b"],
+      forcePreviewRender: true,
+      onlyFailedPreviews: true,
+    });
+  });
+
   it("repairs preview-only append and redo failures without another AI generation", () => {
     for (const input of [
       {
@@ -175,6 +207,14 @@ describe("clip generation retry planning", () => {
       { mode: CLIP_GENERATION_PREVIEW_REPAIR_MODE },
       { mode: CLIP_GENERATION_RETRY_MODE },
     )).toBe(false);
+    expect(clipGenerationIntentsMatch(
+      { mode: CLIP_GENERATION_PREVIEW_REPAIR_MODE, previewClipIds: ["clip-a"] },
+      { mode: CLIP_GENERATION_PREVIEW_REPAIR_MODE, previewClipIds: ["clip-b"] },
+    )).toBe(false);
+    expect(clipGenerationIntentsMatch(
+      { mode: CLIP_GENERATION_PREVIEW_REPAIR_MODE, previewClipIds: ["clip-b", "clip-a"] },
+      { mode: CLIP_GENERATION_PREVIEW_REPAIR_MODE, previewClipIds: ["clip-a", "clip-b"] },
+    )).toBe(true);
   });
 
   it("does not treat malformed or unrelated job summaries as preview-only repairs", () => {

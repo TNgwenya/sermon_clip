@@ -33,6 +33,7 @@ import { validateTranscriptSafetyForPublishing } from "@/server/agents/localLang
 
 type CaptionGenerationOptions = {
   force?: boolean;
+  clipIds?: string[];
 };
 
 type ClipForCaption = Pick<
@@ -877,6 +878,9 @@ export async function generateCaptionsForApprovedClips(
   const clips = await prisma.clipCandidate.findMany({
     where: {
       sermonId: sermon.id,
+      ...(options?.clipIds !== undefined
+        ? { id: { in: Array.from(new Set(options.clipIds)) } }
+        : {}),
       status: {
         in: ["APPROVED", "EXPORTED"],
       },

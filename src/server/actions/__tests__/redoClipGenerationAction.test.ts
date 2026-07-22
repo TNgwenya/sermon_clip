@@ -35,7 +35,8 @@ vi.mock("@/server/agents/processing", () => ({
 }));
 
 vi.mock("@/server/runtime/workerRuntime", () => ({
-  canRunLocalMediaProcessing: mocks.canRunLocally,
+  canRunInlineMediaProcessing: mocks.canRunLocally,
+  canRunLocalMediaProcessing: vi.fn(() => true),
   localMediaProcessingUnavailableMessage: vi.fn(() => "Local processing unavailable."),
 }));
 

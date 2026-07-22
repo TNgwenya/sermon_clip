@@ -94,6 +94,10 @@ import {
 } from "@/lib/prepareWorkflow";
 import { getQueuedMediaAssetsForRemoteBatchAction } from "@/lib/clipReview";
 import { buildClipGenerationRetryPlan } from "@/lib/clipGenerationRetry";
+import {
+  buildForcedMediaAssetRetrySummary,
+  buildForcedProcessingJobSummary,
+} from "@/lib/mediaProcessingJobIntent";
 import { parseContentOpportunityJobSummary } from "@/lib/contentOpportunityJobs";
 import { enqueueContentOpportunityGeneration } from "@/server/agents/contentOpportunityJobService";
 import { isStaleActiveProcessingJob } from "@/lib/pastorWorkflow";
@@ -126,6 +130,7 @@ import {
 } from "@/lib/clipBranding";
 import { getBrandingSettings } from "@/server/branding/settings";
 import {
+  canRunInlineMediaProcessing,
   canRunLocalMediaProcessing,
   localMediaProcessingUnavailableMessage,
 } from "@/server/runtime/workerRuntime";
@@ -319,7 +324,7 @@ function burnCaptionsIntoRenderedClip(
 }
 
 function assertLocalMediaProcessing(action: string): void {
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     throw new Error(localMediaProcessingUnavailableMessage(action));
   }
 }
@@ -327,6 +332,7 @@ function assertLocalMediaProcessing(action: string): void {
 async function queueSermonMediaAssetJobs(
   sermonId: string,
   requestedAssets?: ClipAssetKind[],
+  intent?: { clipIds?: string[]; force?: boolean },
 ): Promise<{ queued: number; reused: number; jobTypes: ProcessingJobType[] }> {
   const assetSet = new Set(requestedAssets ?? ["render", "caption", "captionBurn", "overlay", "export"]);
   const jobTypes: ProcessingJobType[] = [];
@@ -349,8 +355,18 @@ async function queueSermonMediaAssetJobs(
 
   let queued = 0;
   let reused = 0;
+  const clipIds = Array.from(new Set(
+    (intent?.clipIds ?? []).map((clipId) => clipId.trim()).filter(Boolean),
+  )).sort();
   for (const jobType of Array.from(new Set(jobTypes))) {
-    const job = await queueSermonProcessingJob(sermonId, jobType);
+    const generationSummary = clipIds.length > 0 || intent?.force
+      ? {
+          intentKey: `media-assets:${jobType}:${intent?.force === true ? "force" : "normal"}:${clipIds.join(",") || "all"}`,
+          ...(clipIds.length > 0 ? { mediaAssetClipIds: clipIds } : {}),
+          ...(intent?.force ? { forceMediaAssets: true } : {}),
+        }
+      : undefined;
+    const job = await queueSermonProcessingJob(sermonId, jobType, generationSummary);
     if (job.reusedExisting) {
       reused += 1;
     } else {
@@ -359,6 +375,36 @@ async function queueSermonMediaAssetJobs(
   }
 
   return { queued, reused, jobTypes: Array.from(new Set(jobTypes)) };
+}
+
+async function queueClipMediaAssetAction(input: {
+  clipId: string;
+  sermonId: string;
+  assets: ClipAssetKind[];
+  operation: string;
+  invalidate?: Prisma.ClipCandidateUpdateInput;
+  force?: boolean;
+}): Promise<string> {
+  if (input.invalidate) {
+    await prisma.clipCandidate.update({
+      where: { id: input.clipId },
+      data: input.invalidate,
+    });
+  }
+
+  const queued = await queueSermonMediaAssetJobs(input.sermonId, input.assets, {
+    clipIds: [input.clipId],
+    force: input.force === true,
+  });
+  await appendPipelineLog(
+    input.sermonId,
+    `${input.operation} for clip ${input.clipId} ${queued.queued > 0 ? "queued" : "reused an existing queue item"}. Jobs: ${queued.jobTypes.join(", ")}.`,
+  );
+  await revalidateClipPaths(input.clipId, input.sermonId);
+
+  return queued.queued > 0
+    ? `${input.operation} queued for the media worker.`
+    : `${input.operation} is already queued for the media worker.`;
 }
 
 function processingJobTypeLabel(type: ProcessingJobType): string {
@@ -392,9 +438,9 @@ function processingJobTypeLabel(type: ProcessingJobType): string {
   return String(type).replaceAll("_", " ").toLowerCase();
 }
 
-function startOneClickSermonPipeline(sermonId: string): void {
-  if (!canRunLocalMediaProcessing()) {
-    void queueSermonProcessingJob(sermonId, "PROCESS_SERMON").catch(() => undefined);
+async function startOneClickSermonPipeline(sermonId: string): Promise<void> {
+  if (!canRunInlineMediaProcessing()) {
+    await queueSermonProcessingJob(sermonId, "PROCESS_SERMON");
     return;
   }
 
@@ -1753,7 +1799,7 @@ export async function createSermonAction(
     }
 
     revalidatePath("/");
-    startOneClickSermonPipeline(sermon.id);
+    await startOneClickSermonPipeline(sermon.id);
 
     return {
       success: true,
@@ -1789,8 +1835,18 @@ export async function downloadVideoAction(
     };
   }
 
-  if (!canRunLocalMediaProcessing()) {
-    const job = await queueSermonProcessingJob(sermonId, "DOWNLOAD_VIDEO");
+  if (!canRunInlineMediaProcessing()) {
+    const job = await queueSermonProcessingJob(
+      sermonId,
+      "DOWNLOAD_VIDEO",
+      force ? buildForcedProcessingJobSummary("DOWNLOAD_VIDEO") : undefined,
+    );
+    if (job.intentConflict) {
+      return {
+        success: false,
+        message: "A different video download is already queued. Wait for it to finish, then try again.",
+      };
+    }
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath("/");
     return {
@@ -1835,8 +1891,18 @@ export async function extractAudioAction(
     };
   }
 
-  if (!canRunLocalMediaProcessing()) {
-    const job = await queueSermonProcessingJob(sermonId, "EXTRACT_AUDIO");
+  if (!canRunInlineMediaProcessing()) {
+    const job = await queueSermonProcessingJob(
+      sermonId,
+      "EXTRACT_AUDIO",
+      force ? buildForcedProcessingJobSummary("EXTRACT_AUDIO") : undefined,
+    );
+    if (job.intentConflict) {
+      return {
+        success: false,
+        message: "A different audio extraction is already queued. Wait for it to finish, then try again.",
+      };
+    }
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath("/");
     return {
@@ -1881,8 +1947,18 @@ export async function transcribeAudioAction(
     };
   }
 
-  if (!canRunLocalMediaProcessing()) {
-    const job = await queueSermonProcessingJob(sermonId, "TRANSCRIBE_AUDIO");
+  if (!canRunInlineMediaProcessing()) {
+    const job = await queueSermonProcessingJob(
+      sermonId,
+      "TRANSCRIBE_AUDIO",
+      force ? buildForcedProcessingJobSummary("TRANSCRIBE_AUDIO") : undefined,
+    );
+    if (job.intentConflict) {
+      return {
+        success: false,
+        message: "A different transcription is already queued. Wait for it to finish, then try again.",
+      };
+    }
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath("/");
     return {
@@ -1928,11 +2004,15 @@ export async function generateClipSuggestionsAction(
     };
   }
 
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
+    const queuedGenerationSummary = {
+      ...(append ? { append: true as const } : {}),
+      ...(force ? { forceGeneration: true } : {}),
+    };
     const job = await queueSermonProcessingJob(
       sermonId,
       "GENERATE_CLIPS",
-      append ? { append: true } : undefined,
+      Object.keys(queuedGenerationSummary).length > 0 ? queuedGenerationSummary : undefined,
     );
     if (job.intentConflict) {
       return {
@@ -2030,7 +2110,7 @@ export async function redoClipGenerationFromTranscriptAction(
     };
   }
 
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     const job = await queueSermonProcessingJob(
       sermonId,
       "GENERATE_CLIPS",
@@ -2094,7 +2174,7 @@ export async function processSermonAction(
     };
   }
 
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     const job = await queueSermonProcessingJob(sermonId, "PROCESS_SERMON");
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath("/");
@@ -2334,8 +2414,28 @@ export async function retryFailedProcessingJobById(input: {
       };
     }
 
-    if (!canRunLocalMediaProcessing()) {
-      const queuedJob = await queueSermonProcessingJob(sermonId, job.type);
+    if (!canRunInlineMediaProcessing()) {
+      const queuedGenerationSummary = job.type === "DOWNLOAD_VIDEO"
+        || job.type === "EXTRACT_AUDIO"
+        || job.type === "TRANSCRIBE_AUDIO"
+        ? buildForcedProcessingJobSummary(job.type)
+        : job.type === "EXPORT_CLIPS"
+          || job.type === "GENERATE_SUBTITLES"
+          || job.type === "BURN_SUBTITLES"
+          || job.type === "RENDER_OVERLAY"
+          ? buildForcedMediaAssetRetrySummary(job.type, job.generationSummary)
+          : undefined;
+      const queuedJob = await queueSermonProcessingJob(
+        sermonId,
+        job.type,
+        queuedGenerationSummary,
+      );
+      if (queuedJob.intentConflict) {
+        return {
+          success: false,
+          message: "A different request for this processing step is already running. Wait for it to finish, then retry the failed step.",
+        };
+      }
       const label = processingJobTypeLabel(job.type);
       await appendPipelineLog(
         sermonId,
@@ -2467,13 +2567,13 @@ export async function exportApprovedClipsAction(
     };
   }
 
-  if (!canRunLocalMediaProcessing()) {
-    const job = await queueSermonProcessingJob(sermonId, "EXPORT_CLIPS");
+  if (!canRunInlineMediaProcessing()) {
+    const queued = await queueSermonMediaAssetJobs(sermonId, ["render"], { force });
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath("/");
     return {
       success: true,
-      message: job.reusedExisting
+      message: queued.reused > 0 && queued.queued === 0
         ? "Clip export is already queued for your local worker."
         : "Clip export queued for your local worker.",
     };
@@ -2544,6 +2644,39 @@ export async function renderClipCandidateAction(clipId: string): Promise<RenderC
         };
       }
 
+      if (!canRunInlineMediaProcessing()) {
+        if (clip.status === "SUGGESTED") {
+          const queued = await queueSermonProcessingJob(clip.sermonId, "GENERATE_CLIPS", {
+            mode: "repair_previews",
+            existingActiveSuggestionCount: 1,
+            previewClipIds: [clip.id],
+            forcePreviewRender: false,
+          });
+          if (queued.intentConflict) {
+            return {
+              success: false,
+              message: "A different clip-generation request is already running. Wait for it to finish, then prepare this preview again.",
+            };
+          }
+          return {
+            success: true,
+            message: queued.reusedExisting
+              ? "Clip preview preparation is already queued for the media worker."
+              : "Clip preview preparation queued for the media worker.",
+          };
+        }
+
+        return {
+          success: true,
+          message: await queueClipMediaAssetAction({
+            clipId: clip.id,
+            sermonId: clip.sermonId,
+            assets: ["render"],
+            operation: "Clip render",
+          }),
+        };
+      }
+
       try {
         const result = await renderApprovedClip(clip.id);
         await revalidateClipPaths(clip.id, clip.sermonId);
@@ -2598,6 +2731,51 @@ export async function rerenderClipCandidateAction(clipId: string): Promise<Rende
             "This video is already being prepared.",
             "Wait for preparation to finish before trying again.",
           ),
+        };
+      }
+
+      if (!canRunInlineMediaProcessing()) {
+        if (clip.status === "SUGGESTED") {
+          await prisma.clipCandidate.update({
+            where: { id: clip.id },
+            data: {
+              renderFreshness: "NEEDS_REGENERATION",
+              assetInvalidationReason: "Clip preview rerender requested.",
+            },
+          });
+          const queued = await queueSermonProcessingJob(clip.sermonId, "GENERATE_CLIPS", {
+            mode: "repair_previews",
+            existingActiveSuggestionCount: 1,
+            previewClipIds: [clip.id],
+            forcePreviewRender: true,
+          });
+          if (queued.intentConflict) {
+            return {
+              success: false,
+              message: "A different clip-generation request is already running. Wait for it to finish, then rerender this preview.",
+            };
+          }
+          return {
+            success: true,
+            message: queued.reusedExisting
+              ? "Clip preview rerender is already queued for the media worker."
+              : "Clip preview rerender queued for the media worker.",
+          };
+        }
+
+        return {
+          success: true,
+          message: await queueClipMediaAssetAction({
+            clipId: clip.id,
+            sermonId: clip.sermonId,
+            assets: ["render"],
+            operation: "Clip rerender",
+            force: true,
+            invalidate: {
+              renderFreshness: "NEEDS_REGENERATION",
+              assetInvalidationReason: "Clip rerender requested.",
+            },
+          }),
         };
       }
 
@@ -2672,6 +2850,18 @@ export async function exportVerticalClipAction(clipId: string): Promise<ClipExpo
         };
       }
 
+      if (!canRunInlineMediaProcessing()) {
+        return {
+          success: true,
+          message: await queueClipMediaAssetAction({
+            clipId: clip.id,
+            sermonId: clip.sermonId,
+            assets: ["overlay", "export"],
+            operation: "Clip export",
+          }),
+        };
+      }
+
       try {
         const result = await exportVerticalClip(clip.id);
         await revalidateClipPaths(clip.id, clip.sermonId);
@@ -2730,6 +2920,23 @@ export async function reexportVerticalClipAction(clipId: string): Promise<ClipEx
         };
       }
 
+      if (!canRunInlineMediaProcessing()) {
+        return {
+          success: true,
+          message: await queueClipMediaAssetAction({
+            clipId: clip.id,
+            sermonId: clip.sermonId,
+            assets: ["overlay", "export"],
+            operation: "Clip re-export",
+            force: true,
+            invalidate: {
+              exportFreshness: "NEEDS_REGENERATION",
+              assetInvalidationReason: "Clip re-export requested.",
+            },
+          }),
+        };
+      }
+
       try {
         const result = await exportVerticalClip(clip.id, {
           allowReexport: true,
@@ -2785,6 +2992,19 @@ export async function generateSubtitlesForClipAction(clipId: string): Promise<Su
             "Caption generation is already in progress.",
             "Wait for generation to finish before retrying.",
           ),
+        };
+      }
+
+      if (!canRunInlineMediaProcessing()) {
+        return {
+          success: true,
+          message: await queueClipMediaAssetAction({
+            clipId: clip.id,
+            sermonId: clip.sermonId,
+            assets: ["caption"],
+            operation: "Caption generation",
+            force: true,
+          }),
         };
       }
 
@@ -2862,6 +3082,18 @@ export async function burnSubtitlesForClipAction(clipId: string): Promise<Subtit
         };
       }
 
+      if (!canRunInlineMediaProcessing()) {
+        return {
+          success: true,
+          message: await queueClipMediaAssetAction({
+            clipId: clip.id,
+            sermonId: clip.sermonId,
+            assets: ["captionBurn"],
+            operation: "Caption burn",
+          }),
+        };
+      }
+
       try {
         const result = await burnCaptionsIntoRenderedClip(clip.id);
         await revalidateClipPaths(clip.id, clip.sermonId);
@@ -2914,6 +3146,23 @@ export async function reburnSubtitlesForClipAction(clipId: string): Promise<Subt
         };
       }
 
+      if (!canRunInlineMediaProcessing()) {
+        return {
+          success: true,
+          message: await queueClipMediaAssetAction({
+            clipId: clip.id,
+            sermonId: clip.sermonId,
+            assets: ["captionBurn"],
+            operation: "Caption re-burn",
+            force: true,
+            invalidate: {
+              captionBurnFreshness: "NEEDS_REGENERATION",
+              assetInvalidationReason: "Caption re-burn requested.",
+            },
+          }),
+        };
+      }
+
       try {
         await burnCaptionsIntoRenderedClip(clip.id, {
           allowReburn: true,
@@ -2944,8 +3193,12 @@ export async function generateAndBurnSubtitlesForExportedClipsAction(
     return { success: false, message: "Missing sermon id for caption generation." };
   }
 
-  if (!canRunLocalMediaProcessing()) {
-    const queued = await queueSermonMediaAssetJobs(normalizedSermonId, ["caption", "captionBurn"]);
+  if (!canRunInlineMediaProcessing()) {
+    const queued = await queueSermonMediaAssetJobs(
+      normalizedSermonId,
+      ["caption", "captionBurn"],
+      { force: true },
+    );
     revalidatePath(`/sermons/${normalizedSermonId}`);
     revalidatePath("/");
 
@@ -3442,7 +3695,7 @@ export async function startSermonClipQualityRefreshJobAction(input: {
     };
   }
 
-  const runLocally = canRunLocalMediaProcessing();
+  const runLocally = canRunInlineMediaProcessing();
   const job = await createProcessingJob(sermonId, "QUALITY_REFRESH", {
     execution: runLocally ? "INLINE" : "QUEUED",
   });
@@ -3694,7 +3947,7 @@ export async function runClipBatchReviewAction(input: {
   return runOperationWithLogging<ClipReviewBatchActionState>(
     { sermonId, operation: `batch_review_${input.action}` },
     async () => {
-      const queuedRemoteAssets = canRunLocalMediaProcessing()
+      const queuedRemoteAssets = canRunInlineMediaProcessing()
         ? []
         : getQueuedMediaAssetsForRemoteBatchAction(input.action);
       const clipById = new Map(clips.map((clip) => [clip.id, clip]));
@@ -3759,7 +4012,7 @@ export async function runClipBatchReviewAction(input: {
 
       let queuedJobs: Awaited<ReturnType<typeof queueSermonMediaAssetJobs>> | null = null;
       if (processed > 0 && queuedRemoteAssets.length > 0) {
-        queuedJobs = await queueSermonMediaAssetJobs(sermonId, queuedRemoteAssets);
+        queuedJobs = await queueSermonMediaAssetJobs(sermonId, queuedRemoteAssets, { clipIds });
       }
 
       revalidatePath(`/sermons/${sermonId}`);
@@ -3838,6 +4091,41 @@ export async function prepareApprovedClipsAction(input: {
           ? "None of the selected clips are approved yet. Approve the clips you like, then prepare them."
           : "No approved clips yet. Approve the clips you like, then prepare them.",
       processed: 0,
+      prepared: 0,
+      captionsAdded: 0,
+      brandingAdded: 0,
+      readyToPost: 0,
+      failed: 0,
+      failures: [],
+    };
+  }
+
+  if (!canRunInlineMediaProcessing()) {
+    const queued = await queueSermonMediaAssetJobs(sermonId, undefined, {
+      clipIds: clips.map((clip) => clip.id),
+    });
+    await prisma.clipCandidate.updateMany({
+      where: { id: { in: clips.map((clip) => clip.id) } },
+      data: {
+        exportStatus: "QUEUED",
+        exportError: null,
+      },
+    });
+    await appendPipelineLog(
+      sermonId,
+      `Queued preparation for ${clips.length} approved clip(s). Jobs: ${queued.jobTypes.join(", ")}.`,
+    );
+    revalidatePath(`/sermons/${sermonId}`);
+    revalidatePath(`/sermons/${sermonId}/review`);
+    revalidatePath("/ready-to-post");
+    revalidatePath("/");
+
+    return {
+      success: true,
+      message: queued.queued > 0
+        ? `Preparing ${clips.length} approved clip(s) in the media worker.`
+        : `Preparation is already queued for ${clips.length} approved clip(s).`,
+      processed: clips.length,
       prepared: 0,
       captionsAdded: 0,
       brandingAdded: 0,
@@ -4009,19 +4297,65 @@ export async function repairFailedClipOperationsAction(
     select: { id: true },
   });
 
-  const failedPreviewCount = await prisma.clipCandidate.count({
+  const failedPreviewClips = await prisma.clipCandidate.findMany({
     where: {
       sermonId,
       status: "SUGGESTED",
       isAiGenerated: true,
       renderStatus: "FAILED",
     },
+    select: { id: true },
   });
+  const failedPreviewCount = failedPreviewClips.length;
 
   if (failedApprovedClips.length === 0 && failedPreviewCount === 0) {
     return {
       success: true,
       message: "No failed clip operations need repair right now.",
+      previewPrepared: 0,
+      previewFailed: 0,
+      approvedPrepared: 0,
+      approvedFailed: 0,
+    };
+  }
+
+  if (!canRunInlineMediaProcessing()) {
+    const previewJob = failedPreviewCount > 0
+      ? await queueSermonProcessingJob(sermonId, "GENERATE_CLIPS", {
+          mode: "repair_previews",
+          existingActiveSuggestionCount: failedPreviewCount,
+          previewClipIds: failedPreviewClips.map((clip) => clip.id),
+          forcePreviewRender: true,
+          onlyFailedPreviews: true,
+        })
+      : null;
+    if (previewJob?.intentConflict) {
+      return {
+        success: false,
+        message: "A different clip-generation request is already running. Wait for it to finish before repairing previews.",
+        previewPrepared: 0,
+        previewFailed: failedPreviewCount,
+        approvedPrepared: 0,
+        approvedFailed: 0,
+      };
+    }
+    const approvedJobs = failedApprovedClips.length > 0
+      ? await queueSermonMediaAssetJobs(sermonId, undefined, {
+          clipIds: failedApprovedClips.map((clip) => clip.id),
+          force: true,
+        })
+      : null;
+
+    revalidatePath(`/sermons/${sermonId}`);
+    revalidatePath(`/sermons/${sermonId}/review`);
+    revalidatePath(`/ready-to-post?sermonId=${sermonId}`);
+    revalidatePath("/ready-to-post");
+    revalidatePath("/");
+    return {
+      success: true,
+      message: approvedJobs || previewJob
+        ? "Failed clip repairs were queued for the media worker."
+        : "No failed clip repairs need queueing.",
       previewPrepared: 0,
       previewFailed: 0,
       approvedPrepared: 0,
@@ -5930,21 +6264,31 @@ export async function prepareClipStudioForPostingAction(
     };
   }
 
+  const { formats: formatsToPrepare } = resolveClipStudioFormats(input);
+  if (
+    !canRunInlineMediaProcessing()
+    && formatsToPrepare.some((format) => format !== "VERTICAL_9_16")
+  ) {
+    return {
+      success: false,
+      message: "Multi-format Studio exports are not queued yet. Choose Vertical 9:16 before preparing this clip.",
+      results: [],
+    };
+  }
+
   const draftResult = await saveClipStudioDraftAction(input);
   if (!draftResult.success) {
     return draftResult;
   }
-
-  const { formats: formatsToPrepare } = resolveClipStudioFormats(input);
 
   await prisma.clipCandidate.update({
     where: { id: clip.id },
     data: { status: "APPROVED" },
   });
 
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     try {
-      const queued = await queueSermonMediaAssetJobs(clip.sermonId);
+      const queued = await queueSermonMediaAssetJobs(clip.sermonId, undefined, { clipIds: [clip.id] });
       // The control panel cannot observe a Mac worker's in-memory queue. Keep
       // the durable clip state honest so a refresh shows "Preparing" and the
       // prepare button cannot enqueue the same composition repeatedly.
@@ -6044,8 +6388,18 @@ export async function retryClipStudioExportAction(input: {
     };
   }
 
-  if (!canRunLocalMediaProcessing()) {
-    const queued = await queueSermonMediaAssetJobs(clip.sermonId);
+  if (!canRunInlineMediaProcessing()) {
+    if (record.format !== "VERTICAL_9_16") {
+      return {
+        success: false,
+        message: "This multi-format export retry cannot be queued yet. Save the draft and prepare Vertical 9:16, or run the retry from the local development app.",
+        results: [],
+      };
+    }
+    const queued = await queueSermonMediaAssetJobs(clip.sermonId, undefined, {
+      clipIds: [clip.id],
+      force: true,
+    });
     const retriedAt = new Date().toISOString();
     await updateClipStudioExportHistory(
       clip.id,
@@ -6131,6 +6485,18 @@ export async function renderClipOverlayAction(clipId: string): Promise<OverlayAc
         };
       }
 
+      if (!canRunInlineMediaProcessing()) {
+        return {
+          success: true,
+          message: await queueClipMediaAssetAction({
+            clipId: clip.id,
+            sermonId: clip.sermonId,
+            assets: ["overlay"],
+            operation: "Overlay render",
+          }),
+        };
+      }
+
       try {
         const result = await renderClipOverlay(clip.id);
         await revalidateClipPaths(clip.id, clip.sermonId);
@@ -6182,6 +6548,24 @@ export async function rerenderClipOverlayAction(clipId: string): Promise<Overlay
             "Church branding is already being added.",
             "Wait for branding to finish before trying again.",
           ),
+        };
+      }
+
+      if (!canRunInlineMediaProcessing()) {
+        return {
+          success: true,
+          message: await queueClipMediaAssetAction({
+            clipId: clip.id,
+            sermonId: clip.sermonId,
+            assets: ["overlay"],
+            operation: "Overlay rerender",
+            force: true,
+            invalidate: {
+              overlayFreshness: "NEEDS_REGENERATION",
+              exportFreshness: "NEEDS_REGENERATION",
+              assetInvalidationReason: "Overlay rerender requested.",
+            },
+          }),
         };
       }
 
@@ -6423,8 +6807,11 @@ export async function regenerateClipOutdatedAssetsAction(clipId: string): Promis
     return { success: true, message: "All assets are already up to date." };
   }
 
-  if (!canRunLocalMediaProcessing()) {
-    const queued = await queueSermonMediaAssetJobs(clip.sermonId, assets);
+  if (!canRunInlineMediaProcessing()) {
+    const queued = await queueSermonMediaAssetJobs(clip.sermonId, assets, {
+      clipIds: [clip.id],
+      force: true,
+    });
     await appendPipelineLog(
       clip.sermonId,
       `Queued local-worker regeneration for clip ${clip.id}. Assets: ${assets.join(", ")}. Jobs: ${queued.jobTypes.join(", ")}.`,
@@ -6489,7 +6876,7 @@ export async function regenerateAllOutdatedAssetsAction(sermonId: string): Promi
     };
   }
 
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     const queued = await queueSermonMediaAssetJobs(normalizedSermonId);
     await appendPipelineLog(
       normalizedSermonId,
@@ -6589,7 +6976,7 @@ export async function regenerateAllOutdatedCaptionsAction(sermonId: string): Pro
     };
   }
 
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     const queued = await queueSermonMediaAssetJobs(normalizedSermonId, ["caption", "captionBurn"]);
     await appendPipelineLog(
       normalizedSermonId,
@@ -6693,6 +7080,43 @@ export async function regenerateAllExportsAction(sermonId: string): Promise<Rege
       exportFreshness: true,
     },
   });
+
+  if (!canRunInlineMediaProcessing()) {
+    const staleClips = clips.filter((clip) => clip.exportFreshness !== "UP_TO_DATE");
+    if (staleClips.length === 0) {
+      return {
+        success: true,
+        message: "All downloads are already up to date.",
+        attempted: clips.length,
+        completed: 0,
+        skipped: clips.length,
+        failed: 0,
+        failures: [],
+      };
+    }
+
+    const queued = await queueSermonMediaAssetJobs(normalizedSermonId, ["export"], {
+      clipIds: staleClips.map((clip) => clip.id),
+      force: true,
+    });
+    await appendPipelineLog(
+      normalizedSermonId,
+      `Queued export regeneration for ${staleClips.length} clip(s). Jobs: ${queued.jobTypes.join(", ")}.`,
+    );
+    revalidatePath(`/sermons/${normalizedSermonId}`);
+    revalidatePath("/");
+    return {
+      success: true,
+      message: queued.queued > 0
+        ? `Recreating ${staleClips.length} download(s) in the media worker.`
+        : "Download recreation is already queued in the media worker.",
+      attempted: staleClips.length,
+      completed: 0,
+      skipped: clips.length - staleClips.length,
+      failed: 0,
+      failures: [],
+    };
+  }
 
   const items: Array<{ ok: boolean; skipped?: boolean; clipId: string; asset: ClipAssetKind; reason?: string }> = [];
   await appendPipelineLog(normalizedSermonId, `Batch regeneration started: export assets.`);

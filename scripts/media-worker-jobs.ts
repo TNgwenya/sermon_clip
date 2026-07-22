@@ -55,6 +55,17 @@ export type RedoClipGenerationWorkerSourceWindow = {
   analyzeFullRecording: boolean;
 };
 
+export type ClipGenerationWorkerPreviewRequest = {
+  clipIds?: string[];
+  force: boolean;
+  onlyFailed: boolean;
+};
+
+export type MediaAssetWorkerRequest = {
+  clipIds?: string[];
+  force: boolean;
+};
+
 type ExportLayoutStrategy =
   | "CENTER_CROP"
   | "LEFT_FOCUS"
@@ -134,6 +145,55 @@ export function resolveRedoClipGenerationWorkerSourceWindow(
     analyzeFullRecording: typeof summary["analyzeFullRecording"] === "boolean"
       ? summary["analyzeFullRecording"]
       : sermonStartSeconds === null && sermonEndSeconds === null,
+  };
+}
+
+export function resolveClipGenerationWorkerPreviewRequest(
+  generationSummary: unknown,
+): ClipGenerationWorkerPreviewRequest {
+  if (!generationSummary || typeof generationSummary !== "object" || Array.isArray(generationSummary)) {
+    return { force: false, onlyFailed: false };
+  }
+
+  const summary = generationSummary as Record<string, unknown>;
+  const hasClipScope = Object.prototype.hasOwnProperty.call(summary, "previewClipIds");
+  const clipIds = Array.isArray(summary["previewClipIds"])
+    ? Array.from(new Set(
+        summary["previewClipIds"]
+          .filter((clipId): clipId is string => typeof clipId === "string")
+          .map((clipId) => clipId.trim())
+          .filter(Boolean),
+      ))
+    : [];
+
+  return {
+    ...(hasClipScope ? { clipIds } : {}),
+    force: summary["forcePreviewRender"] === true,
+    onlyFailed: summary["onlyFailedPreviews"] === true,
+  };
+}
+
+export function resolveMediaAssetWorkerRequest(
+  generationSummary: unknown,
+): MediaAssetWorkerRequest {
+  if (!generationSummary || typeof generationSummary !== "object" || Array.isArray(generationSummary)) {
+    return { force: false };
+  }
+
+  const summary = generationSummary as Record<string, unknown>;
+  const hasClipScope = Object.prototype.hasOwnProperty.call(summary, "mediaAssetClipIds");
+  const clipIds = Array.isArray(summary["mediaAssetClipIds"])
+    ? Array.from(new Set(
+        summary["mediaAssetClipIds"]
+          .filter((clipId): clipId is string => typeof clipId === "string")
+          .map((clipId) => clipId.trim())
+          .filter(Boolean),
+      ))
+    : [];
+
+  return {
+    ...(hasClipScope ? { clipIds } : {}),
+    force: summary["forceMediaAssets"] === true,
   };
 }
 

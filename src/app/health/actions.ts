@@ -8,7 +8,7 @@ import {
   repairMissingLocalAssetReferences,
   selectUnresolvedFailedProcessingJobRetries,
 } from "@/server/workflow/operationsDiagnostics";
-import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+import { canRunInlineMediaProcessing } from "@/server/runtime/workerRuntime";
 
 export type HealthActionResult = {
   success: boolean;
@@ -47,7 +47,7 @@ function revalidateHealthRecoveryPaths(): void {
 }
 
 export async function prepareMissingPostersAction(): Promise<HealthActionResult> {
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
   }
 
@@ -64,7 +64,7 @@ export async function prepareMissingPostersAction(): Promise<HealthActionResult>
 }
 
 export async function repairLocalLibraryAction(): Promise<HealthActionResult> {
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
   }
 
@@ -81,7 +81,7 @@ export async function repairLocalLibraryAction(): Promise<HealthActionResult> {
 }
 
 export async function rebuildPriorityLibraryAssetsAction(): Promise<HealthActionResult> {
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
   }
 
@@ -130,7 +130,7 @@ export async function rebuildPriorityLibraryAssetsAction(): Promise<HealthAction
 }
 
 export async function retryLatestFailedProcessingJobsAction(): Promise<HealthActionResult> {
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
   }
 
@@ -190,7 +190,7 @@ export async function retryLatestFailedProcessingJobsAction(): Promise<HealthAct
 }
 
 export async function repairAndRebuildLibraryAction(): Promise<HealthActionResult> {
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
   }
 

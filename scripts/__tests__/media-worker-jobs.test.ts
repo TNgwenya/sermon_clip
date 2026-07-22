@@ -4,6 +4,8 @@ import {
   runCaptionBurnBatch,
   runClipGenerationWorkerJob,
   runOverlayAndExportBatch,
+  resolveClipGenerationWorkerPreviewRequest,
+  resolveMediaAssetWorkerRequest,
   resolveRedoClipGenerationWorkerSourceWindow,
   summarizeCaptionBatch,
   summarizePreviewPreparation,
@@ -60,6 +62,42 @@ describe("media worker caption outcomes", () => {
 });
 
 describe("media worker clip-generation outcomes", () => {
+  it("preserves a targeted one-clip preview repair request", () => {
+    expect(resolveClipGenerationWorkerPreviewRequest({
+      mode: "repair_previews",
+      previewClipIds: ["clip-2", "clip-2", " "],
+      forcePreviewRender: true,
+      onlyFailedPreviews: true,
+    })).toEqual({
+      clipIds: ["clip-2"],
+      force: true,
+      onlyFailed: true,
+    });
+  });
+
+  it("fails closed when an explicit preview target list is empty or malformed", () => {
+    expect(resolveClipGenerationWorkerPreviewRequest({
+      mode: "repair_previews",
+      previewClipIds: [],
+    })).toEqual({ clipIds: [], force: false, onlyFailed: false });
+    expect(resolveClipGenerationWorkerPreviewRequest({
+      mode: "repair_previews",
+      previewClipIds: "clip-2",
+    })).toEqual({ clipIds: [], force: false, onlyFailed: false });
+    expect(resolveClipGenerationWorkerPreviewRequest({
+      mode: "repair_previews",
+    })).toEqual({ force: false, onlyFailed: false });
+  });
+
+  it("preserves exact media asset targets without widening to the sermon", () => {
+    expect(resolveMediaAssetWorkerRequest({
+      mediaAssetClipIds: ["clip-2", "clip-2", " "],
+      forceMediaAssets: true,
+    })).toEqual({ clipIds: ["clip-2"], force: true });
+    expect(resolveMediaAssetWorkerRequest({ mediaAssetClipIds: [] }))
+      .toEqual({ clipIds: [], force: false });
+  });
+
   it("restores the selected source range for a queued redo job", () => {
     expect(resolveRedoClipGenerationWorkerSourceWindow({
       mode: "redo",

@@ -4,11 +4,11 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
-import { createProcessingJob } from "@/server/agents/processing";
+import { queueSermonProcessingJob } from "@/server/agents/processing";
 import { prepareGeneratedClipReviewAssets } from "@/server/agents/clipReviewAssetService";
 import { SMART_CLIP_CATEGORIES, type SmartClipCategory } from "@/server/ai/ministryMomentSchema";
 import {
-  canRunLocalMediaProcessing,
+  canRunInlineMediaProcessing,
   localMediaProcessingUnavailableMessage,
 } from "@/server/runtime/workerRuntime";
 
@@ -22,7 +22,7 @@ export type IntelligenceActionState = {
 export type RegenerationActionState = IntelligenceActionState;
 
 function assertLocalMediaProcessing(action: string): void {
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     throw new Error(localMediaProcessingUnavailableMessage(action));
   }
 }
@@ -63,17 +63,11 @@ function generateClipSuggestions(
 }
 
 async function queueSmartClipGeneration(sermonId: string): Promise<void> {
-  const existing = await prisma.processingJob.findFirst({
-    where: {
-      sermonId,
-      type: "GENERATE_CLIPS",
-      status: { in: ["PENDING", "RUNNING"] },
-    },
-    select: { id: true },
+  const queued = await queueSermonProcessingJob(sermonId, "GENERATE_CLIPS", {
+    mode: "retry_generation",
   });
-
-  if (!existing) {
-    await createProcessingJob(sermonId, "GENERATE_CLIPS", { execution: "QUEUED" });
+  if (queued.intentConflict) {
+    throw new Error("A different clip-generation request is already running. Wait for it to finish, then regenerate smart clips.");
   }
 }
 
@@ -176,11 +170,16 @@ export async function regenerateSmartClipsAction(
     return { success: false, message: "Sermon ID is required." };
   }
 
-  if (!canRunLocalMediaProcessing()) {
-    await queueSmartClipGeneration(sermonId);
-    revalidatePath(`/sermons/${sermonId}/review`);
-    revalidatePath(`/sermons/${sermonId}`);
-    return { success: true, message: "Smart clip generation queued for your local worker." };
+  if (!canRunInlineMediaProcessing()) {
+    try {
+      await queueSmartClipGeneration(sermonId);
+      revalidatePath(`/sermons/${sermonId}/review`);
+      revalidatePath(`/sermons/${sermonId}`);
+      return { success: true, message: "Smart clip generation queued for your local worker." };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Smart clip generation could not be queued.";
+      return { success: false, message };
+    }
   }
 
   try {
@@ -216,11 +215,11 @@ export async function regenerateSmartClipsByCategoryAction(
     return { success: false, message: "Invalid smart clip category." };
   }
 
-  if (!canRunLocalMediaProcessing()) {
-    await queueSmartClipGeneration(sermonId);
-    revalidatePath(`/sermons/${sermonId}/review`);
-    revalidatePath(`/sermons/${sermonId}`);
-    return { success: true, message: `${parsedCategory.data} smart clip generation queued for your local worker.` };
+  if (!canRunInlineMediaProcessing()) {
+    return {
+      success: false,
+      message: "Category-only smart clip regeneration is not queued yet. Use Regenerate Smart Clips to run the safe full refresh.",
+    };
   }
 
   try {

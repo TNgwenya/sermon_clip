@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  canRunLocalMediaProcessing: vi.fn(),
+  canRunInlineMediaProcessing: vi.fn(),
   detect: vi.fn(),
   findUnique: vi.fn(),
   stat: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock("@/server/agents/clipStudioAudioReviewService", () => ({
   detectClipStudioAudioSilenceEvents: mocks.detect,
 }));
 vi.mock("@/server/runtime/workerRuntime", () => ({
-  canRunLocalMediaProcessing: mocks.canRunLocalMediaProcessing,
+  canRunInlineMediaProcessing: mocks.canRunInlineMediaProcessing,
 }));
 
 import { GET } from "./route";
@@ -25,7 +25,7 @@ import { GET } from "./route";
 describe("clip audio silence review route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.canRunLocalMediaProcessing.mockReturnValue(true);
+    mocks.canRunInlineMediaProcessing.mockReturnValue(true);
     mocks.findUnique.mockResolvedValue({
       startTimeSeconds: 120,
       endTimeSeconds: 180,
@@ -58,7 +58,7 @@ describe("clip audio silence review route", () => {
   });
 
   it("does not query media or start ffmpeg when local processing is unavailable", async () => {
-    mocks.canRunLocalMediaProcessing.mockReturnValue(false);
+    mocks.canRunInlineMediaProcessing.mockReturnValue(false);
 
     const response = await GET(
       new Request("http://localhost/api/clips/clip-1/audio-silence-review"),

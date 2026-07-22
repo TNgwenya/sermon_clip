@@ -13,6 +13,8 @@ import {
   runCaptionBurnBatch,
   runClipGenerationWorkerJob,
   runOverlayAndExportBatch,
+  resolveClipGenerationWorkerPreviewRequest,
+  resolveMediaAssetWorkerRequest,
   resolveRedoClipGenerationWorkerSourceWindow,
   summarizeCaptionBatch,
   summarizeQualityRefreshBatch,
@@ -23,8 +25,12 @@ import {
   isClipGenerationForcedRetrySummary,
   isClipGenerationPreviewRepairSummary,
 } from "../src/lib/clipGenerationRetry.ts";
+import { isForcedProcessingJobSummary } from "../src/lib/mediaProcessingJobIntent.ts";
 
 process.env.WORKER_ENABLED ||= "true";
+// This process-only marker distinguishes the persistent media worker from a
+// production Next.js web service that happens to share the same .env file.
+process.env.MEDIA_WORKER_RUNTIME = "true";
 const { loadEnvConfig } = nextEnv;
 loadEnvConfig(process.cwd());
 
@@ -148,18 +154,26 @@ function startJobHeartbeat(jobId: string): () => void {
   };
 }
 
-async function runCaptionBurnJob(sermonId: string): Promise<string> {
+async function runCaptionBurnJob(
+  sermonId: string,
+  request: ReturnType<typeof resolveMediaAssetWorkerRequest>,
+): Promise<string> {
   const clips = await prisma.clipCandidate.findMany({
     where: {
       sermonId,
+      ...(request.clipIds ? { id: { in: request.clipIds } } : {}),
       status: { in: ["APPROVED", "EXPORTED"] },
       renderStatus: "COMPLETED",
       captionStatus: "GENERATED",
       captionBurnStatus: { not: "BURNING" },
-      OR: [
-        { captionBurnStatus: { not: "COMPLETED" } },
-        { captionBurnFreshness: { not: "UP_TO_DATE" } },
-      ],
+      ...(request.force
+        ? {}
+        : {
+            OR: [
+              { captionBurnStatus: { not: "COMPLETED" } },
+              { captionBurnFreshness: { not: "UP_TO_DATE" } },
+            ],
+          }),
     },
     orderBy: [{ overallPostScore: "desc" }, { score: "desc" }, { createdAt: "asc" }],
     select: { id: true, captionData: true },
@@ -175,18 +189,26 @@ async function runCaptionBurnJob(sermonId: string): Promise<string> {
   });
 }
 
-async function runOverlayAndExportJob(sermonId: string): Promise<string> {
+async function runOverlayAndExportJob(
+  sermonId: string,
+  request: ReturnType<typeof resolveMediaAssetWorkerRequest>,
+): Promise<string> {
   const clips = await prisma.clipCandidate.findMany({
     where: {
       sermonId,
+      ...(request.clipIds ? { id: { in: request.clipIds } } : {}),
       status: { in: ["APPROVED", "EXPORTED"] },
       renderStatus: "COMPLETED",
-      OR: [
-        { overlayStatus: { not: "COMPLETED" } },
-        { overlayFreshness: { not: "UP_TO_DATE" } },
-        { exportStatus: { not: "COMPLETED" } },
-        { exportFreshness: { not: "UP_TO_DATE" } },
-      ],
+      ...(request.force
+        ? {}
+        : {
+            OR: [
+              { overlayStatus: { not: "COMPLETED" } },
+              { overlayFreshness: { not: "UP_TO_DATE" } },
+              { exportStatus: { not: "COMPLETED" } },
+              { exportFreshness: { not: "UP_TO_DATE" } },
+            ],
+          }),
     },
     orderBy: [{ overallPostScore: "desc" }, { score: "desc" }, { createdAt: "asc" }],
     select: {
@@ -331,8 +353,10 @@ async function skipObsoleteStageJob(job: ProcessingJob): Promise<string | null> 
 async function runJob(job: ProcessingJob): Promise<string> {
   const type = job.type;
   const sermonId = job.sermonId;
+  const mediaAssetRequest = resolveMediaAssetWorkerRequest(job.generationSummary);
+  const forceProcessing = isForcedProcessingJobSummary(job.generationSummary);
 
-  const obsoleteStageMessage = await skipObsoleteStageJob(job);
+  const obsoleteStageMessage = forceProcessing ? null : await skipObsoleteStageJob(job);
   if (obsoleteStageMessage) {
     return obsoleteStageMessage;
   }
@@ -345,17 +369,17 @@ async function runJob(job: ProcessingJob): Promise<string> {
     }
     case "DOWNLOAD_VIDEO": {
       const { downloadSermonVideo } = await import("../src/server/agents/videoDownloadAgent");
-      const result = await downloadSermonVideo(sermonId, { force: false, processingJobId: job.id });
+      const result = await downloadSermonVideo(sermonId, { force: forceProcessing, processingJobId: job.id });
       return result.reusedExistingFile ? "Existing source video reused." : "Source video downloaded.";
     }
     case "EXTRACT_AUDIO": {
       const { extractSermonAudio } = await import("../src/server/agents/audioExtractionAgent");
-      const result = await extractSermonAudio(sermonId, { force: false, processingJobId: job.id });
+      const result = await extractSermonAudio(sermonId, { force: forceProcessing, processingJobId: job.id });
       return result.reusedExistingFile ? "Existing audio reused." : "Audio extracted.";
     }
     case "TRANSCRIBE_AUDIO": {
       const { transcribeSermonAudio } = await import("../src/server/agents/transcriptionAgent");
-      const result = await transcribeSermonAudio(sermonId, { force: false, processingJobId: job.id });
+      const result = await transcribeSermonAudio(sermonId, { force: forceProcessing, processingJobId: job.id });
       return result.reusedExistingTranscript ? "Existing transcript reused." : "Audio transcribed.";
     }
     case "GENERATE_INTELLIGENCE": {
@@ -387,6 +411,7 @@ async function runJob(job: ProcessingJob): Promise<string> {
       }
 
       const append = shouldAppendGeneratedClips(job);
+      const previewRequest = resolveClipGenerationWorkerPreviewRequest(job.generationSummary);
       const summary = await runClipGenerationWorkerJob({
         previewRepairOnly: isClipGenerationPreviewRepairSummary(job.generationSummary),
         forceGeneration: isClipGenerationForcedRetrySummary(job.generationSummary),
@@ -402,7 +427,12 @@ async function runJob(job: ProcessingJob): Promise<string> {
         },
         preparePreviews: async () => {
           const { prepareGeneratedClipReviewAssets } = await import("../src/server/agents/clipReviewAssetService");
-          return prepareGeneratedClipReviewAssets({ sermonId, force: false });
+          return prepareGeneratedClipReviewAssets({
+            sermonId,
+            force: previewRequest.force,
+            onlyFailed: previewRequest.onlyFailed,
+            ...(previewRequest.clipIds ? { clipIds: previewRequest.clipIds } : {}),
+          });
         },
       });
       await restoreCompletedClipGenerationStatus(sermonId);
@@ -410,12 +440,18 @@ async function runJob(job: ProcessingJob): Promise<string> {
     }
     case "EXPORT_CLIPS": {
       const { renderApprovedClipsForSermon } = await import("../src/server/agents/clipRenderService");
-      const result = await renderApprovedClipsForSermon(sermonId, { force: false });
+      const result = await renderApprovedClipsForSermon(sermonId, {
+        force: mediaAssetRequest.force,
+        ...(mediaAssetRequest.clipIds ? { clipIds: mediaAssetRequest.clipIds } : {}),
+      });
       return summarizeRenderBatch(result);
     }
     case "GENERATE_SUBTITLES": {
       const { generateCaptionsForApprovedClips } = await import("../src/server/agents/captionService");
-      const result = await generateCaptionsForApprovedClips(sermonId, { force: false });
+      const result = await generateCaptionsForApprovedClips(sermonId, {
+        force: mediaAssetRequest.force,
+        ...(mediaAssetRequest.clipIds ? { clipIds: mediaAssetRequest.clipIds } : {}),
+      });
       return summarizeCaptionBatch(result);
     }
     case "QUALITY_REFRESH": {
@@ -425,10 +461,10 @@ async function runJob(job: ProcessingJob): Promise<string> {
     }
     case "BURN_SUBTITLES":
     {
-      return runCaptionBurnJob(sermonId);
+      return runCaptionBurnJob(sermonId, mediaAssetRequest);
     }
     case "RENDER_OVERLAY": {
-      return runOverlayAndExportJob(sermonId);
+      return runOverlayAndExportJob(sermonId, mediaAssetRequest);
     }
     default:
       throw new Error(`Unsupported processing job type: ${type}`);

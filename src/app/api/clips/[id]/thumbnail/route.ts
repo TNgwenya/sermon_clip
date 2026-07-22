@@ -7,7 +7,7 @@ import {
   ensureClipThumbnail,
   generateClipThumbnailPreview,
 } from "@/server/agents/clipThumbnailService";
-import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+import { canRunInlineMediaProcessing } from "@/server/runtime/workerRuntime";
 
 export const runtime = "nodejs";
 
@@ -85,7 +85,20 @@ export async function GET(
     return NextResponse.json({ error: "Clip not found." }, { status: 404 });
   }
 
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
+    if (clip.thumbnailPath) {
+      const existingImage = await readFile(/* turbopackIgnore: true */ clip.thumbnailPath).catch(() => null);
+      if (existingImage && existingImage.length > 0) {
+        return new NextResponse(new Uint8Array(existingImage), {
+          status: 200,
+          headers: {
+            "Content-Type": clip.thumbnailPath.endsWith(".webp") ? "image/webp" : "image/jpeg",
+            "Content-Disposition": `inline; filename="${clip.id}-thumbnail"`,
+            "Cache-Control": "private, max-age=3600",
+          },
+        });
+      }
+    }
     return fallbackPoster(clip.title);
   }
 

@@ -26,9 +26,11 @@ import { processSermonPipeline } from "@/server/pipeline/processSermonPipeline";
 import { mediaFileIsUsable } from "@/server/media/fileGuards";
 import { assertMediaStorageCapacity } from "@/server/media/storageCapacity";
 import {
+  canRunInlineMediaProcessing,
   canRunLocalMediaProcessing,
   localMediaProcessingUnavailableMessage,
 } from "@/server/runtime/workerRuntime";
+import { queueSermonProcessingJob } from "@/server/agents/processing";
 
 export const runtime = "nodejs";
 
@@ -77,7 +79,18 @@ function fieldErrorsFromResult(result: ReturnType<typeof createSermonSchema.safe
   };
 }
 
-function startUploadedSermonPipeline(sermonId: string): void {
+async function startUploadedSermonPipeline(sermonId: string): Promise<void> {
+  if (!canRunInlineMediaProcessing()) {
+    const job = await queueSermonProcessingJob(sermonId, "PROCESS_SERMON");
+    await appendPipelineLog(
+      sermonId,
+      job.reusedExisting
+        ? "One-click processing was already queued after raw upload."
+        : "One-click processing queued for the media worker after raw upload.",
+    );
+    return;
+  }
+
   void processSermonPipeline(sermonId)
     .then((result) => {
       revalidatePath(`/sermons/${sermonId}`);
@@ -214,18 +227,26 @@ export async function POST(request: Request): Promise<NextResponse> {
       const sourceVideoPath = getSourceVideoPath(sermon.id);
       const tempSourceVideoPath = getUploadedSourceTempPath(sourceVideoPath);
       const receivedBytes = await stat(/* turbopackIgnore: true */ tempSourceVideoPath).then((fileStat) => fileStat.size).catch(() => 0);
-      if (receivedBytes !== totalBytes) {
-        throw new Error(`The upload ended early. Expected ${totalBytes} bytes but received ${receivedBytes} bytes.`);
+      let finalizedUpload: Awaited<ReturnType<typeof mediaFileIsUsable>>;
+      if (receivedBytes === totalBytes) {
+        const uploadedMediaCheck = await mediaFileIsUsable(tempSourceVideoPath);
+        if (!uploadedMediaCheck.usable) {
+          throw new Error(buildUploadedMediaCheckFailureMessage(uploadedMediaCheck.reason));
+        }
+
+        await rename(/* turbopackIgnore: true */ tempSourceVideoPath, /* turbopackIgnore: true */ sourceVideoPath);
+        finalizedUpload = await mediaFileIsUsable(sourceVideoPath);
+      } else {
+        // Finalization may have moved the complete file before a durable queue
+        // write failed. A repeated mobile request must reuse that file and
+        // retry the enqueue instead of reporting a false truncated upload.
+        const finalizedBytes = await stat(/* turbopackIgnore: true */ sourceVideoPath).then((fileStat) => fileStat.size).catch(() => 0);
+        if (finalizedBytes !== totalBytes) {
+          throw new Error(`The upload ended early. Expected ${totalBytes} bytes but received ${receivedBytes} bytes.`);
+        }
+        finalizedUpload = await mediaFileIsUsable(sourceVideoPath);
       }
 
-      const uploadedMediaCheck = await mediaFileIsUsable(tempSourceVideoPath);
-      if (!uploadedMediaCheck.usable) {
-        throw new Error(buildUploadedMediaCheckFailureMessage(uploadedMediaCheck.reason));
-      }
-
-      await rename(/* turbopackIgnore: true */ tempSourceVideoPath, /* turbopackIgnore: true */ sourceVideoPath);
-
-      const finalizedUpload = await mediaFileIsUsable(sourceVideoPath);
       if (!finalizedUpload.usable) {
         await unlink(/* turbopackIgnore: true */ sourceVideoPath).catch(() => undefined);
         throw new Error(buildUploadedMediaCheckFailureMessage(finalizedUpload.reason));
@@ -244,7 +265,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
       await appendPipelineLog(sermon.id, "Sermon created from chunked uploaded media file and storage folders initialized.");
       revalidatePath("/");
-      startUploadedSermonPipeline(sermon.id);
+      await startUploadedSermonPipeline(sermon.id);
 
       return NextResponse.json({
         success: true,
@@ -399,7 +420,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     revalidatePath("/");
-    startUploadedSermonPipeline(sermon.id);
+    await startUploadedSermonPipeline(sermon.id);
 
     return NextResponse.json({
       success: true,

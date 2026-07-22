@@ -1188,7 +1188,7 @@ export async function renderApprovedClip(
 
 export async function renderApprovedClipsForSermon(
   sermonId: string,
-  options?: Omit<RenderOptions, "allowRerender">,
+  options?: Omit<RenderOptions, "allowRerender"> & { clipIds?: string[] },
 ): Promise<RenderSummary> {
   const normalizedSermonId = sermonId.trim();
   if (!normalizedSermonId) {
@@ -1198,6 +1198,9 @@ export async function renderApprovedClipsForSermon(
   const clips = await prisma.clipCandidate.findMany({
     where: {
       sermonId: normalizedSermonId,
+      ...(options?.clipIds !== undefined
+        ? { id: { in: Array.from(new Set(options.clipIds)) } }
+        : {}),
       status: {
         in: ["APPROVED", "EXPORTED"],
       },

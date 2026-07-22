@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { detectClipStudioAudioSilenceEvents } from "@/server/agents/clipStudioAudioReviewService";
-import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+import { canRunInlineMediaProcessing } from "@/server/runtime/workerRuntime";
 
 export const runtime = "nodejs";
 
@@ -21,7 +21,7 @@ export async function GET(
     return NextResponse.json({ error: "Clip id is required." }, { status: 400, headers: NO_STORE_HEADERS });
   }
 
-  if (!canRunLocalMediaProcessing()) {
+  if (!canRunInlineMediaProcessing()) {
     return NextResponse.json(
       { error: "Exact audio review runs on the local media worker." },
       { status: 409, headers: NO_STORE_HEADERS },

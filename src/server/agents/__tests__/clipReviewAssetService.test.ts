@@ -16,6 +16,33 @@ afterEach(() => {
 });
 
 describe("clip review asset service", () => {
+  it("limits a queued one-clip repair to the requested clip", () => {
+    expect(__clipReviewAssetServiceTestUtils.buildReviewAssetWhere({
+      sermonId: "sermon-1",
+      clipIds: ["clip-target", "clip-target", " "],
+      onlyFailed: true,
+    })).toEqual({
+      sermonId: "sermon-1",
+      id: { in: ["clip-target"] },
+      status: { in: ["SUGGESTED", "APPROVED"] },
+      isAiGenerated: true,
+      renderStatus: "FAILED",
+    });
+  });
+
+  it("selects zero clips for an explicitly empty target instead of widening the repair", () => {
+    expect(__clipReviewAssetServiceTestUtils.buildReviewAssetWhere({
+      sermonId: "sermon-1",
+      clipIds: [],
+    })).toMatchObject({
+      sermonId: "sermon-1",
+      id: { in: [] },
+    });
+    expect(__clipReviewAssetServiceTestUtils.buildReviewAssetWhere({
+      sermonId: "sermon-1",
+    })).not.toHaveProperty("id");
+  });
+
   it("renders missing review previews for active generated clips", () => {
     expect(__clipReviewAssetServiceTestUtils.shouldRenderReviewPreview({
       status: "SUGGESTED",

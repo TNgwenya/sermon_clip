@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 
-import type { AssetFreshness, ClipRenderStatus, ClipStatus } from "@prisma/client";
+import type { AssetFreshness, ClipRenderStatus, ClipStatus, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
@@ -43,6 +43,40 @@ export type ClipReviewAssetSummary = {
   failed: number;
   skipped: number;
 };
+
+function buildReviewAssetWhere(input: {
+  sermonId: string;
+  onlyFailed?: boolean;
+  clipIds?: string[];
+}): Prisma.ClipCandidateWhereInput {
+  const clipIds = Array.from(new Set(
+    (input.clipIds ?? []).map((clipId) => clipId.trim()).filter(Boolean),
+  ));
+
+  return {
+    sermonId: input.sermonId,
+    ...(input.clipIds !== undefined ? { id: { in: clipIds } } : {}),
+    ...(input.onlyFailed
+      ? {
+          status: { in: ["SUGGESTED", "APPROVED"] },
+          isAiGenerated: true,
+          renderStatus: "FAILED",
+        }
+      : {
+          OR: [
+            {
+              status: { in: ["SUGGESTED", "APPROVED"] },
+              isAiGenerated: true,
+            },
+            {
+              status: { in: ["SUGGESTED", "APPROVED", "EXPORTED"] },
+              renderStatus: "COMPLETED",
+              renderedFilePath: { not: null },
+            },
+          ],
+        }),
+  };
+}
 
 function shouldPreparePreview(
   clip: Pick<ReviewAssetClip, "renderStatus">,
@@ -250,30 +284,10 @@ export async function prepareGeneratedClipReviewAssets(input: {
   sermonId: string;
   force?: boolean;
   onlyFailed?: boolean;
+  clipIds?: string[];
 }): Promise<ClipReviewAssetSummary> {
   const clips = await prisma.clipCandidate.findMany({
-    where: {
-      sermonId: input.sermonId,
-      ...(input.onlyFailed
-        ? {
-            status: { in: ["SUGGESTED", "APPROVED"] },
-            isAiGenerated: true,
-            renderStatus: "FAILED",
-          }
-        : {
-            OR: [
-              {
-                status: { in: ["SUGGESTED", "APPROVED"] },
-                isAiGenerated: true,
-              },
-              {
-                status: { in: ["SUGGESTED", "APPROVED", "EXPORTED"] },
-                renderStatus: "COMPLETED",
-                renderedFilePath: { not: null },
-              },
-            ],
-          }),
-    },
+    where: buildReviewAssetWhere(input),
     orderBy: [{ overallPostScore: "desc" }, { score: "desc" }, { startTimeSeconds: "asc" }],
     select: {
       id: true,
@@ -360,6 +374,7 @@ export async function prepareGeneratedClipReviewAssets(input: {
 }
 
 export const __clipReviewAssetServiceTestUtils = {
+  buildReviewAssetWhere,
   shouldPreparePreview,
   shouldRenderReviewPreview,
   shouldUploadRemotePreview,

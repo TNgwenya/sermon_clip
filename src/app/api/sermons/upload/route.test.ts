@@ -13,6 +13,15 @@ const prismaMock = vi.hoisted(() => ({
   },
 }));
 const storageCapacityMock = vi.hoisted(() => vi.fn(async () => undefined));
+const runtimeMock = vi.hoisted(() => ({
+  canRunLocalMediaProcessing: vi.fn(() => true),
+  canRunInlineMediaProcessing: vi.fn(() => true),
+}));
+const queueProcessingJobMock = vi.hoisted(() => vi.fn(async () => ({
+  id: "job-1",
+  reusedExisting: false,
+  intentConflict: false,
+})));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/prisma", () => ({ prisma: prismaMock }));
@@ -35,8 +44,12 @@ vi.mock("@/server/media/storageCapacity", () => ({
   assertMediaStorageCapacity: storageCapacityMock,
 }));
 vi.mock("@/server/runtime/workerRuntime", () => ({
-  canRunLocalMediaProcessing: vi.fn(() => true),
+  canRunLocalMediaProcessing: runtimeMock.canRunLocalMediaProcessing,
+  canRunInlineMediaProcessing: runtimeMock.canRunInlineMediaProcessing,
   localMediaProcessingUnavailableMessage: vi.fn((action: string) => `${action} unavailable.`),
+}));
+vi.mock("@/server/agents/processing", () => ({
+  queueSermonProcessingJob: queueProcessingJobMock,
 }));
 
 import { POST } from "./route";
@@ -64,6 +77,9 @@ describe("raw sermon upload route", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    runtimeMock.canRunLocalMediaProcessing.mockReturnValue(true);
+    runtimeMock.canRunInlineMediaProcessing.mockReturnValue(true);
+    queueProcessingJobMock.mockResolvedValue({ id: "job-1", reusedExisting: false, intentConflict: false });
     await rm(path.dirname(testState.sourcePath), { recursive: true, force: true });
     prismaMock.sermon.findUnique.mockResolvedValue({ id: "sermon-1", title: "Mobile Sermon" });
     storageCapacityMock.mockResolvedValue(undefined);
@@ -129,5 +145,50 @@ describe("raw sermon upload route", () => {
     expect(response.status).toBe(507);
     expect(storageCapacityMock).toHaveBeenCalledWith({ incomingBytes: 2_000_000 });
     expect(prismaMock.sermon.create).not.toHaveBeenCalled();
+  });
+
+  it("accepts the upload on production storage but queues processing outside the web process", async () => {
+    runtimeMock.canRunInlineMediaProcessing.mockReturnValue(false);
+    const partialPath = testState.sourcePath.replace(/\.mp4$/i, ".upload.partial.mp4");
+    await mkdir(path.dirname(partialPath), { recursive: true });
+    await writeFile(partialPath, Buffer.from([1, 2, 3]));
+
+    const finishUrl = new URL("http://localhost/api/sermons/upload");
+    finishUrl.searchParams.set("uploadMode", "finish");
+    finishUrl.searchParams.set("sermonId", "sermon-1");
+    finishUrl.searchParams.set("totalBytes", "3");
+
+    const response = await POST(new Request(finishUrl, { method: "POST" }));
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(queueProcessingJobMock).toHaveBeenCalledWith("sermon-1", "PROCESS_SERMON");
+    });
+    expect(runtimeMock.canRunLocalMediaProcessing).toHaveBeenCalled();
+  });
+
+  it("reuses a finalized upload when the first durable enqueue fails", async () => {
+    runtimeMock.canRunInlineMediaProcessing.mockReturnValue(false);
+    queueProcessingJobMock
+      .mockRejectedValueOnce(new Error("Database temporarily unavailable."))
+      .mockResolvedValueOnce({ id: "job-2", reusedExisting: false, intentConflict: false });
+    const partialPath = testState.sourcePath.replace(/\.mp4$/i, ".upload.partial.mp4");
+    await mkdir(path.dirname(partialPath), { recursive: true });
+    await writeFile(partialPath, Buffer.from([1, 2, 3]));
+
+    const finishUrl = new URL("http://localhost/api/sermons/upload");
+    finishUrl.searchParams.set("uploadMode", "finish");
+    finishUrl.searchParams.set("sermonId", "sermon-1");
+    finishUrl.searchParams.set("totalBytes", "3");
+
+    const firstResponse = await POST(new Request(finishUrl, { method: "POST" }));
+    expect(firstResponse.status).toBe(400);
+    await expect(readFile(testState.sourcePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
+
+    const retryResponse = await POST(new Request(finishUrl, { method: "POST" }));
+    expect(retryResponse.status).toBe(200);
+    expect(queueProcessingJobMock).toHaveBeenCalledTimes(2);
+    expect(queueProcessingJobMock).toHaveBeenLastCalledWith("sermon-1", "PROCESS_SERMON");
+    await expect(readFile(testState.sourcePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
   });
 });
