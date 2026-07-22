@@ -6,6 +6,7 @@ import type { PostingPlatform as PrismaPostingPlatform, Prisma } from "@prisma/c
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
+import { isVideoClipOpportunityType } from "@/lib/contentPublishing";
 import { runContentPublishingPreflight } from "@/lib/contentPublishingPreflight";
 import { fromPrismaPostingPlatform } from "@/lib/postingDrafts";
 import { prisma } from "@/lib/prisma";
@@ -17,6 +18,8 @@ import {
 import { resolveReadyMedia } from "@/lib/readyMedia";
 import { extractCaptionPackage } from "@/lib/clipStudio";
 import { buildCanonicalPlatformPayloads } from "@/lib/publishingPayload";
+import { checkContentAssetMediaReadiness } from "@/server/contentAssets/contentAssetMediaReadiness";
+import { createAssetRevision } from "@/server/contentRevisionService";
 
 const platformSchema = z.enum(["TIKTOK", "INSTAGRAM", "YOUTUBE_SHORTS", "FACEBOOK"]);
 const planItemSchema = z.object({
@@ -70,6 +73,20 @@ function objectMetadata(value: Prisma.JsonValue | null): Record<string, unknown>
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function asRevisionJson(value: Prisma.JsonValue | null | undefined): Prisma.InputJsonValue | undefined {
+  return value === null || value === undefined ? undefined : value as Prisma.InputJsonValue;
+}
+
+function scriptureReferenceWithVersion(
+  reference: string | null | undefined,
+  version: string | null | undefined,
+): string | null {
+  const cleanReference = reference?.trim();
+  if (!cleanReference) return null;
+  const cleanVersion = version?.trim().toUpperCase();
+  return cleanVersion ? `${cleanReference} (${cleanVersion})` : cleanReference;
 }
 
 type AssetPreflightFile = {
@@ -204,15 +221,40 @@ export async function bulkScheduleWeeklyPlanAction(
         id: true,
         status: true,
         assetType: true,
+        title: true,
+        bodyContent: true,
+        structuredContentJson: true,
         caption: true,
+        hashtagsJson: true,
+        callToAction: true,
         metadataJson: true,
-        contentOpportunity: { select: { sourceTranscriptExcerpt: true } },
+        currentRevisionId: true,
+        approvedRevisionId: true,
+        currentRevision: {
+          select: { approvalState: true, renderedAt: true },
+        },
+        contentOpportunity: {
+          select: {
+            opportunityType: true,
+            sourceTranscriptExcerpt: true,
+            relatedScripture: true,
+            scriptureTranslation: true,
+            translationReviewState: true,
+            approvedRevisionId: true,
+          },
+        },
         files: {
           select: {
+            id: true,
+            fileName: true,
             mimeType: true,
+            filePath: true,
+            objectKey: true,
+            publicUrl: true,
             width: true,
             height: true,
             sizeBytes: true,
+            sortOrder: true,
             metadataJson: true,
           },
         },
@@ -252,10 +294,35 @@ export async function bulkScheduleWeeklyPlanAction(
       message: "One or more plan items are no longer approved and ready. Rebuild the weekly plan.",
     };
   }
+  const videoBriefAsset = assets.find((asset) => {
+    const metadata = objectMetadata(asset.metadataJson);
+    const sourceOpportunityType = asset.contentOpportunity?.opportunityType
+      ?? (typeof metadata.sourceOpportunityType === "string" ? metadata.sourceOpportunityType : null);
+    return Boolean(sourceOpportunityType && isVideoClipOpportunityType(sourceOpportunityType));
+  });
+  if (videoBriefAsset) {
+    return {
+      success: false,
+      message: "A video clip brief was included as a generated post. Open its real sermon clip and rebuild the weekly plan.",
+    };
+  }
+  const staleAssetRevision = assets.find((asset) => (
+    !asset.currentRevisionId
+    || !asset.approvedRevisionId
+    || asset.currentRevisionId !== asset.approvedRevisionId
+    || asset.currentRevision?.approvalState !== "APPROVED"
+  ));
+  if (staleAssetRevision) {
+    return {
+      success: false,
+      message: `“${staleAssetRevision.title}” changed after approval. Review and approve its current version before rebuilding the weekly plan.`,
+    };
+  }
 
   const itemByAssetId = new Map(items
     .filter((item) => item.sourceKind === "CONTENT_ASSET")
     .map((item) => [item.sourceId, item]));
+  const mediaReadinessRequests: Array<ReturnType<typeof checkContentAssetMediaReadiness>> = [];
   for (const asset of assets) {
     const item = itemByAssetId.get(asset.id);
     if (!item) continue;
@@ -270,8 +337,21 @@ export async function bulkScheduleWeeklyPlanAction(
       status: asset.status,
       platform: fromPrismaPostingPlatform(item.platform),
       caption: item.caption,
+      artworkText: asset.bodyContent,
       sourceTranscriptExcerpt: asset.contentOpportunity?.sourceTranscriptExcerpt,
+      relatedScripture: scriptureReferenceWithVersion(
+        asset.contentOpportunity?.relatedScripture,
+        asset.contentOpportunity?.scriptureTranslation,
+      )
+        ?? (typeof metadata.relatedScripture === "string" ? metadata.relatedScripture : null),
       translationNeedsReview: metadata.translationNeedsReview === true,
+      translationReview: asset.assetType === "SCRIPTURE_GRAPHIC"
+        ? {
+            scriptureVersion: asset.contentOpportunity?.scriptureTranslation,
+            scriptureVersionRequired: true,
+            scriptureVersionApproved: asset.contentOpportunity?.translationReviewState === "APPROVED",
+          }
+        : undefined,
       files: preflightFiles.map((file) => {
         const fileMetadata = objectMetadata(file.metadataJson);
         return {
@@ -290,6 +370,18 @@ export async function bulkScheduleWeeklyPlanAction(
           ?? `Resolve the publishing checks for “${item.title}”.`,
       };
     }
+    if (preflight.checks.some((check) => check.id === "media")) {
+      mediaReadinessRequests.push(checkContentAssetMediaReadiness({
+        assetType: asset.assetType,
+        platform: fromPrismaPostingPlatform(item.platform),
+        files: asset.files,
+      }));
+    }
+  }
+  const mediaReadinessResults = await Promise.all(mediaReadinessRequests);
+  const blockedMedia = mediaReadinessResults.find((result) => result.status === "BLOCKED");
+  if (blockedMedia) {
+    return { success: false, message: blockedMedia.message };
   }
 
   const controlPanelMode = process.env.VERCEL === "1" || process.env.CONTROL_PANEL_MODE === "true";
@@ -335,6 +427,7 @@ export async function bulkScheduleWeeklyPlanAction(
 
   const warnings = findRepeatedSermonPointWarnings(items);
   const clipsById = new Map(clips.map((clip) => [clip.id, clip]));
+  const assetsById = new Map(assets.map((asset) => [asset.id, asset]));
   try {
     const createdPostIds = await prisma.$transaction(async (tx) => {
       const draft = await tx.postingDraft.create({
@@ -355,6 +448,34 @@ export async function bulkScheduleWeeklyPlanAction(
         const platformCopy = clip
           ? resolveWeeklyClipPlatformCopy({ ...clip, platform: item.platform })
           : null;
+        const contentAsset = item.sourceKind === "CONTENT_ASSET" ? assetsById.get(item.sourceId) : null;
+        let contentAssetRevisionId: string | null = null;
+        if (contentAsset) {
+          const scheduleMatchesApprovedRevision = Boolean(
+            contentAsset.currentRevisionId
+            && contentAsset.currentRevisionId === contentAsset.approvedRevisionId
+            && item.title.trim() === contentAsset.title.trim()
+            && item.caption.trim() === (contentAsset.caption?.trim() ?? ""),
+          );
+          contentAssetRevisionId = scheduleMatchesApprovedRevision
+            ? contentAsset.currentRevisionId
+            : (await createAssetRevision(tx, {
+                contentAssetId: contentAsset.id,
+                sourceOpportunityRevisionId: contentAsset.contentOpportunity?.approvedRevisionId ?? null,
+                title: item.title,
+                bodyContent: contentAsset.bodyContent,
+                structuredContentJson: asRevisionJson(contentAsset.structuredContentJson),
+                caption: item.caption,
+                hashtagsJson: asRevisionJson(contentAsset.hashtagsJson),
+                callToAction: contentAsset.callToAction,
+                metadataJson: asRevisionJson(contentAsset.metadataJson),
+                approvalState: "APPROVED",
+                createdBy: "weekly-plan-review",
+                approvedBy: "weekly-plan-review",
+                approvedAt: new Date(),
+                renderedAt: contentAsset.currentRevision?.renderedAt ?? null,
+              })).id;
+        }
         const post = await tx.scheduledPost.create({
           data: {
             postingDraftId: draft.id,
@@ -376,27 +497,33 @@ export async function bulkScheduleWeeklyPlanAction(
             timezone: parsed.data.timezone,
             idempotencyKey: buildWeeklyPlanIdempotencyKey(item),
             ...(item.sourceKind === "CONTENT_ASSET"
-              ? { contentAssetLinks: { create: { contentAssetId: item.sourceId, sortOrder: 0 } } }
+              ? {
+                  contentAssetLinks: {
+                    create: {
+                      contentAssetId: item.sourceId,
+                      contentAssetRevisionId,
+                      sortOrder: 0,
+                    },
+                  },
+                }
               : {}),
           },
           select: { id: true },
         });
         postIds.push(post.id);
-      }
-
-      if (contentAssetIds.length > 0) {
-        await tx.contentAsset.updateMany({
-          where: {
-            id: { in: contentAssetIds },
-            status: { in: ["PREPARED", "READY"] },
-          },
-          data: {
-            status: "SCHEDULED",
-            scheduledAt: new Date(Math.min(...times)),
-            publishedAt: null,
-            archivedAt: null,
-          },
-        });
+        if (contentAsset && contentAssetRevisionId) {
+          await tx.contentAsset.update({
+            where: { id: contentAsset.id },
+            data: {
+              status: "SCHEDULED",
+              scheduledAt: scheduledFor,
+              currentRevisionId: contentAssetRevisionId,
+              approvedRevisionId: contentAssetRevisionId,
+              publishedAt: null,
+              archivedAt: null,
+            },
+          });
+        }
       }
       return postIds;
     });

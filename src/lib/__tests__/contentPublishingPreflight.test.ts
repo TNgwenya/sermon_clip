@@ -71,6 +71,101 @@ describe("content publishing preflight", () => {
     ]));
   });
 
+  it("blocks quote artwork that changes the pastor's transcript wording", () => {
+    const result = runContentPublishingPreflight({
+      assetType: "QUOTE_GRAPHIC",
+      status: "READY",
+      platform: "Instagram",
+      artworkText: "Pressure always makes your faith stronger.",
+      caption: "A message about faith.",
+      sourceTranscriptExcerpt: "Faith keeps walking when pressure comes.",
+      files: [{ mimeType: "image/png", width: 1080, height: 1350 }],
+    });
+
+    expect(result.canSchedule).toBe(false);
+    expect(result.checks).toContainEqual(expect.objectContaining({
+      id: "quote-integrity",
+      status: "BLOCKED",
+    }));
+  });
+
+  it("can verify quote artwork against stored transcript segments", () => {
+    const result = runContentPublishingPreflight({
+      assetType: "QUOTE_GRAPHIC",
+      status: "READY",
+      platform: "Instagram",
+      artworkText: "Faith keeps walking when pressure comes.",
+      caption: "A message about faith.",
+      sourceTranscriptSegments: [
+        { text: "Faith keeps walking" },
+        { text: "when pressure comes." },
+      ],
+      files: [{ mimeType: "image/png", width: 1080, height: 1350 }],
+    });
+
+    expect(result.canSchedule).toBe(true);
+    expect(result.checks).toContainEqual(expect.objectContaining({
+      id: "quote-integrity",
+      status: "READY",
+    }));
+  });
+
+  it("blocks Scripture graphics until a valid reference and recognized version are present", () => {
+    const valid = runContentPublishingPreflight({
+      assetType: "SCRIPTURE_GRAPHIC",
+      status: "READY",
+      platform: "Facebook",
+      artworkText: "The Lord is my shepherd.",
+      caption: "A word for the week.",
+      relatedScripture: "Psalm 23:1",
+      files: [{ mimeType: "image/png", width: 1080, height: 1350 }],
+    });
+    const invalid = runContentPublishingPreflight({
+      assetType: "SCRIPTURE_GRAPHIC",
+      status: "READY",
+      platform: "Facebook",
+      artworkText: "The Lord is my shepherd.",
+      caption: "A word for the week.",
+      relatedScripture: "Psalm ninety-one",
+      files: [{ mimeType: "image/png", width: 1080, height: 1350 }],
+    });
+
+    expect(valid.canSchedule).toBe(false);
+    expect(valid.checks).toContainEqual(expect.objectContaining({
+      id: "scripture-reference",
+      status: "BLOCKED",
+    }));
+    expect(invalid.canSchedule).toBe(false);
+    expect(invalid.checks).toContainEqual(expect.objectContaining({
+      id: "scripture-reference",
+      status: "BLOCKED",
+    }));
+  });
+
+  it("blocks production notes and explicit translation review states", () => {
+    const result = runContentPublishingPreflight({
+      assetType: "SCRIPTURE_GRAPHIC",
+      status: "READY",
+      platform: "Facebook",
+      artworkText: "God is with us. Add a small footer with the church logo.",
+      caption: "Nkulunkulu unathi.",
+      relatedScripture: "Matthew 1:23 (NIV)",
+      translationReview: {
+        translatedFromLanguage: "isiZulu",
+        originalLanguageText: "Nkulunkulu unathi",
+        translatedText: "God is with us",
+        translationConfidence: 0.95,
+      },
+      files: [{ mimeType: "image/png", width: 1080, height: 1350 }],
+    });
+
+    expect(result.canSchedule).toBe(false);
+    expect(result.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "production-copy", status: "BLOCKED" }),
+      expect.objectContaining({ id: "translation", status: "BLOCKED" }),
+    ]));
+  });
+
   it("does not treat a non-image attachment as prepared graphic media", () => {
     const result = runContentPublishingPreflight({
       assetType: "SCRIPTURE_GRAPHIC",

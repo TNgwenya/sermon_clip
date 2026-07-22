@@ -1,10 +1,12 @@
 import { resolveSpeechCleanupProfile, type SpeechCleanupSettings } from "@/lib/clipStudio";
+import type { CaptionCueWordTiming } from "@/lib/clipStudioEditing";
 
 export type SpeechCleanupCaptionCue = {
   index: number;
   startSeconds: number;
   endSeconds: number;
   text: string;
+  wordTimings?: CaptionCueWordTiming[];
 };
 
 export type SpeechCleanupCut = {
@@ -209,6 +211,7 @@ export function buildSpeechCleanupCutPlan({
           startSeconds,
           endSeconds,
           removedSeconds: roundPlanSeconds(endSeconds - startSeconds),
+          rawGapSeconds: event.durationSeconds,
         }];
       })
     : [];
@@ -235,10 +238,16 @@ export function buildSpeechCleanupCutPlan({
           startSeconds,
           endSeconds,
           removedSeconds: roundPlanSeconds(endSeconds - startSeconds),
+          rawGapSeconds: roundPlanSeconds(gapSeconds),
         }];
       })
     : [];
-  const cuts = hasAudioAnalysis ? audioCuts : transcriptCuts;
+  const plannedCuts = hasAudioAnalysis ? audioCuts : transcriptCuts;
+  const cuts: SpeechCleanupCut[] = plannedCuts.map((cut) => ({
+    startSeconds: cut.startSeconds,
+    endSeconds: cut.endSeconds,
+    removedSeconds: cut.removedSeconds,
+  }));
 
   const removedRanges: SpeechCleanupRemovedRange[] = [
     ...(sourceStartSeconds > 0
@@ -254,12 +263,12 @@ export function buildSpeechCleanupCutPlan({
           afterText: sortedCues[0]?.text.trim() ?? null,
         }]
       : []),
-    ...cuts.map((cut) => ({
+    ...plannedCuts.map((cut) => ({
       ...cut,
       kind: "internal" as const,
       source: hasAudioAnalysis ? "audio" as const : "transcript" as const,
       confidence: hasAudioAnalysis ? "confirmed" as const : "candidate" as const,
-      rawGapSeconds: cut.removedSeconds,
+      rawGapSeconds: cut.rawGapSeconds,
       beforeText: findCaptionCueBefore(sortedCues, cut.startSeconds)?.text.trim() ?? null,
       afterText: findCaptionCueAfter(sortedCues, cut.endSeconds)?.text.trim() ?? null,
     })),
@@ -289,7 +298,7 @@ export function buildSpeechCleanupCutPlan({
           kind: "internal" as const,
           source: "transcript" as const,
           confidence: "candidate" as const,
-          rawGapSeconds: candidate.removedSeconds,
+          rawGapSeconds: candidate.rawGapSeconds,
           beforeText: findCaptionCueBefore(sortedCues, candidate.startSeconds)?.text.trim() ?? null,
           afterText: findCaptionCueAfter(sortedCues, candidate.endSeconds)?.text.trim() ?? null,
         }))
@@ -345,14 +354,19 @@ function normalizeEditableCut(
   const kind: SpeechCleanupRemovedRange["kind"] = record["kind"] === "edge" ? "edge" : "internal";
   const beforeText = typeof record["beforeText"] === "string" ? record["beforeText"] : null;
   const afterText = typeof record["afterText"] === "string" ? record["afterText"] : null;
+  const removedSeconds = roundPlanSeconds(end - start);
+  const storedRawGapSeconds = asFiniteNumber(record["rawGapSeconds"]);
   const cut: SpeechCleanupRemovedRange = {
     kind,
     source,
     confidence,
     startSeconds: start,
     endSeconds: end,
-    removedSeconds: roundPlanSeconds(end - start),
-    rawGapSeconds: roundPlanSeconds(end - start),
+    removedSeconds,
+    rawGapSeconds: roundPlanSeconds(Math.max(
+      removedSeconds,
+      Math.min(durationSeconds, storedRawGapSeconds ?? removedSeconds),
+    )),
     beforeText,
     afterText,
   };
@@ -411,10 +425,76 @@ export function resolveSpeechCleanupEditableCuts(
   edits: SpeechCleanupEdits | null | undefined,
 ): SpeechCleanupEditableCut[] {
   if (edits) {
-    return edits.cuts;
+    return edits.cuts.map((cut) => {
+      const appliedRange = plan.removedRanges.find((range) =>
+        range.kind === "internal"
+        && Math.abs(range.startSeconds - cut.startSeconds) < 0.002
+        && Math.abs(range.endSeconds - cut.endSeconds) < 0.002,
+      );
+
+      return appliedRange
+        ? { ...cut, rawGapSeconds: Math.max(cut.rawGapSeconds, appliedRange.rawGapSeconds) }
+        : cut;
+    });
   }
 
   return createSpeechCleanupEditsFromPlan(plan).cuts;
+}
+
+export function resizeSpeechCleanupEditableCut({
+  cut,
+  removedSeconds,
+  minStartSeconds,
+  maxEndSeconds,
+  minRemovedSeconds = 0.2,
+}: {
+  cut: SpeechCleanupEditableCut;
+  removedSeconds: number;
+  minStartSeconds: number;
+  maxEndSeconds: number;
+  minRemovedSeconds?: number;
+}): SpeechCleanupEditableCut {
+  const currentRemovedSeconds = Math.max(0, cut.endSeconds - cut.startSeconds);
+  const rawGapSeconds = Math.max(currentRemovedSeconds, cut.rawGapSeconds);
+  const safeMinStartSeconds = Number.isFinite(minStartSeconds) ? Math.max(0, minStartSeconds) : 0;
+  const safeMaxEndSeconds = Number.isFinite(maxEndSeconds)
+    ? Math.max(safeMinStartSeconds, maxEndSeconds)
+    : Math.max(cut.endSeconds, safeMinStartSeconds + rawGapSeconds);
+  const availableSeconds = Math.max(0, safeMaxEndSeconds - safeMinStartSeconds);
+  const maximumRemovedSeconds = Math.min(rawGapSeconds, availableSeconds);
+
+  if (maximumRemovedSeconds <= 0) {
+    return cut;
+  }
+
+  const minimumRemovedSeconds = Math.min(
+    maximumRemovedSeconds,
+    Math.max(0, minRemovedSeconds),
+  );
+  const requestedRemovedSeconds = Number.isFinite(removedSeconds)
+    ? removedSeconds
+    : currentRemovedSeconds;
+  const nextRemovedSeconds = clampPlanSeconds(
+    requestedRemovedSeconds,
+    minimumRemovedSeconds,
+    maximumRemovedSeconds,
+  );
+  const currentCenterSeconds = (cut.startSeconds + cut.endSeconds) / 2;
+  const startSeconds = clampPlanSeconds(
+    currentCenterSeconds - nextRemovedSeconds / 2,
+    safeMinStartSeconds,
+    safeMaxEndSeconds - nextRemovedSeconds,
+  );
+  const roundedStartSeconds = roundPlanSeconds(startSeconds);
+  const roundedEndSeconds = roundPlanSeconds(startSeconds + nextRemovedSeconds);
+
+  return {
+    ...cut,
+    startSeconds: roundedStartSeconds,
+    endSeconds: roundedEndSeconds,
+    removedSeconds: roundPlanSeconds(roundedEndSeconds - roundedStartSeconds),
+    rawGapSeconds: roundPlanSeconds(rawGapSeconds),
+  };
 }
 
 export function applySpeechCleanupEditsToPlan(
@@ -426,7 +506,13 @@ export function applySpeechCleanupEditsToPlan(
   }
 
   const durationSeconds = Math.max(0, plan.sourceEndSeconds, ...edits.cuts.map((cut) => cut.endSeconds));
-  const editableCuts = normalizeSpeechCleanupEdits(edits, durationSeconds)?.cuts ?? [];
+  const generatedCutsById = new Map(
+    createSpeechCleanupEditsFromPlan(plan).cuts.map((cut) => [cut.id, cut] as const),
+  );
+  const editableCuts = (normalizeSpeechCleanupEdits(edits, durationSeconds)?.cuts ?? []).map((cut) => ({
+    ...cut,
+    rawGapSeconds: Math.max(cut.rawGapSeconds, generatedCutsById.get(cut.id)?.rawGapSeconds ?? 0),
+  }));
   const activeCuts = editableCuts
     .filter((cut) => cut.enabled)
     .map((cut) => {
@@ -437,7 +523,7 @@ export function applySpeechCleanupEditsToPlan(
         startSeconds,
         endSeconds,
         removedSeconds: roundPlanSeconds(Math.max(0, endSeconds - startSeconds)),
-        rawGapSeconds: roundPlanSeconds(Math.max(0, endSeconds - startSeconds)),
+        rawGapSeconds: roundPlanSeconds(Math.max(cut.rawGapSeconds, endSeconds - startSeconds)),
       };
     })
     .filter((cut) => cut.endSeconds - cut.startSeconds >= 0.2)
@@ -450,7 +536,7 @@ export function applySpeechCleanupEditsToPlan(
     startSeconds: cut.startSeconds,
     endSeconds: cut.endSeconds,
     removedSeconds: roundPlanSeconds(cut.endSeconds - cut.startSeconds),
-    rawGapSeconds: roundPlanSeconds(cut.endSeconds - cut.startSeconds),
+    rawGapSeconds: roundPlanSeconds(Math.max(cut.rawGapSeconds, cut.endSeconds - cut.startSeconds)),
     beforeText: cut.beforeText,
     afterText: cut.afterText,
   }));

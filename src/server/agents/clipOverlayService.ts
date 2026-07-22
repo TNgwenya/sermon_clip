@@ -31,15 +31,9 @@ import {
 import {
   appendPipelineLog,
   ensureSermonFolders,
-  getClipOutputPath,
   getOverlayClipPath,
 } from "@/server/agents/storage";
 import { checkFfmpegInstalled, getMediaDurationSeconds } from "@/server/media/ffmpeg";
-import {
-  invalidateAfterOverlayCompleted,
-  markOverlayAssetCompleted,
-  markOverlayAssetFailed,
-} from "@/server/regeneration/dependencies";
 import { getBrandingOverlayDimensions, renderBrandingOverlayPng } from "@/server/agents/brandingOverlay";
 import {
   DEFAULT_CLIP_BRANDING,
@@ -63,13 +57,24 @@ import {
   type BrollCardTone,
 } from "@/lib/clipStudio";
 import {
+  assertClipEditPlanStillActive,
+  isStaleClipCompositionError,
+  preferStaleClipCompositionError,
   recordClipArtifact,
+  tryUpdateClipCandidateForActiveEditPlan,
+  updateClipCandidateForActiveEditPlan,
   upsertActiveClipEditPlanForClip,
+  type ClipEditPlanGuard,
 } from "@/server/agents/clipEditPlanService";
 import {
   buildVideoEncoderArgs,
   resolvePreferredVideoEncoder,
 } from "@/server/media/videoEncoding";
+import {
+  capturePromotedMediaIdentity,
+  discardPromotedMediaIfUnchanged,
+  type PromotedMediaIdentity,
+} from "@/server/agents/mediaPromotionGuard";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -85,9 +90,11 @@ type ClipForOverlay = Pick<
   | "sermonId"
   | "status"
   | "renderStatus"
+  | "renderFreshness"
   | "durationSeconds"
   | "renderedFilePath"
   | "captionBurnStatus"
+  | "captionBurnFreshness"
   | "captionedVideoPath"
   | "captionData"
   | "overlayStatus"
@@ -416,6 +423,58 @@ function shouldBrandingLowerThirdYieldToCaptions(captionData: unknown): boolean 
   return applyCaptionsToClip && cues.length > 0;
 }
 
+function shouldApplyCaptionsToOverlaySource(captionData: unknown): boolean {
+  if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
+    return true;
+  }
+
+  const value = (captionData as Record<string, unknown>)["applyCaptionsToClip"];
+  return typeof value === "boolean" ? value : true;
+}
+
+function resolveOverlaySourceSelection(
+  clip: Pick<
+    ClipForOverlay,
+    | "renderStatus"
+    | "renderFreshness"
+    | "renderedFilePath"
+    | "captionBurnStatus"
+    | "captionBurnFreshness"
+    | "captionedVideoPath"
+    | "captionData"
+  >,
+): { sourcePath: string; sourceWasCaptioned: boolean } {
+  if (shouldApplyCaptionsToOverlaySource(clip.captionData)) {
+    const captionedPath = clip.captionedVideoPath?.trim();
+    if (
+      clip.captionBurnStatus !== "COMPLETED"
+      || clip.captionBurnFreshness !== "UP_TO_DATE"
+      || !captionedPath
+    ) {
+      throw new Error("Captions are enabled, but the captioned video is stale or incomplete. Rebuild burned captions before adding overlays.");
+    }
+
+    return {
+      sourcePath: captionedPath,
+      sourceWasCaptioned: true,
+    };
+  }
+
+  const renderedPath = clip.renderedFilePath?.trim();
+  if (
+    clip.renderStatus !== "COMPLETED"
+    || clip.renderFreshness !== "UP_TO_DATE"
+    || !renderedPath
+  ) {
+    throw new Error("The prepared render is stale or incomplete. Rebuild the clip before adding overlays.");
+  }
+
+  return {
+    sourcePath: renderedPath,
+    sourceWasCaptioned: false,
+  };
+}
+
 function escapeSvgText(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -682,6 +741,7 @@ export const __clipOverlayTestUtils = {
   buildHookOverlayPosition,
   extractBrollOverlaySpecs,
   shouldBrandingLowerThirdYieldToCaptions,
+  resolveOverlaySourceSelection,
   buildHookOverlaySvg,
   buildBrollCardSvg,
   buildOverlayFilterComplex,
@@ -696,8 +756,9 @@ function commandFor(binaryPath?: string): string {
   return binaryPath?.trim() || "ffmpeg";
 }
 
-function getTempOverlayPath(outputPath: string): string {
-  return outputPath.replace(/\.mp4$/i, ".overlay.partial.mp4");
+function getTempOverlayPath(outputPath: string, editPlanId: string): string {
+  const planSuffix = editPlanId.replace(/[^a-zA-Z0-9_-]/g, "");
+  return outputPath.replace(/\.mp4$/i, `.plan-${planSuffix}.overlay.partial.mp4`);
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -726,9 +787,11 @@ async function loadClipForOverlay(clipId: string): Promise<ClipForOverlay> {
       sermonId: true,
       status: true,
       renderStatus: true,
+      renderFreshness: true,
       durationSeconds: true,
       renderedFilePath: true,
       captionBurnStatus: true,
+      captionBurnFreshness: true,
       captionedVideoPath: true,
       captionData: true,
       overlayStatus: true,
@@ -819,15 +882,15 @@ function buildOverlayMetadata(outputPath: string): Pick<
   };
 }
 
-async function failOverlayRender(clipId: string, message: string): Promise<void> {
-  await prisma.clipCandidate.update({
-    where: { id: clipId },
+async function failOverlayRender(guard: ClipEditPlanGuard, message: string): Promise<void> {
+  await tryUpdateClipCandidateForActiveEditPlan({
+    guard,
     data: {
       overlayStatus: "FAILED",
       overlayRenderError: message,
+      overlayFreshness: "FAILED",
     },
   });
-  await markOverlayAssetFailed(clipId);
 }
 
 async function runFfmpegOverlay(input: {
@@ -941,13 +1004,24 @@ export async function renderClipOverlay(
     throw new Error("Clip id is required for overlay rendering.");
   }
 
+  const { plan: startedEditPlan } = await upsertActiveClipEditPlanForClip({
+    clipCandidateId: clipId,
+    createdBy: "overlay",
+    createdReason: "overlay_input_snapshot",
+  });
+  const editPlanGuard = {
+    clipCandidateId: clipId,
+    editPlanId: startedEditPlan.id,
+    planHash: startedEditPlan.planHash,
+  };
+
   const clip = await loadClipForOverlay(clipId);
+  await assertClipEditPlanStillActive(editPlanGuard);
   await ensureSermonFolders(clip.sermonId);
 
-  const captionedPath = clip.captionBurnStatus === "COMPLETED" && clip.captionedVideoPath?.trim()
-    ? clip.captionedVideoPath.trim()
-    : null;
-  const renderedPath = captionedPath ?? clip.renderedFilePath?.trim() ?? getClipOutputPath(clip.sermonId, clip.id);
+  const overlaySource = resolveOverlaySourceSelection(clip);
+  const renderedPath = overlaySource.sourcePath;
+  const captionedPath = overlaySource.sourceWasCaptioned ? renderedPath : null;
   const renderedClipExists = await fileExists(renderedPath);
 
   const sermon = await loadSermonForOverlay(clip.sermonId);
@@ -964,56 +1038,31 @@ export async function renderClipOverlay(
   });
 
   if (!eligibility.ok) {
-    await failOverlayRender(clip.id, eligibility.reason ?? "Clip is not eligible for overlay rendering.");
+    await failOverlayRender(editPlanGuard, eligibility.reason ?? "Clip is not eligible for overlay rendering.");
     throw new Error(eligibility.reason ?? "Clip is not eligible for overlay rendering.");
   }
 
   const ffmpegInstalled = await checkFfmpegInstalled(options?.ffmpegPath);
   if (!ffmpegInstalled) {
     const message = "FFmpeg is not installed or not executable.";
-    await failOverlayRender(clip.id, message);
+    await failOverlayRender(editPlanGuard, message);
     throw new Error(message);
   }
 
   const outputPath = getOverlayClipPath(clip.sermonId, clip.id);
-  const outputExists = await fileHasBytes(outputPath);
-
-  if (outputExists && !options?.allowRerender && !options?.force) {
-    await upsertActiveClipEditPlanForClip({
-      clipCandidateId: clip.id,
-      createdBy: "overlay",
-      createdReason: "existing_overlay_reused",
-    });
-    const outputStats = await stat(outputPath).catch(() => null);
-    const renderedAt = new Date();
-    await prisma.clipCandidate.update({
-      where: { id: clip.id },
-      data: buildOverlayMetadata(outputPath),
-    });
-    await markOverlayAssetCompleted(clip.id, false);
-    await recordClipArtifact({
-      clipCandidateId: clip.id,
-      kind: "OVERLAY",
-      filePath: outputPath,
-      sizeBytes: outputStats?.size ?? null,
-      metadata: {
-        reusedExistingFile: true,
-        sourceWasCaptioned: Boolean(captionedPath),
-      },
-    });
-
-    return {
-      clipId: clip.id,
-      overlayVideoPath: outputPath,
-      renderedAt,
-      reusedExistingFile: true,
-    };
-  }
+  const tempOutputPath = getTempOverlayPath(outputPath, editPlanGuard.editPlanId);
 
   // Claim the render slot — prevents duplicate concurrent renders.
   const claimResult = await prisma.clipCandidate.updateMany({
     where: {
       id: clip.id,
+      editPlans: {
+        some: {
+          id: editPlanGuard.editPlanId,
+          planHash: editPlanGuard.planHash,
+          status: "ACTIVE",
+        },
+      },
       NOT: { overlayStatus: "RENDERING" },
     },
     data: {
@@ -1023,32 +1072,30 @@ export async function renderClipOverlay(
   });
 
   if (claimResult.count === 0) {
+    await assertClipEditPlanStillActive(editPlanGuard);
     throw new Error("Overlay render is already in progress for this clip.");
   }
 
   const job = await createProcessingJob(clip.sermonId, "RENDER_OVERLAY");
+  let promotedOutputIdentity: PromotedMediaIdentity | null = null;
 
   try {
-    await upsertActiveClipEditPlanForClip({
-      clipCandidateId: clip.id,
-      createdBy: "overlay",
-      createdReason: captionedPath ? "overlay_on_captioned_source_requested" : "overlay_requested",
-    });
+    await assertClipEditPlanStillActive(editPlanGuard);
     await markJobRunning(job.id);
     await appendJobLog(job.id, `Overlay render requested for clip ${clip.id}.`);
 
     const overlayDimensions = getBrandingOverlayDimensions("VERTICAL_9_16");
-    const brandingOverlayPath = getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".branding.png");
-    const introOverlayPath = getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".branding-intro.png");
-    const outroOverlayPath = getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".branding-outro.png");
+    const brandingOverlayPath = tempOutputPath.replace(/\.mp4$/i, ".branding.png");
+    const introOverlayPath = tempOutputPath.replace(/\.mp4$/i, ".branding-intro.png");
+    const outroOverlayPath = tempOutputPath.replace(/\.mp4$/i, ".branding-outro.png");
     const hookOverlaySpec = extractHookOverlaySpec(clip.captionData);
     const brollOverlaySpecs = extractBrollOverlaySpecs(clip.captionData);
     const captionsRequireSafeBrandingPlacement = shouldBrandingLowerThirdYieldToCaptions(clip.captionData);
     const brollOverlayPaths = brollOverlaySpecs.map((_, index) =>
-      getTempOverlayPath(outputPath).replace(/\.mp4$/i, `.broll-${index + 1}.png`),
+      tempOutputPath.replace(/\.mp4$/i, `.broll-${index + 1}.png`),
     );
     const hookOverlayPath = hookOverlaySpec
-      ? getTempOverlayPath(outputPath).replace(/\.mp4$/i, ".hook.png")
+      ? tempOutputPath.replace(/\.mp4$/i, ".hook.png")
       : null;
     const brandingConfig = resolveOverlayBrandingConfig(
       clip.captionData,
@@ -1162,7 +1209,6 @@ export async function renderClipOverlay(
       ),
     });
 
-    const tempOutputPath = getTempOverlayPath(outputPath);
     try {
       await unlink(/* turbopackIgnore: true */ tempOutputPath);
     } catch {
@@ -1182,7 +1228,9 @@ export async function renderClipOverlay(
       jobId: job.id,
     });
 
+    await assertClipEditPlanStillActive(editPlanGuard);
     await rename(/* turbopackIgnore: true */ tempOutputPath, /* turbopackIgnore: true */ outputPath);
+    promotedOutputIdentity = await capturePromotedMediaIdentity(outputPath);
     if (!(await fileHasBytes(outputPath))) {
       throw new Error("Overlay render produced an empty output file.");
     }
@@ -1201,11 +1249,16 @@ export async function renderClipOverlay(
 
     const renderedAt = new Date();
     const outputStats = await stat(outputPath).catch(() => null);
-    await prisma.clipCandidate.update({
-      where: { id: clip.id },
-      data: buildOverlayMetadata(outputPath),
+    await updateClipCandidateForActiveEditPlan({
+      guard: editPlanGuard,
+      data: {
+        ...buildOverlayMetadata(outputPath),
+        overlayFreshness: "UP_TO_DATE",
+        overlayAssetVersion: { increment: 1 },
+        exportFreshness: "NEEDS_REGENERATION",
+        assetInvalidationReason: "Overlay regenerated. Export assets require regeneration.",
+      },
     });
-    await markOverlayAssetCompleted(clip.id, true);
     await recordClipArtifact({
       clipCandidateId: clip.id,
       kind: "OVERLAY",
@@ -1232,12 +1285,11 @@ export async function renderClipOverlay(
             )
           : null,
       },
+      editPlan: {
+        editPlanId: editPlanGuard.editPlanId,
+        planHash: editPlanGuard.planHash,
+      },
     });
-    await invalidateAfterOverlayCompleted(
-      clip.id,
-      "Overlay regenerated. Export assets require regeneration.",
-    );
-
     await appendPipelineLog(clip.sermonId, `Overlay render completed for clip ${clip.id}.`);
     await markJobSucceeded(job.id, `Overlay rendered for clip ${clip.id}.`);
 
@@ -1248,9 +1300,9 @@ export async function renderClipOverlay(
       reusedExistingFile: false,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown overlay render error.";
+    const completionError = await preferStaleClipCompositionError(editPlanGuard, error);
+    const message = completionError instanceof Error ? completionError.message : "Unknown overlay render error.";
 
-    const tempOutputPath = getTempOverlayPath(outputPath);
     try {
       await unlink(/* turbopackIgnore: true */ tempOutputPath);
     } catch {
@@ -1262,14 +1314,36 @@ export async function renderClipOverlay(
       [1, 2, 3, 4].map((index) => unlink(/* turbopackIgnore: true */ tempOutputPath.replace(/\.mp4$/i, `.broll-${index}.png`)).catch(() => undefined)),
     );
 
-    await failOverlayRender(clip.id, message);
-    await recordClipArtifact({
-      clipCandidateId: clip.id,
-      kind: "OVERLAY",
-      status: "FAILED",
-      filePath: outputPath,
-      errorMessage: message,
-    }).catch(() => undefined);
+    if (isStaleClipCompositionError(completionError)) {
+      if (promotedOutputIdentity) {
+        await discardPromotedMediaIfUnchanged(outputPath, promotedOutputIdentity);
+      }
+      await markJobFailed(job.id, message, "Stale overlay discarded after newer Clip Studio changes.").catch(() => undefined);
+      await appendPipelineLog(clip.sermonId, `Discarded stale overlay for clip ${clip.id}: ${message}`).catch(() => undefined);
+      throw completionError;
+    }
+
+    const failureRecorded = await tryUpdateClipCandidateForActiveEditPlan({
+      guard: editPlanGuard,
+      data: {
+        overlayStatus: "FAILED",
+        overlayRenderError: message,
+        overlayFreshness: "FAILED",
+      },
+    });
+    if (failureRecorded) {
+      await recordClipArtifact({
+        clipCandidateId: clip.id,
+        kind: "OVERLAY",
+        status: "FAILED",
+        filePath: outputPath,
+        errorMessage: message,
+        editPlan: {
+          editPlanId: editPlanGuard.editPlanId,
+          planHash: editPlanGuard.planHash,
+        },
+      }).catch(() => undefined);
+    }
     await markJobFailed(job.id, message, "Overlay render failed.");
     await appendPipelineLog(clip.sermonId, `Overlay render failed for clip ${clip.id}: ${message}`);
 

@@ -2,6 +2,7 @@ import path from "node:path";
 
 export const DEV_RESET_DELETE_ORDER = [
   "ProcessingJob",
+  "ContentFunnelEvent",
   "ContentOpportunity",
   "ClipCandidate",
   "MinistryMoment",

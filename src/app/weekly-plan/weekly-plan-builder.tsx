@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import type {
@@ -16,6 +17,7 @@ import {
   type WeeklyPlanCandidate,
   type WeeklyPlanObjective,
 } from "@/lib/weeklyPlan";
+import { buildScheduledPostHref } from "@/lib/contentWorkflowUi";
 import {
   bulkScheduleWeeklyPlanAction,
   recordWeeklyPlanPerformanceAction,
@@ -34,6 +36,7 @@ type WeeklyPlanBuilderProps = {
   sermons: WeeklyPlanSermonOption[];
   candidates: WeeklyPlanCandidate[];
   defaultWeekStart: string;
+  initialSermonId?: string | null;
   performance: ContentPerformanceSummary[];
   recommendations: ContentFollowUpRecommendation[];
   recentPublishedPosts: Array<{
@@ -81,6 +84,7 @@ export function WeeklyPlanBuilder({
   sermons,
   candidates,
   defaultWeekStart,
+  initialSermonId = null,
   performance,
   recommendations,
   recentPublishedPosts,
@@ -88,7 +92,11 @@ export function WeeklyPlanBuilder({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [performancePending, startPerformanceTransition] = useTransition();
-  const [sermonId, setSermonId] = useState(sermons[0]?.id ?? "");
+  const [sermonId, setSermonId] = useState(
+    sermons.some((sermon) => sermon.id === initialSermonId)
+      ? initialSermonId as string
+      : sermons[0]?.id ?? "",
+  );
   const [weekStart, setWeekStart] = useState(defaultWeekStart);
   const [frequency, setFrequency] = useState(5);
   const [objective, setObjective] = useState<WeeklyPlanObjective>("DISCIPLESHIP");
@@ -96,7 +104,11 @@ export function WeeklyPlanBuilder({
   const [platforms, setPlatforms] = useState<ContentPublishingPlatform[]>(["INSTAGRAM", "FACEBOOK"]);
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
   const [platformOverrides, setPlatformOverrides] = useState<Record<string, ContentPublishingPlatform>>({});
-  const [resultMessage, setResultMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  const [resultMessage, setResultMessage] = useState<{
+    tone: "success" | "error";
+    text: string;
+    scheduledPostId?: string;
+  } | null>(null);
   const [performancePostId, setPerformancePostId] = useState(recentPublishedPosts.find((post) => !post.hasMetrics)?.id ?? recentPublishedPosts[0]?.id ?? "");
   const [performanceValues, setPerformanceValues] = useState({ reach: "", views: "", comments: "", shares: "", saves: "", clickThroughs: "" });
   const [performanceMessage, setPerformanceMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
@@ -166,7 +178,13 @@ export function WeeklyPlanBuilder({
           scheduledFor: item.scheduledFor,
         })),
       });
-      setResultMessage({ tone: result.success ? "success" : "error", text: result.message });
+      setResultMessage({
+        tone: result.success ? "success" : "error",
+        text: result.message,
+        scheduledPostId: result.success && "scheduledPostIds" in result
+          ? result.scheduledPostIds?.[0]
+          : undefined,
+      });
       if (result.success) router.refresh();
     });
   }
@@ -198,20 +216,28 @@ export function WeeklyPlanBuilder({
     return (
       <section className={styles.section}>
         <h2>No publishing-ready sermon content yet</h2>
-        <p className={styles.muted}>Prepare at least one approved clip or generated content asset, then return to build a mixed weekly plan.</p>
-        <a href="/opportunities" className="button primary">Open Publishing Ideas</a>
+        <p className={styles.muted}>Review one sermon idea, approve it, and prepare it for publishing. It will then appear here automatically.</p>
+        <div className={styles.actions}>
+          <Link href="/opportunities" className="button primary">Review content ideas</Link>
+          <Link href="/sermons" className="button tertiary">Check sermon clips</Link>
+        </div>
       </section>
     );
   }
 
   return (
     <>
-      <div className={styles.grid}>
-        <aside className={`${styles.section} ${styles.controls}`} aria-label="Weekly plan settings">
-          <div>
-            <p className="kicker">Plan settings</p>
-            <h2>Choose the ministry week</h2>
-          </div>
+      <div id="weekly-plan-builder" className={styles.grid}>
+        <details className={`${styles.section} ${styles.settings}`}>
+          <summary className={styles.settingsSummary}>
+            <span>
+              <span className="kicker">Plan settings</span>
+              <strong>{selectedSermon?.title ?? "Choose a sermon"}</strong>
+              <small>{frequency} posts · {OBJECTIVE_OPTIONS.find((option) => option.value === objective)?.label} · {platforms.length} platform{platforms.length === 1 ? "" : "s"}</small>
+            </span>
+            <span className={styles.settingsAction}>Adjust</span>
+          </summary>
+          <div className={styles.controls} aria-label="Weekly plan settings">
           <label>
             Sermon
             <select value={sermonId} onChange={(event) => setSermonId(event.target.value)}>
@@ -263,7 +289,8 @@ export function WeeklyPlanBuilder({
             <strong>Safe handoff mode</strong>
             <p>Every weekly-plan item is added for human review. Generated non-video content is never made automatic by this bulk action.</p>
           </div>
-        </aside>
+          </div>
+        </details>
 
         <section className={styles.section} aria-label="Weekly plan preview">
           <div>
@@ -281,7 +308,14 @@ export function WeeklyPlanBuilder({
           ) : repeatedPointCount > 0 ? (
             <div className={styles.warning}><strong>Repeated sermon point</strong><br />{repeatedPointCount} proposed post{repeatedPointCount === 1 ? "" : "s"} may repeat an idea already used this week. Deselect or replace it if the repetition is not intentional.</div>
           ) : null}
-          {resultMessage ? <div className={resultMessage.tone === "success" ? styles.success : styles.error}>{resultMessage.text}</div> : null}
+          {resultMessage ? (
+            <div className={resultMessage.tone === "success" ? styles.success : styles.error} role={resultMessage.tone === "success" ? "status" : "alert"}>
+              <span>{resultMessage.text}</span>
+              {resultMessage.scheduledPostId ? (
+                <Link className="text-link small" href={buildScheduledPostHref(resultMessage.scheduledPostId)}>View the first post in the calendar</Link>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className={styles.list}>
             {plan.map((item) => {
@@ -309,13 +343,22 @@ export function WeeklyPlanBuilder({
                     <h3>{item.title}</h3>
                     <p className={styles.meta}>{dateTimeLabel(item.scheduledFor, timezone)} · {timezone}</p>
                     {item.duplicateWarnings.map((warning) => <p key={warning} className={styles.warning}>{warning}</p>)}
-                    {item.sourceKind === "CONTENT_ASSET" ? (
+                    <details className={styles.itemDetails}>
+                      <summary>Preview &amp; source</summary>
+                      <p className={styles.captionPreview}>{item.caption}</p>
                       <div className={styles.handoffs}>
-                        <a className="text-link small" href={`/api/content-assets/${item.sourceId}/handoff/whatsapp`}>WhatsApp pack</a>
-                        <a className="text-link small" href={`/api/content-assets/${item.sourceId}/handoff/story`}>Story pack</a>
-                        <a className="text-link small" href={`/api/content-assets/${item.sourceId}/handoff/email`}>HTML email</a>
+                        <Link className="text-link small" href={item.sourceKind === "CONTENT_ASSET"
+                          ? `/ready-to-post?contentAssetId=${encodeURIComponent(item.sourceId)}#generated-content-assets`
+                          : `/ready-to-post?clipId=${encodeURIComponent(item.sourceId)}#ready-clips`}
+                        >Review prepared {item.sourceKind === "CONTENT_ASSET" ? "post" : "clip"}</Link>
+                        {item.sourceKind === "CONTENT_ASSET" ? (
+                          <>
+                            <a className="text-link small" href={`/api/content-assets/${item.sourceId}/handoff/whatsapp`}>WhatsApp pack</a>
+                            <a className="text-link small" href={`/api/content-assets/${item.sourceId}/handoff/email`}>Email handoff</a>
+                          </>
+                        ) : null}
                       </div>
-                    ) : null}
+                    </details>
                   </div>
                   <label className={styles.itemSchedule}>
                     Platform
@@ -335,7 +378,13 @@ export function WeeklyPlanBuilder({
               );
             })}
           </div>
-          {plan.length === 0 ? <p className={styles.muted}>Choose at least one platform and prepare more content for this sermon.</p> : null}
+          {plan.length === 0 ? (
+            <div className={styles.emptyPlan}>
+              <strong>Nothing is ready for this plan yet</strong>
+              <span className={styles.muted}>Choose at least one platform, or prepare another approved idea from this sermon.</span>
+              <Link className="text-link small" href={`/opportunities?sermonId=${encodeURIComponent(sermonId)}`}>Prepare content from this sermon</Link>
+            </div>
+          ) : null}
           <div className={styles.actions}>
             <button
               type="button"
@@ -345,7 +394,7 @@ export function WeeklyPlanBuilder({
             >
               {isPending ? "Checking & scheduling..." : `Approve & schedule ${selectedPlan.length || ""} post${selectedPlan.length === 1 ? "" : "s"}`}
             </button>
-            <a className="button secondary" href="/ready-to-post#posting-calendar">Open mixed calendar</a>
+            <Link className="text-link small" href="/ready-to-post#posting-calendar">Open the mixed calendar</Link>
           </div>
         </section>
       </div>
@@ -408,10 +457,10 @@ export function WeeklyPlanBuilder({
                   <span><strong>{item.shares}</strong><br />shares</span>
                   <span><strong>{item.saves}</strong><br />saves</span>
                 </div>
-                <a className="text-link small" href={item.sourceKind === "CONTENT_ASSET"
+                <Link className="text-link small" href={item.sourceKind === "CONTENT_ASSET"
                   ? `/ready-to-post?contentAssetId=${item.sourceId}`
                   : `/ready-to-post?clipId=${item.sourceId}`}
-                >Open source content</a>
+                >Open source content</Link>
                 {item.publishedUrls[0] ? <a className="text-link small" href={item.publishedUrls[0]} target="_blank" rel="noreferrer">Open published post</a> : null}
               </article>
             ))}
@@ -425,7 +474,7 @@ export function WeeklyPlanBuilder({
                 <span className="status-pill">{recommendation.followUpType.toLowerCase()}</span>
                 <strong>{recommendation.title}</strong>
                 <p className={styles.muted}>{recommendation.rationale}</p>
-                <a className="text-link small" href={`/opportunities?sermonId=${recommendation.sermonId}`}>Create from this sermon</a>
+                <Link className="text-link small" href={`/opportunities?sermonId=${recommendation.sermonId}`}>Create from this sermon</Link>
               </article>
             ))}
           </div>

@@ -23,11 +23,18 @@ import { listCanonicalPlatformPayloads } from "@/lib/publishingPayload";
 import type { PublishingServiceHealth } from "@/lib/publishingServiceHealth";
 import {
   buildPostingCalendarDays,
+  resolveCalendarDayKey,
   resolveScheduledInstant,
+  startOfCalendarDay,
   suggestNextCalendarSlot,
   toDateTimeInputValueInTimeZone,
   toDateTimeLocalInputValue,
 } from "@/lib/postingSchedule";
+import {
+  CONTENT_ASSET_SCHEDULED_EVENT,
+  isContentAssetScheduleCreatedDetail,
+  scheduledPostElementId,
+} from "@/lib/contentScheduleUi";
 import type { ManualPublishingStatus, RestorablePublishingStatus, ScheduledPost } from "@/lib/scheduledPosts";
 import type { SocialAccount } from "@/lib/socialAccounts";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
@@ -82,6 +89,11 @@ type ReadyQueueExperienceProps = {
   initialPublishingServiceHealth: PublishingServiceHealth;
   controlPanelMode?: boolean;
   contentAssetFocus?: boolean;
+  initialFocusedScheduledPostId?: string | null;
+  scheduledPostScope?: {
+    scheduledPostId?: string | null;
+    contentAssetId?: string | null;
+  };
 };
 
 type VideoPreviewState = "poster" | "loading" | "ready" | "playing" | "paused" | "error";
@@ -165,6 +177,15 @@ const ACTIVE_CALENDAR_STATUSES = new Set<ScheduledPost["status"]>([
   "PLANNED",
   "READY_FOR_MEDIA_TEAM",
   "POSTING",
+  "FAILED",
+  "PRIVATE_ONLY_UNVERIFIED",
+]);
+const SCHEDULED_WORK_STATUSES = new Set<ScheduledPost["status"]>([
+  "PLANNED",
+  "READY_FOR_MEDIA_TEAM",
+  "POSTING",
+]);
+const ATTENTION_CALENDAR_STATUSES = new Set<ScheduledPost["status"]>([
   "FAILED",
   "PRIVATE_ONLY_UNVERIFIED",
 ]);
@@ -787,6 +808,25 @@ export function selectVisibleCalendarPosts<T>(posts: T[], expanded: boolean): T[
   return expanded ? posts : posts.slice(0, COLLAPSED_CALENDAR_POST_LIMIT);
 }
 
+function focusScheduledPostEntry(scheduledPostId: string, attempt = 0): void {
+  const target = document.getElementById(scheduledPostElementId(scheduledPostId));
+  if (target) {
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+    target.focus({ preventScroll: true });
+    return;
+  }
+
+  if (attempt < 12) {
+    window.requestAnimationFrame(() => focusScheduledPostEntry(scheduledPostId, attempt + 1));
+    return;
+  }
+
+  const calendar = document.getElementById("posting-calendar");
+  calendar?.scrollIntoView({ block: "start" });
+  calendar?.focus({ preventScroll: true });
+}
+
 export function ReadyQueueExperience({
   clips,
   clipScopeIds = null,
@@ -799,6 +839,8 @@ export function ReadyQueueExperience({
   initialPublishingServiceHealth,
   controlPanelMode = false,
   contentAssetFocus = false,
+  initialFocusedScheduledPostId = null,
+  scheduledPostScope,
 }: ReadyQueueExperienceProps) {
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<PostingDraft[]>(initialDrafts);
@@ -834,6 +876,16 @@ export function ReadyQueueExperience({
   } | null>(null);
   const [rescheduleValues, setRescheduleValues] = useState<Record<string, string>>({});
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const initialCalendarFocusHandled = useRef(false);
+  const scheduledPostsEndpoint = useMemo(() => {
+    const searchParams = new URLSearchParams();
+    const scopedScheduledPostId = scheduledPostScope?.scheduledPostId?.trim();
+    const scopedContentAssetId = scheduledPostScope?.contentAssetId?.trim();
+    if (scopedScheduledPostId) searchParams.set("scheduledPostId", scopedScheduledPostId);
+    if (scopedContentAssetId) searchParams.set("contentAssetId", scopedContentAssetId);
+    const query = searchParams.toString();
+    return query ? `/api/ready-to-post/scheduled-posts?${query}` : "/api/ready-to-post/scheduled-posts";
+  }, [scheduledPostScope?.contentAssetId, scheduledPostScope?.scheduledPostId]);
   const refreshPublishingServiceHealth = useCallback(async () => {
     try {
       const response = await fetch("/api/ready-to-post/publishing-health", { cache: "no-store" });
@@ -978,12 +1030,14 @@ export function ReadyQueueExperience({
     .map(buildScheduleClipSummary);
   const calendarWindowLabel = buildCalendarWindowLabel(calendarStartDate, calendarDayCount);
   const calendarWindowPosts = calendarDays.flatMap((day) => day.posts);
-  const calendarPlannedCount = calendarWindowPosts.filter((post) => ACTIVE_CALENDAR_STATUSES.has(post.status)).length;
+  const calendarPlannedCount = calendarWindowPosts.filter((post) => SCHEDULED_WORK_STATUSES.has(post.status)).length;
+  const calendarAttentionCount = calendarWindowPosts.filter((post) => ATTENTION_CALENDAR_STATUSES.has(post.status)).length;
   const calendarPostedCount = calendarWindowPosts.filter((post) => post.status === "POSTED").length;
   const calendarGeneratedContentCount = calendarWindowPosts.filter((post) => (post.contentAssets?.length ?? 0) > 0).length;
-  const nextCalendarPost = calendarWindowPosts.find((post) => ACTIVE_CALENDAR_STATUSES.has(post.status))
-    ?? calendarWindowPosts[0]
-    ?? null;
+  const nextCalendarPost = calendarWindowPosts.find((post) => SCHEDULED_WORK_STATUSES.has(post.status)) ?? null;
+  const nextAttentionPost = calendarWindowPosts.find((post) => ATTENTION_CALENDAR_STATUSES.has(post.status)) ?? null;
+  const plannedUploadCount = scopedScheduledPosts.filter((post) => SCHEDULED_WORK_STATUSES.has(post.status)).length;
+  const attentionUploadCount = scopedScheduledPosts.filter((post) => ATTENTION_CALENDAR_STATUSES.has(post.status)).length;
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -1061,17 +1115,104 @@ export function ReadyQueueExperience({
     });
   }
 
-  async function refreshScheduledPosts() {
+  const loadScheduledPosts = useCallback(async (endpoint: string): Promise<ScheduledPost[]> => {
     try {
-      const response = await fetch("/api/ready-to-post/scheduled-posts");
+      const response = await fetch(endpoint);
       const data = await response.json();
       if (Array.isArray(data.scheduledPosts)) {
         setScheduledPosts(data.scheduledPosts);
+        return data.scheduledPosts;
       }
     } catch {
       // Keep the server-rendered posting queue if refresh fails.
     }
-  }
+    return [];
+  }, []);
+  const refreshScheduledPosts = useCallback(async (): Promise<ScheduledPost[]> => {
+    return loadScheduledPosts(scheduledPostsEndpoint);
+  }, [loadScheduledPosts, scheduledPostsEndpoint]);
+
+  useEffect(() => {
+    const handleContentAssetScheduled = (event: Event) => {
+      if (!(event instanceof CustomEvent) || !isContentAssetScheduleCreatedDetail(event.detail)) return;
+      const detail = event.detail;
+
+      void (async () => {
+        const refreshedPosts = scheduledPostScope?.scheduledPostId
+          && scheduledPostScope.scheduledPostId !== detail.scheduledPostId
+          ? await loadScheduledPosts(
+              `/api/ready-to-post/scheduled-posts?scheduledPostId=${encodeURIComponent(detail.scheduledPostId)}`,
+            )
+          : await refreshScheduledPosts();
+        const scheduledPost = refreshedPosts.find((post) => post.id === detail.scheduledPostId);
+        const methodLabel = detail.automationMode === "AUTOMATIC"
+          ? "Automatic post scheduled"
+          : "Manual handoff scheduled";
+
+        if (!scheduledPost?.scheduledFor) {
+          setPublishingMessage(`${methodLabel}. Refresh the calendar to see ${detail.title}.`);
+          document.getElementById("posting-calendar")?.scrollIntoView({ block: "start" });
+          return;
+        }
+
+        const scheduledDate = new Date(scheduledPost.scheduledFor);
+        if (!Number.isNaN(scheduledDate.getTime())) {
+          const calendarDayKey = resolveCalendarDayKey(scheduledDate);
+          setCalendarStartDate(startOfCalendarDay(scheduledDate));
+          setPlannerExpanded(false);
+          setCalendarPlatformFilter("ALL");
+          setCalendarStatusFilter("ACTIVE");
+          setExpandedCalendarDays((current) => {
+            const next = new Set(current);
+            next.add(calendarDayKey);
+            return next;
+          });
+        }
+
+        setPublishingMessage(`${methodLabel}. ${detail.title} is now focused in the calendar.`);
+        window.requestAnimationFrame(() => focusScheduledPostEntry(detail.scheduledPostId));
+      })();
+    };
+
+    window.addEventListener(CONTENT_ASSET_SCHEDULED_EVENT, handleContentAssetScheduled);
+    return () => window.removeEventListener(CONTENT_ASSET_SCHEDULED_EVENT, handleContentAssetScheduled);
+  }, [loadScheduledPosts, refreshScheduledPosts, scheduledPostScope?.scheduledPostId]);
+
+  useEffect(() => {
+    if (!initialFocusedScheduledPostId || initialCalendarFocusHandled.current) return;
+    const scheduledPost = scheduledPosts.find((post) => post.id === initialFocusedScheduledPostId);
+    initialCalendarFocusHandled.current = true;
+    if (!scheduledPost) {
+      const frame = window.requestAnimationFrame(() => {
+        setPublishingMessage("That planned post is no longer in this calendar view. Clear the page filters or refresh the publishing desk.");
+        document.getElementById("posting-calendar")?.scrollIntoView({ block: "start" });
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+
+    if (!scheduledPost.scheduledFor) {
+      const frame = window.requestAnimationFrame(() => {
+        setCalendarStatusFilter("ALL");
+        setPublishingMessage("This handoff does not have an exact calendar time yet. Open the unscheduled section below to finish it.");
+        document.getElementById("posting-calendar")?.scrollIntoView({ block: "start" });
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+
+    const scheduledDate = new Date(scheduledPost.scheduledFor);
+    if (Number.isNaN(scheduledDate.getTime())) return;
+    const calendarDayKey = resolveCalendarDayKey(scheduledDate);
+    const frame = window.requestAnimationFrame(() => {
+      setCalendarStartDate(startOfCalendarDay(scheduledDate));
+      setPlannerExpanded(false);
+      setCalendarPlatformFilter("ALL");
+      setCalendarStatusFilter(ACTIVE_CALENDAR_STATUSES.has(scheduledPost.status) ? "ACTIVE" : "ALL");
+      setExpandedCalendarDays(new Set([calendarDayKey]));
+      setPublishingMessage(`${buildScheduledPostTitle(scheduledPost, clips)} is focused in the calendar.`);
+      window.requestAnimationFrame(() => focusScheduledPostEntry(initialFocusedScheduledPostId));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [clips, initialFocusedScheduledPostId, scheduledPosts]);
 
   function addDraft(draft: PostingDraft) {
     setDrafts((current) => [draft, ...current].slice(0, 6));
@@ -1300,35 +1441,6 @@ export function ReadyQueueExperience({
   function focusClip(clipId: string) {
     setFocusedClipId(clipId);
   }
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadDraftsAndScheduledPosts() {
-      try {
-        const [draftResponse, scheduledPostResponse] = await Promise.all([
-          fetch("/api/ready-to-post/drafts"),
-          fetch("/api/ready-to-post/scheduled-posts"),
-        ]);
-        const draftData = await draftResponse.json();
-        const scheduledPostData = await scheduledPostResponse.json();
-        if (isMounted && Array.isArray(draftData.drafts)) {
-          setDrafts(draftData.drafts);
-        }
-        if (isMounted && Array.isArray(scheduledPostData.scheduledPosts)) {
-          setScheduledPosts(scheduledPostData.scheduledPosts);
-        }
-      } catch {
-        // Keep the server-rendered queue if the refresh fails.
-      }
-    }
-
-    loadDraftsAndScheduledPosts();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   return (
     <>
@@ -1692,7 +1804,7 @@ export function ReadyQueueExperience({
         </section>
       ) : null}
 
-      <section id="posting-calendar" className="social-calendar-panel premium-ready-calendar premium-ready-secondary-surface" aria-label="Publishing calendar">
+      <section id="posting-calendar" className="social-calendar-panel premium-ready-calendar premium-ready-secondary-surface" aria-label="Publishing calendar" tabIndex={-1}>
         <div className="social-calendar-header">
           <div>
             <p className="kicker">Calendar</p>
@@ -1761,10 +1873,12 @@ export function ReadyQueueExperience({
             <span>
               {nextCalendarPost
                 ? `Next: ${formatCalendarTime(nextCalendarPost.scheduledFor, nextCalendarPost.timezone ?? DEFAULT_DISPLAY_TIME_ZONE)} · ${nextCalendarPost.platform} · ${buildScheduledPostTitle(nextCalendarPost, clips)}`
+                : nextAttentionPost
+                  ? `Needs attention: ${formatCalendarTime(nextAttentionPost.scheduledFor, nextAttentionPost.timezone ?? DEFAULT_DISPLAY_TIME_ZONE)} · ${nextAttentionPost.platform} · ${buildScheduledPostTitle(nextAttentionPost, clips)}`
                 : "No posts in this window yet."}
             </span>
             <small>
-              {calendarPlannedCount} active · {calendarPostedCount} posted · {calendarGeneratedContentCount} generated
+              {calendarPlannedCount} active{calendarAttentionCount > 0 ? ` · ${calendarAttentionCount} needs attention` : ""} · {calendarPostedCount} posted · {calendarGeneratedContentCount} generated
               {calendarClipIds.length > 0 ? ` · ${calendarClipIds.length} selected` : ""}
             </small>
           </div>
@@ -1814,6 +1928,7 @@ export function ReadyQueueExperience({
           {calendarDays.map((day) => {
             const isDayExpanded = expandedCalendarDays.has(day.key);
             const visiblePosts = selectVisibleCalendarPosts(day.posts, isDayExpanded);
+            const dayAttentionCount = day.posts.filter((post) => ATTENTION_CALENDAR_STATUSES.has(post.status)).length;
 
             return (
               <article
@@ -1830,7 +1945,7 @@ export function ReadyQueueExperience({
                   <p className="muted small">
                     {day.posts.length === 0
                       ? "Open slot"
-                      : `${day.posts.length} post${day.posts.length === 1 ? "" : "s"} · ${day.plannedCount} active`}
+                      : `${day.posts.length} post${day.posts.length === 1 ? "" : "s"} · ${day.plannedCount} active${dayAttentionCount > 0 ? ` · ${dayAttentionCount} needs attention` : ""}`}
                   </p>
                 </div>
               </div>
@@ -1866,7 +1981,14 @@ export function ReadyQueueExperience({
                   const queuePendingLabel = post.status === "FAILED" ? "Retrying..." : "Queuing...";
 
                   return (
-                    <div key={post.id} className={`social-calendar-post ${getCalendarPostToneClass(post)}`}>
+                    <div
+                      key={post.id}
+                      id={scheduledPostElementId(post.id)}
+                      className={`social-calendar-post ${getCalendarPostToneClass(post)}`}
+                      role="group"
+                      aria-label={`${formatCalendarTime(post.scheduledFor, post.timezone ?? DEFAULT_DISPLAY_TIME_ZONE)} ${post.platform}: ${title}. ${post.automationMode === "AUTOMATIC" ? "Automatic publishing" : "Manual media-team handoff"}.`}
+                      tabIndex={-1}
+                    >
                       <div className={`platform-mark platform-${getPlatformClass(post.platform)}`} aria-hidden="true">
                         <PlatformIcon platform={post.platform} />
                       </div>
@@ -2077,7 +2199,10 @@ export function ReadyQueueExperience({
           <summary>
             <div>
               <p className="kicker">Planned posts</p>
-              <h2>{scopedScheduledPosts.length} upload{scopedScheduledPosts.length === 1 ? "" : "s"} planned</h2>
+              <h2>
+                {plannedUploadCount} upload{plannedUploadCount === 1 ? "" : "s"} planned
+                {attentionUploadCount > 0 ? ` · ${attentionUploadCount} needs attention` : ""}
+              </h2>
               <p className="muted small">
                 {controlPanelMode
                   ? "Scheduled posts are listed here. Open the Mac app to preview and download local media."

@@ -6,7 +6,12 @@ import {
   matchMetricToScheduledPost,
   type ContentPerformancePost,
 } from "@/lib/contentPerformance";
-import { normalizeSuggestedPostingPlatform } from "@/lib/contentPublishing";
+import {
+  isVideoClipOpportunityType,
+  normalizeSuggestedPostingPlatform,
+} from "@/lib/contentPublishing";
+import { supportsManualContentHandoffWithoutMedia } from "@/lib/contentPublishingPreflight";
+import { hasApprovedAssetPublishingRevision } from "@/lib/contentWorkflowUi";
 import { prisma } from "@/lib/prisma";
 import { deriveSermonPointKey, nextMondayDateInput, type WeeklyPlanCandidate } from "@/lib/weeklyPlan";
 import { WeeklyPlanBuilder } from "@/app/weekly-plan/weekly-plan-builder";
@@ -26,13 +31,22 @@ function jsonObject(value: unknown): Record<string, unknown> {
     : {};
 }
 
-export default async function WeeklyPlanPage() {
+type WeeklyPlanSearchParams = {
+  sermonId?: string;
+};
+
+export default async function WeeklyPlanPage({
+  searchParams,
+}: {
+  searchParams: Promise<WeeklyPlanSearchParams>;
+}) {
+  const params = await searchParams;
   const loadedAt = new Date();
   const [sermonRecords, scheduledRecords, postedRecords, metricRecords] = await Promise.all([
     prisma.sermon.findMany({
       where: {
         OR: [
-          { contentAssets: { some: { status: { in: ["PREPARED", "READY", "SCHEDULED"] } } } },
+          { contentAssets: { some: { status: { in: ["READY", "SCHEDULED"] } } } },
           {
             clipCandidates: {
               some: {
@@ -52,7 +66,7 @@ export default async function WeeklyPlanPage() {
         sermonDate: true,
         intelligence: { select: { centralTheme: true } },
         contentAssets: {
-          where: { status: { in: ["PREPARED", "READY", "SCHEDULED"] } },
+          where: { status: { in: ["READY", "SCHEDULED"] } },
           orderBy: { updatedAt: "desc" },
           take: 30,
           select: {
@@ -63,6 +77,15 @@ export default async function WeeklyPlanPage() {
             bodyContent: true,
             platform: true,
             metadataJson: true,
+            currentRevisionId: true,
+            approvedRevisionId: true,
+            currentRevision: {
+              select: { approvalState: true },
+            },
+            files: {
+              select: { id: true },
+              take: 1,
+            },
             contentOpportunity: {
               select: {
                 relatedScripture: true,
@@ -178,11 +201,32 @@ export default async function WeeklyPlanPage() {
   });
 
   const candidates: WeeklyPlanCandidate[] = sermonRecords.flatMap((sermon) => {
-    const assets: WeeklyPlanCandidate[] = sermon.contentAssets.map((asset) => {
+    const assets: WeeklyPlanCandidate[] = sermon.contentAssets.flatMap((asset) => {
+      if (!hasApprovedAssetPublishingRevision({
+        currentRevisionId: asset.currentRevisionId,
+        approvedRevisionId: asset.approvedRevisionId,
+        currentRevisionApprovalState: asset.currentRevision?.approvalState,
+      })) {
+        return [];
+      }
+      if (
+        !supportsManualContentHandoffWithoutMedia(asset.assetType)
+        && asset.files.length === 0
+      ) {
+        return [];
+      }
       const metadata = jsonObject(asset.metadataJson);
+      const sourceOpportunityType = asset.contentOpportunity?.opportunityType
+        ?? (typeof metadata.sourceOpportunityType === "string" ? metadata.sourceOpportunityType : null);
+      if (
+        sourceOpportunityType
+        && isVideoClipOpportunityType(sourceOpportunityType)
+      ) {
+        return [];
+      }
       const relatedScripture = asset.contentOpportunity?.relatedScripture
         || (typeof metadata.relatedScripture === "string" ? metadata.relatedScripture : null);
-      return {
+      return [{
         id: asset.id,
         sourceKind: "CONTENT_ASSET",
         sermonId: sermon.id,
@@ -205,7 +249,7 @@ export default async function WeeklyPlanPage() {
           scheduledFor: link.scheduledPost.scheduledFor?.toISOString() ?? null,
           status: link.scheduledPost.status,
         })),
-      };
+      }];
     });
     const clips: WeeklyPlanCandidate[] = sermon.clipCandidates.map((clip) => ({
       id: clip.id,
@@ -297,9 +341,9 @@ export default async function WeeklyPlanPage() {
           <p className={styles.muted}>Assemble clips and approved sermon material, spot repeated ideas, then place the reviewed week on the mixed-content calendar.</p>
         </div>
         <nav className={styles.heroActions} aria-label="Weekly plan actions">
-          <Link className="button primary" href="/ready-to-post">Publishing desk</Link>
-          <Link className="button secondary" href="/opportunities">Content ideas</Link>
-          <Link className="button secondary" href="/growth">Growth insights</Link>
+          <Link className="button primary" href="#weekly-plan-builder">Review this week</Link>
+          <Link className="button tertiary" href="/ready-to-post">Publishing desk</Link>
+          <Link className="button tertiary" href="/opportunities">Content ideas</Link>
         </nav>
       </header>
       <WeeklyPlanBuilder
@@ -312,6 +356,7 @@ export default async function WeeklyPlanPage() {
         }))}
         candidates={candidates}
         defaultWeekStart={nextMondayDateInput(loadedAt)}
+        initialSermonId={sermonRecords.some((sermon) => sermon.id === params.sermonId) ? params.sermonId : null}
         performance={performance}
         recommendations={recommendations}
         recentPublishedPosts={recentPublishedPosts}

@@ -17,12 +17,13 @@ import { resolveCaptionStylePreset } from "@/lib/captionStylePresets";
 import { resolveFramingDisplayLabel } from "@/lib/clipExportSettings";
 import {
   buildSpeechCleanupPreviewPlan,
-  mapCleanedPreviewSecondsToSourceSeconds,
   mapSourceSecondsToCleanedPreviewSeconds,
   resolveActiveCaptionCueText,
   resolveActiveCaptionWordIndex,
+  resolveCaptionLookupSeconds,
   resolveCompositionPreviewDuration,
   resolveHookOverlayAnimationFrame,
+  resolvePreviewSeekSourceSeconds,
   resolveSpeechCleanupJumpTarget,
   shouldShowHookOverlay,
   synchronizePreviewBackdropMedia,
@@ -326,6 +327,10 @@ export function ClipStudioLivePreview({
       return sourcePreviewSeconds >= startSeconds && sourcePreviewSeconds <= endSeconds;
     }) ?? null;
   }, [editPreview.brollLayer, previewSeconds, sourcePreviewSeconds, speechCleanupPreviewPlan]);
+  const captionLookupSeconds = resolveCaptionLookupSeconds(
+    sourcePreviewSeconds,
+    editPreview.captionSyncOffsetSeconds,
+  );
   const activeCaptionCue = useMemo(() => {
     if (!editPreview.applyCaptionsToClip) {
       return null;
@@ -336,17 +341,17 @@ export function ClipStudioLivePreview({
       .sort((left, right) => left.startSeconds - right.startSeconds);
     return sortedCues.find((cue, index) => {
       const isLastCue = index === sortedCues.length - 1;
-      return sourcePreviewSeconds >= cue.startSeconds && (sourcePreviewSeconds < cue.endSeconds || (isLastCue && sourcePreviewSeconds <= cue.endSeconds));
+      return captionLookupSeconds >= cue.startSeconds && (captionLookupSeconds < cue.endSeconds || (isLastCue && captionLookupSeconds <= cue.endSeconds));
     }) ?? null;
-  }, [editPreview.applyCaptionsToClip, editPreview.captionCues, sourcePreviewSeconds]);
+  }, [captionLookupSeconds, editPreview.applyCaptionsToClip, editPreview.captionCues]);
   const captionPreviewText = useMemo(() => {
     return resolveActiveCaptionCueText({
       applyCaptionsToClip: editPreview.applyCaptionsToClip,
       captionCues: editPreview.captionCues,
       fallbackText: editPreview.onVideoCaptionText,
-      previewSeconds: sourcePreviewSeconds,
+      previewSeconds: captionLookupSeconds,
     });
-  }, [editPreview.applyCaptionsToClip, editPreview.captionCues, editPreview.onVideoCaptionText, sourcePreviewSeconds]);
+  }, [captionLookupSeconds, editPreview.applyCaptionsToClip, editPreview.captionCues, editPreview.onVideoCaptionText]);
   const captionDisplayText = editPreview.captionAppearance.uppercase || captionStyle.visual.uppercase
     ? captionPreviewText.toUpperCase()
     : captionPreviewText;
@@ -382,12 +387,16 @@ export function ClipStudioLivePreview({
   );
   const hasManualCropPreview = Boolean(manualCropPreview);
   const activeCaptionWordIndex = useMemo(() => {
+    if (editPreview.captionRevealMode !== "active-word") {
+      return -1;
+    }
+
     return resolveActiveCaptionWordIndex({
       activeCue: activeCaptionCue,
       words: captionWords,
-      previewSeconds: sourcePreviewSeconds,
+      previewSeconds: captionLookupSeconds,
     });
-  }, [activeCaptionCue, captionWords, sourcePreviewSeconds]);
+  }, [activeCaptionCue, captionLookupSeconds, captionWords, editPreview.captionRevealMode]);
   const previewStyle = {
     "--clip-brand-color": brandingConfig.themeColor ?? "#75d9b8",
     "--clip-brand-tint-opacity": resolveBrandBackgroundOpacity(brandingConfig.backgroundStyle),
@@ -520,6 +529,7 @@ export function ClipStudioLivePreview({
     syncBackdropToForeground();
     updatePreviewClock({
       currentSeconds,
+      sourceCurrentSeconds: sourceSeconds,
       durationSeconds,
       isPlaying,
     });
@@ -579,9 +589,11 @@ export function ClipStudioLivePreview({
     const sourceEndSeconds = speechCleanupPreviewPlan.enabled
       ? sourceStartSeconds + speechCleanupPreviewPlan.sourceEndSeconds
       : draftEndSeconds ?? maxSeconds;
-    const seekSourceSeconds = speechCleanupPreviewPlan.enabled
-      ? mapCleanedPreviewSecondsToSourceSeconds(seekRequest.seconds, speechCleanupPreviewPlan)
-      : seekRequest.seconds;
+    const seekSourceSeconds = resolvePreviewSeekSourceSeconds({
+      requestedSeconds: seekRequest.seconds,
+      timeDomain: seekRequest.timeDomain,
+      plan: speechCleanupPreviewPlan,
+    });
     const targetSeconds = hasSourcePreview
       ? sourceStartSeconds + Math.min(seekSourceSeconds, Math.max(0, sourceEndSeconds - sourceStartSeconds))
       : seekSourceSeconds;
@@ -863,7 +875,8 @@ export function ClipStudioLivePreview({
 
             {previewMediaReady && captionPreviewText ? (
               <div
-                className={`clip-studio-live-caption ${captionStyle.className} caption-position-${editPreview.captionPosition} caption-size-${editPreview.captionAppearance.fontScale} ${
+                key={editPreview.captionRevealMode === "single-word" ? `${activeCaptionCue?.index ?? "cue"}-${captionDisplayText}` : "caption"}
+                className={`clip-studio-live-caption ${captionStyle.className} caption-position-${editPreview.captionPosition} caption-size-${editPreview.captionAppearance.fontScale} caption-reveal-${editPreview.captionRevealMode} ${
                   editPreview.captionAppearance.uppercase ? "caption-uppercase" : ""
                 }`}
                 style={captionAppearanceStyle}

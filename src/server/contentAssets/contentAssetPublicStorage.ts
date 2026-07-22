@@ -155,6 +155,51 @@ export async function readContentAssetPublicFile(
   return bytes;
 }
 
+/**
+ * Confirms that the configured public object serves at least one byte without
+ * downloading an entire publishing image. Meta fetches this URL directly, so
+ * a database URL alone is not sufficient evidence that media is publishable.
+ */
+export async function probeContentAssetPublicFile(publicUrl: string): Promise<{ byteLength: number }> {
+  if (!isTrustedContentAssetPublicUrl(publicUrl)) {
+    throw new Error("The content-asset public URL is not part of the configured media bucket.");
+  }
+
+  const response = await fetch(publicUrl, {
+    cache: "no-store",
+    redirect: "error",
+    headers: { Range: "bytes=0-0" },
+  });
+  if (!response.ok) {
+    throw new Error(`Public content-asset probe failed with HTTP ${response.status}.`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("The public content-asset response did not include readable bytes.");
+  }
+
+  try {
+    const firstChunk = await reader.read();
+    const observedBytes = firstChunk.value?.byteLength ?? 0;
+    if (firstChunk.done || observedBytes === 0) {
+      throw new Error("The public content-asset file is empty.");
+    }
+
+    const contentRange = response.headers.get("content-range")?.match(/\/([0-9]+)$/);
+    const rangeSize = contentRange ? Number(contentRange[1]) : Number.NaN;
+    const contentLength = Number(response.headers.get("content-length"));
+    const byteLength = Number.isSafeInteger(rangeSize) && rangeSize > 0
+      ? rangeSize
+      : Number.isSafeInteger(contentLength) && contentLength > 0
+        ? contentLength
+        : observedBytes;
+    return { byteLength };
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
 export async function uploadContentAssetFileToR2(input: {
   contentAssetId: string;
   fileId: string;

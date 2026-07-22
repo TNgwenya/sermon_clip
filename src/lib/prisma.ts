@@ -22,7 +22,7 @@ function createPrismaClient() {
   });
 }
 
-type AppPrismaClient = ReturnType<typeof createPrismaClient>;
+export type AppPrismaClient = ReturnType<typeof createPrismaClient>;
 
 declare global {
   var prisma: AppPrismaClient | undefined;

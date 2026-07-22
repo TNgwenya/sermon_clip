@@ -30,9 +30,11 @@ describe("caption service helpers", () => {
       ],
     );
 
-    expect(cues).toHaveLength(2);
-    expect(cues[0]).toMatchObject({ index: 1, startSeconds: 0, endSeconds: 3, text: "Opening line" });
-    expect(cues[1]).toMatchObject({ index: 2, startSeconds: 5, endSeconds: 12, text: "Main thought" });
+    expect(cues.map((cue) => cue.text)).toEqual(["Opening", "line", "Main", "thought"]);
+    expect(cues[0]).toMatchObject({ index: 1, startSeconds: 0 });
+    expect(cues[1]).toMatchObject({ index: 2, endSeconds: 3 });
+    expect(cues[2]).toMatchObject({ index: 3, startSeconds: 5 });
+    expect(cues[3]).toMatchObject({ index: 4, endSeconds: 12 });
   });
 
   it("uses adjusted clip boundaries when calculating caption timing", () => {
@@ -59,8 +61,90 @@ describe("caption service helpers", () => {
       ],
     );
 
-    expect(cues[0]).toMatchObject({ startSeconds: 0, endSeconds: 15 });
-    expect(cues[1]).toMatchObject({ startSeconds: 43, endSeconds: 50 });
+    expect(cues.map((cue) => cue.text)).toEqual(["Adjusted", "opening", "Adjusted", "ending"]);
+    expect(cues[0]).toMatchObject({ startSeconds: 0 });
+    expect(cues[1]).toMatchObject({ endSeconds: 15 });
+    expect(cues[2]).toMatchObject({ startSeconds: 43 });
+    expect(cues[3]).toMatchObject({ endSeconds: 50 });
+  });
+
+  it("prefers persisted exact word timings over coarse transcript segments", () => {
+    const result = __captionServiceTestUtils.buildCaptionCueSet(
+      {
+        id: "clip-1",
+        startTimeSeconds: 30,
+        endTimeSeconds: 40,
+        adjustedStartTimeSeconds: null,
+        adjustedEndTimeSeconds: null,
+        durationSeconds: 10,
+      },
+      [{ startTimeSeconds: 30, endTimeSeconds: 40, text: "Coarse segment wording" }],
+      [
+        { text: "Grace", startTimeSeconds: 31.1, endTimeSeconds: 31.5 },
+        { text: "still", startTimeSeconds: 31.8, endTimeSeconds: 32.2 },
+        { text: "wins", startTimeSeconds: 32.6, endTimeSeconds: 33.1 },
+      ],
+      "active-word",
+    );
+
+    expect(result.source).toBe("transcript-word-timings");
+    expect(result.cues).toEqual([
+      {
+        index: 1,
+        startSeconds: 1.1,
+        endSeconds: 3.1,
+        text: "Grace still wins",
+        wordTimings: [
+          { text: "Grace", startSeconds: 1.1, endSeconds: 1.5 },
+          { text: "still", startSeconds: 1.8, endSeconds: 2.2 },
+          { text: "wins", startSeconds: 2.6, endSeconds: 3.1 },
+        ],
+      },
+    ]);
+  });
+
+  it("uses one exact cue per word for the single-word reveal mode", () => {
+    const result = __captionServiceTestUtils.buildCaptionCueSet(
+      {
+        id: "clip-1",
+        startTimeSeconds: 10,
+        endTimeSeconds: 20,
+        adjustedStartTimeSeconds: null,
+        adjustedEndTimeSeconds: null,
+        durationSeconds: 10,
+      },
+      [],
+      [
+        { text: "Faith", startTimeSeconds: 10.2, endTimeSeconds: 10.7 },
+        { text: "moves", startTimeSeconds: 10.9, endTimeSeconds: 11.4 },
+      ],
+      "single-word",
+    );
+
+    expect(result.cues.map((cue) => cue.text)).toEqual(["Faith", "moves"]);
+    expect(result.cues[1]?.wordTimings).toEqual([
+      { text: "moves", startSeconds: 0.9, endSeconds: 1.4 },
+    ]);
+  });
+
+  it("falls back to grouped segment timing when persisted words are unavailable", () => {
+    const result = __captionServiceTestUtils.buildCaptionCueSet(
+      {
+        id: "clip-1",
+        startTimeSeconds: 0,
+        endTimeSeconds: 8,
+        adjustedStartTimeSeconds: null,
+        adjustedEndTimeSeconds: null,
+        durationSeconds: 8,
+      },
+      [{ startTimeSeconds: 0, endTimeSeconds: 8, text: "God is faithful through every season" }],
+      [],
+      "phrase",
+    );
+
+    expect(result.source).toBe("transcript-segments");
+    expect(result.cues.map((cue) => cue.text)).toEqual(["God is", "faithful", "through", "every", "season"]);
+    expect(result.cues.every((cue) => (cue.wordTimings?.length ?? 0) > 0)).toBe(true);
   });
 
   it("renders SRT blocks with sequential numbering", () => {
@@ -256,7 +340,7 @@ describe("caption service helpers", () => {
     ).toBe(true);
   });
 
-  it("preserves up-to-date manual Clip Studio caption cues during bulk generation", () => {
+  it("preserves manual Clip Studio caption cues even during a forced media rebuild", () => {
     expect(
       __captionServiceTestUtils.shouldPreserveManualCaptionCues(
         {
@@ -285,7 +369,68 @@ describe("caption service helpers", () => {
         },
         { force: true },
       ),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("keeps Studio styling and overlays when generated caption metadata is refreshed", () => {
+    const metadata = __captionServiceTestUtils.buildCaptionMetadata({
+      clip: {
+        id: "clip-1",
+        sermonId: "sermon-1",
+        status: "APPROVED",
+        startTimeSeconds: 10,
+        endTimeSeconds: 20,
+        adjustedStartTimeSeconds: null,
+        adjustedEndTimeSeconds: null,
+        durationSeconds: 10,
+        transcriptText: "Grace wins",
+        srtPath: null,
+        subtitlesGenerated: false,
+        captionStatus: "NOT_GENERATED",
+        captionFreshness: "OUTDATED",
+        transcriptSafetyStatus: "TRUSTED",
+        captionData: {
+          captionStylePresetId: "kinetic-pop",
+          captionRevealMode: "single-word",
+          hookOverlay: { enabled: true, text: "Watch this" },
+        },
+      },
+      srtPath: "/tmp/clip-1.srt",
+      generatedAt: new Date("2026-07-22T10:00:00.000Z"),
+      source: "transcript-word-timings",
+      cues: [{
+        index: 1,
+        startSeconds: 0,
+        endSeconds: 1,
+        text: "Grace",
+        wordTimings: [{ text: "Grace", startSeconds: 0, endSeconds: 1 }],
+      }],
+      cueQuality: { coverageRatio: 0.8, maxGapSeconds: 0.2, totalCueDurationSeconds: 8, warnings: [] },
+      transcriptFidelity: {
+        matchedTranscriptTokens: 1,
+        transcriptTokenCount: 2,
+        extraCueTokens: 0,
+        cueTokenCount: 1,
+        transcriptCoverageRatio: 0.5,
+        extraCueTokenRatio: 0,
+        warnings: [],
+      },
+      reusedExistingFile: false,
+    });
+
+    expect(metadata.captionData).toMatchObject({
+      captionStylePresetId: "kinetic-pop",
+      captionRevealMode: "single-word",
+      hookOverlay: { enabled: true, text: "Watch this" },
+      source: "transcript-word-timings",
+      cues: [{
+        index: 1,
+        startSeconds: 0,
+        endSeconds: 1,
+        text: "Grace",
+        wordTimings: [{ text: "Grace", startSeconds: 0, endSeconds: 1 }],
+      }],
+    });
   });
 
   it("extracts saved Studio cues into a worker-safe SRT payload", () => {

@@ -147,11 +147,18 @@ export function hashtagsToEditorInput(hashtags: string[]): string {
   return hashtags.join(" ");
 }
 
+export type CaptionCueWordTiming = {
+  text: string;
+  startSeconds: number;
+  endSeconds: number;
+};
+
 export type EditableCaptionCue = {
   index: number;
   startSeconds: number;
   endSeconds: number;
   text: string;
+  wordTimings?: CaptionCueWordTiming[];
 };
 
 export type CaptionSourceSegment = {
@@ -160,11 +167,13 @@ export type CaptionSourceSegment = {
   text: string;
 };
 
-type TimedCaptionWord = {
+export type CaptionSourceWord = {
+  startTimeSeconds: number;
+  endTimeSeconds: number;
   text: string;
-  startSeconds: number;
-  endSeconds: number;
 };
+
+type TimedCaptionWord = CaptionCueWordTiming;
 
 export type CaptionCueValidationResult = {
   isValid: boolean;
@@ -177,6 +186,89 @@ export type CaptionCueValidationResult = {
 
 function normalizeCaptionCueText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+export function parseCaptionSourceWords(value: unknown): CaptionSourceWord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return [];
+    }
+
+    const record = item as Record<string, unknown>;
+    const text = typeof record["text"] === "string" ? normalizeCaptionCueText(record["text"]) : "";
+    const startTimeSeconds = record["startTimeSeconds"];
+    const endTimeSeconds = record["endTimeSeconds"];
+    if (
+      !text ||
+      typeof startTimeSeconds !== "number" ||
+      !Number.isFinite(startTimeSeconds) ||
+      typeof endTimeSeconds !== "number" ||
+      !Number.isFinite(endTimeSeconds) ||
+      endTimeSeconds <= startTimeSeconds
+    ) {
+      return [];
+    }
+
+    return [{ text, startTimeSeconds, endTimeSeconds }];
+  });
+}
+
+export function normalizeCaptionCueWordTimings(
+  value: unknown,
+  cueStartSeconds: number,
+  cueEndSeconds: number,
+): CaptionCueWordTiming[] | undefined {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    !Number.isFinite(cueStartSeconds) ||
+    !Number.isFinite(cueEndSeconds) ||
+    cueEndSeconds <= cueStartSeconds
+  ) {
+    return undefined;
+  }
+
+  const normalized: CaptionCueWordTiming[] = [];
+  let previousStartSeconds = Number.NEGATIVE_INFINITY;
+
+  for (const timing of value) {
+    if (!timing || typeof timing !== "object" || Array.isArray(timing)) {
+      return undefined;
+    }
+
+    const record = timing as Record<string, unknown>;
+    const text = typeof record["text"] === "string" ? normalizeCaptionCueText(record["text"]) : "";
+    const rawStartSeconds = record["startSeconds"];
+    const rawEndSeconds = record["endSeconds"];
+    if (
+      !text ||
+      typeof rawStartSeconds !== "number" ||
+      !Number.isFinite(rawStartSeconds) ||
+      typeof rawEndSeconds !== "number" ||
+      !Number.isFinite(rawEndSeconds) ||
+      rawEndSeconds <= rawStartSeconds ||
+      rawStartSeconds < cueStartSeconds - 0.001 ||
+      rawEndSeconds > cueEndSeconds + 0.001 ||
+      rawStartSeconds + 0.001 < previousStartSeconds
+    ) {
+      return undefined;
+    }
+
+    const startSeconds = Number(Math.max(cueStartSeconds, rawStartSeconds).toFixed(3));
+    const endSeconds = Number(Math.min(cueEndSeconds, rawEndSeconds).toFixed(3));
+    if (endSeconds <= startSeconds) {
+      return undefined;
+    }
+
+    normalized.push({ text, startSeconds, endSeconds });
+    previousStartSeconds = rawStartSeconds;
+  }
+
+  return normalized;
 }
 
 function splitCaptionWords(value: string): string[] {
@@ -315,29 +407,23 @@ function shouldStartNextTimedCaptionCue({
   );
 }
 
-export function buildTimedCaptionCuesFromTranscriptSegments({
-  startTimeSeconds,
-  endTimeSeconds,
-  segments,
-  maxWordsPerCue = DEFAULT_TIMED_CAPTION_WORDS_PER_CUE,
-  maxCueDurationSeconds = DEFAULT_TIMED_CAPTION_MAX_CUE_SECONDS,
+function buildTimedCaptionCuesFromWords({
+  timedWords,
+  clipDurationSeconds,
+  maxWordsPerCue,
+  maxCueDurationSeconds,
 }: {
-  startTimeSeconds: number;
-  endTimeSeconds: number;
-  segments: CaptionSourceSegment[];
-  maxWordsPerCue?: number;
-  maxCueDurationSeconds?: number;
+  timedWords: TimedCaptionWord[];
+  clipDurationSeconds: number;
+  maxWordsPerCue: number;
+  maxCueDurationSeconds: number;
 }): EditableCaptionCue[] {
-  const clipDurationSeconds = Math.max(0, Number((endTimeSeconds - startTimeSeconds).toFixed(3)));
   const normalizedMaxWordsPerCue = Number.isFinite(maxWordsPerCue)
     ? Math.max(1, Math.min(8, Math.floor(maxWordsPerCue)))
     : DEFAULT_TIMED_CAPTION_WORDS_PER_CUE;
   const normalizedMaxCueDurationSeconds = Number.isFinite(maxCueDurationSeconds) && maxCueDurationSeconds > 0
     ? Math.max(0.25, maxCueDurationSeconds)
     : DEFAULT_TIMED_CAPTION_MAX_CUE_SECONDS;
-  const timedWords = segments
-    .flatMap((segment) => estimateTimedCaptionWordsForSegment(segment, startTimeSeconds, endTimeSeconds))
-    .sort((left, right) => left.startSeconds - right.startSeconds || left.endSeconds - right.endSeconds);
   const cues: EditableCaptionCue[] = [];
   let currentWords: TimedCaptionWord[] = [];
 
@@ -354,11 +440,17 @@ export function buildTimedCaptionCuesFromTranscriptSegments({
     const text = normalizeCaptionCueText(currentWords.map((word) => word.text).join(" "));
 
     if (text && cueEndSeconds > cueStartSeconds) {
+      const wordTimings = currentWords.map((word) => ({
+        text: word.text,
+        startSeconds: Number(Math.max(cueStartSeconds, word.startSeconds).toFixed(3)),
+        endSeconds: Number(Math.min(cueEndSeconds, word.endSeconds).toFixed(3)),
+      }));
       cues.push({
         index: cues.length + 1,
         startSeconds: Number(cueStartSeconds.toFixed(3)),
         endSeconds: Number(cueEndSeconds.toFixed(3)),
         text,
+        wordTimings,
       });
     }
 
@@ -383,6 +475,77 @@ export function buildTimedCaptionCuesFromTranscriptSegments({
   flushCurrentCue();
 
   return cues;
+}
+
+export function buildTimedCaptionCuesFromTranscriptWords({
+  startTimeSeconds,
+  endTimeSeconds,
+  words,
+  maxWordsPerCue = DEFAULT_TIMED_CAPTION_WORDS_PER_CUE,
+  maxCueDurationSeconds = DEFAULT_TIMED_CAPTION_MAX_CUE_SECONDS,
+}: {
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+  words: CaptionSourceWord[];
+  maxWordsPerCue?: number;
+  maxCueDurationSeconds?: number;
+}): EditableCaptionCue[] {
+  const clipDurationSeconds = Math.max(0, Number((endTimeSeconds - startTimeSeconds).toFixed(3)));
+  const timedWords = words.flatMap((word) => {
+    const text = normalizeCaptionCueText(word.text);
+    const absoluteStartSeconds = Number(word.startTimeSeconds);
+    const absoluteEndSeconds = Number(word.endTimeSeconds);
+    const clippedStartSeconds = Math.max(startTimeSeconds, absoluteStartSeconds);
+    const clippedEndSeconds = Math.min(endTimeSeconds, absoluteEndSeconds);
+
+    if (
+      !text ||
+      !Number.isFinite(absoluteStartSeconds) ||
+      !Number.isFinite(absoluteEndSeconds) ||
+      clippedEndSeconds <= clippedStartSeconds
+    ) {
+      return [];
+    }
+
+    return [{
+      text,
+      startSeconds: Number((clippedStartSeconds - startTimeSeconds).toFixed(3)),
+      endSeconds: Number((clippedEndSeconds - startTimeSeconds).toFixed(3)),
+    }];
+  }).sort((left, right) => left.startSeconds - right.startSeconds || left.endSeconds - right.endSeconds);
+
+  return buildTimedCaptionCuesFromWords({
+    timedWords,
+    clipDurationSeconds,
+    maxWordsPerCue,
+    maxCueDurationSeconds,
+  });
+}
+
+export function buildTimedCaptionCuesFromTranscriptSegments({
+  startTimeSeconds,
+  endTimeSeconds,
+  segments,
+  maxWordsPerCue = DEFAULT_TIMED_CAPTION_WORDS_PER_CUE,
+  maxCueDurationSeconds = DEFAULT_TIMED_CAPTION_MAX_CUE_SECONDS,
+}: {
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+  segments: CaptionSourceSegment[];
+  maxWordsPerCue?: number;
+  maxCueDurationSeconds?: number;
+}): EditableCaptionCue[] {
+  const clipDurationSeconds = Math.max(0, Number((endTimeSeconds - startTimeSeconds).toFixed(3)));
+  const timedWords = segments
+    .flatMap((segment) => estimateTimedCaptionWordsForSegment(segment, startTimeSeconds, endTimeSeconds))
+    .sort((left, right) => left.startSeconds - right.startSeconds || left.endSeconds - right.endSeconds);
+
+  return buildTimedCaptionCuesFromWords({
+    timedWords,
+    clipDurationSeconds,
+    maxWordsPerCue,
+    maxCueDurationSeconds,
+  });
 }
 
 function normalizeTranscriptGroundingText(value: string): string {
@@ -441,12 +604,19 @@ export function validateEditableCaptionCues(
   clipDurationSeconds: number | null,
 ): CaptionCueValidationResult {
   const normalizedCues = cues
-    .map((cue, index) => ({
-      index: index + 1,
-      startSeconds: Number(cue.startSeconds),
-      endSeconds: Number(cue.endSeconds),
-      text: normalizeCaptionCueText(cue.text),
-    }))
+    .map((cue, index) => {
+      const startSeconds = Number(cue.startSeconds);
+      const endSeconds = Number(cue.endSeconds);
+      const wordTimings = normalizeCaptionCueWordTimings(cue.wordTimings, startSeconds, endSeconds);
+
+      return {
+        index: index + 1,
+        startSeconds,
+        endSeconds,
+        text: normalizeCaptionCueText(cue.text),
+        ...(wordTimings ? { wordTimings } : {}),
+      };
+    })
     .filter((cue) => cue.text.length > 0);
 
   const errors: string[] = [];
@@ -513,16 +683,20 @@ export function resolveClipStudioInitialCaptionCues({
   savedCues,
   transcriptCues,
   clipDurationSeconds,
-  savedCuesManuallyEdited,
+  savedCuesManuallyEdited: _savedCuesManuallyEdited,
 }: {
   savedCues: EditableCaptionCue[];
   transcriptCues: EditableCaptionCue[];
   clipDurationSeconds: number | null;
   savedCuesManuallyEdited: boolean;
 }): EditableCaptionCue[] {
+  void _savedCuesManuallyEdited;
   const savedValidation = validateEditableCaptionCues(savedCues, clipDurationSeconds);
 
-  if (savedCuesManuallyEdited && savedValidation.isValid) {
+  // What the creator last saved is the Studio source of truth. Regenerating
+  // from transcript during hydration made the preview differ from the final
+  // approved composition before the user touched a control.
+  if (savedValidation.isValid) {
     return savedValidation.cues;
   }
 

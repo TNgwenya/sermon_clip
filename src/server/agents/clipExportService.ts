@@ -42,20 +42,27 @@ import {
 import { normalizeManualCropKeyframes } from "@/lib/manualCrop";
 import { resolveExportSettings } from "@/lib/clipExportSettings";
 import { resolveIntelligentFramingDecision } from "@/lib/clipFramingIntelligence";
-import {
-  markExportAssetCompleted,
-  markExportAssetFailed,
-} from "@/server/regeneration/dependencies";
 import { type ClipBrandingConfig, type WatermarkPosition } from "@/lib/clipBranding";
 import { getBrandingOverlayDimensions, renderBrandingOverlayPng } from "@/server/agents/brandingOverlay";
 import { ensureClipThumbnail } from "@/server/agents/clipThumbnailService";
 import { resolveSmartCropCenter, resolveSmartCropTimeline } from "@/server/agents/videoSubjectTrackingService";
 import {
+  assertClipEditPlanStillActive,
+  isStaleClipCompositionError,
+  preferStaleClipCompositionError,
   recordClipArtifact,
+  tryUpdateClipCandidateForActiveEditPlan,
+  updateClipCandidateForActiveEditPlan,
   upsertActiveClipEditPlanForClip,
+  type ClipEditPlanGuard,
 } from "@/server/agents/clipEditPlanService";
 import { validateTranscriptSafetyForPublishing } from "@/server/agents/localLanguageTranscriptSafety";
 import { extractSpeechCleanupCutPlan } from "@/lib/speechCleanupPlan";
+import {
+  capturePromotedMediaIdentity,
+  discardPromotedMediaIfUnchanged,
+  type PromotedMediaIdentity,
+} from "@/server/agents/mediaPromotionGuard";
 
 export type ExportPreset = "VERTICAL_9_16" | "HORIZONTAL_16_9" | "SQUARE_1_1";
 export type ExportLayoutStrategy =
@@ -246,8 +253,9 @@ function shouldPreservePreparedManualFraming(input: {
     && input.sourceKind !== "ORIGINAL_SERMON";
 }
 
-function getTempPath(outputPath: string): string {
-  return outputPath.replace(/\.mp4$/i, ".partial.mp4");
+function getTempPath(outputPath: string, editPlanId: string): string {
+  const planSuffix = editPlanId.replace(/[^a-zA-Z0-9_-]/g, "");
+  return outputPath.replace(/\.mp4$/i, `.plan-${planSuffix}.partial.mp4`);
 }
 
 function formatSuffix(format: ExportPreset): string {
@@ -453,15 +461,15 @@ async function validateVideoInput(
   });
 }
 
-async function failExport(clipId: string, message: string): Promise<void> {
-  await prisma.clipCandidate.update({
-    where: { id: clipId },
+async function failExport(guard: ClipEditPlanGuard, message: string): Promise<void> {
+  await tryUpdateClipCandidateForActiveEditPlan({
+    guard,
     data: {
       exportStatus: "FAILED",
       exportError: message,
+      exportFreshness: "FAILED",
     },
   });
-  await markExportAssetFailed(clipId);
 }
 
 function validateExportEligibility(input: {
@@ -739,11 +747,23 @@ export async function exportClipWithPreset(
     throw new Error("Clip id is required for export.");
   }
 
+  const { plan: startedEditPlan } = await upsertActiveClipEditPlanForClip({
+    clipCandidateId: clipId,
+    createdBy: "export",
+    createdReason: "export_input_snapshot",
+  });
+  const editPlanGuard = {
+    clipCandidateId: clipId,
+    editPlanId: startedEditPlan.id,
+    planHash: startedEditPlan.planHash,
+  };
+
   const format = options?.format ?? "VERTICAL_9_16";
   const layoutStrategy = options?.layoutStrategy ?? "CENTER_CROP";
   const spec = EXPORT_SPECS[format];
 
   const clip = await loadClip(clipId);
+  await assertClipEditPlanStillActive(editPlanGuard);
   await ensureSermonFolders(clip.sermonId);
 
   const transcriptSafety = validateTranscriptSafetyForPublishing(clip);
@@ -771,14 +791,9 @@ export async function exportClipWithPreset(
   const outputExists = await fileHasBytes(outputPath);
 
   if (outputExists && clip.exportFreshness === "UP_TO_DATE" && !options?.allowReexport && !options?.force) {
-    await upsertActiveClipEditPlanForClip({
-      clipCandidateId: clip.id,
-      createdBy: "export",
-      createdReason: "existing_export_reused",
-    });
     const outputStats = await stat(outputPath).catch(() => null);
-    await prisma.clipCandidate.update({
-      where: { id: clip.id },
+    await updateClipCandidateForActiveEditPlan({
+      guard: editPlanGuard,
       data: {
         exportStatus: "COMPLETED",
         exportFormat: format,
@@ -797,7 +812,6 @@ export async function exportClipWithPreset(
       captionedVideoPath: clip.captionedVideoPath,
       exportedFilePath: outputPath,
     }, { ffmpegPath: options?.ffmpegPath });
-    await markExportAssetCompleted(clip.id, false);
     await recordClipArtifact({
       clipCandidateId: clip.id,
       kind: "EXPORT",
@@ -808,6 +822,10 @@ export async function exportClipWithPreset(
         reusedExistingFile: true,
         layoutStrategy,
         sourceKind: exportSource.kind,
+      },
+      editPlan: {
+        editPlanId: editPlanGuard.editPlanId,
+        planHash: editPlanGuard.planHash,
       },
     });
 
@@ -828,7 +846,7 @@ export async function exportClipWithPreset(
 
   if (!eligibility.ok) {
     if (eligibility.shouldMarkFailed) {
-      await failExport(clip.id, eligibility.reason ?? "Clip is not eligible for export.");
+      await failExport(editPlanGuard, eligibility.reason ?? "Clip is not eligible for export.");
     }
     throw new Error(eligibility.reason ?? "Clip is not eligible for export.");
   }
@@ -836,7 +854,7 @@ export async function exportClipWithPreset(
   const ffmpegInstalled = await checkFfmpegInstalled(options?.ffmpegPath);
   if (!ffmpegInstalled) {
     const message = "FFmpeg is not installed or not executable.";
-    await failExport(clip.id, message);
+    await failExport(editPlanGuard, message);
     throw new Error(message);
   }
 
@@ -850,6 +868,13 @@ export async function exportClipWithPreset(
   const queued = await prisma.clipCandidate.updateMany({
     where: {
       id: clip.id,
+      editPlans: {
+        some: {
+          id: editPlanGuard.editPlanId,
+          planHash: editPlanGuard.planHash,
+          status: "ACTIVE",
+        },
+      },
       NOT: {
         exportStatus: "EXPORTING",
       },
@@ -863,25 +888,23 @@ export async function exportClipWithPreset(
   });
 
   if (queued.count === 0) {
+    await assertClipEditPlanStillActive(editPlanGuard);
     throw new Error("Clip export is already in progress. Duplicate request blocked.");
   }
 
   const job = await createProcessingJob(clip.sermonId, "EXPORT_CLIPS");
   const startedAt = Date.now();
+  let promotedOutputIdentity: PromotedMediaIdentity | null = null;
 
   try {
-    await upsertActiveClipEditPlanForClip({
-      clipCandidateId: clip.id,
-      createdBy: "export",
-      createdReason: "export_requested",
-    });
+    await assertClipEditPlanStillActive(editPlanGuard);
     await markJobRunning(job.id);
     await appendJobLog(job.id, `Export requested for clip ${clip.id} with format ${format}.`);
     await appendJobLog(job.id, `Export source selected: ${exportSource.kind}. ${exportSource.reason}`);
     await appendPipelineLog(clip.sermonId, `Export source selected for clip ${clip.id}: ${exportSource.kind}. ${exportSource.reason}`);
 
-    await prisma.clipCandidate.update({
-      where: { id: clip.id },
+    await updateClipCandidateForActiveEditPlan({
+      guard: editPlanGuard,
       data: {
         exportStatus: "EXPORTING",
         exportError: null,
@@ -1008,7 +1031,7 @@ export async function exportClipWithPreset(
         );
       }
     }
-    const tempPath = getTempPath(outputPath);
+    const tempPath = getTempPath(outputPath, editPlanGuard.editPlanId);
     const overlayDimensions = getBrandingOverlayDimensions(format);
     const brandingOverlayPath = tempPath.replace(/\.mp4$/i, ".branding.png");
     let fullFilter = filter;
@@ -1102,7 +1125,9 @@ export async function exportClipWithPreset(
       completedVideoEncoder = fallbackVideoEncoder;
     }
 
+    await assertClipEditPlanStillActive(editPlanGuard);
     await rename(tempPath, outputPath);
+    promotedOutputIdentity = await capturePromotedMediaIdentity(outputPath);
 
     if (overlayEnabled) {
       await unlink(brandingOverlayPath).catch(() => undefined);
@@ -1114,8 +1139,8 @@ export async function exportClipWithPreset(
       throw new Error("Export produced an empty output file.");
     }
     await appendJobLog(job.id, `Exported file size for ${clip.id}: ${outputStats.size} bytes.`);
-    await prisma.clipCandidate.update({
-      where: { id: clip.id },
+    await updateClipCandidateForActiveEditPlan({
+      guard: editPlanGuard,
       data: {
         ...buildExportMetadata({
           format,
@@ -1165,7 +1190,9 @@ export async function exportClipWithPreset(
         cropStabilityScore: framingDecision.cropStabilityScore,
         ...(smartCropRuntimeFallbackReason
           ? { assetInvalidationReason: smartCropRuntimeFallbackReason }
-          : {}),
+          : { assetInvalidationReason: null }),
+        exportFreshness: "UP_TO_DATE",
+        exportAssetVersion: { increment: 1 },
       },
     });
     const thumbnail = await ensureClipThumbnail({
@@ -1181,12 +1208,6 @@ export async function exportClipWithPreset(
     } else if (thumbnail.error) {
       await appendJobLog(job.id, `Clip poster is not ready yet for ${clip.id}: ${thumbnail.error}`);
     }
-    await upsertActiveClipEditPlanForClip({
-      clipCandidateId: clip.id,
-      createdBy: "export",
-      createdReason: "export_completed_with_quality_profile",
-    });
-    await markExportAssetCompleted(clip.id, true);
     await recordClipArtifact({
       clipCandidateId: clip.id,
       kind: "EXPORT",
@@ -1205,6 +1226,10 @@ export async function exportClipWithPreset(
         videoEncoder: completedVideoEncoder,
         audioBitrate: resolveAudioBitrate("export"),
       },
+      editPlan: {
+        editPlanId: editPlanGuard.editPlanId,
+        planHash: editPlanGuard.planHash,
+      },
     });
 
     const elapsedMs = Date.now() - startedAt;
@@ -1217,20 +1242,44 @@ export async function exportClipWithPreset(
       exportPath: outputPath,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown clip export error.";
-    await unlink(getTempPath(outputPath)).catch(() => undefined);
-    await failExport(clip.id, message);
-    await recordClipArtifact({
-      clipCandidateId: clip.id,
-      kind: "EXPORT",
-      status: "FAILED",
-      format,
-      filePath: outputPath,
-      errorMessage: message,
-      metadata: {
-        layoutStrategy,
+    const completionError = await preferStaleClipCompositionError(editPlanGuard, error);
+    const message = completionError instanceof Error ? completionError.message : "Unknown clip export error.";
+    await unlink(getTempPath(outputPath, editPlanGuard.editPlanId)).catch(() => undefined);
+
+    if (isStaleClipCompositionError(completionError)) {
+      if (promotedOutputIdentity) {
+        await discardPromotedMediaIfUnchanged(outputPath, promotedOutputIdentity);
+      }
+      await markJobFailed(job.id, message, `Stale export for clip ${clip.id} discarded after newer Clip Studio changes.`).catch(() => undefined);
+      await appendPipelineLog(clip.sermonId, `Discarded stale export for clip ${clip.id}: ${message}`).catch(() => undefined);
+      throw completionError;
+    }
+
+    const failureRecorded = await tryUpdateClipCandidateForActiveEditPlan({
+      guard: editPlanGuard,
+      data: {
+        exportStatus: "FAILED",
+        exportError: message,
+        exportFreshness: "FAILED",
       },
-    }).catch(() => undefined);
+    });
+    if (failureRecorded) {
+      await recordClipArtifact({
+        clipCandidateId: clip.id,
+        kind: "EXPORT",
+        status: "FAILED",
+        format,
+        filePath: outputPath,
+        errorMessage: message,
+        metadata: {
+          layoutStrategy,
+        },
+        editPlan: {
+          editPlanId: editPlanGuard.editPlanId,
+          planHash: editPlanGuard.planHash,
+        },
+      }).catch(() => undefined);
+    }
     await markJobFailed(job.id, message, `Clip ${clip.id} export failed.`);
     await appendPipelineLog(clip.sermonId, `Clip ${clip.id} export failed: ${message}`);
     throw new Error(message);

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { access, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import type { SermonStatus } from "@prisma/client";
+import { Prisma, type SermonStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import {
@@ -281,6 +281,20 @@ function validateNormalizedTranscript(transcript: NormalizedTranscript): Normali
     }
   }
 
+  for (const word of transcript.words ?? []) {
+    if (!Number.isFinite(word.startTimeSeconds) || !Number.isFinite(word.endTimeSeconds)) {
+      throw new Error("Transcription returned invalid word timestamps.");
+    }
+
+    if (word.endTimeSeconds <= word.startTimeSeconds) {
+      throw new Error("Transcription returned a word with invalid time ordering.");
+    }
+
+    if (!word.text.trim()) {
+      throw new Error("Transcription returned an empty timestamped word.");
+    }
+  }
+
   return {
     ...transcript,
     fullText,
@@ -297,7 +311,8 @@ function isNormalizedTranscriptLike(value: unknown): value is NormalizedTranscri
     transcript.provider === "openai" &&
     typeof transcript.model === "string" &&
     typeof transcript.fullText === "string" &&
-    Array.isArray(transcript.segments)
+    Array.isArray(transcript.segments) &&
+    (transcript.words === undefined || Array.isArray(transcript.words))
   );
 }
 
@@ -345,6 +360,18 @@ function buildTranscriptSegmentRecord(input: {
   };
 }
 
+function buildTranscriptWordTimingsJson(words: NormalizedTranscript["words"]) {
+  if (!words || words.length === 0) {
+    return Prisma.DbNull;
+  }
+
+  return words.map((word) => ({
+    text: word.text,
+    startTimeSeconds: word.startTimeSeconds,
+    endTimeSeconds: word.endTimeSeconds,
+  }));
+}
+
 async function replaceTranscriptRecords(input: {
   sermonId: string;
   fullText: string;
@@ -352,6 +379,7 @@ async function replaceTranscriptRecords(input: {
   language: string;
   transcriptJsonPath: string;
   segments: NormalizedTranscript["segments"];
+  words?: NormalizedTranscript["words"];
 }): Promise<void> {
   const previousTranscript = await prisma.transcript.findUnique({
     where: { sermonId: input.sermonId },
@@ -378,6 +406,8 @@ async function replaceTranscriptRecords(input: {
       })
     : null;
 
+  const wordTimings = buildTranscriptWordTimingsJson(input.words);
+
   await prisma.$transaction(async (tx) => {
     const transcript = await tx.transcript.upsert({
       where: { sermonId: input.sermonId },
@@ -386,6 +416,7 @@ async function replaceTranscriptRecords(input: {
         provider: input.provider,
         language: input.language,
         rawJsonPath: input.transcriptJsonPath,
+        wordTimings,
       },
       create: {
         sermonId: input.sermonId,
@@ -393,6 +424,7 @@ async function replaceTranscriptRecords(input: {
         provider: input.provider,
         language: input.language,
         rawJsonPath: input.transcriptJsonPath,
+        wordTimings,
       },
     });
 
@@ -575,6 +607,34 @@ function isNoiseTranscriptSegment(text: string): boolean {
   return false;
 }
 
+function filterTranscriptWordsToSegments(
+  words: NormalizedTranscript["words"],
+  segments: NormalizedTranscript["segments"],
+  window?: { startTimeSeconds: number; endTimeSeconds: number },
+): NormalizedTranscript["words"] {
+  if (words === undefined) {
+    return undefined;
+  }
+
+  if (words.length === 0 || segments.length === 0) {
+    return [];
+  }
+
+  return words.filter((word) => {
+    if (
+      window &&
+      (word.startTimeSeconds >= window.endTimeSeconds || word.endTimeSeconds <= window.startTimeSeconds)
+    ) {
+      return false;
+    }
+
+    return segments.some((segment) => (
+      word.startTimeSeconds < segment.endTimeSeconds &&
+      word.endTimeSeconds > segment.startTimeSeconds
+    ));
+  });
+}
+
 function cleanupTranscriptForClipping(transcript: NormalizedTranscript): NormalizedTranscript {
   const cleanedSegments: NormalizedTranscript["segments"] = [];
   let previousNormalized = "";
@@ -607,6 +667,7 @@ function cleanupTranscriptForClipping(transcript: NormalizedTranscript): Normali
     ...transcript,
     fullText: cleanedSegments.map((segment) => segment.text).join(" ").trim(),
     segments: cleanedSegments,
+    words: filterTranscriptWordsToSegments(transcript.words, cleanedSegments),
     raw: {
       ...(transcript.raw && typeof transcript.raw === "object" ? transcript.raw : {}),
       cleanup: {
@@ -849,8 +910,13 @@ function isDuplicateAtChunkSeam(
 function mergeChunkTranscriptSegments(
   previousSegments: NormalizedTranscript["segments"],
   nextSegments: NormalizedTranscript["segments"],
-): { segments: NormalizedTranscript["segments"]; removedDuplicateCount: number } {
+): {
+  segments: NormalizedTranscript["segments"];
+  keptNextSegments: NormalizedTranscript["segments"];
+  removedDuplicateCount: number;
+} {
   const merged = [...previousSegments];
+  const keptNextSegments: NormalizedTranscript["segments"] = [];
   let removedDuplicateCount = 0;
   let stillAtChunkStart = true;
 
@@ -862,9 +928,43 @@ function mergeChunkTranscriptSegments(
 
     stillAtChunkStart = false;
     merged.push(segment);
+    keptNextSegments.push(segment);
   }
 
-  return { segments: merged, removedDuplicateCount };
+  return { segments: merged, keptNextSegments, removedDuplicateCount };
+}
+
+function mergeChunkTranscriptTimeline(input: {
+  previousSegments: NormalizedTranscript["segments"];
+  previousWords: NormalizedTranscript["words"];
+  nextTranscript: NormalizedTranscript;
+  timelineOffsetSeconds: number;
+}): {
+  segments: NormalizedTranscript["segments"];
+  words: NormalizedTranscript["words"];
+  removedDuplicateCount: number;
+} {
+  const shiftedTranscript = offsetTranscriptTimeline(input.nextTranscript, input.timelineOffsetSeconds);
+  const mergedSegments = mergeChunkTranscriptSegments(input.previousSegments, shiftedTranscript.segments);
+  const hasCompleteNextWordTimings = Boolean(shiftedTranscript.words && shiftedTranscript.words.length > 0);
+  const words = input.previousWords === undefined || !hasCompleteNextWordTimings
+    ? undefined
+    : [
+        ...input.previousWords,
+        ...(filterTranscriptWordsToSegments(
+          shiftedTranscript.words,
+          mergedSegments.keptNextSegments,
+        ) ?? []),
+      ].sort((left, right) => (
+        left.startTimeSeconds - right.startTimeSeconds ||
+        left.endTimeSeconds - right.endTimeSeconds
+      ));
+
+  return {
+    segments: mergedSegments.segments,
+    words,
+    removedDuplicateCount: mergedSegments.removedDuplicateCount,
+  };
 }
 
 function applySermonSegmentWindowToTranscript(
@@ -906,6 +1006,10 @@ function applySermonSegmentWindowToTranscript(
       ...transcript,
       fullText: segments.map((segment) => segment.text.trim()).join(" ").trim(),
       segments,
+      words: filterTranscriptWordsToSegments(transcript.words, segments, {
+        startTimeSeconds: start,
+        endTimeSeconds: end,
+      }),
     },
   };
 }
@@ -938,6 +1042,10 @@ function applyClippingWindowToTranscript(
       ...windowed.transcript,
       fullText: segments.map((segment) => segment.text.trim()).join(" ").trim(),
       segments,
+      words: filterTranscriptWordsToSegments(windowed.transcript.words, segments, {
+        startTimeSeconds: inferredWindow.startTimeSeconds,
+        endTimeSeconds: inferredWindow.endTimeSeconds,
+      }),
     },
   };
 }
@@ -1809,6 +1917,7 @@ async function transcribeAudioWithChunking(
   }
 
   let mergedSegments: NormalizedTranscript["segments"] = [];
+  let mergedWords: NormalizedTranscript["words"] = [];
   const chunkSummaries: ChunkTimelineSummary[] = [];
   const chunkModels = new Set<string>();
   let language: string | undefined;
@@ -1897,8 +2006,12 @@ async function transcribeAudioWithChunking(
       legacyChunkTimeline.offsets[index] ??
       getChunkTimelineOffsetSeconds(index, chunkDurationSeconds)
     );
-    const shiftedSegments = offsetChunkTranscriptSegments(chunkTranscript.segments, timelineOffsetSeconds);
-    const merged = mergeChunkTranscriptSegments(mergedSegments, shiftedSegments);
+    const merged = mergeChunkTranscriptTimeline({
+      previousSegments: mergedSegments,
+      previousWords: mergedWords,
+      nextTranscript: chunkTranscript,
+      timelineOffsetSeconds,
+    });
     if (merged.removedDuplicateCount > 0) {
       await appendPipelineLog(
         sermonId,
@@ -1906,6 +2019,7 @@ async function transcribeAudioWithChunking(
       );
     }
     mergedSegments = merged.segments;
+    mergedWords = merged.words;
     previousTranscriptTail = getTranscriptTail(mergedSegments.map((segment) => segment.text).join(" "));
 
     chunkSummaries.push({
@@ -1926,6 +2040,7 @@ async function transcribeAudioWithChunking(
     provider: "openai",
     model: chunkModels.size > 0 ? `chunked:${Array.from(chunkModels).join(",")}` : "chunked-openai",
     segments: mergedSegments,
+    words: mergedWords && mergedWords.length > 0 ? mergedWords : undefined,
     raw: {
       chunking: {
         implemented: true,
@@ -2313,6 +2428,7 @@ export async function transcribeSermonAudio(
       language: storedTranscriptLanguage,
       transcriptJsonPath,
       segments: transcriptWindowed.transcript.segments,
+      words: transcriptWindowed.transcript.words,
     });
 
     await markSermonTranscribedUnlessAdvanced(sermon.id);
@@ -2368,13 +2484,16 @@ export const __transcriptionTestUtils = {
   buildChunkTranscriptCachePath,
   buildChunkTranscriptCachePayload,
   buildTranscriptSegmentRecord,
+  buildTranscriptWordTimingsJson,
   buildSpeechEnhancedAudioArgs,
   buildCumulativeChunkTimelineOffsets,
   buildSilenceAwareChunkSpecs,
   cleanupTranscriptForClipping,
+  filterTranscriptWordsToSegments,
   getChunkTimelineOffsetSeconds,
   getTranscriptTail,
   mergeChunkTranscriptSegments,
+  mergeChunkTranscriptTimeline,
   normalizeTranscriptTextForCleanup,
   offsetChunkTranscriptSegments,
   offsetTranscriptTimeline,

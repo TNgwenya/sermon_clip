@@ -209,6 +209,75 @@ describe("transcription sermon segment filtering", () => {
     });
   });
 
+  it("merges chunk word timestamps onto the sermon timeline and drops words from removed seam segments", () => {
+    const merged = __transcriptionTestUtils.mergeChunkTranscriptTimeline({
+      previousSegments: [
+        { startTimeSeconds: 1192, endTimeSeconds: 1199, text: "God is faithful in every season." },
+      ],
+      previousWords: [
+        { text: "God", startTimeSeconds: 1192, endTimeSeconds: 1192.4 },
+        { text: "faithful", startTimeSeconds: 1193, endTimeSeconds: 1193.6 },
+      ],
+      nextTranscript: {
+        fullText: "God is faithful in every season. The church keeps walking.",
+        provider: "openai",
+        model: "whisper-1",
+        segments: [
+          { startTimeSeconds: 0, endTimeSeconds: 5, text: "God is faithful in every season." },
+          { startTimeSeconds: 6, endTimeSeconds: 10, text: "The church keeps walking." },
+        ],
+        words: [
+          { text: "God", startTimeSeconds: 0, endTimeSeconds: 0.4 },
+          { text: "faithful", startTimeSeconds: 1, endTimeSeconds: 1.6 },
+          { text: "The", startTimeSeconds: 6, endTimeSeconds: 6.3 },
+          { text: "church", startTimeSeconds: 6.3, endTimeSeconds: 6.8 },
+          { text: "keeps", startTimeSeconds: 6.8, endTimeSeconds: 7.2 },
+          { text: "walking.", startTimeSeconds: 7.2, endTimeSeconds: 8 },
+        ],
+        raw: {},
+      },
+      timelineOffsetSeconds: 1200,
+    });
+
+    expect(merged.removedDuplicateCount).toBe(1);
+    expect(merged.segments.map((segment) => segment.text)).toEqual([
+      "God is faithful in every season.",
+      "The church keeps walking.",
+    ]);
+    expect(merged.words).toEqual([
+      { text: "God", startTimeSeconds: 1192, endTimeSeconds: 1192.4 },
+      { text: "faithful", startTimeSeconds: 1193, endTimeSeconds: 1193.6 },
+      { text: "The", startTimeSeconds: 1206, endTimeSeconds: 1206.3 },
+      { text: "church", startTimeSeconds: 1206.3, endTimeSeconds: 1206.8 },
+      { text: "keeps", startTimeSeconds: 1206.8, endTimeSeconds: 1207.2 },
+      { text: "walking.", startTimeSeconds: 1207.2, endTimeSeconds: 1208 },
+    ]);
+  });
+
+  it("omits chunked word timings when any provider chunk has no word timestamps", () => {
+    const merged = __transcriptionTestUtils.mergeChunkTranscriptTimeline({
+      previousSegments: [
+        { startTimeSeconds: 0, endTimeSeconds: 3, text: "First exact words." },
+      ],
+      previousWords: [
+        { text: "First", startTimeSeconds: 0, endTimeSeconds: 0.5 },
+      ],
+      nextTranscript: {
+        fullText: "Second segment without exact words.",
+        provider: "openai",
+        model: "provider-without-words",
+        segments: [
+          { startTimeSeconds: 0, endTimeSeconds: 3, text: "Second segment without exact words." },
+        ],
+        raw: {},
+      },
+      timelineOffsetSeconds: 300,
+    });
+
+    expect(merged.words).toBeUndefined();
+    expect(merged.segments).toHaveLength(2);
+  });
+
   it("preserves provider confidence while shifting chunk timestamps", () => {
     const shifted = __transcriptionTestUtils.offsetChunkTranscriptSegments([
       {
@@ -307,6 +376,11 @@ describe("transcription sermon segment filtering", () => {
           confidence: 0.73,
         },
       ],
+      words: [
+        { text: "God", startTimeSeconds: 0, endTimeSeconds: 0.4 },
+        { text: "is", startTimeSeconds: 0.4, endTimeSeconds: 0.55 },
+        { text: "faithful", startTimeSeconds: 0.55, endTimeSeconds: 1.2 },
+      ],
       raw: {},
     };
 
@@ -336,6 +410,11 @@ describe("transcription sermon segment filtering", () => {
       ).resolves.toMatchObject({
         fullText: "God is faithful in every season.",
         segments: [{ startTimeSeconds: 0, endTimeSeconds: 6, confidence: 0.73 }],
+        words: [
+          { text: "God", startTimeSeconds: 0, endTimeSeconds: 0.4 },
+          { text: "is", startTimeSeconds: 0.4, endTimeSeconds: 0.55 },
+          { text: "faithful", startTimeSeconds: 0.55, endTimeSeconds: 1.2 },
+        ],
       });
 
       await expect(
@@ -936,6 +1015,14 @@ describe("transcription sermon segment filtering", () => {
         { startTimeSeconds: 22, endTimeSeconds: 24, text: "Amen." },
         { startTimeSeconds: 24, endTimeSeconds: 34, text: "The church must use every gift with courage." },
       ],
+      words: [
+        { text: "Music", startTimeSeconds: 0, endTimeSeconds: 1 },
+        { text: "God", startTimeSeconds: 4, endTimeSeconds: 4.4 },
+        { text: "God", startTimeSeconds: 10, endTimeSeconds: 10.4 },
+        { text: "God", startTimeSeconds: 16, endTimeSeconds: 16.4 },
+        { text: "Amen.", startTimeSeconds: 22, endTimeSeconds: 22.6 },
+        { text: "The", startTimeSeconds: 24, endTimeSeconds: 24.3 },
+      ],
     };
 
     const cleaned = __transcriptionTestUtils.cleanupTranscriptForClipping(transcript);
@@ -948,6 +1035,7 @@ describe("transcription sermon segment filtering", () => {
     ]);
     expect(cleaned.fullText).not.toContain("Music");
     expect(cleaned.fullText).toContain("Amen");
+    expect(cleaned.words?.map((word) => word.startTimeSeconds)).toEqual([4, 10, 22, 24]);
     expect((cleaned.raw as { cleanup?: { removedSegmentCount: number } }).cleanup?.removedSegmentCount).toBe(2);
   });
 
@@ -1058,6 +1146,38 @@ describe("transcription sermon segment filtering", () => {
     expect(result.transcript.fullText).not.toContain("Worship song");
   });
 
+  it("filters exact word timings to the configured sermon window, including partially overlapping segments", () => {
+    const result = __transcriptionTestUtils.applySermonSegmentWindowToTranscript({
+      fullText: "Before boundary after boundary. Keep this too.",
+      provider: "openai",
+      model: "whisper-1",
+      segments: [
+        { startTimeSeconds: 110, endTimeSeconds: 130, text: "Before boundary after boundary." },
+        { startTimeSeconds: 130, endTimeSeconds: 150, text: "Keep this too." },
+      ],
+      words: [
+        { text: "Before", startTimeSeconds: 111, endTimeSeconds: 111.5 },
+        { text: "boundary", startTimeSeconds: 118, endTimeSeconds: 118.6 },
+        { text: "after", startTimeSeconds: 121, endTimeSeconds: 121.4 },
+        { text: "boundary.", startTimeSeconds: 125, endTimeSeconds: 125.8 },
+        { text: "Keep", startTimeSeconds: 131, endTimeSeconds: 131.4 },
+        { text: "too.", startTimeSeconds: 151, endTimeSeconds: 151.4 },
+      ],
+      raw: {},
+    }, {
+      sermonStartSeconds: 120,
+      sermonEndSeconds: 150,
+      analyzeFullRecording: false,
+      knownDurationSeconds: 200,
+    });
+
+    expect(result.transcript.words).toEqual([
+      { text: "after", startTimeSeconds: 121, endTimeSeconds: 121.4 },
+      { text: "boundary.", startTimeSeconds: 125, endTimeSeconds: 125.8 },
+      { text: "Keep", startTimeSeconds: 131, endTimeSeconds: 131.4 },
+    ]);
+  });
+
   it("keeps original timestamp reference for clip mapping", () => {
     const result = __transcriptionTestUtils.applySermonSegmentWindowToTranscript(baseTranscript, {
       sermonStartSeconds: 120,
@@ -1106,6 +1226,12 @@ describe("transcription sermon segment filtering", () => {
           { startTimeSeconds: 0, endTimeSeconds: 3.2, text: "Faith comes" },
           { startTimeSeconds: 3.2, endTimeSeconds: 6.4, text: "by hearing." },
         ],
+        words: [
+          { text: "Faith", startTimeSeconds: 0, endTimeSeconds: 0.52 },
+          { text: "comes", startTimeSeconds: 0.52, endTimeSeconds: 1.04 },
+          { text: "by", startTimeSeconds: 3.2, endTimeSeconds: 3.42 },
+          { text: "hearing.", startTimeSeconds: 3.42, endTimeSeconds: 4.12 },
+        ],
         raw: {},
       },
       9540,
@@ -1115,6 +1241,12 @@ describe("transcription sermon segment filtering", () => {
     expect(result.segments[0]?.endTimeSeconds).toBe(9543.2);
     expect(result.segments[1]?.startTimeSeconds).toBe(9543.2);
     expect(result.segments[1]?.endTimeSeconds).toBe(9546.4);
+    expect(result.words).toEqual([
+      { text: "Faith", startTimeSeconds: 9540, endTimeSeconds: 9540.52 },
+      { text: "comes", startTimeSeconds: 9540.52, endTimeSeconds: 9541.04 },
+      { text: "by", startTimeSeconds: 9543.2, endTimeSeconds: 9543.42 },
+      { text: "hearing.", startTimeSeconds: 9543.42, endTimeSeconds: 9544.12 },
+    ]);
   });
 
   it("falls back to full-video transcript when no window is provided", () => {

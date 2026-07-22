@@ -59,6 +59,40 @@
   color: #99f6e4;
 }
 
+.scheduleSuccess {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  background: rgba(34, 197, 94, 0.07);
+}
+
+.scheduleSuccessCopy {
+  display: grid;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.scheduleSuccessCopy strong {
+  color: #bbf7d0;
+  font-size: 0.95rem;
+}
+
+.scheduleSuccessCopy span {
+  color: #e5e7eb;
+}
+
+.scheduleSuccessCopy small {
+  color: var(--muted);
+}
+
+.scheduleSuccessActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.5rem;
+}
+
 .assetWorkspace {
   display: grid;
   grid-template-columns: minmax(10rem, 0.72fr) minmax(0, 1.28fr);
@@ -145,6 +179,35 @@
   gap: 0.85rem;
 }
 
+.approvalState {
+  display: grid;
+  gap: 0.18rem;
+  border: 1px solid rgba(74, 222, 128, 0.22);
+  border-radius: 9px;
+  background: rgba(34, 197, 94, 0.055);
+  padding: 0.68rem 0.75rem;
+}
+
+.approvalState strong {
+  color: #bbf7d0;
+  font-size: 0.78rem;
+}
+
+.approvalState span {
+  color: #b8c1bd;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.approvalState.needsApproval {
+  border-color: rgba(251, 191, 36, 0.3);
+  background: rgba(245, 158, 11, 0.07);
+}
+
+.approvalState.needsApproval strong {
+  color: #fde68a;
+}
+
 .reviewColumn > div:first-child {
   display: grid;
   gap: 0.4rem;
@@ -170,7 +233,7 @@
 }
 
 .primaryActions > * {
-  flex: 1 1 10rem;
+  flex: 1 1 100%;
 }
 
 .handoffDetails {
@@ -217,6 +280,15 @@
 }
 
 @media (max-width: 640px) {
+  .scheduleSuccess {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .scheduleSuccessActions > * {
+    flex: 1 1 0;
+  }
+
   .assetWorkspace {
     grid-template-columns: 1fr;
   }

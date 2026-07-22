@@ -98,6 +98,7 @@ MEDIA_WORKER_POLL_SECONDS=15
 MEDIA_WORKER_HEARTBEAT_SECONDS=30
 MEDIA_WORKER_STALE_JOB_MINUTES=60
 MEDIA_WORKER_MAX_ATTEMPTS=2
+CONTENT_OPPORTUNITY_GENERATION_EXECUTION=QUEUED
 SCHEDULER_ADMIN_PASSWORD=single_user_dashboard_password
 CONTROL_PANEL_MODE=true
 YOUTUBE_CLIENT_ID=your_google_oauth_client_id
@@ -120,6 +121,7 @@ POSTING_WORKER_DRY_RUN=true
 `OPENAI_TRANSCRIPTION_MODEL` stays on `whisper-1` to provide word timestamps. The higher-accuracy `gpt-4o-transcribe` pass now defaults to `auto` and runs only when timing, confidence, or language evidence indicates that Whisper wording needs help. Diarization defaults off; set `OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED=true` when speaker labels are required. `OPENAI_TRANSCRIPTION_GLOSSARY` accepts comma-, semicolon-, or newline-separated names, scripture terms, places, and local-language spellings. The older FFmpeg speech-enhancement retry is disabled by default because production samples consistently performed worse; it can be re-enabled explicitly for controlled evaluation.
 Text AI calls go through the shared Responses API gateway. Clip selection and sermon intelligence default to `gpt-5.6-terra` with `medium` reasoning; routine structured extraction and review tasks default to `gpt-5.6-luna` with `low` reasoning. Use `OPENAI_CHAT_MODEL` and `OPENAI_REASONING_EFFORT` as global overrides, or the task-specific variables for measured exceptions. Validated structured results are cached by model, prompt version, options, and input hash; duplicate in-flight requests are coalesced. `OPENAI_CLIP_SELECTION_MAX_WINDOWS` limits premium semantic review after deterministic pre-ranking while preserving remaining windows for local coverage top-up. AI calls record provider attempt counts, cache hits, cached input tokens, reasoning tokens, audio duration, latency, and estimated text cost; raw prompts are not stored.
 `MEDIA_WORKER_HEARTBEAT_SECONDS`, `MEDIA_WORKER_STALE_JOB_MINUTES`, and `MEDIA_WORKER_MAX_ATTEMPTS` control media job leases. A stale `RUNNING` job can be reclaimed by another local worker, then marked failed after the configured claim limit.
+Content idea generation is also claimed by `npm run worker:media` as a durable `GENERATE_CONTENT_OPPORTUNITIES` job. Keep `CONTENT_OPPORTUNITY_GENERATION_EXECUTION=QUEUED` in production; `INLINE` is an explicit local fallback for environments that cannot run the worker.
 `POSTING_WORKER_DRY_RUN` defaults to true unless explicitly set to `false`, so the worker can be tested without posting.
 Social Settings OAuth links use the current app host for callback URLs. Register the exact local and live callback URLs with each provider, for example `http://localhost:3000/api/oauth/youtube/callback` and `https://your-vercel-app.vercel.app/api/oauth/youtube/callback`. Keep `WORKER_API_BASE_URL` pointed at the app the worker should poll; it does not need to match the OAuth callback host.
 
@@ -273,6 +275,7 @@ Useful worker settings:
 - `MEDIA_WORKER_HEARTBEAT_SECONDS`: defaults to `30`.
 - `MEDIA_WORKER_STALE_JOB_MINUTES`: defaults to `60`.
 - `MEDIA_WORKER_MAX_ATTEMPTS`: defaults to `2`.
+- `CONTENT_OPPORTUNITY_GENERATION_EXECUTION`: defaults to durable queued generation; use `INLINE` only as an explicit local fallback.
 - `POSTING_WORKER_SYNC_SECONDS`: defaults to `60`.
 - `POSTING_WORKER_DUE_CHECK_SECONDS`: defaults to `30`.
 - `POSTING_WORKER_UPCOMING_WINDOW_MINUTES`: defaults to `10080` (7 days).

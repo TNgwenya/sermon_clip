@@ -14,8 +14,13 @@ import {
 } from "@/lib/scheduledPosts";
 import { isValidIanaTimeZone, resolveScheduledInstant } from "@/lib/postingSchedule";
 
-export async function GET(): Promise<NextResponse> {
-  const scheduledPosts = await listScheduledPosts();
+export async function GET(request: Request): Promise<NextResponse> {
+  const url = new URL(request.url);
+  const scheduledPosts = await listScheduledPosts({
+    scheduledPostId: url.searchParams.get("scheduledPostId"),
+    contentAssetId: url.searchParams.get("contentAssetId"),
+    includeContentAssetFiles: false,
+  });
   return NextResponse.json({ scheduledPosts });
 }
 

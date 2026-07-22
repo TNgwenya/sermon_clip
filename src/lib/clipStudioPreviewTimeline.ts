@@ -1,4 +1,5 @@
 import type { HookOverlayConfig } from "@/lib/clipStudio";
+import { normalizeCaptionCueWordTimings } from "@/lib/clipStudioEditing";
 import type {
   SpeechCleanupAudioSilenceEvent,
   SpeechCleanupCaptionCue,
@@ -94,6 +95,34 @@ export function mapCleanedPreviewSecondsToSourceSeconds(cleanedSeconds: number, 
   return mapCleanedSecondsToSourceSeconds(cleanedSeconds, plan);
 }
 
+export type PreviewSeekTimeDomain = "cleaned" | "source";
+
+export function resolvePreviewSeekSourceSeconds({
+  requestedSeconds,
+  timeDomain,
+  plan,
+}: {
+  requestedSeconds: number;
+  timeDomain: PreviewSeekTimeDomain;
+  plan: SpeechCleanupPreviewPlan | null | undefined;
+}): number {
+  const safeRequestedSeconds = Number.isFinite(requestedSeconds) ? Math.max(0, requestedSeconds) : 0;
+  if (!plan?.enabled) {
+    return safeRequestedSeconds;
+  }
+
+  if (timeDomain === "cleaned") {
+    return mapCleanedPreviewSecondsToSourceSeconds(safeRequestedSeconds, plan);
+  }
+
+  // A source-time request can land inside a removed range. Round-tripping it
+  // through the cleaned timeline moves it to the first playable source frame.
+  return mapCleanedPreviewSecondsToSourceSeconds(
+    mapSourceSecondsToCleanedPreviewSeconds(safeRequestedSeconds, plan),
+    plan,
+  );
+}
+
 export function shouldShowHookOverlay(hookOverlay: HookOverlayConfig, previewSeconds: number): boolean {
   if (!hookOverlay.enabled || !hookOverlay.text.trim()) {
     return false;
@@ -161,6 +190,17 @@ export function resolveActiveCaptionCueText({
   return activeCue?.text.trim() ?? (captionCues.length === 0 ? fallbackText.trim() : "");
 }
 
+export function resolveCaptionLookupSeconds(
+  sourcePreviewSeconds: number,
+  captionSyncOffsetSeconds: number,
+): number {
+  const previewSeconds = Number.isFinite(sourcePreviewSeconds) ? sourcePreviewSeconds : 0;
+  const offsetSeconds = Number.isFinite(captionSyncOffsetSeconds) ? captionSyncOffsetSeconds : 0;
+  // Positive offsets make captions appear later, so the preview looks up an
+  // earlier point in the unshifted cue timeline.
+  return previewSeconds - offsetSeconds;
+}
+
 function getPreviewCaptionWordWeight(word: string): number {
   const spokenCharacterCount = word.replace(/[^\p{L}\p{N}]+/gu, "").length;
   const punctuationWeight = /[.!?]["')\]]?$/.test(word)
@@ -170,6 +210,13 @@ function getPreviewCaptionWordWeight(word: string): number {
       : 0;
 
   return Math.max(1, spokenCharacterCount) + punctuationWeight;
+}
+
+function normalizePreviewCaptionWord(word: string): string {
+  return word
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
 export function resolveActiveCaptionWordIndex({
@@ -189,6 +236,34 @@ export function resolveActiveCaptionWordIndex({
 
   if (!activeCue || activeCue.endSeconds <= activeCue.startSeconds) {
     return 0;
+  }
+
+  const exactWordTimings = normalizeCaptionCueWordTimings(
+    activeCue.wordTimings,
+    activeCue.startSeconds,
+    activeCue.endSeconds,
+  );
+  const exactWordsMatch = exactWordTimings?.length === visibleWords.length && visibleWords.every((word, index) => {
+    const normalizedVisibleWord = normalizePreviewCaptionWord(word);
+    const normalizedTimedWord = normalizePreviewCaptionWord(exactWordTimings[index]?.text ?? "");
+    return normalizedVisibleWord.length > 0 && normalizedVisibleWord === normalizedTimedWord;
+  });
+
+  if (exactWordTimings && exactWordsMatch) {
+    const clampedSeconds = clampPreviewSeconds(previewSeconds, activeCue.startSeconds, activeCue.endSeconds);
+    for (let index = exactWordTimings.length - 1; index >= 0; index -= 1) {
+      const timing = exactWordTimings[index];
+      const isLastWord = index === exactWordTimings.length - 1;
+      if (
+        clampedSeconds >= timing.startSeconds &&
+        (clampedSeconds < timing.endSeconds || (isLastWord && clampedSeconds <= timing.endSeconds))
+      ) {
+        return index;
+      }
+    }
+
+    const nextWordIndex = exactWordTimings.findIndex((timing) => clampedSeconds < timing.startSeconds);
+    return nextWordIndex < 0 ? exactWordTimings.length - 1 : Math.max(0, nextWordIndex - 1);
   }
 
   const cueDurationSeconds = Math.max(0.1, activeCue.endSeconds - activeCue.startSeconds);

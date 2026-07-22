@@ -64,6 +64,7 @@
   grid-template-columns: minmax(260px, .75fr) minmax(0, 1.65fr);
   gap: 20px;
   margin-top: 20px;
+  scroll-margin-top: 20px;
 }
 
 .section {
@@ -76,10 +77,66 @@
   box-shadow: 0 18px 54px rgba(0, 0, 0, .15);
 }
 
+.settings {
+  align-self: start;
+  overflow: hidden;
+  padding: 0;
+}
+
+.settingsSummary {
+  display: flex;
+  min-height: 5.2rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  list-style: none;
+  padding: 18px 20px;
+}
+
+.settingsSummary::-webkit-details-marker {
+  display: none;
+}
+
+.settingsSummary > span:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.settingsSummary strong,
+.settingsSummary small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settingsSummary small {
+  color: var(--muted, #a9afa9);
+}
+
+.settingsAction {
+  flex: 0 0 auto;
+  border: 1px solid rgba(157, 214, 189, .24);
+  border-radius: 999px;
+  color: #d8f4e5;
+  font-size: .78rem;
+  font-weight: 800;
+  padding: 7px 10px;
+}
+
+.settings[open] .settingsSummary {
+  border-bottom: 1px solid var(--border, rgba(230, 237, 230, .12));
+}
+
+.settings[open] .settingsAction::after {
+  content: " settings";
+}
+
 .controls {
   display: grid;
-  align-self: start;
   gap: 16px;
+  padding: 20px;
 }
 
 .controls label,
@@ -224,6 +281,8 @@
 .warning,
 .success,
 .error {
+  display: grid;
+  gap: 6px;
   padding: 12px 14px;
   border-radius: 12px;
 }
@@ -283,6 +342,38 @@
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
+}
+
+.itemDetails {
+  margin-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, .07);
+  padding-top: 8px;
+}
+
+.itemDetails summary {
+  cursor: pointer;
+  color: #c6cec8;
+  font-size: .78rem;
+  font-weight: 750;
+}
+
+.captionPreview {
+  max-height: 9rem;
+  overflow: auto;
+  color: var(--muted, #a9afa9);
+  font-size: .82rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.emptyPlan {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  border: 1px dashed rgba(157, 214, 189, .22);
+  border-radius: 12px;
+  background: rgba(157, 214, 189, .035);
+  padding: 16px;
 }
 
 .performanceRecorder {
@@ -366,7 +457,7 @@
   }
 
   .hero h1 {
-    font-size: clamp(2.7rem, 14vw, 4rem);
+    font-size: clamp(2.25rem, 11vw, 3.25rem);
   }
 
   .heroActions {
@@ -383,5 +474,19 @@
   .summary,
   .platformOptions {
     grid-template-columns: 1fr;
+  }
+
+  .settingsSummary {
+    min-height: 4.7rem;
+    padding: 14px 16px;
+  }
+
+  .settingsSummary strong,
+  .settingsSummary small {
+    white-space: normal;
+  }
+
+  .controls {
+    padding: 16px;
   }
 }

@@ -12,6 +12,8 @@ import {
   extractCaptionAppearanceSettings,
   extractApplyCaptionsToClip,
   extractCaptionPosition,
+  extractCaptionRevealMode,
+  extractCaptionSyncOffsetSeconds,
   extractCaptionStyleOverride,
   extractBrollLayerConfig,
   extractHookOverlayConfig,
@@ -30,6 +32,9 @@ import {
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
 import {
   buildEditableCaptionCuesFromTranscriptSegments,
+  buildTimedCaptionCuesFromTranscriptSegments,
+  buildTimedCaptionCuesFromTranscriptWords,
+  parseCaptionSourceWords,
   resolveClipStudioInitialCaptionCues,
 } from "@/lib/clipStudioEditing";
 import { ClipStudioEditor } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-editor";
@@ -283,7 +288,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     notFound();
   }
 
-  const [transcriptSegments, sermonDurationSegment, appBranding] = await Promise.all([
+  const [transcriptSegments, sermonDurationSegment, transcriptRecord, appBranding] = await Promise.all([
     prisma.transcriptSegment.findMany({
       where: {
         sermonId,
@@ -305,6 +310,10 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       orderBy: { endTimeSeconds: "desc" },
       select: { endTimeSeconds: true },
     }),
+    prisma.transcript.findUnique({
+      where: { sermonId },
+      select: { wordTimings: true },
+    }),
     getBrandingSettings().catch(() => null),
   ]);
 
@@ -319,6 +328,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   const captionStyleOverride = extractCaptionStyleOverride(clip.captionData);
   const captionPosition = extractCaptionPosition(clip.captionData);
   const captionAppearance = extractCaptionAppearanceSettings(clip.captionData);
+  const captionRevealMode = extractCaptionRevealMode(clip.captionData);
+  const captionSyncOffsetSeconds = extractCaptionSyncOffsetSeconds(clip.captionData);
   const applyCaptionsToClip = extractApplyCaptionsToClip(clip.captionData);
   const hookOverlay = extractHookOverlayConfig(clip.captionData, clip.hook || clip.suggestedHook);
   const brollLayer = extractBrollLayerConfig(
@@ -378,11 +389,33 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
         clipEndSeconds: clip.endTimeSeconds,
         transcriptText: clip.transcriptText,
       });
-  const transcriptCaptionCues = buildEditableCaptionCuesFromTranscriptSegments({
-    startTimeSeconds: clip.startTimeSeconds,
-    endTimeSeconds: clip.endTimeSeconds,
-    segments: studioTranscriptSegments,
-  });
+  const transcriptWords = parseCaptionSourceWords(transcriptRecord?.wordTimings).filter(
+    (word) =>
+      word.endTimeSeconds >= Math.max(0, clip.startTimeSeconds - 20) &&
+      word.startTimeSeconds <= clip.endTimeSeconds + 20,
+  );
+  const exactWordCaptionCues = transcriptWords.length > 0
+    ? buildTimedCaptionCuesFromTranscriptWords({
+        startTimeSeconds: clip.startTimeSeconds,
+        endTimeSeconds: clip.endTimeSeconds,
+        words: transcriptWords,
+        maxWordsPerCue: captionRevealMode === "single-word" ? 1 : 5,
+        maxCueDurationSeconds: captionRevealMode === "single-word" ? 1.4 : 2.4,
+      })
+    : [];
+  const transcriptCaptionCues = exactWordCaptionCues.length > 0
+    ? exactWordCaptionCues
+    : captionRevealMode === "single-word"
+      ? buildTimedCaptionCuesFromTranscriptSegments({
+          startTimeSeconds: clip.startTimeSeconds,
+          endTimeSeconds: clip.endTimeSeconds,
+          segments: studioTranscriptSegments,
+        })
+      : buildEditableCaptionCuesFromTranscriptSegments({
+          startTimeSeconds: clip.startTimeSeconds,
+          endTimeSeconds: clip.endTimeSeconds,
+          segments: studioTranscriptSegments,
+        });
   const generatedOnVideoCaptionCues = transcriptCaptionCues.length > 0
     ? transcriptCaptionCues
     : fallbackOnVideoCaptionCues;
@@ -414,6 +447,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     captionStylePresetId: captionStyleOverride || appBranding?.defaultCaptionStyleName || DEFAULT_CAPTION_STYLE_PRESET_ID,
     captionPosition,
     captionAppearance,
+    captionRevealMode,
+    captionSyncOffsetSeconds,
     hookOverlay,
     brollLayer,
     speechCleanup: speechCleanupSettings,
@@ -680,6 +715,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 initialCaptionStylePresetId={captionStyleOverride}
                 initialCaptionPosition={captionPosition}
                 initialCaptionAppearance={captionAppearance}
+                initialCaptionRevealMode={captionRevealMode}
+                initialCaptionSyncOffsetSeconds={captionSyncOffsetSeconds}
                 brandCaptionStylePresetId={appBranding?.defaultCaptionStyleName ?? DEFAULT_CAPTION_STYLE_PRESET_ID}
                 suggestedHook={clip.suggestedHook ?? ""}
                 suggestedCaption={clip.suggestedCaption ?? ""}
@@ -694,6 +731,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 initialAudioSilenceAnalyzed={false}
                 audioSilenceReviewUrl={audioSilenceReviewUrl}
                 transcriptSegments={studioTranscriptSegments}
+                transcriptWords={transcriptWords}
                 knownDurationSeconds={sermonDurationSegment?.endTimeSeconds ?? null}
                 captionQualityScore={captionGuidance.qualityScore}
                 captionQualityReason={captionGuidance.qualityReason}

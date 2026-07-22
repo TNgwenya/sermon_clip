@@ -12,10 +12,12 @@ import type {
   BrollLayerConfig,
   CaptionAppearanceSettings,
   CaptionPosition,
+  CaptionRevealMode,
   HookOverlayConfig,
   SpeechCleanupSettings,
 } from "@/lib/clipStudio";
 import type { ExportSettings } from "@/lib/clipExportSettings";
+import type { CaptionCueWordTiming, EditableCaptionCue } from "@/lib/clipStudioEditing";
 import type { SpeechCleanupAudioSilenceEvent } from "@/lib/clipStudioPreviewTimeline";
 import type { SpeechCleanupEdits } from "@/lib/speechCleanupPlan";
 
@@ -32,16 +34,13 @@ export type ClipStudioEditPreview = {
   shortCaption: string;
   platformCaption: string;
   onVideoCaptionText: string;
-  captionCues: Array<{
-    index: number;
-    startSeconds: number;
-    endSeconds: number;
-    text: string;
-  }>;
+  captionCues: EditableCaptionCue[];
   applyCaptionsToClip: boolean;
   captionStylePresetId: string;
   captionPosition: CaptionPosition;
   captionAppearance: CaptionAppearanceSettings;
+  captionRevealMode: CaptionRevealMode;
+  captionSyncOffsetSeconds: number;
   hookOverlay: HookOverlayConfig;
   brollLayer: BrollLayerConfig;
   speechCleanup: SpeechCleanupSettings;
@@ -54,8 +53,15 @@ export type ClipStudioEditPreview = {
 
 export type ClipStudioPreviewClock = {
   currentSeconds: number;
+  sourceCurrentSeconds: number;
   durationSeconds: number | null;
   isPlaying: boolean;
+};
+
+export type ClipStudioPreviewSeekRequest = {
+  seconds: number;
+  requestId: number;
+  timeDomain: "cleaned" | "source";
 };
 
 type ClipStudioPreviewContextValue = {
@@ -63,7 +69,7 @@ type ClipStudioPreviewContextValue = {
   brandingConfig: ClipBrandingConfig;
   editPreview: ClipStudioEditPreview;
   previewClock: ClipStudioPreviewClock;
-  seekRequest: { seconds: number; requestId: number } | null;
+  seekRequest: ClipStudioPreviewSeekRequest | null;
   playbackRequest: { requestId: number } | null;
   churchName: string;
   sermonTitle: string;
@@ -77,6 +83,7 @@ type ClipStudioPreviewContextValue = {
   updateEditPreview: (preview: ClipStudioEditPreview) => void;
   updatePreviewClock: (clock: ClipStudioPreviewClock) => void;
   seekPreviewTo: (seconds: number) => void;
+  seekSourcePreviewTo: (seconds: number) => void;
   requestPreviewPlayback: () => void;
 };
 
@@ -136,6 +143,23 @@ function sameBrandingConfig(a: ClipBrandingConfig, b: ClipBrandingConfig): boole
   );
 }
 
+function sameCaptionWordTimings(
+  a: CaptionCueWordTiming[] | undefined,
+  b: CaptionCueWordTiming[] | undefined,
+): boolean {
+  const left = a ?? [];
+  const right = b ?? [];
+  return left.length === right.length && left.every((timing, index) => {
+    const otherTiming = right[index];
+    return (
+      otherTiming !== undefined &&
+      timing.text === otherTiming.text &&
+      timing.startSeconds === otherTiming.startSeconds &&
+      timing.endSeconds === otherTiming.endSeconds
+    );
+  });
+}
+
 function sameEditPreview(a: ClipStudioEditPreview, b: ClipStudioEditPreview): boolean {
   return (
     a.startLabel === b.startLabel &&
@@ -158,12 +182,15 @@ function sameEditPreview(a: ClipStudioEditPreview, b: ClipStudioEditPreview): bo
         cue.index === otherCue.index &&
         cue.startSeconds === otherCue.startSeconds &&
         cue.endSeconds === otherCue.endSeconds &&
-        cue.text === otherCue.text
+        cue.text === otherCue.text &&
+        sameCaptionWordTimings(cue.wordTimings, otherCue.wordTimings)
       );
     }) &&
     a.applyCaptionsToClip === b.applyCaptionsToClip &&
     a.captionStylePresetId === b.captionStylePresetId &&
     a.captionPosition === b.captionPosition &&
+    a.captionRevealMode === b.captionRevealMode &&
+    a.captionSyncOffsetSeconds === b.captionSyncOffsetSeconds &&
     a.captionAppearance.fontScale === b.captionAppearance.fontScale &&
     a.captionAppearance.maxLines === b.captionAppearance.maxLines &&
     a.captionAppearance.uppercase === b.captionAppearance.uppercase &&
@@ -216,6 +243,7 @@ function sameEditPreview(a: ClipStudioEditPreview, b: ClipStudioEditPreview): bo
 function samePreviewClock(a: ClipStudioPreviewClock, b: ClipStudioPreviewClock): boolean {
   return (
     Math.abs(a.currentSeconds - b.currentSeconds) < 0.05 &&
+    Math.abs(a.sourceCurrentSeconds - b.sourceCurrentSeconds) < 0.05 &&
     a.durationSeconds === b.durationSeconds &&
     a.isPlaying === b.isPlaying
   );
@@ -257,10 +285,11 @@ export function ClipStudioPreviewProvider({
   const [editPreview, setEditPreview] = useState(initialEditPreview);
   const [previewClock, setPreviewClock] = useState<ClipStudioPreviewClock>({
     currentSeconds: 0,
+    sourceCurrentSeconds: 0,
     durationSeconds: null,
     isPlaying: false,
   });
-  const [seekRequest, setSeekRequest] = useState<{ seconds: number; requestId: number } | null>(null);
+  const [seekRequest, setSeekRequest] = useState<ClipStudioPreviewSeekRequest | null>(null);
   const [playbackRequest, setPlaybackRequest] = useState<{ requestId: number } | null>(null);
   const currentCompositionKey = useMemo(
     () => buildCompositionKey({ exportSettings, brandingConfig, editPreview }),
@@ -385,6 +414,19 @@ export function ClipStudioPreviewProvider({
     setSeekRequest((current) => ({
       seconds: Math.max(0, seconds),
       requestId: (current?.requestId ?? 0) + 1,
+      timeDomain: "cleaned",
+    }));
+  }, []);
+
+  const seekSourcePreviewTo = useCallback((seconds: number) => {
+    if (!Number.isFinite(seconds)) {
+      return;
+    }
+
+    setSeekRequest((current) => ({
+      seconds: Math.max(0, seconds),
+      requestId: (current?.requestId ?? 0) + 1,
+      timeDomain: "source",
     }));
   }, []);
 
@@ -414,6 +456,7 @@ export function ClipStudioPreviewProvider({
       updateEditPreview,
       updatePreviewClock,
       seekPreviewTo,
+      seekSourcePreviewTo,
       requestPreviewPlayback,
     }),
     [
@@ -430,6 +473,7 @@ export function ClipStudioPreviewProvider({
       previewClock,
       requestPreviewPlayback,
       seekPreviewTo,
+      seekSourcePreviewTo,
       seekRequest,
       sermonTitle,
       updateBrandingConfig,

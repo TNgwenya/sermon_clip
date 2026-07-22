@@ -1,10 +1,19 @@
+import {
+  normalizeContentArtworkSettings,
+  normalizeContentArtworkTextOverrides,
+  type ContentArtworkSettings,
+  type ContentArtworkTextOverrides,
+} from "@/lib/contentArtworkDesign";
+
 export const CONTENT_GRAPHIC_TEMPLATE_IDS = [
   "quote-emphasis",
   "quote-minimal",
   "quote-radiant",
+  "quote-textured",
   "scripture-focus",
   "scripture-editorial",
   "scripture-calm",
+  "scripture-textured",
   "prayer-calm",
   "devotional-reflection",
   "invitation-bold",
@@ -19,9 +28,15 @@ export type ContentGraphicArtDirection =
   | "EDITORIAL"
   | "MINIMAL"
   | "LUMINOUS"
+  | "TEXTURED"
   | "SERENE"
   | "JOURNAL"
   | "CELEBRATION";
+export type ContentGraphicTemplateFamily =
+  | "EDITORIAL_MINIMAL"
+  | "BOLD_RADIANT"
+  | "TEXTURED_PHOTO";
+export type ContentGraphicReferenceTreatment = "BYLINE" | "RULE" | "PILL" | "PLAIN";
 
 export type ContentGraphicTemplate = {
   id: ContentGraphicTemplateId;
@@ -33,32 +48,51 @@ export type ContentGraphicTemplate = {
   surface: "GLASS" | "PANEL" | "MINIMAL" | "BOLD";
   showQuoteMark: boolean;
   artDirection: ContentGraphicArtDirection;
+  family: ContentGraphicTemplateFamily;
+  referenceTreatment: ContentGraphicReferenceTreatment;
   tone: string;
+};
+
+export const CONTENT_GRAPHIC_TEMPLATE_FAMILY_LABELS: Record<ContentGraphicTemplateFamily, string> = {
+  EDITORIAL_MINIMAL: "Editorial & minimal",
+  BOLD_RADIANT: "Bold & radiant",
+  TEXTURED_PHOTO: "Textured depth",
+};
+
+export const CONTENT_GRAPHIC_REFERENCE_LABELS: Record<ContentGraphicReferenceTreatment, string> = {
+  BYLINE: "Byline",
+  RULE: "Ruled reference",
+  PILL: "Reference badge",
+  PLAIN: "Simple reference",
 };
 
 export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
   {
     id: "quote-emphasis",
     label: "Editorial quote",
-    description: "Magazine-style framing, confident type, and a strong quotation mark.",
+    description: "Magazine framing, serif quotation type, and a speaker byline.",
     eyebrow: "FROM THE MESSAGE",
     role: "QUOTE",
     alignment: "LEFT",
     surface: "GLASS",
     showQuoteMark: true,
     artDirection: "EDITORIAL",
+    family: "EDITORIAL_MINIMAL",
+    referenceTreatment: "BYLINE",
     tone: "Confident",
   },
   {
     id: "quote-minimal",
-    label: "Quiet statement",
-    description: "Generous space and restrained details for a short, memorable line.",
+    label: "Minimal quote",
+    description: "Generous space, restrained rules, and a quiet speaker byline.",
     eyebrow: "FROM THE MESSAGE",
     role: "QUOTE",
     alignment: "CENTER",
     surface: "MINIMAL",
     showQuoteMark: true,
     artDirection: "MINIMAL",
+    family: "EDITORIAL_MINIMAL",
+    referenceTreatment: "BYLINE",
     tone: "Refined",
   },
   {
@@ -71,11 +105,27 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     surface: "GLASS",
     showQuoteMark: true,
     artDirection: "LUMINOUS",
+    family: "BOLD_RADIANT",
+    referenceTreatment: "PILL",
     tone: "Uplifting",
   },
   {
+    id: "quote-textured",
+    label: "Textured quote",
+    description: "Layered grain and a grounded editorial panel, ready for bold testimony copy.",
+    eyebrow: "FROM THE MESSAGE",
+    role: "QUOTE",
+    alignment: "LEFT",
+    surface: "PANEL",
+    showQuoteMark: true,
+    artDirection: "TEXTURED",
+    family: "TEXTURED_PHOTO",
+    referenceTreatment: "BYLINE",
+    tone: "Grounded",
+  },
+  {
     id: "scripture-focus",
-    label: "Sacred light",
+    label: "Radiant Scripture",
     description: "A luminous, centred composition that gives the verse room to breathe.",
     eyebrow: "SCRIPTURE",
     role: "SCRIPTURE",
@@ -83,11 +133,13 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     surface: "MINIMAL",
     showQuoteMark: false,
     artDirection: "LUMINOUS",
+    family: "BOLD_RADIANT",
+    referenceTreatment: "PILL",
     tone: "Reverent",
   },
   {
     id: "scripture-editorial",
-    label: "Verse editorial",
+    label: "Editorial Scripture",
     description: "A bold, modern layout for clear teaching and easy social reading.",
     eyebrow: "SCRIPTURE",
     role: "SCRIPTURE",
@@ -95,11 +147,13 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     surface: "PANEL",
     showQuoteMark: false,
     artDirection: "EDITORIAL",
+    family: "EDITORIAL_MINIMAL",
+    referenceTreatment: "RULE",
     tone: "Modern",
   },
   {
     id: "scripture-calm",
-    label: "Still waters",
+    label: "Still-waters Scripture",
     description: "Soft organic layers for reflective, devotional Scripture moments.",
     eyebrow: "SCRIPTURE",
     role: "SCRIPTURE",
@@ -107,7 +161,23 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     surface: "GLASS",
     showQuoteMark: false,
     artDirection: "SERENE",
+    family: "BOLD_RADIANT",
+    referenceTreatment: "PLAIN",
     tone: "Peaceful",
+  },
+  {
+    id: "scripture-textured",
+    label: "Textured Scripture",
+    description: "Woven paper detail and a protected reading panel for a timeless verse card.",
+    eyebrow: "SCRIPTURE",
+    role: "SCRIPTURE",
+    alignment: "LEFT",
+    surface: "PANEL",
+    showQuoteMark: false,
+    artDirection: "TEXTURED",
+    family: "TEXTURED_PHOTO",
+    referenceTreatment: "RULE",
+    tone: "Timeless",
   },
   {
     id: "prayer-calm",
@@ -119,6 +189,8 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     surface: "GLASS",
     showQuoteMark: false,
     artDirection: "SERENE",
+    family: "BOLD_RADIANT",
+    referenceTreatment: "PLAIN",
     tone: "Peaceful",
   },
   {
@@ -131,6 +203,8 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     surface: "PANEL",
     showQuoteMark: false,
     artDirection: "JOURNAL",
+    family: "TEXTURED_PHOTO",
+    referenceTreatment: "RULE",
     tone: "Thoughtful",
   },
   {
@@ -143,6 +217,8 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     surface: "BOLD",
     showQuoteMark: false,
     artDirection: "CELEBRATION",
+    family: "BOLD_RADIANT",
+    referenceTreatment: "PILL",
     tone: "Energetic",
   },
   {
@@ -155,6 +231,8 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     surface: "BOLD",
     showQuoteMark: false,
     artDirection: "CELEBRATION",
+    family: "BOLD_RADIANT",
+    referenceTreatment: "PILL",
     tone: "Bold",
   },
   {
@@ -167,6 +245,8 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     surface: "PANEL",
     showQuoteMark: false,
     artDirection: "EDITORIAL",
+    family: "EDITORIAL_MINIMAL",
+    referenceTreatment: "RULE",
     tone: "Clear",
   },
   {
@@ -179,6 +259,8 @@ export const CONTENT_GRAPHIC_TEMPLATES: readonly ContentGraphicTemplate[] = [
     surface: "GLASS",
     showQuoteMark: false,
     artDirection: "LUMINOUS",
+    family: "BOLD_RADIANT",
+    referenceTreatment: "PILL",
     tone: "Inviting",
   },
 ] as const;
@@ -192,11 +274,14 @@ export type CarouselStudioSlide = {
   title: string;
   body: string;
   scripture: string | null;
+  textOverrides?: ContentArtworkTextOverrides;
 };
 
 export type ContentDesignStudioDocument = {
-  version: 1;
+  version: 2;
   templateId: ContentGraphicTemplateId;
+  artwork: ContentArtworkSettings;
+  textOverrides: ContentArtworkTextOverrides;
   slides: CarouselStudioSlide[];
 };
 
@@ -338,6 +423,9 @@ function parseStoredSlide(value: unknown, index: number): CarouselStudioSlide | 
     scripture: typeof record.scripture === "string" && record.scripture.trim()
       ? record.scripture.trim()
       : null,
+    ...(record.textOverrides == null
+      ? {}
+      : { textOverrides: normalizeContentArtworkTextOverrides(record.textOverrides) }),
   };
 }
 
@@ -355,10 +443,14 @@ export function readContentDesignStudioDocument(input: {
   const storedSlides = Array.isArray(stored?.slides)
     ? stored.slides.map(parseStoredSlide).filter((slide): slide is CarouselStudioSlide => Boolean(slide)).slice(0, 10)
     : [];
+  const artwork = normalizeContentArtworkSettings(stored?.artwork, templateId);
+  const textOverrides = normalizeContentArtworkTextOverrides(stored?.textOverrides);
 
   return {
-    version: 1,
+    version: 2,
     templateId,
+    artwork,
+    textOverrides,
     slides: input.assetType === "CAROUSEL" && storedSlides.length === 0
       ? buildCarouselStudioSlides(input.bodyContent ?? "", input.title)
       : storedSlides,

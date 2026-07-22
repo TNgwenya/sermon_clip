@@ -1,6 +1,9 @@
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
 import { isCaptionStylePresetId as isKnownCaptionStylePresetId, type CaptionStylePresetId } from "@/lib/captionStylePresets";
-import type { EditableCaptionCue } from "@/lib/clipStudioEditing";
+import {
+  normalizeCaptionCueWordTimings,
+  type EditableCaptionCue,
+} from "@/lib/clipStudioEditing";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -37,6 +40,7 @@ export type HookOverlaySize = "small" | "medium" | "large";
 export type BrollCardTone = "scripture" | "quote" | "application" | "context";
 export type BrollCardPosition = "full" | "upper" | "lower";
 export type CaptionPosition = "top" | "middle" | "lower";
+export type CaptionRevealMode = "phrase" | "active-word" | "single-word";
 export type CaptionFontScale = "compact" | "regular" | "large";
 export type CaptionMaxLines = 2 | 3 | 4;
 export type SpeechCleanupIntensity = "normal" | "more" | "strong" | "maximum";
@@ -278,11 +282,13 @@ export function extractOnVideoCaptionCues(
       return [];
     }
 
+    const wordTimings = normalizeCaptionCueWordTimings(record["wordTimings"], startSeconds, endSeconds);
     return [{
       index: Number(record["index"]) || index + 1,
       startSeconds,
       endSeconds,
       text,
+      ...(wordTimings ? { wordTimings } : {}),
     }];
   });
 
@@ -315,6 +321,39 @@ export function extractCaptionPosition(captionData: unknown): CaptionPosition {
   const value = data?.["captionPosition"];
 
   return value === "top" || value === "middle" || value === "lower" ? value : "lower";
+}
+
+export function normalizeCaptionRevealMode(value: unknown): CaptionRevealMode {
+  return value === "phrase" || value === "single-word" ? value : "active-word";
+}
+
+export function extractCaptionRevealMode(captionData: unknown): CaptionRevealMode {
+  const data = asObject(captionData);
+  const explicitRevealMode = data?.["captionRevealMode"];
+  if (explicitRevealMode !== undefined && explicitRevealMode !== null) {
+    return normalizeCaptionRevealMode(explicitRevealMode);
+  }
+
+  const legacyWordHighlightEnabled = data?.["wordHighlightEnabled"];
+  if (typeof legacyWordHighlightEnabled === "boolean") {
+    return legacyWordHighlightEnabled ? "active-word" : "phrase";
+  }
+
+  return normalizeCaptionRevealMode(undefined);
+}
+
+export function normalizeCaptionSyncOffsetSeconds(value: unknown): number {
+  const seconds = asNumber(value);
+  if (seconds === null) {
+    return 0;
+  }
+
+  return Number(Math.max(-2, Math.min(2, seconds)).toFixed(2));
+}
+
+export function extractCaptionSyncOffsetSeconds(captionData: unknown): number {
+  const data = asObject(captionData);
+  return normalizeCaptionSyncOffsetSeconds(data?.["captionSyncOffsetSeconds"]);
 }
 
 export function extractApplyCaptionsToClip(captionData: unknown): boolean {

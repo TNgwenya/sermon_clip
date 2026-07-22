@@ -368,6 +368,10 @@ async function runJob(job: ProcessingJob): Promise<string> {
       }
       return "Sermon intelligence generated.";
     }
+    case "GENERATE_CONTENT_OPPORTUNITIES": {
+      const { processContentOpportunityGenerationJob } = await import("../src/server/agents/contentOpportunityJobService");
+      return processContentOpportunityGenerationJob({ jobId: job.id, sermonId });
+    }
     case "GENERATE_CLIPS": {
       if (shouldRedoGeneratedClips(job)) {
         const { redoClipGenerationFromTranscript } = await import("../src/server/agents/clipRedoService");

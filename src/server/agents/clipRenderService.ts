@@ -46,20 +46,26 @@ import {
   type SpeechCleanupProfile,
 } from "@/lib/clipStudio";
 import {
-  invalidateAfterRenderCompleted,
-  markRenderAssetCompleted,
-  markRenderAssetFailed,
-} from "@/server/regeneration/dependencies";
-import {
   buildSpeechCleanupCutPlan,
   extractSpeechCleanupEdits,
   serializeSpeechCleanupCutPlan,
   type SpeechCleanupCutPlan,
 } from "@/lib/speechCleanupPlan";
 import {
+  assertClipEditPlanStillActive,
+  isStaleClipCompositionError,
+  preferStaleClipCompositionError,
   recordClipArtifact,
+  tryUpdateClipCandidateForActiveEditPlan,
+  updateClipCandidateForActiveEditPlan,
   upsertActiveClipEditPlanForClip,
+  type ClipEditPlanGuard,
 } from "@/server/agents/clipEditPlanService";
+import {
+  capturePromotedMediaIdentity,
+  discardPromotedMediaIfUnchanged,
+  type PromotedMediaIdentity,
+} from "@/server/agents/mediaPromotionGuard";
 
 type RenderOptions = {
   ffmpegPath?: string;
@@ -279,8 +285,9 @@ async function fileHasBytes(filePath: string): Promise<boolean> {
   }
 }
 
-function getTempRenderPath(outputPath: string): string {
-  return outputPath.replace(/\.mp4$/i, ".partial.mp4");
+function getTempRenderPath(outputPath: string, editPlanId: string): string {
+  const planSuffix = editPlanId.replace(/[^a-zA-Z0-9_-]/g, "");
+  return outputPath.replace(/\.mp4$/i, `.plan-${planSuffix}.partial.mp4`);
 }
 
 async function resolveSourceVideoForRender(clip: Pick<ClipWithSermon, "sermonId" | "sermon">): Promise<{
@@ -844,15 +851,15 @@ async function getSermonDurationSeconds(
   return segment.endTimeSeconds;
 }
 
-async function failClipRender(clipId: string, message: string): Promise<void> {
-  await prisma.clipCandidate.update({
-    where: { id: clipId },
+async function failClipRender(guard: ClipEditPlanGuard, message: string): Promise<void> {
+  await tryUpdateClipCandidateForActiveEditPlan({
+    guard,
     data: {
       renderStatus: "FAILED",
       renderError: message,
+      renderFreshness: "FAILED",
     },
   });
-  await markRenderAssetFailed(clipId);
 }
 
 export async function renderApprovedClip(
@@ -864,7 +871,19 @@ export async function renderApprovedClip(
     throw new Error("Clip id is required for rendering.");
   }
 
+  const { plan: startedEditPlan } = await upsertActiveClipEditPlanForClip({
+    clipCandidateId: clipId,
+    createdBy: "render",
+    createdReason: "render_input_snapshot",
+  });
+  const editPlanGuard = {
+    clipCandidateId: clipId,
+    editPlanId: startedEditPlan.id,
+    planHash: startedEditPlan.planHash,
+  };
+
   const clip = await loadClipForRender(clipId);
+  await assertClipEditPlanStillActive(editPlanGuard);
   await ensureSermonFolders(clip.sermonId);
 
   const { sourceVideoPath, sourceVideoExists } = await resolveSourceVideoForRender(clip);
@@ -890,7 +909,7 @@ export async function renderApprovedClip(
 
   if (!eligibility.ok) {
     if (eligibility.shouldMarkFailed !== false) {
-      await failClipRender(clip.id, eligibility.reason ?? "Clip is not eligible for rendering.");
+      await failClipRender(editPlanGuard, eligibility.reason ?? "Clip is not eligible for rendering.");
     }
     throw new Error(eligibility.reason ?? "Clip is not eligible for rendering.");
   }
@@ -898,50 +917,22 @@ export async function renderApprovedClip(
   const ffmpegInstalled = await checkFfmpegInstalled(options?.ffmpegPath);
   if (!ffmpegInstalled) {
     const message = "FFmpeg is not installed or not executable.";
-    await failClipRender(clip.id, message);
+    await failClipRender(editPlanGuard, message);
     throw new Error(message);
   }
 
   const outputPath = getClipOutputPath(clip.sermonId, clip.id);
-  const outputExists = await fileExists(outputPath);
-
-  if (outputExists && !options?.allowRerender && !options?.force) {
-    await upsertActiveClipEditPlanForClip({
-      clipCandidateId: clip.id,
-      createdBy: "render",
-      createdReason: "existing_render_reused",
-    });
-    const outputStats = await stat(outputPath).catch(() => null);
-    await prisma.clipCandidate.update({
-      where: { id: clip.id },
-      data: {
-        renderStatus: "COMPLETED",
-        renderedFilePath: outputPath,
-        renderError: null,
-      },
-    });
-    await markRenderAssetCompleted(clip.id, false);
-    await recordClipArtifact({
-      clipCandidateId: clip.id,
-      kind: "RENDERED_SOURCE",
-      filePath: outputPath,
-      sizeBytes: outputStats?.size ?? null,
-      durationSeconds: Number((boundaries.endTimeSeconds - boundaries.startTimeSeconds).toFixed(2)),
-      metadata: {
-        reusedExistingFile: true,
-      },
-    });
-
-    return {
-      clipId: clip.id,
-      renderedFilePath: outputPath,
-      durationSeconds: Number((boundaries.endTimeSeconds - boundaries.startTimeSeconds).toFixed(2)),
-    };
-  }
 
   const transitionResult = await prisma.clipCandidate.updateMany({
     where: {
       id: clip.id,
+      editPlans: {
+        some: {
+          id: editPlanGuard.editPlanId,
+          planHash: editPlanGuard.planHash,
+          status: "ACTIVE",
+        },
+      },
       NOT: {
         renderStatus: "RENDERING",
       },
@@ -953,30 +944,28 @@ export async function renderApprovedClip(
   });
 
   if (transitionResult.count === 0) {
+    await assertClipEditPlanStillActive(editPlanGuard);
     throw new Error("Clip is already rendering. Duplicate render request blocked.");
   }
 
   const job = await createProcessingJob(clip.sermonId, "EXPORT_CLIPS");
   const renderStartedAt = Date.now();
+  let promotedOutputIdentity: PromotedMediaIdentity | null = null;
 
   try {
-    await upsertActiveClipEditPlanForClip({
-      clipCandidateId: clip.id,
-      createdBy: "render",
-      createdReason: "render_requested",
-    });
+    await assertClipEditPlanStillActive(editPlanGuard);
     await markJobRunning(job.id);
     await appendJobLog(job.id, `Clip render requested for ${clip.id}.`);
 
-    await prisma.clipCandidate.update({
-      where: { id: clip.id },
+    await updateClipCandidateForActiveEditPlan({
+      guard: editPlanGuard,
       data: {
         renderStatus: "RENDERING",
         renderError: null,
       },
     });
 
-    const tempOutputPath = getTempRenderPath(outputPath);
+    const tempOutputPath = getTempRenderPath(outputPath, editPlanGuard.editPlanId);
     try {
       await unlink(tempOutputPath);
     } catch {
@@ -1094,7 +1083,9 @@ export async function renderApprovedClip(
       internalSilenceCleanup,
     });
 
+    await assertClipEditPlanStillActive(editPlanGuard);
     await rename(tempOutputPath, outputPath);
+    promotedOutputIdentity = await capturePromotedMediaIdentity(outputPath);
 
     const renderedDurationSeconds = internalSilenceCleanup?.applied
       ? internalSilenceCleanup.renderedDurationSeconds
@@ -1113,20 +1104,21 @@ export async function renderApprovedClip(
       speechCleanupPlan: speechCleanupPlan?.enabled ? serializeSpeechCleanupCutPlan(speechCleanupPlan) : null,
     } as Prisma.InputJsonValue;
 
-    await prisma.clipCandidate.update({
-      where: { id: clip.id },
+    await updateClipCandidateForActiveEditPlan({
+      guard: editPlanGuard,
       data: {
         ...metadata,
         exportPath: outputPath,
         captionData: updatedCaptionData,
+        renderFreshness: "UP_TO_DATE",
+        renderAssetVersion: { increment: 1 },
+        captionFreshness: "NEEDS_REGENERATION",
+        captionBurnFreshness: "NEEDS_REGENERATION",
+        overlayFreshness: "NEEDS_REGENERATION",
+        exportFreshness: "NEEDS_REGENERATION",
+        assetInvalidationReason: "Render asset regenerated. Caption/burn/overlay/export assets now require regeneration.",
       },
     });
-    await upsertActiveClipEditPlanForClip({
-      clipCandidateId: clip.id,
-      createdBy: "render",
-      createdReason: "render_completed_with_cleanup_plan",
-    });
-    await markRenderAssetCompleted(clip.id, true);
     await recordClipArtifact({
       clipCandidateId: clip.id,
       kind: "RENDERED_SOURCE",
@@ -1138,12 +1130,11 @@ export async function renderApprovedClip(
         speechCleanupApplied: Boolean(speechCleanupPlan?.enabled),
         framingPreset,
       },
+      editPlan: {
+        editPlanId: editPlanGuard.editPlanId,
+        planHash: editPlanGuard.planHash,
+      },
     });
-    await invalidateAfterRenderCompleted(
-      clip.id,
-      "Render asset regenerated. Caption/burn/overlay/export assets now require regeneration.",
-    );
-
     const renderMs = Date.now() - renderStartedAt;
     await appendPipelineLog(clip.sermonId, `Clip ${clip.id} render completed in ${renderMs}ms.`);
     await markJobSucceeded(job.id, `Clip ${clip.id} rendered successfully in ${renderMs}ms.`);
@@ -1154,16 +1145,40 @@ export async function renderApprovedClip(
       durationSeconds: renderedDurationSeconds,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown render error.";
+    const completionError = await preferStaleClipCompositionError(editPlanGuard, error);
+    const message = completionError instanceof Error ? completionError.message : "Unknown render error.";
+    await unlink(getTempRenderPath(outputPath, editPlanGuard.editPlanId)).catch(() => undefined);
 
-    await failClipRender(clip.id, message);
-    await recordClipArtifact({
-      clipCandidateId: clip.id,
-      kind: "RENDERED_SOURCE",
-      status: "FAILED",
-      filePath: outputPath,
-      errorMessage: message,
-    }).catch(() => undefined);
+    if (isStaleClipCompositionError(completionError)) {
+      if (promotedOutputIdentity) {
+        await discardPromotedMediaIfUnchanged(outputPath, promotedOutputIdentity);
+      }
+      await markJobFailed(job.id, message, "Stale clip render discarded after newer Clip Studio changes.").catch(() => undefined);
+      await appendPipelineLog(clip.sermonId, `Discarded stale render for clip ${clip.id}: ${message}`).catch(() => undefined);
+      throw completionError;
+    }
+
+    const failureRecorded = await tryUpdateClipCandidateForActiveEditPlan({
+      guard: editPlanGuard,
+      data: {
+        renderStatus: "FAILED",
+        renderError: message,
+        renderFreshness: "FAILED",
+      },
+    });
+    if (failureRecorded) {
+      await recordClipArtifact({
+        clipCandidateId: clip.id,
+        kind: "RENDERED_SOURCE",
+        status: "FAILED",
+        filePath: outputPath,
+        errorMessage: message,
+        editPlan: {
+          editPlanId: editPlanGuard.editPlanId,
+          planHash: editPlanGuard.planHash,
+        },
+      }).catch(() => undefined);
+    }
     await markJobFailed(job.id, message, "Clip render failed.");
     await appendPipelineLog(clip.sermonId, `Clip ${clip.id} render failed: ${message}`);
 

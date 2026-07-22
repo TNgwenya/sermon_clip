@@ -40,6 +40,7 @@ enum ProcessingJobType {
   GENERATE_INTELLIGENCE
   RENDER_OVERLAY
   QUALITY_REFRESH
+  GENERATE_CONTENT_OPPORTUNITIES
 }
 
 enum ProcessingJobStatus {
@@ -47,6 +48,20 @@ enum ProcessingJobStatus {
   RUNNING
   SUCCEEDED
   FAILED
+}
+
+enum ContentFunnelEventType {
+  GENERATION_REQUESTED
+  GENERATION_COMPLETED
+  GENERATION_SHORTFALL
+  PREVIEWED
+  EDITED
+  APPROVED
+  REAPPROVAL_REQUIRED
+  DESIGN_SAVED
+  DESIGN_RENDERED
+  SCHEDULE_SUCCEEDED
+  SCHEDULE_FAILED
 }
 
 enum ClipStatus {
@@ -408,6 +423,18 @@ enum ContentAssetStatus {
   ARCHIVED
 }
 
+enum ContentRevisionApprovalState {
+  DRAFT
+  APPROVED
+  REAPPROVAL_REQUIRED
+}
+
+enum TranslationReviewState {
+  NOT_REQUIRED
+  REVIEW_REQUIRED
+  APPROVED
+}
+
 enum PostingPlatform {
   TIKTOK
   INSTAGRAM
@@ -595,6 +622,7 @@ model Transcript {
   provider    String
   language    String
   rawJsonPath String?
+  wordTimings Json?
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
   sermon      Sermon              @relation(fields: [sermonId], references: [id], onDelete: Cascade)
@@ -1131,33 +1159,43 @@ model MinistryMoment {
 }
 
 model ContentOpportunity {
-  id                      String                     @id @default(cuid())
-  sermonId                String
-  churchName              String?
-  category                ContentOpportunityCategory
-  opportunityType         ContentOpportunityType
-  title                   String
-  bodyContent             String
-  shortDescription        String?
-  sourceTranscriptExcerpt String?
-  relatedScripture        String?
-  ministryMomentId        String?
-  relatedClipId           String?
-  suggestedPlatform       String?
-  confidenceScore         Float?
-  aiReason                String?
-  status                  ContentOpportunityStatus   @default(NEEDS_REVIEW)
-  editedContent           String?
-  approvedContent         String?
-  isAiGenerated           Boolean                    @default(true)
-  isManuallyCreated       Boolean                    @default(false)
-  isManuallyEdited        Boolean                    @default(false)
-  createdAt               DateTime                   @default(now())
-  updatedAt               DateTime                   @updatedAt
-  sermon                  Sermon                     @relation(fields: [sermonId], references: [id], onDelete: Cascade)
-  ministryMoment          MinistryMoment?            @relation(fields: [ministryMomentId], references: [id], onDelete: SetNull)
-  relatedClip             ClipCandidate?             @relation("RelatedClipContentOpportunities", fields: [relatedClipId], references: [id], onDelete: SetNull)
-  contentAssets           ContentAsset[]
+  id                         String                       @id @default(cuid())
+  sermonId                   String
+  churchName                 String?
+  category                   ContentOpportunityCategory
+  opportunityType            ContentOpportunityType
+  title                      String
+  bodyContent                String
+  structuredContentJson      Json?
+  shortDescription           String?
+  sourceTranscriptExcerpt    String?
+  sourceTranscriptSegmentIds Json?
+  sourceStartTimeSeconds     Float?
+  sourceEndTimeSeconds       Float?
+  relatedScripture           String?
+  scriptureTranslation       String?
+  scriptureVerifiedAt        DateTime?
+  translationReviewState     TranslationReviewState       @default(NOT_REQUIRED)
+  ministryMomentId           String?
+  relatedClipId              String?
+  suggestedPlatform          String?
+  confidenceScore            Float?
+  aiReason                   String?
+  status                     ContentOpportunityStatus     @default(NEEDS_REVIEW)
+  editedContent              String?
+  approvedContent            String?
+  isAiGenerated              Boolean                      @default(true)
+  isManuallyCreated          Boolean                      @default(false)
+  isManuallyEdited           Boolean                      @default(false)
+  approvedRevisionId         String?                      @unique
+  createdAt                  DateTime                     @default(now())
+  updatedAt                  DateTime                     @updatedAt
+  sermon                     Sermon                       @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  ministryMoment             MinistryMoment?              @relation(fields: [ministryMomentId], references: [id], onDelete: SetNull)
+  relatedClip                ClipCandidate?               @relation("RelatedClipContentOpportunities", fields: [relatedClipId], references: [id], onDelete: SetNull)
+  contentAssets              ContentAsset[]
+  revisions                  ContentOpportunityRevision[] @relation("OpportunityRevisionHistory")
+  approvedRevision           ContentOpportunityRevision?  @relation("ApprovedOpportunityRevision", fields: [approvedRevisionId], references: [id], onDelete: SetNull)
 
   @@index([sermonId])
   @@index([sermonId, category])
@@ -1166,44 +1204,133 @@ model ContentOpportunity {
   @@index([churchName])
   @@index([ministryMomentId])
   @@index([relatedClipId])
+  @@index([approvedRevisionId])
   @@index([category])
   @@index([opportunityType])
   @@index([status])
   @@index([createdAt])
 }
 
+model ContentOpportunityRevision {
+  id                         String                       @id @default(cuid())
+  contentOpportunityId       String
+  revisionNumber             Int
+  title                      String
+  shortDescription           String?
+  content                    String
+  structuredContentJson      Json?
+  sourceTranscriptExcerpt    String?
+  sourceTranscriptSegmentIds Json?
+  sourceStartTimeSeconds     Float?
+  sourceEndTimeSeconds       Float?
+  relatedScripture           String?
+  scriptureTranslation       String?
+  scriptureVerifiedAt        DateTime?
+  translationReviewState     TranslationReviewState       @default(NOT_REQUIRED)
+  approvalState              ContentRevisionApprovalState @default(DRAFT)
+  createdBy                  String?
+  approvedBy                 String?
+  approvedAt                 DateTime?
+  createdAt                  DateTime                     @default(now())
+  opportunity                ContentOpportunity           @relation("OpportunityRevisionHistory", fields: [contentOpportunityId], references: [id], onDelete: Cascade)
+  approvedForOpportunity     ContentOpportunity?          @relation("ApprovedOpportunityRevision")
+  assetRevisions             ContentAssetRevision[]       @relation("AssetSourceOpportunityRevision")
+
+  @@unique([contentOpportunityId, revisionNumber])
+  @@index([contentOpportunityId, approvalState])
+  @@index([createdAt])
+}
+
+model ContentFunnelEvent {
+  id              String                 @id @default(cuid())
+  eventType       ContentFunnelEventType
+  sermonId        String?
+  opportunityId   String?
+  contentAssetId  String?
+  scheduledPostId String?
+  processingJobId String?
+  dedupeKey       String?                @unique
+  durationMs      Int?
+  metadataJson    Json?
+  occurredAt      DateTime               @default(now())
+
+  @@index([eventType, occurredAt])
+  @@index([sermonId, occurredAt])
+  @@index([opportunityId, occurredAt])
+  @@index([contentAssetId, occurredAt])
+  @@index([processingJobId, occurredAt])
+}
+
 model ContentAsset {
-  id                   String                      @id @default(cuid())
-  sermonId             String
-  contentOpportunityId String?
-  assetType            ContentAssetType
-  status               ContentAssetStatus          @default(GENERATED)
-  platform             PostingPlatform?
-  title                String
-  bodyContent          String?
-  caption              String?
-  hashtagsJson         Json?
-  callToAction         String?
-  metadataJson         Json?
-  approvedAt           DateTime?
-  preparedAt           DateTime?
-  readyAt              DateTime?
-  scheduledAt          DateTime?
-  publishedAt          DateTime?
-  archivedAt           DateTime?
-  createdAt            DateTime                    @default(now())
-  updatedAt            DateTime                    @updatedAt
-  sermon               Sermon                      @relation(fields: [sermonId], references: [id], onDelete: Cascade)
-  contentOpportunity   ContentOpportunity?         @relation(fields: [contentOpportunityId], references: [id], onDelete: SetNull)
-  files                ContentAssetFile[]
-  scheduledPostLinks   ScheduledPostContentAsset[]
+  id                    String                      @id @default(cuid())
+  sermonId              String
+  contentOpportunityId  String?
+  assetType             ContentAssetType
+  status                ContentAssetStatus          @default(GENERATED)
+  platform              PostingPlatform?
+  title                 String
+  bodyContent           String?
+  structuredContentJson Json?
+  caption               String?
+  hashtagsJson          Json?
+  callToAction          String?
+  metadataJson          Json?
+  approvedAt            DateTime?
+  preparedAt            DateTime?
+  readyAt               DateTime?
+  scheduledAt           DateTime?
+  publishedAt           DateTime?
+  archivedAt            DateTime?
+  currentRevisionId     String?                     @unique
+  approvedRevisionId    String?                     @unique
+  createdAt             DateTime                    @default(now())
+  updatedAt             DateTime                    @updatedAt
+  sermon                Sermon                      @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  contentOpportunity    ContentOpportunity?         @relation(fields: [contentOpportunityId], references: [id], onDelete: SetNull)
+  revisions             ContentAssetRevision[]      @relation("ContentAssetRevisionHistory")
+  currentRevision       ContentAssetRevision?       @relation("CurrentContentAssetRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  approvedRevision      ContentAssetRevision?       @relation("ApprovedContentAssetRevision", fields: [approvedRevisionId], references: [id], onDelete: SetNull)
+  files                 ContentAssetFile[]
+  scheduledPostLinks    ScheduledPostContentAsset[]
 
   @@index([sermonId])
   @@index([contentOpportunityId])
+  @@index([currentRevisionId])
+  @@index([approvedRevisionId])
   @@index([assetType])
   @@index([status])
   @@index([platform])
   @@index([sermonId, status])
+  @@index([createdAt])
+}
+
+model ContentAssetRevision {
+  id                          String                       @id @default(cuid())
+  contentAssetId              String
+  sourceOpportunityRevisionId String?
+  revisionNumber              Int
+  title                       String
+  bodyContent                 String?
+  structuredContentJson       Json?
+  caption                     String?
+  hashtagsJson                Json?
+  callToAction                String?
+  metadataJson                Json?
+  approvalState               ContentRevisionApprovalState @default(DRAFT)
+  createdBy                   String?
+  approvedBy                  String?
+  approvedAt                  DateTime?
+  renderedAt                  DateTime?
+  createdAt                   DateTime                     @default(now())
+  contentAsset                ContentAsset                 @relation("ContentAssetRevisionHistory", fields: [contentAssetId], references: [id], onDelete: Cascade)
+  sourceOpportunityRevision   ContentOpportunityRevision?  @relation("AssetSourceOpportunityRevision", fields: [sourceOpportunityRevisionId], references: [id], onDelete: SetNull)
+  currentForAsset             ContentAsset?                @relation("CurrentContentAssetRevision")
+  approvedForAsset            ContentAsset?                @relation("ApprovedContentAssetRevision")
+  scheduledPostLinks          ScheduledPostContentAsset[]
+
+  @@unique([contentAssetId, revisionNumber])
+  @@index([contentAssetId, approvalState])
+  @@index([sourceOpportunityRevisionId])
   @@index([createdAt])
 }
 
@@ -1342,16 +1469,19 @@ model ScheduledPost {
 }
 
 model ScheduledPostContentAsset {
-  scheduledPostId String
-  contentAssetId  String
-  sortOrder       Int           @default(0)
-  createdAt       DateTime      @default(now())
-  scheduledPost   ScheduledPost @relation(fields: [scheduledPostId], references: [id], onDelete: Cascade)
-  contentAsset    ContentAsset  @relation(fields: [contentAssetId], references: [id], onDelete: Cascade)
+  scheduledPostId        String
+  contentAssetId         String
+  contentAssetRevisionId String?
+  sortOrder              Int                   @default(0)
+  createdAt              DateTime              @default(now())
+  scheduledPost          ScheduledPost         @relation(fields: [scheduledPostId], references: [id], onDelete: Cascade)
+  contentAsset           ContentAsset          @relation(fields: [contentAssetId], references: [id], onDelete: Cascade)
+  contentAssetRevision   ContentAssetRevision? @relation(fields: [contentAssetRevisionId], references: [id], onDelete: SetNull)
 
   @@id([scheduledPostId, contentAssetId])
   @@index([scheduledPostId, sortOrder])
   @@index([contentAssetId])
+  @@index([contentAssetRevisionId])
 }
 
 model SocialMetricSnapshot {

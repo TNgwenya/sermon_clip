@@ -9,9 +9,11 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   CONTENT_ASSET_TYPES,
+  isVideoClipOpportunityType,
   mapOpportunityTypeToContentAssetType,
   normalizeContentHashtags,
   normalizeSuggestedPostingPlatform,
+  resolveVideoClipOpportunityWorkflow,
 } from "@/lib/contentPublishing";
 import {
   buildCarouselStudioSlides,
@@ -26,7 +28,19 @@ import {
 import { fromPrismaPostingPlatform } from "@/lib/postingDrafts";
 import { isValidIanaTimeZone, resolveScheduledInstant } from "@/lib/postingSchedule";
 import { getPublishingServiceHealth } from "@/lib/publishingServiceHealth";
+import {
+  createArtworkBrandFingerprint,
+  readArtworkBrandFingerprint,
+} from "@/server/branding/artworkBrandFingerprint";
+import { readBrandingArtworkLogoDataUrl } from "@/server/branding/artworkLogo";
+import { getBrandingSettings } from "@/server/branding/settings";
 import { uploadContentAssetFileToR2 } from "@/server/contentAssets/contentAssetPublicStorage";
+import { checkContentAssetMediaReadiness } from "@/server/contentAssets/contentAssetMediaReadiness";
+import {
+  createAssetRevision,
+  createOpportunityRevision,
+} from "@/server/contentRevisionService";
+import { recordContentFunnelEvent } from "@/server/contentFunnelTelemetry";
 
 const contentPublishingPlatformSchema = z.enum(["TIKTOK", "INSTAGRAM", "YOUTUBE_SHORTS", "FACEBOOK"]);
 const contentAssetTypeSchema = z.enum(CONTENT_ASSET_TYPES);
@@ -93,6 +107,20 @@ function asMetadataRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function asRevisionJson(value: Prisma.JsonValue | null | undefined): Prisma.InputJsonValue | undefined {
+  return value === null || value === undefined ? undefined : value as Prisma.InputJsonValue;
+}
+
+function scriptureReferenceWithVersion(
+  reference: string | null | undefined,
+  version: string | null | undefined,
+): string | null {
+  const trimmedReference = reference?.trim();
+  if (!trimmedReference) return null;
+  const trimmedVersion = version?.trim().toUpperCase();
+  return trimmedVersion ? `${trimmedReference} (${trimmedVersion})` : trimmedReference;
+}
+
 function rebuildCarouselSlidesWithSavedDesign(input: {
   content: string;
   title: string;
@@ -134,7 +162,10 @@ export async function prepareContentOpportunityForPublishingAction(
             assetType: true,
             title: true,
             bodyContent: true,
+            structuredContentJson: true,
             metadataJson: true,
+            currentRevisionId: true,
+            approvedRevisionId: true,
           },
         })
       : null;
@@ -157,10 +188,34 @@ export async function prepareContentOpportunityForPublishingAction(
             id: true,
             opportunityType: true,
             status: true,
+            title: true,
+            shortDescription: true,
+            bodyContent: true,
+            editedContent: true,
+            approvedContent: true,
             sourceTranscriptExcerpt: true,
+            sourceTranscriptSegmentIds: true,
+            sourceStartTimeSeconds: true,
+            sourceEndTimeSeconds: true,
             suggestedPlatform: true,
             relatedScripture: true,
+            scriptureTranslation: true,
+            scriptureVerifiedAt: true,
+            translationReviewState: true,
             aiReason: true,
+            structuredContentJson: true,
+            approvedRevisionId: true,
+            relatedClip: {
+              select: {
+                id: true,
+                sermonId: true,
+                title: true,
+                status: true,
+                startTimeSeconds: true,
+                endTimeSeconds: true,
+                transcriptSafetyStatus: true,
+              },
+            },
           },
         })
       : null;
@@ -169,8 +224,35 @@ export async function prepareContentOpportunityForPublishingAction(
       return { success: false, message: "The approved publishing idea could not be found." };
     }
 
+    const requestedMetadata = asMetadataRecord(requestedAsset?.metadataJson);
+    const requestedSourceOpportunityType = requestedMetadata.sourceOpportunityType;
+    if (
+      !opportunity
+      && typeof requestedSourceOpportunityType === "string"
+      && isVideoClipOpportunityType(requestedSourceOpportunityType)
+    ) {
+      return {
+        success: false,
+        message: "This legacy asset came from a video clip brief and cannot be edited as a text post. Return to the sermon clip workflow.",
+      };
+    }
+
     if (opportunity && opportunity.status !== "APPROVED" && opportunity.status !== "USED") {
       return { success: false, message: "Approve this generated content before preparing it for publishing." };
+    }
+
+    if (opportunity && isVideoClipOpportunityType(opportunity.opportunityType)) {
+      const workflow = resolveVideoClipOpportunityWorkflow({
+        sermonId: parsed.data.sermonId,
+        opportunityType: opportunity.opportunityType,
+        relatedClip: opportunity.relatedClip,
+      });
+      return {
+        success: false,
+        message: workflow
+          ? `${workflow.message} Use “${workflow.actionLabel}” from Content Ideas.`
+          : "Video clip briefs must be completed in the sermon clip workflow.",
+      };
     }
 
     if (
@@ -194,7 +276,10 @@ export async function prepareContentOpportunityForPublishingAction(
             assetType: true,
             title: true,
             bodyContent: true,
+            structuredContentJson: true,
             metadataJson: true,
+            currentRevisionId: true,
+            approvedRevisionId: true,
           },
         })
       : null);
@@ -254,9 +339,12 @@ export async function prepareContentOpportunityForPublishingAction(
         ? {
             designStudio: {
               ...existingDesignMetadata,
-              version: 1,
+              version: 2,
               templateId: designDocument.templateId,
+              templateVersion: 1,
+              artwork: designDocument.artwork,
               slides: designSlides,
+              brandSnapshot: null,
               updatedAt: now.toISOString(),
               renderRequired: true,
               renderedAt: null,
@@ -272,6 +360,11 @@ export async function prepareContentOpportunityForPublishingAction(
       platform,
       title: parsed.data.title,
       bodyContent: parsed.data.bodyContent,
+      ...(opportunity?.structuredContentJson
+        ? { structuredContentJson: opportunity.structuredContentJson as Prisma.InputJsonValue }
+        : existingAsset?.structuredContentJson
+          ? { structuredContentJson: existingAsset.structuredContentJson as Prisma.InputJsonValue }
+          : {}),
       caption: parsed.data.caption?.trim() || parsed.data.bodyContent,
       hashtagsJson: hashtags,
       callToAction: parsed.data.callToAction?.trim() || null,
@@ -286,24 +379,84 @@ export async function prepareContentOpportunityForPublishingAction(
     };
 
     const contentAssetId = existingAsset?.id ?? randomUUID();
-    const contentAsset = existingAsset
-      ? await prisma.contentAsset.update({
-          where: { id: existingAsset.id },
-          data: {
-            ...data,
-            // Artwork-source changes invalidate production files. Caption,
-            // hashtag, platform and CTA edits preserve every existing output.
-            ...(artworkChanged ? { files: { deleteMany: {} } } : {}),
-          },
-          select: { id: true },
-        })
-      : await prisma.contentAsset.create({
-          data: {
-            id: contentAssetId,
-            ...data,
-          },
-          select: { id: true },
+    const contentAsset = await prisma.$transaction(async (tx) => {
+      let sourceOpportunityRevisionId = opportunity?.approvedRevisionId ?? null;
+      if (opportunity && !sourceOpportunityRevisionId) {
+        const approvedAt = new Date();
+        const opportunityRevision = await createOpportunityRevision(tx, {
+          contentOpportunityId: opportunity.id,
+          title: opportunity.title,
+          shortDescription: opportunity.shortDescription,
+          content: opportunity.approvedContent?.trim()
+            || opportunity.editedContent?.trim()
+            || opportunity.bodyContent,
+          structuredContentJson: asRevisionJson(opportunity.structuredContentJson),
+          sourceTranscriptExcerpt: opportunity.sourceTranscriptExcerpt,
+          sourceTranscriptSegmentIds: asRevisionJson(opportunity.sourceTranscriptSegmentIds),
+          sourceStartTimeSeconds: opportunity.sourceStartTimeSeconds,
+          sourceEndTimeSeconds: opportunity.sourceEndTimeSeconds,
+          relatedScripture: opportunity.relatedScripture,
+          scriptureTranslation: opportunity.scriptureTranslation,
+          scriptureVerifiedAt: opportunity.scriptureVerifiedAt,
+          translationReviewState: opportunity.translationReviewState,
+          approvalState: "APPROVED",
+          createdBy: "legacy-approval-backfill",
+          approvedBy: "legacy-approval-backfill",
+          approvedAt,
         });
+        sourceOpportunityRevisionId = opportunityRevision.id;
+        await tx.contentOpportunity.update({
+          where: { id: opportunity.id },
+          data: { approvedRevisionId: opportunityRevision.id },
+        });
+      }
+
+      const savedAsset = existingAsset
+        ? await tx.contentAsset.update({
+            where: { id: existingAsset.id },
+            data: {
+              ...data,
+              // Artwork-source changes invalidate production files. Caption,
+              // hashtag, platform and CTA edits preserve every existing output.
+              ...(artworkChanged ? { files: { deleteMany: {} } } : {}),
+            },
+            select: { id: true },
+          })
+        : await tx.contentAsset.create({
+            data: {
+              id: contentAssetId,
+              ...data,
+            },
+            select: { id: true },
+          });
+
+      const revision = await createAssetRevision(tx, {
+        contentAssetId: savedAsset.id,
+        sourceOpportunityRevisionId,
+        title: parsed.data.title,
+        bodyContent: parsed.data.bodyContent,
+        structuredContentJson: asRevisionJson(
+          opportunity?.structuredContentJson ?? existingAsset?.structuredContentJson,
+        ),
+        caption: parsed.data.caption?.trim() || parsed.data.bodyContent,
+        hashtagsJson: hashtags,
+        callToAction: parsed.data.callToAction?.trim() || null,
+        metadataJson: metadataJson as Prisma.InputJsonValue,
+        approvalState: "APPROVED",
+        createdBy: "content-preparation",
+        approvedBy: "content-preparation",
+        approvedAt: now,
+      });
+
+      await tx.contentAsset.update({
+        where: { id: savedAsset.id },
+        data: {
+          currentRevisionId: revision.id,
+          approvedRevisionId: revision.id,
+        },
+      });
+      return savedAsset;
+    });
 
     revalidateContentPublishingPaths(parsed.data.sermonId, contentAsset.id);
     return {
@@ -390,6 +543,7 @@ async function prepareAutomaticContentAssetMedia(input: {
     width: number | null;
     height: number | null;
     sizeBytes: bigint | null;
+    sortOrder: number;
     metadataJson: Prisma.JsonValue | null;
   }>;
 }): Promise<typeof input.files> {
@@ -444,7 +598,7 @@ async function prepareAutomaticContentAssetMedia(input: {
   });
 }
 
-export async function scheduleContentAssetAction(
+async function scheduleContentAssetInternal(
   input: ContentAssetScheduleInput,
 ): Promise<ContentAssetActionResult> {
   const parsed = scheduleSchema.safeParse(input);
@@ -475,8 +629,21 @@ export async function scheduleContentAssetAction(
         status: true,
         assetType: true,
         platform: true,
+        title: true,
+        bodyContent: true,
+        structuredContentJson: true,
         caption: true,
+        hashtagsJson: true,
+        callToAction: true,
         metadataJson: true,
+        currentRevisionId: true,
+        approvedRevisionId: true,
+        currentRevision: {
+          select: {
+            approvalState: true,
+            renderedAt: true,
+          },
+        },
         files: {
           orderBy: { sortOrder: "asc" },
           select: {
@@ -489,16 +656,90 @@ export async function scheduleContentAssetAction(
             width: true,
             height: true,
             sizeBytes: true,
+            sortOrder: true,
             metadataJson: true,
           },
         },
         contentOpportunity: {
-          select: { sourceTranscriptExcerpt: true },
+          select: {
+            opportunityType: true,
+            sourceTranscriptExcerpt: true,
+            approvedRevisionId: true,
+            relatedScripture: true,
+            scriptureTranslation: true,
+            translationReviewState: true,
+            relatedClip: {
+              select: {
+                id: true,
+                sermonId: true,
+                title: true,
+                status: true,
+                startTimeSeconds: true,
+                endTimeSeconds: true,
+                transcriptSafetyStatus: true,
+              },
+            },
+          },
         },
       },
     });
     if (!asset || !["READY", "SCHEDULED"].includes(asset.status)) {
       return { success: false, message: "Finish rendering this approved content before placing it on the calendar." };
+    }
+    const assetMetadata = asMetadataRecord(asset.metadataJson);
+    const sourceOpportunityType = asset.contentOpportunity?.opportunityType
+      ?? (typeof assetMetadata.sourceOpportunityType === "string"
+        ? assetMetadata.sourceOpportunityType
+        : null);
+    if (
+      sourceOpportunityType
+      && isVideoClipOpportunityType(sourceOpportunityType)
+    ) {
+      const workflow = resolveVideoClipOpportunityWorkflow({
+        sermonId: asset.sermonId,
+        opportunityType: sourceOpportunityType,
+        relatedClip: asset.contentOpportunity?.relatedClip,
+      });
+      return {
+        success: false,
+        message: workflow
+          ? `${workflow.message} Use “${workflow.actionLabel}” instead of scheduling this legacy text asset.`
+          : "This video clip brief cannot be scheduled as a text content asset.",
+      };
+    }
+    if (
+      asset.currentRevisionId
+      && asset.approvedRevisionId
+      && asset.currentRevisionId !== asset.approvedRevisionId
+    ) {
+      return {
+        success: false,
+        message: "This content changed after approval. Review and approve the current version before scheduling it.",
+      };
+    }
+    if (asset.currentRevision && asset.currentRevision.approvalState !== "APPROVED") {
+      return {
+        success: false,
+        message: "This content revision still needs approval before scheduling.",
+      };
+    }
+    const approvedBrandFingerprint = readArtworkBrandFingerprint(assetMetadata);
+    if (isDesignableContentAssetType(asset.assetType) && approvedBrandFingerprint) {
+      const branding = await getBrandingSettings();
+      const logoDataUrl = await readBrandingArtworkLogoDataUrl(branding.churchLogoPath);
+      const currentBrandFingerprint = createArtworkBrandFingerprint({
+        churchName: branding.churchName,
+        primaryColor: branding.primaryBrandColor,
+        secondaryColor: branding.secondaryBrandColor,
+        fontFamily: branding.defaultFontFamily,
+        logoDataUrl,
+      });
+      if (currentBrandFingerprint !== approvedBrandFingerprint) {
+        return {
+          success: false,
+          message: "Your church branding changed after this artwork was approved. Open Design Studio and approve the artwork again before scheduling it.",
+        };
+      }
     }
 
     const automatic = parsed.data.automationMode === "AUTOMATIC";
@@ -533,9 +774,7 @@ export async function scheduleContentAssetAction(
       };
     }
 
-    const metadata = asset.metadataJson && typeof asset.metadataJson === "object" && !Array.isArray(asset.metadataJson)
-      ? asset.metadataJson as Record<string, unknown>
-      : {};
+    const metadata = assetMetadata;
     const buildPreflight = (files: typeof asset.files) => runContentPublishingPreflight({
         assetType: asset.assetType,
         status: asset.status,
@@ -544,7 +783,19 @@ export async function scheduleContentAssetAction(
         automationMode: parsed.data.automationMode,
         metaConnectionReady: automatic ? Boolean(metaAccount) : undefined,
         sourceTranscriptExcerpt: asset.contentOpportunity?.sourceTranscriptExcerpt,
+        artworkText: asset.bodyContent,
+        relatedScripture: scriptureReferenceWithVersion(
+          asset.contentOpportunity?.relatedScripture,
+          asset.contentOpportunity?.scriptureTranslation,
+        ),
         translationNeedsReview: metadata.translationNeedsReview === true,
+        translationReview: asset.assetType === "SCRIPTURE_GRAPHIC"
+          ? {
+              scriptureVersion: asset.contentOpportunity?.scriptureTranslation,
+              scriptureVersionRequired: true,
+              scriptureVersionApproved: asset.contentOpportunity?.translationReviewState === "APPROVED",
+            }
+          : undefined,
         files: files.map((file) => {
           const fileMetadata = file.metadataJson && typeof file.metadataJson === "object" && !Array.isArray(file.metadataJson)
             ? file.metadataJson as Record<string, unknown>
@@ -589,7 +840,7 @@ export async function scheduleContentAssetAction(
       };
     }
 
-    const preparedFiles = automatic && initialPreflight.checks.some((item) => item.id === "public-media" && item.status === "BLOCKED")
+    let preparedFiles = automatic && initialPreflight.checks.some((item) => item.id === "public-media" && item.status === "BLOCKED")
       ? await prepareAutomaticContentAssetMedia({
           assetId: asset.id,
           assetType: asset.assetType,
@@ -597,6 +848,36 @@ export async function scheduleContentAssetAction(
           files: asset.files,
         })
       : asset.files;
+
+    if (initialPreflight.checks.some((item) => item.id === "media")) {
+      const mediaReadiness = await checkContentAssetMediaReadiness({
+        assetType: asset.assetType,
+        platform: fromPrismaPostingPlatform(parsed.data.platform),
+        files: preparedFiles,
+      });
+      if (mediaReadiness.status === "BLOCKED") {
+        return { success: false, message: mediaReadiness.message };
+      }
+
+      const recoveredPublicUrls = new Map(
+        mediaReadiness.files
+          .filter((file) => file.source === "OBJECT_KEY" && Boolean(file.effectivePublicUrl))
+          .map((file) => [file.id, file.effectivePublicUrl as string]),
+      );
+      if (recoveredPublicUrls.size > 0) {
+        for (const [fileId, publicUrl] of recoveredPublicUrls) {
+          await prisma.contentAssetFile.update({
+            where: { id: fileId },
+            data: { publicUrl },
+          });
+        }
+        preparedFiles = preparedFiles.map((file) => {
+          const publicUrl = recoveredPublicUrls.get(file.id);
+          return publicUrl ? { ...file, publicUrl } : file;
+        });
+      }
+    }
+
     const finalPreflight = automatic ? buildPreflight(preparedFiles) : initialPreflight;
     if (!finalPreflight.canSchedule) {
       const blocker = finalPreflight.checks.find((item) => item.status === "BLOCKED");
@@ -618,6 +899,37 @@ export async function scheduleContentAssetAction(
     ].join(":");
 
     const scheduledPost = await prisma.$transaction(async (tx) => {
+      const scheduleMatchesApprovedRevision = Boolean(
+        asset.currentRevisionId
+        && asset.currentRevisionId === asset.approvedRevisionId
+        && parsed.data.title.trim() === asset.title.trim()
+        && parsed.data.caption.trim() === (asset.caption?.trim() ?? ""),
+      );
+      let scheduledRevisionId = scheduleMatchesApprovedRevision
+        ? asset.currentRevisionId
+        : null;
+
+      if (!scheduledRevisionId) {
+        const approvedAt = new Date();
+        const revision = await createAssetRevision(tx, {
+          contentAssetId: asset.id,
+          sourceOpportunityRevisionId: asset.contentOpportunity?.approvedRevisionId ?? null,
+          title: parsed.data.title,
+          bodyContent: asset.bodyContent,
+          structuredContentJson: asRevisionJson(asset.structuredContentJson),
+          caption: parsed.data.caption,
+          hashtagsJson: asRevisionJson(asset.hashtagsJson),
+          callToAction: asset.callToAction,
+          metadataJson: asRevisionJson(asset.metadataJson),
+          approvalState: "APPROVED",
+          createdBy: "publishing-schedule",
+          approvedBy: "publishing-schedule",
+          approvedAt,
+          renderedAt: asset.currentRevision?.renderedAt ?? null,
+        });
+        scheduledRevisionId = revision.id;
+      }
+
       const post = await tx.scheduledPost.create({
         data: {
           clipIdsJson: [],
@@ -637,6 +949,7 @@ export async function scheduleContentAssetAction(
           contentAssetLinks: {
             create: {
               contentAssetId: asset.id,
+              contentAssetRevisionId: scheduledRevisionId,
               sortOrder: 0,
             },
           },
@@ -652,6 +965,8 @@ export async function scheduleContentAssetAction(
           title: parsed.data.title,
           caption: parsed.data.caption,
           scheduledAt: scheduledFor,
+          currentRevisionId: scheduledRevisionId,
+          approvedRevisionId: scheduledRevisionId,
         },
       });
 
@@ -680,6 +995,59 @@ export async function scheduleContentAssetAction(
       message: error instanceof Error ? error.message : "The content could not be scheduled.",
     };
   }
+}
+
+function classifyContentScheduleFailure(message: string): string {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("already") && normalized.includes("scheduled")) return "DUPLICATE";
+  if (normalized.includes("approval") || normalized.includes("approve")) return "APPROVAL_REQUIRED";
+  if (normalized.includes("render") || normalized.includes("image") || normalized.includes("media") || normalized.includes("file")) return "MEDIA_NOT_READY";
+  if (normalized.includes("publishing service") || normalized.includes("connected") || normalized.includes("permission")) return "PUBLISHING_SERVICE_NOT_READY";
+  if (normalized.includes("date") || normalized.includes("time") || normalized.includes("timezone")) return "SCHEDULE_VALIDATION";
+  if (normalized.includes("scripture") || normalized.includes("transcript") || normalized.includes("translation")) return "CONTENT_INTEGRITY";
+  return "SCHEDULE_BLOCKED";
+}
+
+export async function scheduleContentAssetAction(
+  input: ContentAssetScheduleInput,
+): Promise<ContentAssetActionResult> {
+  const startedAt = Date.now();
+  const result = await scheduleContentAssetInternal(input);
+  const parsedInput = scheduleSchema.safeParse(input);
+  const rawInput = input as unknown;
+  const rawAssetId = rawInput && typeof rawInput === "object" && "assetId" in rawInput
+    ? (rawInput as { assetId?: unknown }).assetId
+    : null;
+  const assetId = parsedInput.success ? parsedInput.data.assetId : String(rawAssetId ?? "").trim();
+  const asset = assetId
+    ? await prisma.contentAsset.findUnique({
+        where: { id: assetId },
+        select: {
+          id: true,
+          sermonId: true,
+          contentOpportunityId: true,
+          assetType: true,
+        },
+      }).catch(() => null)
+    : null;
+  await recordContentFunnelEvent({
+    eventType: result.success ? "SCHEDULE_SUCCEEDED" : "SCHEDULE_FAILED",
+    sermonId: asset?.sermonId,
+    opportunityId: asset?.contentOpportunityId,
+    contentAssetId: asset?.id ?? (assetId || null),
+    scheduledPostId: result.scheduledPostId,
+    dedupeKey: result.success && result.scheduledPostId
+      ? `content-schedule-succeeded:${result.scheduledPostId}`
+      : `content-schedule-failed:${assetId || "unknown"}:${randomUUID()}`,
+    durationMs: Date.now() - startedAt,
+    metadata: {
+      assetType: asset?.assetType,
+      platform: parsedInput.success ? parsedInput.data.platform : null,
+      automationMode: parsedInput.success ? parsedInput.data.automationMode : undefined,
+      ...(!result.success ? { failureCode: classifyContentScheduleFailure(result.message) } : {}),
+    },
+  });
+  return result;
 }
 
 export async function scheduleContentAssetManualAction(

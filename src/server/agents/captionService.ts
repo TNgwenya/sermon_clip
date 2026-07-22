@@ -2,6 +2,14 @@ import { rename, stat, unlink, writeFile } from "node:fs/promises";
 
 import type { ClipCandidate, Prisma } from "@prisma/client";
 
+import { extractCaptionRevealMode, type CaptionRevealMode } from "@/lib/clipStudio";
+import {
+  buildTimedCaptionCuesFromTranscriptSegments,
+  buildTimedCaptionCuesFromTranscriptWords,
+  parseCaptionSourceWords,
+  type CaptionSourceWord,
+  type EditableCaptionCue,
+} from "@/lib/clipStudioEditing";
 import { prisma } from "@/lib/prisma";
 import {
   appendJobLog,
@@ -52,11 +60,13 @@ type TranscriptSegment = {
   text: string;
 };
 
-export type CaptionCue = {
-  index: number;
-  startSeconds: number;
-  endSeconds: number;
-  text: string;
+export type CaptionCue = EditableCaptionCue;
+
+type CaptionCueSource = "transcript-word-timings" | "transcript-segments";
+
+type CaptionCueSet = {
+  cues: CaptionCue[];
+  source: CaptionCueSource;
 };
 
 type CaptionGenerationResult = {
@@ -217,41 +227,61 @@ function validateCaptionCueTiming(cues: CaptionCue[], clipDurationSeconds: numbe
   };
 }
 
+function buildCaptionCueSet(
+  clip: Pick<ClipForCaption, "id" | "startTimeSeconds" | "endTimeSeconds" | "durationSeconds" | "adjustedStartTimeSeconds" | "adjustedEndTimeSeconds">,
+  segments: TranscriptSegment[],
+  transcriptWords: CaptionSourceWord[] = [],
+  revealMode: CaptionRevealMode = "active-word",
+): CaptionCueSet {
+  const boundaries = resolveClipBoundaries(clip);
+  const singleWordReveal = revealMode === "single-word";
+  const grouping = {
+    maxWordsPerCue: singleWordReveal ? 1 : 5,
+    maxCueDurationSeconds: singleWordReveal ? 1.4 : 2.4,
+  };
+  const exactCues = transcriptWords.length > 0
+    ? buildTimedCaptionCuesFromTranscriptWords({
+        startTimeSeconds: boundaries.startTimeSeconds,
+        endTimeSeconds: boundaries.endTimeSeconds,
+        words: transcriptWords,
+        ...grouping,
+      })
+    : [];
+
+  if (exactCues.length > 0) {
+    return {
+      cues: exactCues,
+      source: "transcript-word-timings",
+    };
+  }
+
+  return {
+    cues: buildTimedCaptionCuesFromTranscriptSegments({
+      startTimeSeconds: boundaries.startTimeSeconds,
+      endTimeSeconds: boundaries.endTimeSeconds,
+      segments,
+      ...grouping,
+    }),
+    source: "transcript-segments",
+  };
+}
+
 function buildCaptionCues(
   clip: Pick<ClipForCaption, "id" | "startTimeSeconds" | "endTimeSeconds" | "durationSeconds" | "adjustedStartTimeSeconds" | "adjustedEndTimeSeconds">,
   segments: TranscriptSegment[],
+  transcriptWords: CaptionSourceWord[] = [],
+  revealMode: CaptionRevealMode = "active-word",
 ): CaptionCue[] {
-  const boundaries = resolveClipBoundaries(clip);
-  const clipDurationSeconds = resolveClipDurationSeconds(clip);
-  const cues: CaptionCue[] = [];
+  return buildCaptionCueSet(clip, segments, transcriptWords, revealMode).cues;
+}
 
-  for (const segment of segments) {
-    const overlapStart = Math.max(boundaries.startTimeSeconds, segment.startTimeSeconds);
-    const overlapEnd = Math.min(boundaries.endTimeSeconds, segment.endTimeSeconds);
-    const relativeStart = Math.max(0, Number((overlapStart - boundaries.startTimeSeconds).toFixed(3)));
-    const relativeEnd = Math.min(
-      clipDurationSeconds,
-      Number((overlapEnd - boundaries.startTimeSeconds).toFixed(3)),
-    );
+async function loadTranscriptWords(sermonId: string): Promise<CaptionSourceWord[]> {
+  const transcript = await prisma.transcript.findUnique({
+    where: { sermonId },
+    select: { wordTimings: true },
+  });
 
-    const text = normalizeCaptionText(segment.text);
-    if (!text) {
-      continue;
-    }
-
-    if (relativeEnd <= relativeStart) {
-      continue;
-    }
-
-    cues.push({
-      index: cues.length + 1,
-      startSeconds: relativeStart,
-      endSeconds: relativeEnd,
-      text,
-    });
-  }
-
-  return cues;
+  return parseCaptionSourceWords(transcript?.wordTimings);
 }
 
 function assessCaptionCueQuality(cues: CaptionCue[], clipDurationSeconds: number): CaptionCueQuality {
@@ -393,16 +423,29 @@ function extractManualCaptionCues(captionData: unknown): CaptionCue[] {
 }
 
 function shouldPreserveManualCaptionCues(
-  clip: Pick<ClipForCaption, "captionData" | "subtitlesGenerated" | "captionStatus" | "captionFreshness">,
-  options: CaptionGenerationOptions | undefined,
+  clip: Pick<ClipForCaption, "captionData" | "subtitlesGenerated" | "captionStatus" | "captionFreshness">
+    & Partial<Pick<ClipForCaption, "startTimeSeconds" | "endTimeSeconds" | "adjustedStartTimeSeconds" | "adjustedEndTimeSeconds" | "durationSeconds">>,
+  _options: CaptionGenerationOptions | undefined,
 ): boolean {
-  return Boolean(
-    !options?.force &&
-    clip.subtitlesGenerated &&
-    clip.captionStatus === "GENERATED" &&
-    clip.captionFreshness === "UP_TO_DATE" &&
-    hasManualCaptionCues(clip.captionData),
-  );
+  void _options;
+  // A forced media rebuild must not silently replace words a creator approved
+  // in Clip Studio. Studio rewrites cue timing when boundaries change, so any
+  // valid manual cue set remains the source of truth until the creator asks to
+  // re-sync it explicitly.
+  const manualCues = extractManualCaptionCues(clip.captionData);
+  if (!hasManualCaptionCues(clip.captionData) || manualCues.length === 0) {
+    return false;
+  }
+
+  const startSeconds = clip.adjustedStartTimeSeconds ?? clip.startTimeSeconds;
+  const endSeconds = clip.adjustedEndTimeSeconds ?? clip.endTimeSeconds;
+  const durationSeconds = typeof clip.durationSeconds === "number" && Number.isFinite(clip.durationSeconds)
+    ? clip.durationSeconds
+    : typeof startSeconds === "number" && typeof endSeconds === "number"
+      ? endSeconds - startSeconds
+      : null;
+
+  return durationSeconds === null || validateCaptionCueTiming(manualCues, durationSeconds).isValid;
 }
 
 function getTempSrtPath(srtPath: string): string {
@@ -531,10 +574,16 @@ function buildCaptionMetadata(input: {
   srtPath: string;
   generatedAt: Date;
   cues: CaptionCue[];
+  source?: CaptionCueSource;
   cueQuality: CaptionCueQuality;
   transcriptFidelity: CaptionTranscriptFidelity;
   reusedExistingFile: boolean;
 }): Prisma.ClipCandidateUpdateInput {
+  const existingCaptionData = input.clip.captionData && typeof input.clip.captionData === "object" && !Array.isArray(input.clip.captionData)
+    ? input.clip.captionData as Record<string, unknown>
+    : {};
+  const existingSchemaVersion = Number(existingCaptionData["schemaVersion"]);
+
   return {
     captionStatus: "GENERATED",
     subtitleFilePath: input.srtPath,
@@ -543,8 +592,9 @@ function buildCaptionMetadata(input: {
     captionGeneratedAt: input.generatedAt,
     captionGenerationError: null,
     captionData: {
-      schemaVersion: 1,
-      source: "transcript-segments",
+      ...existingCaptionData,
+      schemaVersion: Number.isFinite(existingSchemaVersion) ? Math.max(1, existingSchemaVersion) : 1,
+      source: input.source ?? "transcript-segments",
       generatedAt: input.generatedAt.toISOString(),
       reusedExistingFile: input.reusedExistingFile,
       quality: {
@@ -563,6 +613,15 @@ function buildCaptionMetadata(input: {
         startSeconds: cue.startSeconds,
         endSeconds: cue.endSeconds,
         text: cue.text,
+        ...(cue.wordTimings
+          ? {
+              wordTimings: cue.wordTimings.map((timing) => ({
+                text: timing.text,
+                startSeconds: timing.startSeconds,
+                endSeconds: timing.endSeconds,
+              })),
+            }
+          : {}),
       })),
       clip: {
         startTimeSeconds: resolveClipBoundaries(input.clip).startTimeSeconds,
@@ -587,12 +646,24 @@ async function generateCaptionsForClipCore(
   clip: ClipForCaption,
   options: CaptionGenerationOptions | undefined,
   jobId: string,
+  loadPersistedTranscriptWords: (() => Promise<CaptionSourceWord[]>) | undefined = undefined,
 ): Promise<CaptionGenerationResult> {
   await ensureSermonFolders(clip.sermonId);
 
   const eligibility = validateCaptionGenerationEligibility(clip);
   if (!eligibility.ok) {
     throw new Error(eligibility.reason);
+  }
+
+  if (shouldPreserveManualCaptionCues(clip, options)) {
+    const materialized = await materializeManualCaptionCues(clip, jobId);
+    return {
+      clipId: clip.id,
+      srtPath: materialized.srtPath,
+      generatedAt: new Date(),
+      reusedExistingFile: true,
+      cueCount: materialized.cueCount,
+    };
   }
 
   const boundaries = resolveClipBoundaries(clip);
@@ -646,14 +717,23 @@ async function generateCaptionsForClipCore(
     };
   }
 
-  const segments = await loadOverlappingSegments(clip.sermonId, boundaries);
-  if (segments.length === 0) {
-    throw new Error("Transcript exists but contains no segments overlapping this clip.");
+  const [segments, transcriptWords] = await Promise.all([
+    loadOverlappingSegments(clip.sermonId, boundaries),
+    loadPersistedTranscriptWords?.() ?? loadTranscriptWords(clip.sermonId),
+  ]);
+  if (segments.length === 0 && transcriptWords.length === 0) {
+    throw new Error("Transcript exists but contains no timed words or segments overlapping this clip.");
   }
 
-  const cues = buildCaptionCues(clip, segments);
+  const captionCueSet = buildCaptionCueSet(
+    clip,
+    segments,
+    transcriptWords,
+    extractCaptionRevealMode(clip.captionData),
+  );
+  const cues = captionCueSet.cues;
   if (cues.length === 0) {
-    throw new Error("No valid caption cues were generated from overlapping transcript segments.");
+    throw new Error("No valid caption cues were generated from overlapping transcript timing.");
   }
 
   const effectiveClipDurationSeconds = boundaryValidation.durationSeconds;
@@ -698,6 +778,7 @@ async function generateCaptionsForClipCore(
       srtPath,
       generatedAt,
       cues,
+      source: captionCueSet.source,
       cueQuality,
       transcriptFidelity,
       reusedExistingFile: false,
@@ -843,6 +924,11 @@ export async function generateCaptionsForApprovedClips(
   let reused = 0;
   let skipped = 0;
   const errors: Array<{ clipId: string; reason: string }> = [];
+  let transcriptWordsPromise: Promise<CaptionSourceWord[]> | null = null;
+  const loadBulkTranscriptWords = (): Promise<CaptionSourceWord[]> => {
+    transcriptWordsPromise ??= loadTranscriptWords(sermon.id);
+    return transcriptWordsPromise;
+  };
 
   for (const clip of clips) {
     const currentClip = await loadClipForCaption(clip.id).catch(() => null);
@@ -882,7 +968,7 @@ export async function generateCaptionsForApprovedClips(
     });
 
     try {
-      const result = await generateCaptionsForClipCore(currentClip, options, job.id);
+      const result = await generateCaptionsForClipCore(currentClip, options, job.id, loadBulkTranscriptWords);
       if (result.reusedExistingFile) {
         reused += 1;
       } else {
@@ -920,6 +1006,7 @@ export async function generateCaptionsForApprovedClips(
 
 export const __captionServiceTestUtils = {
   buildCaptionCues,
+  buildCaptionCueSet,
   buildSrtFromCues,
   assessCaptionCueQuality,
   assessCaptionTranscriptFidelity,
@@ -929,6 +1016,7 @@ export const __captionServiceTestUtils = {
   hasManualCaptionCues,
   extractManualCaptionCues,
   shouldPreserveManualCaptionCues,
+  buildCaptionMetadata,
   fileHasBytes,
   writeCaptionFileAtomically,
 };

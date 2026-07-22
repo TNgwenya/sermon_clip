@@ -54,7 +54,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" data-scroll-behavior="smooth">
       <body className="premium-app">
         <a className="skip-link" href="#workspace-content">Skip to main content</a>
         <div className="app-shell">

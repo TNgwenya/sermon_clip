@@ -13,7 +13,11 @@ import {
 } from "@/components/ui";
 import { databaseReadBatch, prisma } from "@/lib/prisma";
 import { normalizeContentHashtags } from "@/lib/contentPublishing";
+import { resolveContentOpportunityContract } from "@/lib/contentOpportunityContracts";
+import { buildContentContractPresentation } from "@/lib/contentWorkflowUi";
 import { OpportunitiesExperience } from "@/app/opportunities/opportunities-experience";
+import { ContentGenerationStatus } from "@/app/opportunities/content-generation-status";
+import { buildContentOpportunityJobStatusView } from "@/lib/contentOpportunityJobs";
 import {
   CONTENT_OPPORTUNITY_TYPES,
   CONTENT_OPPORTUNITY_TYPE_LABELS,
@@ -27,10 +31,28 @@ type SearchParams = {
   topic?: string;
   scripture?: string;
   ministryMomentType?: string;
+  opportunityId?: string;
 };
 
 const STATUSES = ["DRAFT", "NEEDS_REVIEW", "APPROVED", "REJECTED", "USED", "ARCHIVED"] as const;
 const CATEGORIES = ["SOCIAL", "DEVOTIONAL", "DISCIPLESHIP", "PROMOTION", "WRITTEN", "ENGAGEMENT", "RECAP"] as const;
+
+function findRecentContentOpportunityGenerationJob(sermonId: string) {
+  const recentWindowStart = new Date(Date.now() - 12 * 60 * 60_000);
+
+  return prisma.processingJob.findFirst({
+    where: {
+      sermonId,
+      type: "GENERATE_CONTENT_OPPORTUNITIES",
+      createdAt: { gte: recentWindowStart },
+    },
+    orderBy: { createdAt: "desc" },
+    select: {
+      status: true,
+      generationSummary: true,
+    },
+  });
+}
 
 function formatStatusLabel(status: (typeof STATUSES)[number]): string {
   return status.replace(/_/g, " ").toLowerCase();
@@ -109,6 +131,7 @@ async function OpportunityResults({
   const status = asStatus(filters.status);
   const opportunityType = asType(filters.type);
   const ministryMomentType = asMinistryMomentType(filters.ministryMomentType);
+  const focusedOpportunityId = filters.opportunityId?.trim() || null;
   const scopedSermonId = activeSermonId ?? "__no_sermon__";
 
   const where: Prisma.ContentOpportunityWhereInput = {
@@ -116,7 +139,16 @@ async function OpportunityResults({
       { sermonId: scopedSermonId },
       category ? { category } : {},
       opportunityType ? { opportunityType } : {},
-      status ? { status } : { status: { notIn: ["REJECTED", "ARCHIVED"] } },
+      status
+        ? { status }
+        : focusedOpportunityId
+          ? {
+              OR: [
+                { status: { notIn: ["REJECTED", "ARCHIVED"] } },
+                { id: focusedOpportunityId },
+              ],
+            }
+          : { status: { notIn: ["REJECTED", "ARCHIVED"] } },
       filters.scripture
         ? { relatedScripture: { contains: filters.scripture, mode: "insensitive" } }
         : {},
@@ -129,7 +161,7 @@ async function OpportunityResults({
 
   // A pooled runtime can run these reads concurrently. The direct fallback
   // keeps them on one transaction to avoid opening several remote connections.
-  const [opportunities, momentTypes, preparedAssets, topicSuggestions] = await databaseReadBatch([
+  const [opportunities, momentTypes, preparedAssets, topicSuggestions, generationJob] = await databaseReadBatch([
     prisma.contentOpportunity.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -141,15 +173,40 @@ async function OpportunityResults({
         title: true,
         shortDescription: true,
         bodyContent: true,
+        structuredContentJson: true,
         editedContent: true,
         approvedContent: true,
         confidenceScore: true,
         suggestedPlatform: true,
         relatedScripture: true,
+        scriptureTranslation: true,
+        translationReviewState: true,
         sourceTranscriptExcerpt: true,
+        sourceTranscriptSegmentIds: true,
+        sourceStartTimeSeconds: true,
+        sourceEndTimeSeconds: true,
         aiReason: true,
         status: true,
+        approvedRevisionId: true,
         createdAt: true,
+        approvedRevision: {
+          select: {
+            revisionNumber: true,
+            approvedAt: true,
+          },
+        },
+        revisions: {
+          orderBy: { revisionNumber: "desc" },
+          take: 5,
+          select: {
+            id: true,
+            revisionNumber: true,
+            approvalState: true,
+            createdBy: true,
+            approvedAt: true,
+            createdAt: true,
+          },
+        },
         sermon: {
           select: {
             title: true,
@@ -158,6 +215,17 @@ async function OpportunityResults({
         ministryMoment: {
           select: {
             momentType: true,
+          },
+        },
+        relatedClip: {
+          select: {
+            id: true,
+            sermonId: true,
+            title: true,
+            status: true,
+            startTimeSeconds: true,
+            endTimeSeconds: true,
+            transcriptSafetyStatus: true,
           },
         },
       },
@@ -188,6 +256,14 @@ async function OpportunityResults({
         caption: true,
         hashtagsJson: true,
         callToAction: true,
+        currentRevisionId: true,
+        approvedRevisionId: true,
+        currentRevision: {
+          select: {
+            approvalState: true,
+            sourceOpportunityRevisionId: true,
+          },
+        },
       },
       take: 150,
     }),
@@ -198,28 +274,68 @@ async function OpportunityResults({
       orderBy: { topic: "asc" },
       take: 100,
     }),
+    findRecentContentOpportunityGenerationJob(scopedSermonId),
   ]);
 
-  const normalized = opportunities.map((item) => ({
-    id: item.id,
-    sermonId: item.sermonId,
-    sermonTitle: item.sermon.title,
-    category: item.category,
-    opportunityType: item.opportunityType,
-    title: item.title,
-    shortDescription: item.shortDescription,
-    bodyContent: item.bodyContent,
-    editedContent: item.editedContent,
-    approvedContent: item.approvedContent,
-    confidenceScore: item.confidenceScore,
-    suggestedPlatform: item.suggestedPlatform,
-    relatedScripture: item.relatedScripture,
-    sourceTranscriptExcerpt: item.sourceTranscriptExcerpt,
-    aiReason: item.aiReason,
-    ministryMomentType: item.ministryMoment?.momentType ?? null,
-    status: item.status,
-    createdAt: item.createdAt.toISOString(),
-  }));
+  const normalized = opportunities.map((item) => {
+    const resolvedContent = resolveContentOpportunityContract({
+      opportunityType: item.opportunityType,
+      structuredContent: item.structuredContentJson,
+      bodyContent: item.editedContent ?? item.bodyContent,
+      title: item.title,
+      sourceTranscriptExcerpt: item.sourceTranscriptExcerpt,
+      relatedScripture: [item.relatedScripture, item.scriptureTranslation].filter(Boolean).join(" "),
+      relatedClipTitle: item.relatedClip?.title,
+      suggestedPlatform: item.suggestedPlatform,
+    });
+    const presentation = buildContentContractPresentation(resolvedContent.contract);
+
+    return {
+      id: item.id,
+      sermonId: item.sermonId,
+      sermonTitle: item.sermon.title,
+      category: item.category,
+      opportunityType: item.opportunityType,
+      title: item.title,
+      shortDescription: item.shortDescription,
+      bodyContent: item.bodyContent,
+      editedContent: item.editedContent,
+      approvedContent: item.approvedContent,
+      artworkText: presentation.artworkText,
+      publishingCaption: presentation.publishingCaption,
+      contentStructureLabel: presentation.structureLabel,
+      contentRequiresReview: resolvedContent.source === "LEGACY_CONVERTED",
+      confidenceScore: item.confidenceScore,
+      suggestedPlatform: item.suggestedPlatform,
+      relatedScripture: item.relatedScripture,
+      scriptureTranslation: item.scriptureTranslation,
+      translationReviewState: item.translationReviewState,
+      sourceTranscriptExcerpt: item.sourceTranscriptExcerpt,
+      sourceTranscriptSegmentIds: Array.isArray(item.sourceTranscriptSegmentIds)
+        ? item.sourceTranscriptSegmentIds.filter((segmentId): segmentId is string => typeof segmentId === "string" && Boolean(segmentId.trim()))
+        : [],
+      sourceStartTimeSeconds: item.sourceStartTimeSeconds,
+      sourceEndTimeSeconds: item.sourceEndTimeSeconds,
+      aiReason: item.aiReason,
+      ministryMomentType: item.ministryMoment?.momentType ?? null,
+      relatedClip: item.relatedClip,
+      approvedRevisionId: item.approvedRevisionId,
+      approvedRevision: item.approvedRevision ? {
+        revisionNumber: item.approvedRevision.revisionNumber,
+        approvedAt: item.approvedRevision.approvedAt?.toISOString() ?? null,
+      } : null,
+      revisions: item.revisions.map((revision) => ({
+        id: revision.id,
+        revisionNumber: revision.revisionNumber,
+        approvalState: revision.approvalState,
+        createdBy: revision.createdBy,
+        approvedAt: revision.approvedAt?.toISOString() ?? null,
+        createdAt: revision.createdAt.toISOString(),
+      })),
+      status: item.status,
+      createdAt: item.createdAt.toISOString(),
+    };
+  });
   const hasActiveFilters = Boolean(
     filters.category ||
     filters.type ||
@@ -286,13 +402,18 @@ async function OpportunityResults({
   ) : null;
 
   return (
-    <OpportunitiesExperience
+    <>
+      <ContentGenerationStatus
+        view={generationJob ? buildContentOpportunityJobStatusView(generationJob) : null}
+      />
+      <OpportunitiesExperience
       opportunities={normalized}
       activeSermonId={activeSermonId}
       activeSermonTitle={activeSermonTitle}
       hasActiveFilters={hasActiveFilters}
       clearFiltersHref={clearFiltersHref}
       includeInactive={status === "REJECTED" || status === "ARCHIVED"}
+      initialOpportunityId={focusedOpportunityId}
       filterControls={filterControls}
       preparedAssets={preparedAssets.map((asset) => ({
         id: asset.id,
@@ -305,8 +426,13 @@ async function OpportunityResults({
         caption: asset.caption,
         hashtags: normalizeContentHashtags(Array.isArray(asset.hashtagsJson) ? asset.hashtagsJson.filter((item): item is string => typeof item === "string") : []),
         callToAction: asset.callToAction,
+        currentRevisionId: asset.currentRevisionId,
+        approvedRevisionId: asset.approvedRevisionId,
+        currentRevisionApprovalState: asset.currentRevision?.approvalState ?? null,
+        sourceOpportunityRevisionId: asset.currentRevision?.sourceOpportunityRevisionId ?? null,
       }))}
-    />
+      />
+    </>
   );
 }
 

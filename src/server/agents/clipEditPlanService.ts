@@ -3,6 +3,10 @@ import type { ClipArtifactKind, ClipArtifactStatus, ClipExportFormat, Prisma } f
 import { prisma } from "@/lib/prisma";
 import { hashStableJson } from "@/server/utils/stableJson";
 import { extractSpeechCleanupCutPlan } from "@/lib/speechCleanupPlan";
+import {
+  extractCaptionRevealMode,
+  extractCaptionSyncOffsetSeconds,
+} from "@/lib/clipStudio";
 
 const CLIP_EDIT_PLAN_SCHEMA_VERSION = 1;
 
@@ -23,10 +27,6 @@ const clipEditPlanSelect = {
   exportLayoutStrategy: true,
   manualCropKeyframes: true,
   captionData: true,
-  renderedFilePath: true,
-  captionedVideoPath: true,
-  overlayVideoPath: true,
-  exportedFilePath: true,
 } satisfies Prisma.ClipCandidateSelect;
 
 type ClipForEditPlan = Prisma.ClipCandidateGetPayload<{ select: typeof clipEditPlanSelect }>;
@@ -42,6 +42,46 @@ export type ClipEditPlanSnapshot = {
   planJson: Prisma.InputJsonValue;
   cleanupPlanJson: Prisma.InputJsonValue | null;
 };
+
+export type ClipEditPlanGuard = {
+  clipCandidateId: string;
+  editPlanId: string;
+  planHash: string;
+};
+
+export const STALE_CLIP_COMPOSITION_ERROR_CODE = "STALE_CLIP_COMPOSITION" as const;
+
+export class StaleClipCompositionError extends Error {
+  readonly code = STALE_CLIP_COMPOSITION_ERROR_CODE;
+  readonly clipCandidateId: string;
+  readonly expectedEditPlanId: string;
+  readonly expectedPlanHash: string;
+  readonly activeEditPlanId: string | null;
+  readonly activePlanHash: string | null;
+
+  constructor(input: ClipEditPlanGuard & {
+    activeEditPlanId?: string | null;
+    activePlanHash?: string | null;
+  }) {
+    super("Clip Studio changes were saved while this media was being generated. The stale output was discarded; rebuild it from the latest composition.");
+    this.name = "StaleClipCompositionError";
+    this.clipCandidateId = input.clipCandidateId;
+    this.expectedEditPlanId = input.editPlanId;
+    this.expectedPlanHash = input.planHash;
+    this.activeEditPlanId = input.activeEditPlanId ?? null;
+    this.activePlanHash = input.activePlanHash ?? null;
+  }
+}
+
+export function isStaleClipCompositionError(error: unknown): error is StaleClipCompositionError {
+  return error instanceof StaleClipCompositionError
+    || Boolean(
+      error
+      && typeof error === "object"
+      && "code" in error
+      && error.code === STALE_CLIP_COMPOSITION_ERROR_CODE,
+    );
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -71,15 +111,12 @@ function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot 
   const cropPlan = {
     exportLayoutStrategy: clip.exportLayoutStrategy,
     manualCropKeyframes: clip.manualCropKeyframes ?? null,
-    framingDecision: captionData["framingDecision"] ?? null,
   };
   const exportSettings = {
     exportFormat: clip.exportFormat,
     exportLayoutStrategy: clip.exportLayoutStrategy,
     exportSettings: captionData["exportSettings"] ?? null,
     framingPersonality: captionData["framingPersonality"] ?? null,
-    exportSource: captionData["exportSource"] ?? null,
-    exportQualityProfile: captionData["exportQualityProfile"] ?? null,
   };
   const planDocument = {
     schemaVersion: CLIP_EDIT_PLAN_SCHEMA_VERSION,
@@ -101,7 +138,6 @@ function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot 
     speechCleanup: {
       settings: captionData["speechCleanup"] ?? null,
       edits: captionData["speechCleanupEdits"] ?? null,
-      cutPlan: speechCleanupPlan,
     },
     captions: {
       applyCaptionsToClip: readBoolean(captionData, "applyCaptionsToClip", true),
@@ -109,6 +145,8 @@ function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot 
       captionStylePresetId: captionData["captionStylePresetId"] ?? null,
       captionPosition: captionData["captionPosition"] ?? null,
       captionAppearance: captionData["captionAppearance"] ?? null,
+      captionRevealMode: extractCaptionRevealMode(captionData),
+      captionSyncOffsetSeconds: extractCaptionSyncOffsetSeconds(captionData),
       wordHighlightEnabled: readBoolean(captionData, "wordHighlightEnabled", false),
     },
     overlays: {
@@ -118,12 +156,6 @@ function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot 
     },
     framing: cropPlan,
     export: exportSettings,
-    artifactPaths: {
-      renderedFilePath: clip.renderedFilePath,
-      captionedVideoPath: clip.captionedVideoPath,
-      overlayVideoPath: clip.overlayVideoPath,
-      exportedFilePath: clip.exportedFilePath,
-    },
   };
   const planHash = hashStableJson(planDocument);
 
@@ -148,6 +180,118 @@ export async function getActiveClipEditPlan(clipCandidateId: string) {
     },
     orderBy: { version: "desc" },
   });
+}
+
+async function loadActiveClipEditPlanGuard(clipCandidateId: string) {
+  return prisma.clipEditPlan.findFirst({
+    where: {
+      clipCandidateId,
+      status: "ACTIVE",
+    },
+    orderBy: { version: "desc" },
+    select: {
+      id: true,
+      planHash: true,
+    },
+  });
+}
+
+function staleClipCompositionError(
+  expected: ClipEditPlanGuard,
+  active: { id: string; planHash: string } | null,
+): StaleClipCompositionError {
+  return new StaleClipCompositionError({
+    ...expected,
+    activeEditPlanId: active?.id ?? null,
+    activePlanHash: active?.planHash ?? null,
+  });
+}
+
+export async function assertClipEditPlanStillActive(
+  expected: ClipEditPlanGuard,
+): Promise<{ id: string; planHash: string }> {
+  const active = await loadActiveClipEditPlanGuard(expected.clipCandidateId);
+  if (
+    !active
+    || active.id !== expected.editPlanId
+    || active.planHash !== expected.planHash
+  ) {
+    throw staleClipCompositionError(expected, active);
+  }
+
+  return active;
+}
+
+/**
+ * A media command can fail for its own reason after the creator has already
+ * saved a newer composition. In that case the superseded plan, not the media
+ * error, must control cleanup so the new draft is never marked FAILED.
+ */
+export async function preferStaleClipCompositionError(
+  expected: ClipEditPlanGuard,
+  error: unknown,
+): Promise<unknown> {
+  if (isStaleClipCompositionError(error)) {
+    return error;
+  }
+
+  try {
+    await assertClipEditPlanStillActive(expected);
+    return error;
+  } catch (guardError) {
+    return isStaleClipCompositionError(guardError) ? guardError : error;
+  }
+}
+
+/**
+ * Writes clip completion metadata only while the plan captured at job start is
+ * still ACTIVE. The relation predicate makes the comparison and mutation one
+ * database operation, closing the gap between a read-only assertion and write.
+ */
+export async function updateClipCandidateForActiveEditPlan(input: {
+  guard: ClipEditPlanGuard;
+  data: Prisma.ClipCandidateUpdateManyMutationInput;
+}): Promise<void> {
+  const result = await prisma.clipCandidate.updateMany({
+    where: {
+      id: input.guard.clipCandidateId,
+      editPlans: {
+        some: {
+          id: input.guard.editPlanId,
+          planHash: input.guard.planHash,
+          status: "ACTIVE",
+        },
+      },
+    },
+    data: input.data,
+  });
+
+  if (result.count !== 1) {
+    const active = await loadActiveClipEditPlanGuard(input.guard.clipCandidateId);
+    throw staleClipCompositionError(input.guard, active);
+  }
+}
+
+/** Best-effort guarded write for failure metadata; a newer Studio plan wins. */
+export async function tryUpdateClipCandidateForActiveEditPlan(input: {
+  guard: ClipEditPlanGuard;
+  data: Prisma.ClipCandidateUpdateManyMutationInput;
+}): Promise<boolean> {
+  const result = await prisma.clipCandidate.updateMany({
+    where: {
+      id: input.guard.clipCandidateId,
+      editPlans: {
+        some: {
+          id: input.guard.editPlanId,
+          planHash: input.guard.planHash,
+          status: "ACTIVE",
+        },
+      },
+    },
+    data: input.data,
+  });
+
+  return result.count === 1;
 }
 
 export async function upsertActiveClipEditPlanForClip(input: {
@@ -182,7 +326,7 @@ export async function upsertActiveClipEditPlanForClip(input: {
   });
   const nextVersion = (latestVersion?.version ?? 0) + 1;
 
-  // Keep the supersede/create pair atomic without an interactive transaction.
+  // Keep the supersede/create pair and artifact invalidation atomic without an interactive transaction.
   // Interactive transactions expire after five seconds by default, which is
   // too brittle when the hosted database pool needs to wake or reconnect.
   const [, plan] = await prisma.$transaction([
@@ -212,6 +356,19 @@ export async function upsertActiveClipEditPlanForClip(input: {
         createdReason: input.createdReason ?? null,
       },
     }),
+    prisma.clipArtifact.updateMany({
+      where: {
+        clipCandidateId: clip.id,
+        freshness: "UP_TO_DATE",
+        OR: [
+          { planHash: null },
+          { planHash: { not: snapshot.planHash } },
+        ],
+      },
+      data: {
+        freshness: "OUTDATED",
+      },
+    }),
   ]);
 
   return {
@@ -233,6 +390,7 @@ export async function recordClipArtifact(input: {
   durationSeconds?: number | null;
   errorMessage?: string | null;
   metadata?: Prisma.InputJsonValue | null;
+  editPlan?: Pick<ClipEditPlanGuard, "editPlanId" | "planHash"> | null;
 }) {
   const clip = await prisma.clipCandidate.findUnique({
     where: { id: input.clipCandidateId },
@@ -243,7 +401,13 @@ export async function recordClipArtifact(input: {
     throw new Error(`Clip candidate ${input.clipCandidateId} was not found.`);
   }
 
-  const activePlan = await getActiveClipEditPlan(clip.id);
+  const activePlan = input.editPlan
+    ? await assertClipEditPlanStillActive({
+        clipCandidateId: clip.id,
+        editPlanId: input.editPlan.editPlanId,
+        planHash: input.editPlan.planHash,
+      })
+    : await getActiveClipEditPlan(clip.id);
 
   return prisma.clipArtifact.create({
     data: {
@@ -266,3 +430,7 @@ export async function recordClipArtifact(input: {
     },
   });
 }
+
+export const __clipEditPlanTestUtils = {
+  buildClipEditPlanSnapshot,
+};

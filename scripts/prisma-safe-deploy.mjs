@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { loadEnvFile } from "node:process";
@@ -9,7 +10,9 @@ import {
   withDatabaseConnectionRetry,
 } from "./prisma-deploy-retry.mjs";
 
-loadEnvFile(".env");
+if (existsSync(".env")) {
+  loadEnvFile(".env");
+}
 
 const prisma = new PrismaClient();
 const BASELINE_MARKER_TABLE = '"_sermon_clip_baseline_state"';
@@ -161,6 +164,7 @@ async function assertBaselineInvariants() {
           AND indexdef ILIKE '%PENDING%'
           AND indexdef ILIKE '%RUNNING%'
           AND indexdef ILIKE '%GENERATE_INTELLIGENCE%'
+          AND indexdef ILIKE '%GENERATE_CONTENT_OPPORTUNITIES%'
       ) AS "hasActiveJobIndex",
       (
         SELECT COUNT(*)::int

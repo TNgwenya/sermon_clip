@@ -4,10 +4,13 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { createDefaultContentArtworkSettings } from "@/lib/contentArtworkDesign";
 import {
+  analyzeNonVideoTextLayout,
   getNonVideoAssetOutputDirectory,
   preflightApprovedNonVideoAssets,
   renderApprovedNonVideoAssets,
+  resolveRenderedScriptureReference,
   toContentAssetFilePersistenceInput,
   type ApprovedNonVideoAssetInput,
 } from "@/server/contentAssets/nonVideoAssetRenderer";
@@ -79,6 +82,7 @@ describe("approved non-video asset renderer", () => {
       }
       expect(file.size).toBe(bytes.byteLength);
       expect(file.metadata.sourceStatus).toBe("APPROVED");
+      expect(file.metadata.templateId).toBe("quote-emphasis");
     }
 
     expect(toContentAssetFilePersistenceInput(first.files[0])).toMatchObject({
@@ -110,7 +114,103 @@ describe("approved non-video asset renderer", () => {
       && !file.layout.horizontalOverflow
       && !file.layout.verticalOverflow
     ))).toBe(true);
+    expect(result.preflight.plannedFiles.map((file) => file.layout.safeArea.format)).toEqual([
+      "SQUARE",
+      "PORTRAIT",
+      "STORY",
+      "LANDSCAPE",
+    ]);
+    expect(result.preflight.plannedFiles.every((file) => (
+      file.layout.startY >= file.layout.safeArea.top
+      && file.layout.safeBottom < file.layout.referenceY
+      && file.layout.referenceY < file.layout.brandY
+      && file.layout.brandY <= file.layout.safeArea.bottom
+    ))).toBe(true);
     expect(result.files).toHaveLength(8);
+  });
+
+  it("uses the selected photo recipe and typography settings in production output", async () => {
+    const root = await makeTemporaryRoot();
+    const artwork = {
+      ...createDefaultContentArtworkSettings("quote-emphasis"),
+      backgroundId: "still-waters" as const,
+      paletteId: "ocean" as const,
+      typographyPresetId: "quiet" as const,
+      textScale: 1.1,
+      lineHeight: 1.15,
+    };
+    const result = await renderApprovedNonVideoAssets(approvedInput({ artwork }), {
+      outputRoot: root,
+      variants: ["PORTRAIT"],
+    });
+
+    expect(result.files).toHaveLength(2);
+    expect(result.files[0].metadata).toMatchObject({
+      artworkVersion: 1,
+      backgroundId: "still-waters",
+      paletteId: "ocean",
+      typographyPresetId: "quiet",
+    });
+    expect((await readFile(result.files[0].path)).byteLength).toBeGreaterThan(10_000);
+
+    const defaultLayout = analyzeNonVideoTextLayout(
+      "Trust God with the next faithful step.",
+      1080,
+      1350,
+      "Choose faith",
+      "Proverbs 3:5",
+    );
+    expect(result.preflight.plannedFiles[0].layout.baseFontSize).toBeGreaterThan(defaultLayout.baseFontSize);
+    expect(result.preflight.plannedFiles[0].layout.lineHeight).not.toBe(defaultLayout.lineHeight);
+  });
+
+  it("normalizes and applies global text overrides to PNG and JPEG production output", async () => {
+    const root = await makeTemporaryRoot();
+    const baseline = await renderApprovedNonVideoAssets(approvedInput(), {
+      outputRoot: root,
+      storageKey: "baseline",
+      variants: ["PORTRAIT"],
+    });
+    const customized = await renderApprovedNonVideoAssets(approvedInput({
+      textOverrides: {
+        eyebrowText: "  Sunday   message ",
+        footerText: "  Melusi Church ",
+        showEyebrow: false,
+        showFooter: true,
+      },
+    }), {
+      outputRoot: root,
+      storageKey: "customized",
+      variants: ["PORTRAIT"],
+    });
+
+    expect(customized.preflight.plannedFiles[0].textOverrides).toEqual({
+      version: 1,
+      eyebrowText: "Sunday message",
+      footerText: "Melusi Church",
+      showEyebrow: false,
+      showFooter: true,
+    });
+    const baselinePng = await readFile(baseline.files.find((file) => file.mime === "image/png")!.path);
+    const customizedPng = await readFile(customized.files.find((file) => file.mime === "image/png")!.path);
+    const baselineJpeg = await readFile(baseline.files.find((file) => file.mime === "image/jpeg")!.path);
+    const customizedJpeg = await readFile(customized.files.find((file) => file.mime === "image/jpeg")!.path);
+    expect(customizedPng.equals(baselinePng)).toBe(false);
+    expect(customizedJpeg.equals(baselineJpeg)).toBe(false);
+  });
+
+  it("keeps a selected textured family deterministic across every planned production size", () => {
+    const first = preflightApprovedNonVideoAssets(approvedInput({ templateId: "quote-textured" }));
+    const second = preflightApprovedNonVideoAssets(approvedInput({ templateId: "quote-textured" }));
+
+    expect(first.ready).toBe(true);
+    expect(first.plannedFiles.map((file) => file.templateId)).toEqual([
+      "quote-textured",
+      "quote-textured",
+      "quote-textured",
+      "quote-textured",
+    ]);
+    expect(second.plannedFiles).toEqual(first.plannedFiles);
   });
 
   it("renders approved carousel copy as ordered portrait PNG and JPEG slides", async () => {
@@ -137,6 +237,60 @@ describe("approved non-video asset renderer", () => {
       slideNumber: 3,
       slideCount: 3,
     });
+  });
+
+  it("uses a slide text override when present and otherwise falls back to the global override", async () => {
+    const root = await makeTemporaryRoot();
+    const globalOverrides = {
+      version: 1 as const,
+      eyebrowText: "Teaching point",
+      footerText: "Global footer",
+      showEyebrow: true,
+      showFooter: true,
+    };
+    const slideOverrides = {
+      version: 1 as const,
+      eyebrowText: "First point",
+      footerText: "Slide footer",
+      showEyebrow: false,
+      showFooter: true,
+    };
+    const result = await renderApprovedNonVideoAssets(approvedInput({
+      opportunityType: "CAROUSEL_IDEA",
+      title: "Faith steps",
+      approvedContent: "Faith keeps moving.",
+      textOverrides: globalOverrides,
+      carouselSlides: [
+        {
+          id: "first",
+          role: "CONTENT",
+          templateId: "carousel-content",
+          title: "Keep moving",
+          body: "Faith keeps moving.",
+          scripture: null,
+          textOverrides: slideOverrides,
+        },
+        {
+          id: "second",
+          role: "CONTENT",
+          templateId: "carousel-content",
+          title: "Keep moving",
+          body: "Faith keeps moving.",
+          scripture: null,
+        },
+      ],
+    }), { outputRoot: root });
+
+    expect(result.preflight.plannedFiles.map((file) => file.textOverrides)).toEqual([
+      slideOverrides,
+      globalOverrides,
+    ]);
+    const firstPng = await readFile(result.files.find((file) => file.name === "slide-01.png")!.path);
+    const secondPng = await readFile(result.files.find((file) => file.name === "slide-02.png")!.path);
+    const firstJpeg = await readFile(result.files.find((file) => file.name === "slide-01.jpg")!.path);
+    const secondJpeg = await readFile(result.files.find((file) => file.name === "slide-02.jpg")!.path);
+    expect(firstPng.equals(secondPng)).toBe(false);
+    expect(firstJpeg.equals(secondJpeg)).toBe(false);
   });
 
   it("keeps an intentionally blank carousel reference blank instead of inheriting the global reference", () => {
@@ -209,6 +363,79 @@ describe("approved non-video asset renderer", () => {
       code: "QUOTE_TRANSCRIPT_EVIDENCE_MISSING",
       blocking: true,
     }));
+  });
+
+  it("blocks quote artwork that no longer matches the transcript evidence", () => {
+    const preflight = preflightApprovedNonVideoAssets(approvedInput({
+      approvedContent: "Pressure always makes your faith stronger.",
+      sourceTranscriptExcerpt: "Faith keeps walking when pressure comes.",
+    }));
+
+    expect(preflight.ready).toBe(false);
+    expect(preflight.diagnostics).toContainEqual(expect.objectContaining({
+      code: "QUOTE_TRANSCRIPT_MISMATCH",
+      blocking: true,
+    }));
+  });
+
+  it("blocks invalid Scripture references and production directions before rendering", () => {
+    const invalidReference = preflightApprovedNonVideoAssets(approvedInput({
+      opportunityType: "SCRIPTURE_GRAPHIC",
+      approvedContent: "The Lord is my shepherd.",
+      relatedScripture: "Psalm ninety-one",
+    }));
+    const productionDirection = preflightApprovedNonVideoAssets(approvedInput({
+      approvedContent: "Trust God today. Add a small footer with the church logo.",
+      sourceTranscriptExcerpt: "Trust God today. Add a small footer with the church logo.",
+    }));
+
+    expect(invalidReference.diagnostics).toContainEqual(expect.objectContaining({
+      code: "SCRIPTURE_REFERENCE_INVALID",
+      blocking: true,
+    }));
+    expect(productionDirection.diagnostics).toContainEqual(expect.objectContaining({
+      code: "PRODUCTION_COPY_UNSAFE",
+      blocking: true,
+    }));
+  });
+
+  it("requires a recognized displayed translation and an explicit human accuracy check for Scripture", () => {
+    const missingVersion = preflightApprovedNonVideoAssets(approvedInput({
+      opportunityType: "SCRIPTURE_GRAPHIC",
+      approvedContent: "The Lord is my shepherd.",
+      relatedScripture: "Psalm 23:1",
+      scriptureTranslation: null,
+      scriptureAccuracyConfirmed: true,
+    }));
+    const unconfirmed = preflightApprovedNonVideoAssets(approvedInput({
+      opportunityType: "SCRIPTURE_GRAPHIC",
+      approvedContent: "The Lord is my shepherd.",
+      relatedScripture: "Psalm 23:1",
+      scriptureTranslation: "NIV",
+      scriptureAccuracyConfirmed: false,
+    }));
+    const ready = preflightApprovedNonVideoAssets(approvedInput({
+      opportunityType: "SCRIPTURE_GRAPHIC",
+      approvedContent: "The Lord is my shepherd.",
+      relatedScripture: "Psalm 23:1",
+      scriptureTranslation: "NIV",
+      scriptureAccuracyConfirmed: true,
+    }));
+
+    expect(missingVersion.diagnostics).toContainEqual(expect.objectContaining({
+      code: "SCRIPTURE_REFERENCE_INVALID",
+      blocking: true,
+    }));
+    expect(unconfirmed.diagnostics).toContainEqual(expect.objectContaining({
+      code: "SCRIPTURE_ACCURACY_UNCONFIRMED",
+      blocking: true,
+    }));
+    expect(ready.ready).toBe(true);
+    expect(ready.plannedFiles.every((file) => file.scripture?.endsWith(" NIV"))).toBe(true);
+    expect(resolveRenderedScriptureReference({
+      relatedScripture: "John 3:16 NLT",
+      scriptureTranslation: "NIV",
+    })).toBe("John 3:16 NIV");
   });
 
   it("rejects unsafe IDs before constructing a storage path", () => {

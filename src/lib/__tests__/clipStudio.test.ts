@@ -7,6 +7,8 @@ import {
   extractBrollLayerConfig,
   extractCaptionAppearanceSettings,
   extractCaptionPosition,
+  extractCaptionRevealMode,
+  extractCaptionSyncOffsetSeconds,
   extractCaptionStyleOverride,
   extractCaptionGuidance,
   extractHookOverlayConfig,
@@ -23,6 +25,8 @@ import {
   inferBrollCardTone,
   labelForBrollTone,
   normalizeBrollLayerConfig,
+  normalizeCaptionRevealMode,
+  normalizeCaptionSyncOffsetSeconds,
   normalizeHookOverlayForClipDuration,
   renderStatusLabel,
   resolveNextBrollCardStart,
@@ -254,12 +258,36 @@ describe("Studio on-video caption settings", () => {
     expect(
       extractOnVideoCaptionCues({
         cues: [
-          { index: 4, startSeconds: 0, endSeconds: 2, text: "First line" },
-          { index: 5, startSeconds: 2, endSeconds: 5, text: "Second line" },
+          {
+            index: 4,
+            startSeconds: 0,
+            endSeconds: 2,
+            text: "First line",
+            wordTimings: [
+              { text: " First ", startSeconds: 0, endSeconds: 0.8 },
+              { text: "line", startSeconds: 1, endSeconds: 2 },
+            ],
+          },
+          {
+            index: 5,
+            startSeconds: 2,
+            endSeconds: 5,
+            text: "Second line",
+            wordTimings: [{ text: "Second", startSeconds: 1, endSeconds: 3 }],
+          },
         ],
       }, null, 12),
     ).toEqual([
-      { index: 1, startSeconds: 0, endSeconds: 2, text: "First line" },
+      {
+        index: 1,
+        startSeconds: 0,
+        endSeconds: 2,
+        text: "First line",
+        wordTimings: [
+          { text: "First", startSeconds: 0, endSeconds: 0.8 },
+          { text: "line", startSeconds: 1, endSeconds: 2 },
+        ],
+      },
       { index: 2, startSeconds: 2, endSeconds: 5, text: "Second line" },
     ]);
   });
@@ -279,6 +307,31 @@ describe("Studio on-video caption settings", () => {
     expect(extractCaptionPosition(null)).toBe("lower");
     expect(extractCaptionPosition({ captionPosition: "middle" })).toBe("middle");
     expect(extractCaptionPosition({ captionPosition: "sideways" })).toBe("lower");
+  });
+
+  it("normalizes modern caption reveal modes", () => {
+    expect(normalizeCaptionRevealMode("phrase")).toBe("phrase");
+    expect(normalizeCaptionRevealMode("single-word")).toBe("single-word");
+    expect(normalizeCaptionRevealMode("unknown")).toBe("active-word");
+    expect(extractCaptionRevealMode({ captionRevealMode: "single-word" })).toBe("single-word");
+    expect(extractCaptionRevealMode(null)).toBe("active-word");
+  });
+
+  it("uses the legacy word highlight flag when no reveal mode is stored", () => {
+    expect(extractCaptionRevealMode({ wordHighlightEnabled: true })).toBe("active-word");
+    expect(extractCaptionRevealMode({ wordHighlightEnabled: false })).toBe("phrase");
+    expect(extractCaptionRevealMode({
+      captionRevealMode: "single-word",
+      wordHighlightEnabled: false,
+    })).toBe("single-word");
+  });
+
+  it("normalizes global caption sync offsets", () => {
+    expect(normalizeCaptionSyncOffsetSeconds(0.175)).toBe(0.17);
+    expect(normalizeCaptionSyncOffsetSeconds(9)).toBe(2);
+    expect(normalizeCaptionSyncOffsetSeconds(-9)).toBe(-2);
+    expect(extractCaptionSyncOffsetSeconds({ captionSyncOffsetSeconds: -0.35 })).toBe(-0.35);
+    expect(extractCaptionSyncOffsetSeconds(null)).toBe(0);
   });
 
   it("defaults captions to applied unless explicitly disabled", () => {

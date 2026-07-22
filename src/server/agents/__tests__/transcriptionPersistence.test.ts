@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const txMock = vi.hoisted(() => ({
@@ -28,6 +29,15 @@ const replacementInput = {
   provider: "openai",
   language: "en",
   transcriptJsonPath: "/storage/sermon-1/transcript/transcript.json",
+  words: [
+    { text: "Grace", startTimeSeconds: 0, endTimeSeconds: 0.42 },
+    { text: "meets", startTimeSeconds: 0.42, endTimeSeconds: 0.88 },
+    { text: "us", startTimeSeconds: 0.88, endTimeSeconds: 1.08 },
+    { text: "here.", startTimeSeconds: 1.08, endTimeSeconds: 1.45 },
+    { text: "Faith", startTimeSeconds: 3, endTimeSeconds: 3.43 },
+    { text: "keeps", startTimeSeconds: 3.43, endTimeSeconds: 3.9 },
+    { text: "moving.", startTimeSeconds: 3.9, endTimeSeconds: 4.52 },
+  ],
   segments: [
     {
       startTimeSeconds: 0,
@@ -72,7 +82,9 @@ describe("transcript persistence", () => {
       update: expect.objectContaining({
         fullText: replacementInput.fullText,
         rawJsonPath: replacementInput.transcriptJsonPath,
+        wordTimings: replacementInput.words,
       }),
+      create: expect.objectContaining({ wordTimings: replacementInput.words }),
     }));
     expect(txMock.transcriptSegment.deleteMany).toHaveBeenCalledWith({
       where: { sermonId: "sermon-1" },
@@ -106,6 +118,18 @@ describe("transcript persistence", () => {
     expect(txMock.transcriptSegment.createMany.mock.invocationCallOrder[0]).toBeLessThan(
       txMock.sermon.update.mock.invocationCallOrder[0],
     );
+  });
+
+  it("stores database null when the provider returns no word timestamps", async () => {
+    await __transcriptionTestUtils.replaceTranscriptRecords({
+      ...replacementInput,
+      words: [],
+    });
+
+    expect(txMock.transcript.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: expect.objectContaining({ wordTimings: Prisma.DbNull }),
+      create: expect.objectContaining({ wordTimings: Prisma.DbNull }),
+    }));
   });
 
   it("does not update the sermon path when segment insertion fails", async () => {

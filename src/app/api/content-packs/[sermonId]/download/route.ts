@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { createZipArchive } from "@/lib/zipArchive";
 import { slugifyExportName } from "@/lib/exportNaming";
 import { renderBrandedContentSvg, splitCarouselSlides } from "@/lib/contentAssetRenderer";
+import { readBrandingArtworkLogoDataUrl } from "@/server/branding/artworkLogo";
 import { getBrandingSettings } from "@/server/branding/settings";
 
 export async function GET(
@@ -40,6 +41,14 @@ export async function GET(
   }
 
   const branding = await getBrandingSettings();
+  const logoDataUrl = await readBrandingArtworkLogoDataUrl(branding.churchLogoPath);
+  const artworkBranding = {
+    churchName: branding.churchName,
+    primaryColor: branding.primaryBrandColor,
+    secondaryColor: branding.secondaryBrandColor,
+    fontFamily: branding.defaultFontFamily,
+    logoDataUrl,
+  };
   const entries: Array<{ name: string; data: string }> = [];
   const manifest: string[] = [
     `# ${sermon.title} — approved content pack`,
@@ -60,7 +69,7 @@ export async function GET(
       for (const format of [{ name: "square", width: 1080, height: 1080 }, { name: "story", width: 1080, height: 1920 }]) {
         entries.push({
           name: `graphics/${base}-${format.name}.svg`,
-          data: renderBrandedContentSvg({ title: item.title, content, scripture: item.relatedScripture, branding: { churchName: branding.churchName, primaryColor: branding.primaryBrandColor, secondaryColor: branding.secondaryBrandColor, fontFamily: branding.defaultFontFamily }, width: format.width, height: format.height }),
+          data: renderBrandedContentSvg({ title: item.title, content, scripture: item.relatedScripture, branding: artworkBranding, width: format.width, height: format.height }),
         });
       }
     }
@@ -68,7 +77,7 @@ export async function GET(
     if (item.opportunityType === "CAROUSEL_IDEA") {
       splitCarouselSlides(content).forEach((slide, index) => entries.push({
         name: `carousels/${base}/slide-${String(index + 1).padStart(2, "0")}.svg`,
-        data: renderBrandedContentSvg({ title: `${item.title} · ${index + 1}`, content: slide, scripture: item.relatedScripture, branding: { churchName: branding.churchName, primaryColor: branding.primaryBrandColor, secondaryColor: branding.secondaryBrandColor, fontFamily: branding.defaultFontFamily }, width: 1080, height: 1350 }),
+        data: renderBrandedContentSvg({ title: `${item.title} · ${index + 1}`, content: slide, scripture: item.relatedScripture, branding: artworkBranding, width: 1080, height: 1350 }),
       }));
     }
   }

@@ -141,23 +141,62 @@ async function sendHeartbeat(): Promise<void> {
   }
 }
 
-async function claimPost(post: AutomationPost): Promise<boolean> {
+function isClaimedAutomationPost(value: unknown, expectedPostId: string): value is AutomationPost {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (
+    record["id"] !== expectedPostId
+    || typeof record["platform"] !== "string"
+    || typeof record["title"] !== "string"
+    || typeof record["caption"] !== "string"
+    || !Array.isArray(record["clips"])
+  ) {
+    return false;
+  }
+
+  return record["clips"].every((clip) => {
+    if (!clip || typeof clip !== "object" || Array.isArray(clip)) {
+      return false;
+    }
+
+    const candidates = (clip as Record<string, unknown>)["localFileCandidates"];
+    return Array.isArray(candidates)
+      && candidates.length === 1
+      && typeof candidates[0] === "string"
+      && candidates[0].trim().length > 0;
+  });
+}
+
+async function claimPost(post: AutomationPost): Promise<AutomationPost | null> {
   const response = await apiFetch(`/api/automation/scheduled-posts/${post.id}/claim`, {
     method: "POST",
     body: JSON.stringify({ workerId }),
   });
+  const data = await response.json().catch(() => null);
 
   if (response.ok) {
-    return true;
+    const claimedPost = data?.scheduledPost;
+    if (isClaimedAutomationPost(claimedPost, post.id)) {
+      return claimedPost;
+    }
+
+    logger.warn("claim skipped", {
+      post: post.id,
+      platform: post.platform,
+      error: "Claim response did not include one canonical ready export per clip.",
+    });
+    return null;
   }
 
-  const data = await response.json().catch(() => null);
   logger.warn("claim skipped", {
     post: post.id,
     platform: post.platform,
     error: data?.error ?? response.statusText,
   });
-  return false;
+  return null;
 }
 
 async function completePost(post: AutomationPost, result: UploadResult): Promise<void> {
@@ -365,13 +404,10 @@ async function publishPost(post: AutomationPost): Promise<UploadResult> {
   }
 
   const video = await firstExistingFile(firstClip.localFileCandidates);
-  let stagedMedia: StagedMedia | undefined = post.mediaPublicUrl && post.mediaObjectKey
-    ? {
-      publicUrl: post.mediaPublicUrl,
-      objectKey: post.mediaObjectKey,
-      uploadedAt: post.mediaUploadedAt ?? new Date().toISOString(),
-    }
-    : undefined;
+  // Scheduled-post staging metadata is not revision-bound yet. Re-stage the
+  // exact export returned by the successful claim instead of reusing a URL
+  // that may point at an older Studio composition.
+  let stagedMedia: StagedMedia | undefined;
 
   if (dryRun) {
     logger.warn("dry-run publish skipped", {
@@ -457,10 +493,11 @@ async function processDuePosts(): Promise<void> {
       return;
     }
 
-    for (const post of duePosts) {
+    for (const cachedPost of duePosts) {
       const startedAt = Date.now();
-      const claimed = await claimPost(post);
-      if (!claimed) {
+      const post = await claimPost(cachedPost);
+      if (!post) {
+        cachedPosts = cachedPosts.filter((item) => item.id !== cachedPost.id);
         continue;
       }
       activeLeasePostIds.add(post.id);
@@ -571,17 +608,24 @@ async function main(): Promise<void> {
   }, heartbeatIntervalMs);
 }
 
-process.on("SIGINT", () => {
-  logger.warn("stopping");
-  process.exit(0);
-});
+export const __postingWorkerTestUtils = {
+  claimPost,
+  isClaimedAutomationPost,
+};
 
-process.on("SIGTERM", () => {
-  logger.warn("stopping");
-  process.exit(0);
-});
+if (!process.env.VITEST) {
+  process.on("SIGINT", () => {
+    logger.warn("stopping");
+    process.exit(0);
+  });
 
-void main().catch((error) => {
-  logger.error("fatal startup failure", errorFields(error));
-  process.exit(1);
-});
+  process.on("SIGTERM", () => {
+    logger.warn("stopping");
+    process.exit(0);
+  });
+
+  void main().catch((error) => {
+    logger.error("fatal startup failure", errorFields(error));
+    process.exit(1);
+  });
+}

@@ -170,6 +170,14 @@ describe("caption burn service validation", () => {
         verticalOffset: -16,
       }),
     ).toContain("MarginV=42");
+    expect(
+      __captionBurnTestUtils.buildCaptionForceStyle("clean-lower", "STANDARD", "top", {
+        fontScale: "regular",
+        maxLines: 4,
+        uppercase: false,
+        verticalOffset: 16,
+      }),
+    ).toContain("MarginV=66");
   });
 
   it("maps saved caption positions to subtitle and overlay placement", () => {
@@ -214,7 +222,11 @@ describe("caption burn service validation", () => {
   it("detects active-word overlay caption mode", () => {
     expect(__captionBurnTestUtils.shouldUseWordHighlightOverlay({ wordHighlightEnabled: true })).toBe(true);
     expect(__captionBurnTestUtils.shouldUseWordHighlightOverlay({ wordHighlightEnabled: false })).toBe(false);
-    expect(__captionBurnTestUtils.shouldUseWordHighlightOverlay({})).toBe(false);
+    expect(__captionBurnTestUtils.shouldUseWordHighlightOverlay({ captionRevealMode: "phrase", wordHighlightEnabled: true })).toBe(false);
+    expect(__captionBurnTestUtils.shouldUseWordHighlightOverlay({ captionRevealMode: "single-word" })).toBe(false);
+    expect(__captionBurnTestUtils.shouldUseWordHighlightOverlay({ captionRevealMode: "active-word" })).toBe(true);
+    expect(__captionBurnTestUtils.shouldUseWordHighlightOverlay({})).toBe(true);
+    expect(__captionBurnTestUtils.MAX_WORD_HIGHLIGHT_OVERLAY_CUES).toBeGreaterThanOrEqual(300);
   });
 
   it("detects when FFmpeg needs the image overlay caption fallback", () => {
@@ -237,6 +249,55 @@ describe("caption burn service validation", () => {
         startSeconds: 0,
         endSeconds: 2.5,
         text: "Bring your pain to Jesus.",
+      },
+    ]);
+  });
+
+  it("retains structurally valid exact word timings from saved Studio cues", () => {
+    const [cue] = __captionBurnTestUtils.extractCaptionCueOverlays({
+      cues: [{
+        index: 1,
+        startSeconds: 0.2,
+        endSeconds: 1.8,
+        text: "Grace wins",
+        wordTimings: [
+          { text: "Grace", startSeconds: 0.2, endSeconds: 0.75 },
+          { text: "wins", startSeconds: 1.05, endSeconds: 1.8 },
+        ],
+      }],
+    });
+
+    expect(cue?.wordTimings).toEqual([
+      { text: "Grace", startSeconds: 0.2, endSeconds: 0.75 },
+      { text: "wins", startSeconds: 1.05, endSeconds: 1.8 },
+    ]);
+    expect(__captionBurnTestUtils.resolveMatchingCaptionWordTimings(cue!)).toHaveLength(2);
+  });
+
+  it("shifts every final caption cue by the saved Studio sync offset", () => {
+    expect(__captionBurnTestUtils.shiftCaptionCueOverlays([
+      { index: 1, startSeconds: 0.1, endSeconds: 0.8, text: "Early" },
+      { index: 2, startSeconds: 1, endSeconds: 2, text: "On time" },
+    ], -0.25)).toEqual([
+      { index: 1, startSeconds: 0, endSeconds: 0.55, text: "Early" },
+      { index: 2, startSeconds: 0.75, endSeconds: 1.75, text: "On time" },
+    ]);
+
+    expect(__captionBurnTestUtils.shiftCaptionCueOverlays([
+      {
+        index: 1,
+        startSeconds: 1,
+        endSeconds: 2,
+        text: "Later",
+        wordTimings: [{ text: "Later", startSeconds: 1.1, endSeconds: 1.9 }],
+      },
+    ], 0.2)).toEqual([
+      {
+        index: 1,
+        startSeconds: 1.2,
+        endSeconds: 2.2,
+        text: "Later",
+        wordTimings: [{ text: "Later", startSeconds: 1.3, endSeconds: 2.1 }],
       },
     ]);
   });
@@ -287,6 +348,36 @@ describe("caption burn service validation", () => {
       endSeconds: 4,
       activeWordIndex: 1,
     });
+  });
+
+  it("uses exact saved speech ranges for active-word overlays", () => {
+    const overlays = __captionBurnTestUtils.expandCaptionCueWordHighlightOverlays([{
+      index: 1,
+      startSeconds: 0,
+      endSeconds: 2,
+      text: "Grace wins",
+      wordTimings: [
+        { text: "Grace", startSeconds: 0.1, endSeconds: 0.55 },
+        { text: "wins", startSeconds: 1.15, endSeconds: 1.9 },
+      ],
+    }]);
+
+    expect(overlays.map((overlay) => [overlay.startSeconds, overlay.endSeconds])).toEqual([
+      [0.1, 0.55],
+      [1.15, 1.9],
+    ]);
+  });
+
+  it("builds an animated scale-and-fade graph for one-word pop exports", () => {
+    const graph = __captionBurnTestUtils.buildCaptionOverlayFilterGraph(
+      [{ index: 1, startSeconds: 1, endSeconds: 1.8, text: "Grace" }],
+      "H-h-132",
+      true,
+    );
+
+    expect(graph).toContain("scale=w=");
+    expect(graph).toContain("fade=t=in");
+    expect(graph).toContain("setpts=PTS+1.000/TB");
   });
 
   it("renders active words in the overlay SVG", () => {
@@ -422,6 +513,13 @@ describe("caption burn service validation", () => {
 
     expect(svg).toContain("KEEP");
     expect(svg).not.toContain("keep the faith");
+    expect(
+      __captionBurnTestUtils.formatCaptionOverlayText(
+        "keep the faith",
+        { fontScale: "regular", maxLines: 3, uppercase: false, verticalOffset: 0 },
+        "kinetic-pop",
+      ),
+    ).toBe("KEEP THE FAITH");
   });
 
   it("renders caption appearance in overlay SVG", () => {

@@ -6,8 +6,14 @@ import {
   isDesignableContentAssetType,
   readContentDesignStudioDocument,
 } from "@/lib/contentGraphicTemplates";
+import { validateScriptureReference } from "@/lib/contentIntegrity";
 import { prisma } from "@/lib/prisma";
+import {
+  createArtworkBrandFingerprint,
+  readArtworkBrandFingerprint,
+} from "@/server/branding/artworkBrandFingerprint";
 import { getBrandingSettings } from "@/server/branding/settings";
+import { readBrandingArtworkLogoDataUrl } from "@/server/branding/artworkLogo";
 
 function readMetadataString(value: unknown, key: string): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -18,6 +24,14 @@ function readMetadataString(value: unknown, key: string): string | null {
 function hasMetadataKey(value: unknown, key: string): boolean {
   return Boolean(value && typeof value === "object" && !Array.isArray(value)
     && Object.prototype.hasOwnProperty.call(value, key));
+}
+
+function withDisplayedTranslation(reference: string | null, translation: string | null): string | null {
+  if (!reference || !translation?.trim()) return reference;
+  const validation = validateScriptureReference(reference);
+  return validation.versionStatus === "MISSING"
+    ? `${reference} (${translation.trim().toUpperCase()})`
+    : reference;
 }
 
 export default async function ContentAssetStudioPage({
@@ -40,7 +54,12 @@ export default async function ContentAssetStudioPage({
         updatedAt: true,
         sermon: { select: { title: true } },
         contentOpportunity: {
-          select: { status: true, relatedScripture: true, sourceTranscriptExcerpt: true },
+          select: {
+            status: true,
+            relatedScripture: true,
+            scriptureTranslation: true,
+            sourceTranscriptExcerpt: true,
+          },
         },
         files: {
           orderBy: { sortOrder: "asc" },
@@ -60,6 +79,7 @@ export default async function ContentAssetStudioPage({
   ]);
 
   if (!asset || !isDesignableContentAssetType(asset.assetType)) notFound();
+  const logoDataUrl = await readBrandingArtworkLogoDataUrl(branding.churchLogoPath);
 
   const document = readContentDesignStudioDocument({
     metadata: asset.metadataJson,
@@ -67,9 +87,23 @@ export default async function ContentAssetStudioPage({
     title: asset.title,
     bodyContent: asset.bodyContent,
   });
+  const approvedBrandFingerprint = readArtworkBrandFingerprint(asset.metadataJson);
+  const currentBrandFingerprint = createArtworkBrandFingerprint({
+    churchName: branding.churchName,
+    primaryColor: branding.primaryBrandColor,
+    secondaryColor: branding.secondaryBrandColor,
+    fontFamily: branding.defaultFontFamily,
+    logoDataUrl,
+  });
   const relatedScripture = hasMetadataKey(asset.metadataJson, "relatedScripture")
     ? readMetadataString(asset.metadataJson, "relatedScripture")
     : asset.contentOpportunity?.relatedScripture ?? null;
+  const displayedRelatedScripture = asset.assetType === "SCRIPTURE_GRAPHIC"
+    ? withDisplayedTranslation(
+        relatedScripture,
+        asset.contentOpportunity?.scriptureTranslation ?? null,
+      )
+    : relatedScripture;
 
   return (
     <main className="page-shell stack-lg">
@@ -95,9 +129,14 @@ export default async function ContentAssetStudioPage({
           title: asset.title,
           bodyContent: asset.bodyContent ?? "",
           sermonTitle: asset.sermon.title,
-          relatedScripture,
+          relatedScripture: displayedRelatedScripture,
+          scriptureTranslation: asset.contentOpportunity?.scriptureTranslation ?? null,
           sourceTranscriptExcerpt: asset.contentOpportunity?.sourceTranscriptExcerpt ?? null,
           sourceOpportunityStatus: asset.contentOpportunity?.status ?? null,
+          brandingChangedSinceRender: Boolean(
+            approvedBrandFingerprint
+              && approvedBrandFingerprint !== currentBrandFingerprint,
+          ),
           design: document,
           updatedAt: asset.updatedAt.toISOString(),
           files: asset.files.map((file) => ({
@@ -114,6 +153,7 @@ export default async function ContentAssetStudioPage({
           primaryColor: branding.primaryBrandColor,
           secondaryColor: branding.secondaryBrandColor,
           fontFamily: branding.defaultFontFamily,
+          logoDataUrl,
         }}
       />
     </main>

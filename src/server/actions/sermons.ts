@@ -68,9 +68,12 @@ import {
 } from "@/server/regeneration/dependencies";
 import {
   buildEditableCaptionCuesFromTranscriptSegments,
+  buildTimedCaptionCuesFromTranscriptSegments,
+  buildTimedCaptionCuesFromTranscriptWords,
   buildSrtFromEditableCues,
   mergeCaptionCueTextOverrides,
   type EditableCaptionCue,
+  parseCaptionSourceWords,
   parseHashtagEditorInput,
   validateCaptionCuesFromTranscript,
   validateEditableCaptionCues,
@@ -90,6 +93,8 @@ import {
 } from "@/lib/prepareWorkflow";
 import { getQueuedMediaAssetsForRemoteBatchAction } from "@/lib/clipReview";
 import { buildClipGenerationRetryPlan } from "@/lib/clipGenerationRetry";
+import { parseContentOpportunityJobSummary } from "@/lib/contentOpportunityJobs";
+import { enqueueContentOpportunityGeneration } from "@/server/agents/contentOpportunityJobService";
 import { isStaleActiveProcessingJob } from "@/lib/pastorWorkflow";
 import { buildStaleClipOperationRecovery } from "@/lib/staleClipOperations";
 import { prunePostingPackageHistoryByClipIds } from "@/lib/postingPackages";
@@ -131,9 +136,13 @@ import {
   normalizeHookOverlayForClipDuration,
   normalizeSpeechCleanupIntensity,
   normalizeCaptionAppearanceSettings,
+  extractCaptionRevealMode,
+  normalizeCaptionRevealMode,
+  normalizeCaptionSyncOffsetSeconds,
   type BrollLayerConfig,
   type CaptionAppearanceSettings,
   type CaptionPosition,
+  type CaptionRevealMode,
   type SpeechCleanupIntensity,
 } from "@/lib/clipStudio";
 import { buildClipStudioPrepareAssetPlan } from "@/lib/clipStudioPrepare";
@@ -368,6 +377,8 @@ function processingJobTypeLabel(type: ProcessingJobType): string {
       return "Sermon processing";
     case "GENERATE_INTELLIGENCE":
       return "Sermon intelligence";
+    case "GENERATE_CONTENT_OPPORTUNITIES":
+      return "Content idea generation";
     case "RENDER_OVERLAY":
       return "Overlay render";
     case "QUALITY_REFRESH":
@@ -593,6 +604,8 @@ export type UpdateClipStudioEditsInput = {
   captionStylePresetId: string;
   captionPosition: string;
   captionAppearance: CaptionAppearanceSettings;
+  captionRevealMode?: CaptionRevealMode;
+  captionSyncOffsetSeconds?: number;
   hook: string;
   hookOverlay: {
     enabled: boolean;
@@ -658,6 +671,8 @@ export type PrepareClipStudioForPostingInput = {
     captionStylePresetId: string;
     captionPosition: string;
     captionAppearance: CaptionAppearanceSettings;
+    captionRevealMode?: CaptionRevealMode;
+    captionSyncOffsetSeconds?: number;
     hookOverlay: UpdateClipStudioEditsInput["hookOverlay"];
     brollLayer: BrollLayerConfig;
     speechCleanup: UpdateClipStudioEditsInput["speechCleanup"];
@@ -2243,6 +2258,38 @@ export async function retryFailedProcessingJobById(input: {
           : queuedJob.reusedExisting
             ? "Clip generation retry is already queued for the media worker."
             : "Clip generation retry queued for the media worker.",
+      };
+    }
+
+    if (job.type === "GENERATE_CONTENT_OPPORTUNITIES") {
+      const failedSummary = parseContentOpportunityJobSummary(job.generationSummary);
+      if (!failedSummary) {
+        return {
+          success: false,
+          message: "This content idea job has no safe retry instructions. Start a new generation request from Content Ideas.",
+        };
+      }
+      const queuedJob = await enqueueContentOpportunityGeneration({
+        sermonId,
+        request: failedSummary.request,
+      });
+      if (queuedJob.intentConflict) {
+        return {
+          success: false,
+          message: "A different content idea request is already running. Wait for it to finish before retrying this one.",
+        };
+      }
+      await appendPipelineLog(
+        sermonId,
+        `Manual content idea retry ${queuedJob.reusedExisting ? "reused" : "created"} processing job ${queuedJob.jobId}.`,
+      );
+      revalidatePath(`/sermons/${sermonId}`);
+      revalidatePath("/opportunities");
+      return {
+        success: true,
+        message: queuedJob.reusedExisting
+          ? "Content idea generation is already queued."
+          : "Content idea generation retry queued.",
       };
     }
 
@@ -4322,6 +4369,8 @@ export async function updateClipStudioEditsAction(
         };
   const previousSpeechCleanupEdits = normalizeSpeechCleanupEdits(captionDataRecord["speechCleanupEdits"], timing.durationSeconds);
   const previousCaptionAppearance = normalizeCaptionAppearanceSettings(captionDataRecord["captionAppearance"]);
+  const previousCaptionRevealMode = extractCaptionRevealMode(captionDataRecord);
+  const previousCaptionSyncOffsetSeconds = normalizeCaptionSyncOffsetSeconds(captionDataRecord["captionSyncOffsetSeconds"]);
   const previousBrollLayer = normalizeBrollLayerConfig(captionDataRecord["brollLayer"], timing.durationSeconds);
 
   const boundariesChanged =
@@ -4358,6 +4407,12 @@ export async function updateClipStudioEditsAction(
   const selectedTranscriptText = boundariesChanged
     ? selectedTranscriptSegments.map((segment) => segment.text.replace(/\s+/g, " ").trim()).filter(Boolean).join(" ")
     : clip.transcriptText;
+  const selectedTranscriptWords = boundariesChanged
+    ? parseCaptionSourceWords((await prisma.transcript.findUnique({
+        where: { sermonId: clip.sermonId },
+        select: { wordTimings: true },
+      }))?.wordTimings)
+    : [];
 
   if (boundariesChanged && !selectedTranscriptText) {
     return {
@@ -4374,11 +4429,25 @@ export async function updateClipStudioEditsAction(
   const platformCaption = input.platformCaption.trim();
   const transcriptCaptionCues =
     boundariesChanged
-      ? buildEditableCaptionCuesFromTranscriptSegments({
-          startTimeSeconds: timing.startSeconds,
-          endTimeSeconds: timing.endSeconds,
-          segments: selectedTranscriptSegments,
-        })
+      ? selectedTranscriptWords.length > 0
+        ? buildTimedCaptionCuesFromTranscriptWords({
+            startTimeSeconds: timing.startSeconds,
+            endTimeSeconds: timing.endSeconds,
+            words: selectedTranscriptWords,
+            maxWordsPerCue: input.captionRevealMode === "single-word" ? 1 : 5,
+            maxCueDurationSeconds: input.captionRevealMode === "single-word" ? 1.4 : 2.4,
+          })
+        : input.captionRevealMode === "single-word"
+          ? buildTimedCaptionCuesFromTranscriptSegments({
+              startTimeSeconds: timing.startSeconds,
+              endTimeSeconds: timing.endSeconds,
+              segments: selectedTranscriptSegments,
+            })
+          : buildEditableCaptionCuesFromTranscriptSegments({
+              startTimeSeconds: timing.startSeconds,
+              endTimeSeconds: timing.endSeconds,
+              segments: selectedTranscriptSegments,
+            })
       : [];
   const draftCaptionCues = boundariesChanged && transcriptCaptionCues.length > 0
     ? mergeCaptionCueTextOverrides({
@@ -4422,6 +4491,20 @@ export async function updateClipStudioEditsAction(
   const normalizedCaptionStylePresetId = normalizeClipStudioCaptionStylePresetId(input.captionStylePresetId);
   const normalizedCaptionPosition = normalizeClipStudioCaptionPosition(input.captionPosition);
   const normalizedCaptionAppearance = normalizeCaptionAppearanceSettings(input.captionAppearance);
+  const normalizedCaptionRevealMode = normalizeCaptionRevealMode(input.captionRevealMode);
+  const normalizedCaptionSyncOffsetSeconds = normalizeCaptionSyncOffsetSeconds(input.captionSyncOffsetSeconds);
+  const validatedClipDurationSeconds = timing.durationSeconds;
+  const shiftedCaptionStartsBeforeClip = normalizedCaptionCues.some(
+    (cue) => cue.startSeconds + normalizedCaptionSyncOffsetSeconds < -0.001,
+  );
+  const shiftedCaptionEndsAfterClip = normalizedCaptionCues.some(
+    (cue) => cue.endSeconds + normalizedCaptionSyncOffsetSeconds > validatedClipDurationSeconds + 0.001,
+  );
+  if (input.applyCaptionsToClip && (shiftedCaptionStartsBeforeClip || shiftedCaptionEndsAfterClip)) {
+    combinedWarnings.push(
+      "The caption sync offset moves a boundary word partly outside the clip. Review the opening and closing captions in the preview.",
+    );
+  }
   const hookOverlayVisibility = normalizeHookOverlayForClipDuration(input.hookOverlay, timing.durationSeconds);
   const normalizedHookOverlay = hookOverlayVisibility.hookOverlay;
   const normalizedBrollLayer = normalizeBrollLayerConfig(input.brollLayer, timing.durationSeconds);
@@ -4486,7 +4569,9 @@ export async function updateClipStudioEditsAction(
     captionDataRecord["applyCaptionsToClip"] !== input.applyCaptionsToClip ||
     captionDataRecord["captionStylePresetId"] !== normalizedCaptionStylePresetId ||
     captionDataRecord["captionPosition"] !== normalizedCaptionPosition ||
-    JSON.stringify(previousCaptionAppearance) !== JSON.stringify(normalizedCaptionAppearance);
+    JSON.stringify(previousCaptionAppearance) !== JSON.stringify(normalizedCaptionAppearance) ||
+    previousCaptionRevealMode !== normalizedCaptionRevealMode ||
+    previousCaptionSyncOffsetSeconds !== normalizedCaptionSyncOffsetSeconds;
   const hashtagChanged = previousHashtags.join("|") !== hashtags.join("|");
   const editorialHookChanged = clip.hook !== hookText;
   const visualHookChanged = JSON.stringify(previousHookOverlay) !== JSON.stringify(normalizedHookOverlay);
@@ -4546,12 +4631,15 @@ export async function updateClipStudioEditsAction(
         captionStylePresetId: normalizedCaptionStylePresetId,
         captionPosition: normalizedCaptionPosition,
         captionAppearance: normalizedCaptionAppearance,
-        wordHighlightEnabled: true,
+        captionRevealMode: normalizedCaptionRevealMode,
+        captionSyncOffsetSeconds: normalizedCaptionSyncOffsetSeconds,
+        wordHighlightEnabled: normalizedCaptionRevealMode === "active-word",
         cues: normalizedCaptionCues.map((cue) => ({
           index: cue.index,
           startSeconds: cue.startSeconds,
           endSeconds: cue.endSeconds,
           text: cue.text,
+          ...(cue.wordTimings ? { wordTimings: cue.wordTimings } : {}),
         })),
         hookOverlay: normalizedHookOverlay,
         brollLayer: normalizedBrollLayer,
@@ -5674,6 +5762,8 @@ export async function saveClipStudioDraftAction(
       captionStylePresetId: input.editPreview.captionStylePresetId,
       captionPosition: input.editPreview.captionPosition,
       captionAppearance: input.editPreview.captionAppearance,
+      captionRevealMode: input.editPreview.captionRevealMode,
+      captionSyncOffsetSeconds: input.editPreview.captionSyncOffsetSeconds,
       hook: input.editPreview.editorialHook,
       hookOverlay: input.editPreview.hookOverlay,
       brollLayer: input.editPreview.brollLayer,

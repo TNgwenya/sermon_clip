@@ -35,6 +35,7 @@ describe("dev reset plan", () => {
   it("keeps dependent records before the sermon parent in delete order", () => {
     expect(DEV_RESET_DELETE_ORDER[0]).toBe("ProcessingJob");
     expect(DEV_RESET_DELETE_ORDER).toContain("ClipCandidate");
+    expect(DEV_RESET_DELETE_ORDER).toContain("ContentFunnelEvent");
     expect(DEV_RESET_DELETE_ORDER).toContain("ContentOpportunity");
     expect(DEV_RESET_DELETE_ORDER.at(-1)).toBe("Sermon");
   });

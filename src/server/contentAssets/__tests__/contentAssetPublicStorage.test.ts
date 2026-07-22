@@ -32,6 +32,7 @@ import {
   buildContentAssetPublicUrl,
   isContentAssetPublicStorageConfigured,
   isTrustedContentAssetPublicUrl,
+  probeContentAssetPublicFile,
   readContentAssetPublicFile,
   uploadContentAssetFilesWhenConfigured,
   uploadContentAssetFileToR2,
@@ -204,5 +205,25 @@ describe("content asset public storage", () => {
       "not part of the configured media bucket",
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("probes a trusted public object with a one-byte range request", async () => {
+    configureR2();
+    const fetchMock = vi.fn(async () => new Response(Buffer.from("x"), {
+      status: 206,
+      headers: {
+        "content-length": "1",
+        "content-range": "bytes 0-0/42000",
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const publicUrl = "https://media.example.com/content-assets/asset-1/publishing/file-1.jpg";
+
+    await expect(probeContentAssetPublicFile(publicUrl)).resolves.toEqual({ byteLength: 42_000 });
+    expect(fetchMock).toHaveBeenCalledWith(publicUrl, {
+      cache: "no-store",
+      redirect: "error",
+      headers: { Range: "bytes=0-0" },
+    });
   });
 });

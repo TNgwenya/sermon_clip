@@ -57,7 +57,7 @@ export function ClipStudioPrepareButton({
           ? serverNeedsUpdate
             ? "Final video needs updating"
             : "Final video ready"
-          : "Ready to prepare";
+          : "Ready to prepare final video";
   const stateToneClass = transcriptReviewRequired
     ? "tone-warning"
     : serverIsPreparing
@@ -73,25 +73,58 @@ export function ClipStudioPrepareButton({
     ? "Preparation in progress"
     : hasPreparedMedia
       ? finalNeedsUpdate
-        ? "Update final video"
+        ? "Save & update final video"
         : "Rebuild final video"
       : clipStatus === "SUGGESTED" || clipStatus === "REJECTED"
         ? "Approve & prepare final video"
-        : "Prepare final video";
+        : "Save & prepare final video";
   const finalIsReady = hasPreparedMedia && !serverNeedsUpdate && !isDraftDirty && !serverIsPreparing;
+  const captionStyleLabel = editPreview.captionStylePresetId
+    .replaceAll("-", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+  const enabledCleanupCuts = editPreview.speechCleanupEdits?.cuts.filter((cut) => cut.enabled).length ?? 0;
+  const automaticPacingFeatures = [
+    editPreview.speechCleanup.removeDeadAir ? "dead air" : null,
+    editPreview.speechCleanup.tightenLongPauses ? "long pauses" : null,
+  ].filter((value): value is string => Boolean(value));
+  const pacingSummary = enabledCleanupCuts > 0
+    ? `${enabledCleanupCuts} reviewed pause adjustment${enabledCleanupCuts === 1 ? "" : "s"}`
+    : automaticPacingFeatures.length > 0
+      ? `Auto ${automaticPacingFeatures.join(" + ")}`
+      : "Original pacing kept";
+  const captionSummary = editPreview.applyCaptionsToClip
+    ? `${captionStyleLabel} · ${editPreview.captionRevealMode === "single-word"
+      ? "1 word pop"
+      : editPreview.captionRevealMode === "active-word"
+        ? "active word"
+        : "phrase"}${Math.abs(editPreview.captionSyncOffsetSeconds) >= 0.001
+      ? ` · ${editPreview.captionSyncOffsetSeconds > 0 ? "+" : ""}${editPreview.captionSyncOffsetSeconds.toFixed(2)}s sync`
+      : " · synced"}`
+    : "Captions off";
+  const hookSummary = editPreview.hookOverlay.enabled
+    ? `Hook on · ${editPreview.hookOverlay.text || editPreview.editorialHook || "text required"}`
+    : "Hook overlay off";
   const preparationChecklist = useMemo(
     () => [
-      `${exportSettings.selectedFormats.length} video format${exportSettings.selectedFormats.length === 1 ? "" : "s"}`,
-      editPreview.applyCaptionsToClip ? "On-video captions" : "Video without captions",
-      exportSettings.manualCropKeyframes.length > 0 ? "Custom framing" : "Selected framing",
+      `${exportSettings.selectedFormats.length} format${exportSettings.selectedFormats.length === 1 ? "" : "s"} · ${exportSettings.primaryFormat.replaceAll("_", " ")}`,
+      captionSummary,
+      hookSummary,
+      pacingSummary,
+      exportSettings.manualCropKeyframes.length > 0
+        ? "Custom framing"
+        : `${exportSettings.framingMode.replaceAll("_", " ")} framing`,
       brandingConfig.enabled && brandingConfig.preset !== "NO_BRANDING" ? "Church branding" : "Clean video",
     ],
     [
       brandingConfig.enabled,
       brandingConfig.preset,
-      editPreview.applyCaptionsToClip,
+      captionSummary,
       exportSettings.manualCropKeyframes.length,
+      exportSettings.framingMode,
+      exportSettings.primaryFormat,
       exportSettings.selectedFormats.length,
+      hookSummary,
+      pacingSummary,
     ],
   );
 
@@ -140,6 +173,8 @@ export function ClipStudioPrepareButton({
         captionStylePresetId: editPreview.captionStylePresetId,
         captionPosition: editPreview.captionPosition,
         captionAppearance: editPreview.captionAppearance,
+        captionRevealMode: editPreview.captionRevealMode,
+        captionSyncOffsetSeconds: editPreview.captionSyncOffsetSeconds,
         hookOverlay: editPreview.hookOverlay,
         brollLayer: editPreview.brollLayer,
         speechCleanup: editPreview.speechCleanup,
@@ -216,6 +251,18 @@ export function ClipStudioPrepareButton({
           {stateLabel}
         </span>
       </div>
+      <details className="clip-studio-final-summary">
+        <summary>
+          <span>
+            <strong>Final video checklist</strong>
+            <small>Review exactly what will be rendered</small>
+          </span>
+          <span aria-hidden="true">⌄</span>
+        </summary>
+        <ul>
+          {preparationChecklist.map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      </details>
       {finalIsReady && !isPending ? (
         <div className="clip-studio-ready-actions">
           <Link className="button primary" href={`/ready-to-post?clipId=${clipId}`}>
@@ -239,7 +286,7 @@ export function ClipStudioPrepareButton({
             disabled={isPending || !isDraftDirty || !canPrepare}
             aria-busy={isPending && activeOperation === "save"}
           >
-            {isPending && activeOperation === "save" ? "Saving draft…" : "Save draft"}
+            {isPending && activeOperation === "save" ? "Saving changes…" : "Save changes"}
           </button>
           <button
             type="button"

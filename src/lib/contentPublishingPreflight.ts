@@ -1,4 +1,13 @@
 import type { PostingPlatform } from "@/lib/postingDrafts";
+import {
+  deriveTranslationReviewState,
+  detectProductionCopyIssues,
+  extractQuoteTextFromContent,
+  validateScriptureReference,
+  verifyQuoteTextAgainstTranscript,
+  type TranscriptSegmentEvidence,
+  type TranslationReviewInput,
+} from "@/lib/contentIntegrity";
 
 export type ContentPublishingPreflightStatus = "READY" | "BLOCKED" | "REVIEW";
 
@@ -32,7 +41,11 @@ export type ContentPublishingPreflightInput = {
   automationMode?: "MANUAL" | "AUTOMATIC";
   metaConnectionReady?: boolean;
   sourceTranscriptExcerpt?: string | null;
+  sourceTranscriptSegments?: TranscriptSegmentEvidence[];
+  artworkText?: string | null;
+  relatedScripture?: string | null;
   translationNeedsReview?: boolean;
+  translationReview?: Omit<TranslationReviewInput, "translationNeedsReview">;
   files: ContentPublishingPreflightFile[];
 };
 
@@ -114,15 +127,63 @@ export function runContentPublishingPreflight(input: ContentPublishingPreflightI
     : check("platform", "BLOCKED", "Choose a publishing platform."));
 
   if (input.assetType === "QUOTE_GRAPHIC") {
-    checks.push(input.sourceTranscriptExcerpt?.trim()
+    const hasTranscriptEvidence = Boolean(
+      input.sourceTranscriptExcerpt?.trim()
+      || input.sourceTranscriptSegments?.some((segment) => (
+        typeof segment === "string" ? segment.trim() : segment.text?.trim()
+      )),
+    );
+    checks.push(hasTranscriptEvidence
       ? check("quote-evidence", "READY", "The pastor quote has transcript evidence.")
       : check("quote-evidence", "BLOCKED", "A pastor quote needs transcript evidence before publishing."));
+
+    if (input.artworkText?.trim()) {
+      const quoteIntegrity = verifyQuoteTextAgainstTranscript({
+        quoteText: extractQuoteTextFromContent(input.artworkText),
+        sourceTranscriptExcerpt: input.sourceTranscriptExcerpt,
+        transcriptSegments: input.sourceTranscriptSegments,
+      });
+      checks.push(quoteIntegrity.verified
+        ? check("quote-integrity", "READY", quoteIntegrity.message)
+        : check("quote-integrity", "BLOCKED", quoteIntegrity.message));
+    }
   }
 
-  if (input.translationNeedsReview) {
-    checks.push(check("translation", "BLOCKED", "Review and approve the translated wording before publishing."));
+  if (input.assetType === "SCRIPTURE_GRAPHIC") {
+    const scripture = validateScriptureReference(input.relatedScripture);
+    if (!scripture.valid) {
+      checks.push(check("scripture-reference", "BLOCKED", scripture.errors[0] ?? "Add a valid Bible reference."));
+    } else if (scripture.versionStatus === "UNRECOGNIZED") {
+      checks.push(check("scripture-reference", "BLOCKED", "Use a recognized Scripture translation/version label."));
+    } else if (scripture.versionStatus === "MISSING") {
+      checks.push(check("scripture-reference", "BLOCKED", "Choose and confirm the Scripture translation/version used for the verse wording."));
+    } else {
+      checks.push(check("scripture-reference", "READY", "The Bible reference and translation/version syntax are valid."));
+    }
+  }
+
+  const translationReview = deriveTranslationReviewState({
+    ...input.translationReview,
+    translationNeedsReview: input.translationNeedsReview,
+  });
+  if (translationReview.blocking) {
+    checks.push(check("translation", "BLOCKED", translationReview.message));
   } else {
-    checks.push(check("translation", "READY", "No unresolved translation review is recorded."));
+    checks.push(check("translation", "READY", translationReview.message));
+  }
+
+  if (input.artworkText !== undefined) {
+    const productionCopyIssues = detectProductionCopyIssues({
+      artworkText: input.artworkText,
+      caption: input.caption,
+    });
+    checks.push(productionCopyIssues.length > 0
+      ? check(
+          "production-copy",
+          "BLOCKED",
+          "Remove internal production instructions or placeholders from the artwork and caption before publishing.",
+        )
+      : check("production-copy", "READY", "Artwork and caption contain no production placeholders or internal directions."));
   }
 
   if (requiresPreparedMedia) {

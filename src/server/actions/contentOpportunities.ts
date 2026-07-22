@@ -2,19 +2,42 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { requestContentOpportunityGeneration } from "@/server/agents/contentOpportunityJobService";
 import {
-  generateContentOpportunities,
-  regenerateContentOpportunities,
-  type OpportunityGenerationResult,
-} from "@/server/agents/contentMultiplicationService";
-import { CONTENT_OPPORTUNITY_TYPES } from "@/server/ai/contentOpportunitySchema";
+  CONTENT_OPPORTUNITY_TYPES,
+  type ContentOpportunityType,
+} from "@/server/ai/contentOpportunitySchema";
 import { getContentPackPreset } from "@/lib/contentPackPresets";
+import {
+  formatContentOpportunityGenerationResult,
+  type ContentOpportunityJobRequest,
+} from "@/lib/contentOpportunityJobs";
+import { createOpportunityRevision } from "@/server/contentRevisionService";
+import { recordContentFunnelEvent } from "@/server/contentFunnelTelemetry";
+import {
+  detectProductionCopyIssues,
+  extractQuoteTextFromContent,
+  findQuoteTranscriptSegmentSpan,
+  validateScriptureReference,
+  verifyQuoteTextAgainstTranscript,
+  type QuoteTranscriptSegmentSpan,
+} from "@/lib/contentIntegrity";
+import {
+  convertLegacyBodyContent,
+  parseContentOpportunityContractForType,
+  resolveContentOpportunityContract,
+  type ContentOpportunityContract,
+} from "@/lib/contentOpportunityContracts";
 
 export type ContentOpportunityActionState = {
   success: boolean;
   message: string;
+  queued?: boolean;
+  jobId?: string;
+  progress?: "QUEUED" | "RUNNING" | "COMPLETED";
 };
 
 const contentOpportunityTypeSchema = z.enum(CONTENT_OPPORTUNITY_TYPES);
@@ -34,25 +57,170 @@ const updateOpportunitySchema = z.object({
   title: z.string().trim().min(1).max(200),
   shortDescription: z.string().trim().max(400).optional(),
   content: z.string().trim().min(1).max(10000),
+  relatedScripture: z.string().trim().max(200).nullable().optional(),
+  scriptureTranslation: z.string().trim().max(20).nullable().optional(),
+  translationConfirmed: z.boolean().optional(),
 });
 
-function buildGenerationMessage(
-  result: OpportunityGenerationResult,
-  targetType?: string,
-): string {
-  if (result.reusedExistingOpportunities) {
-    return targetType
-      ? `Existing ${targetType} opportunities were reused.`
-      : "Existing content opportunities were reused.";
+function asRevisionJson(value: Prisma.JsonValue | null | undefined): Prisma.InputJsonValue | undefined {
+  return value === null || value === undefined ? undefined : value as Prisma.InputJsonValue;
+}
+
+function scriptureReferenceWithVersion(
+  reference: string | null | undefined,
+  version: string | null | undefined,
+): string | null {
+  const trimmedReference = reference?.trim();
+  if (!trimmedReference) return null;
+  const trimmedVersion = version?.trim().toUpperCase();
+  return trimmedVersion ? `${trimmedReference} (${trimmedVersion})` : trimmedReference;
+}
+
+function contentContractJson(contract: ContentOpportunityContract): Prisma.InputJsonValue {
+  return contract as unknown as Prisma.InputJsonValue;
+}
+
+function sourceSegmentIds(value: Prisma.JsonValue | null | undefined): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+    : [];
+}
+
+function buildApprovedContentContract(input: {
+  opportunityType: ContentOpportunityType;
+  structuredContent: Prisma.JsonValue | null;
+  title: string;
+  content: string;
+  sourceTranscriptExcerpt: string | null;
+  sourceTranscriptId: string | null;
+  sourceTranscriptSegmentIds: Prisma.JsonValue | null;
+  sourceStartTimeSeconds: number | null;
+  sourceEndTimeSeconds: number | null;
+  relatedScripture: string | null;
+  scriptureTranslation: string | null;
+  suggestedPlatform: string | null;
+  approvedAt: Date;
+}): ContentOpportunityContract {
+  const resolved = resolveContentOpportunityContract({
+    opportunityType: input.opportunityType,
+    structuredContent: input.structuredContent,
+    bodyContent: input.content,
+    title: input.title,
+    sourceTranscriptExcerpt: input.sourceTranscriptExcerpt,
+    relatedScripture: scriptureReferenceWithVersion(input.relatedScripture, input.scriptureTranslation),
+    suggestedPlatform: input.suggestedPlatform,
+  }).contract;
+  const reviewedContract = { ...resolved };
+  delete reviewedContract.legacyConversion;
+  const verification = {
+    status: "VERIFIED" as const,
+    method: "TRANSCRIPT_MATCH" as const,
+    verifiedAt: input.approvedAt.toISOString(),
+    verifiedBy: "opportunity-review",
+    note: "The approved wording was matched against the stored transcript evidence.",
+  };
+
+  if (resolved.family === "QUOTE_GRAPHIC") {
+    const transcriptEvidence = {
+      kind: "TRANSCRIPT_SPAN" as const,
+      transcriptId: input.sourceTranscriptId,
+      segmentIds: sourceSegmentIds(input.sourceTranscriptSegmentIds),
+      startMs: input.sourceStartTimeSeconds === null ? null : Math.round(input.sourceStartTimeSeconds * 1000),
+      endMs: input.sourceEndTimeSeconds === null ? null : Math.round(input.sourceEndTimeSeconds * 1000),
+      excerpt: input.sourceTranscriptExcerpt?.trim() || input.content,
+      speaker: null,
+      verification,
+    };
+    const firstTranscriptIndex = resolved.sourceEvidence.findIndex((item) => item.kind === "TRANSCRIPT_SPAN");
+    const sourceEvidence = firstTranscriptIndex >= 0
+      ? resolved.sourceEvidence.map((item, index) => index === firstTranscriptIndex ? transcriptEvidence : item)
+      : [transcriptEvidence, ...resolved.sourceEvidence];
+    return parseContentOpportunityContractForType(input.opportunityType, {
+      ...reviewedContract,
+      sourceEvidence,
+      quote: {
+        ...resolved.quote,
+        text: extractQuoteTextFromContent(input.content) ?? input.content,
+        kind: "VERBATIM_SERMON",
+      },
+    });
   }
 
-  const archiveText = result.archivedCount > 0
-    ? ` Archived ${result.archivedCount} older draft${result.archivedCount === 1 ? "" : "s"}.`
-    : "";
+  if (resolved.family === "SCRIPTURE_GRAPHIC") {
+    const validated = validateScriptureReference(scriptureReferenceWithVersion(
+      input.relatedScripture,
+      input.scriptureTranslation,
+    ));
+    const scripture = {
+      reference: validated.normalizedReference,
+      verseText: input.content,
+      translation: validated.version,
+      verification: {
+        referenceStatus: "VERIFIED" as const,
+        verseTextStatus: "VERIFIED" as const,
+        translationStatus: "VERIFIED" as const,
+        method: "MANUAL_REVIEW" as const,
+        verifiedAt: input.approvedAt.toISOString(),
+        verifiedBy: "opportunity-review",
+        note: "A reviewer confirmed the reference, verse wording, and selected translation.",
+      },
+    };
+    return parseContentOpportunityContractForType(input.opportunityType, {
+      ...reviewedContract,
+      scripture,
+      sourceEvidence: [
+        ...resolved.sourceEvidence.filter((item) => item.kind !== "SCRIPTURE"),
+        { kind: "SCRIPTURE", scripture },
+      ],
+      artwork: { ...resolved.artwork, primaryText: input.content },
+    });
+  }
 
-  return targetType
-    ? `Generated ${result.opportunityCount} ${targetType} opportunit${result.opportunityCount === 1 ? "y" : "ies"}.${archiveText}`
-    : `Generated ${result.opportunityCount} content opportunit${result.opportunityCount === 1 ? "y" : "ies"}.${archiveText}`;
+  return parseContentOpportunityContractForType(input.opportunityType, reviewedContract);
+}
+
+async function submitContentOpportunityGeneration(
+  sermonId: string,
+  request: ContentOpportunityJobRequest,
+): Promise<ContentOpportunityActionState> {
+  const requested = await requestContentOpportunityGeneration({ sermonId, request });
+  if (requested.execution === "INLINE") {
+    return {
+      success: true,
+      message: formatContentOpportunityGenerationResult(requested.result, request.targetType),
+      jobId: requested.jobId,
+      progress: "COMPLETED",
+    };
+  }
+  if (requested.intentConflict) {
+    return {
+      success: false,
+      message: requested.progress === "COMPLETED"
+        ? "A different content idea request finished before this one could be queued. Review its results, then try this request again if it is still needed."
+        : "A different content idea request is already queued or running for this sermon. Wait for it to finish, then try this request again.",
+      queued: false,
+      jobId: requested.jobId,
+      progress: requested.progress,
+    };
+  }
+  if (requested.progress === "COMPLETED") {
+    return {
+      success: true,
+      message: "This exact content idea request has completed. Refresh to review its validated results and any reported shortfalls.",
+      queued: false,
+      jobId: requested.jobId,
+      progress: "COMPLETED",
+    };
+  }
+  return {
+    success: true,
+    message: requested.reusedExisting
+      ? "This exact content idea request is already queued or running. No duplicate was created; refresh to see its latest progress."
+      : "Content idea generation is queued and is not complete yet. Keep the background worker running; refresh to see progress and validated drafts when the job finishes.",
+    queued: true,
+    jobId: requested.jobId,
+    progress: requested.progress,
+  };
 }
 
 function revalidateOpportunityPaths(sermonId: string): void {
@@ -70,9 +238,9 @@ export async function generateContentOpportunitiesAction(
   }
 
   try {
-    const result = await generateContentOpportunities(sermonId);
+    const result = await submitContentOpportunityGeneration(sermonId, { mode: "GENERATE" });
     revalidateOpportunityPaths(sermonId);
-    return { success: true, message: buildGenerationMessage(result) };
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown generation error.";
     return { success: false, message };
@@ -93,14 +261,16 @@ export async function generateContentPackAction(
   }
 
   try {
-    const result = await regenerateContentOpportunities(sermonId, {
+    const result = await submitContentOpportunityGeneration(sermonId, {
+      mode: "CONTENT_PACK",
+      presetId: preset.id,
       quantities: preset.quantities,
       replaceDefaultQuantities: true,
     });
     revalidateOpportunityPaths(sermonId);
     return {
-      success: true,
-      message: `${preset.label}: generated ${result.opportunityCount} draft${result.opportunityCount === 1 ? "" : "s"} ready for review.`,
+      ...result,
+      message: `${preset.label}: ${result.message}`,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Content pack generation failed.";
@@ -116,9 +286,9 @@ export async function regenerateContentOpportunitiesAction(
   }
 
   try {
-    const result = await regenerateContentOpportunities(sermonId);
+    const result = await submitContentOpportunityGeneration(sermonId, { mode: "REGENERATE" });
     revalidateOpportunityPaths(sermonId);
-    return { success: true, message: buildGenerationMessage(result) };
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown regeneration error.";
     return { success: false, message };
@@ -139,15 +309,13 @@ export async function regenerateContentOpportunityTypeAction(
   }
 
   try {
-    const result = await regenerateContentOpportunities(sermonId, {
+    const result = await submitContentOpportunityGeneration(sermonId, {
+      mode: "REGENERATE_TYPE",
       targetType: parsedType.data,
     });
 
     revalidateOpportunityPaths(sermonId);
-    return {
-      success: true,
-      message: buildGenerationMessage(result, parsedType.data),
-    };
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown regeneration error.";
     return { success: false, message };
@@ -175,9 +343,20 @@ export async function updateContentOpportunityStatusAction(
         id: true,
         status: true,
         opportunityType: true,
+        title: true,
+        shortDescription: true,
         sourceTranscriptExcerpt: true,
+        sourceTranscriptSegmentIds: true,
+        sourceStartTimeSeconds: true,
+        sourceEndTimeSeconds: true,
+        suggestedPlatform: true,
+        relatedScripture: true,
+        scriptureTranslation: true,
+        scriptureVerifiedAt: true,
+        translationReviewState: true,
         editedContent: true,
         bodyContent: true,
+        structuredContentJson: true,
         approvedContent: true,
       },
     });
@@ -197,24 +376,155 @@ export async function updateContentOpportunityStatusAction(
       };
     }
 
-    if (
-      parsedStatus.data === "APPROVED" &&
-      current.opportunityType === "QUOTE_GRAPHIC" &&
-      !current.sourceTranscriptExcerpt?.trim()
-    ) {
-      return { success: false, message: "A pastor quote cannot be approved without transcript evidence." };
+    const approvedContent = current.editedContent?.trim() || current.bodyContent;
+    let approvedQuoteEvidence: QuoteTranscriptSegmentSpan | null = null;
+    if (parsedStatus.data === "APPROVED") {
+      if (current.opportunityType === "QUOTE_GRAPHIC") {
+        const transcriptSegments = await prisma.transcriptSegment.findMany({
+          where: { sermonId },
+          orderBy: [
+            { startTimeSeconds: "asc" },
+            { endTimeSeconds: "asc" },
+          ],
+          select: {
+            id: true,
+            transcriptId: true,
+            text: true,
+            startTimeSeconds: true,
+            endTimeSeconds: true,
+          },
+        });
+        const quoteText = extractQuoteTextFromContent(approvedContent);
+        approvedQuoteEvidence = findQuoteTranscriptSegmentSpan({
+          quoteText,
+          transcriptSegments,
+        });
+        if (!approvedQuoteEvidence) {
+          const quoteIntegrity = verifyQuoteTextAgainstTranscript({
+            quoteText,
+            transcriptSegments,
+          });
+          return { success: false, message: quoteIntegrity.message };
+        }
+      }
+
+      if (current.opportunityType === "SCRIPTURE_GRAPHIC") {
+        const scripture = validateScriptureReference(scriptureReferenceWithVersion(
+          current.relatedScripture,
+          current.scriptureTranslation,
+        ));
+        if (!scripture.valid) {
+          return {
+            success: false,
+            message: scripture.errors[0] ?? "Add a valid Bible reference before approval.",
+          };
+        }
+        if (scripture.versionStatus !== "RECOGNIZED") {
+          return {
+            success: false,
+            message: "Choose a recognized Scripture translation before approval.",
+          };
+        }
+        if (current.translationReviewState !== "APPROVED") {
+          return {
+            success: false,
+            message: "Confirm that the verse wording matches the selected translation before approval.",
+          };
+        }
+      }
+
+      if (
+        (current.opportunityType === "QUOTE_GRAPHIC" || current.opportunityType === "SCRIPTURE_GRAPHIC")
+        && detectProductionCopyIssues({ artworkText: approvedContent }).length > 0
+      ) {
+        return {
+          success: false,
+          message: "Remove internal design directions or placeholders from the artwork text before approval.",
+        };
+      }
     }
 
-    await prisma.contentOpportunity.update({
-      where: { id: current.id },
-      data: {
-        status: parsedStatus.data,
-        approvedContent:
-          parsedStatus.data === "APPROVED"
-            ? current.editedContent?.trim() || current.bodyContent
-            : current.approvedContent,
-      },
+    let approvedRevisionId: string | null = null;
+    await prisma.$transaction(async (tx) => {
+      if (parsedStatus.data === "APPROVED") {
+        const approvedAt = new Date();
+        const approvedContract = buildApprovedContentContract({
+          opportunityType: current.opportunityType,
+          structuredContent: current.structuredContentJson,
+          title: current.title,
+          content: approvedContent,
+          sourceTranscriptExcerpt: approvedQuoteEvidence?.excerpt ?? current.sourceTranscriptExcerpt,
+          sourceTranscriptId: approvedQuoteEvidence?.transcriptId ?? null,
+          sourceTranscriptSegmentIds: approvedQuoteEvidence?.segmentIds ?? current.sourceTranscriptSegmentIds,
+          sourceStartTimeSeconds: approvedQuoteEvidence?.startTimeSeconds ?? current.sourceStartTimeSeconds,
+          sourceEndTimeSeconds: approvedQuoteEvidence?.endTimeSeconds ?? current.sourceEndTimeSeconds,
+          relatedScripture: current.relatedScripture,
+          scriptureTranslation: current.scriptureTranslation,
+          suggestedPlatform: current.suggestedPlatform,
+          approvedAt,
+        });
+        const approvedContractJson = contentContractJson(approvedContract);
+        const revision = await createOpportunityRevision(tx, {
+          contentOpportunityId: current.id,
+          title: current.title,
+          shortDescription: current.shortDescription,
+          content: approvedContent,
+          structuredContentJson: approvedContractJson,
+          sourceTranscriptExcerpt: approvedQuoteEvidence?.excerpt ?? current.sourceTranscriptExcerpt,
+          sourceTranscriptSegmentIds: approvedQuoteEvidence?.segmentIds
+            ?? asRevisionJson(current.sourceTranscriptSegmentIds),
+          sourceStartTimeSeconds: approvedQuoteEvidence?.startTimeSeconds ?? current.sourceStartTimeSeconds,
+          sourceEndTimeSeconds: approvedQuoteEvidence?.endTimeSeconds ?? current.sourceEndTimeSeconds,
+          relatedScripture: current.relatedScripture,
+          scriptureTranslation: current.scriptureTranslation,
+          scriptureVerifiedAt: current.scriptureVerifiedAt,
+          translationReviewState: current.translationReviewState,
+          approvalState: "APPROVED",
+          createdBy: "opportunity-review",
+          approvedBy: "opportunity-review",
+          approvedAt,
+        });
+        approvedRevisionId = revision.id;
+        await tx.contentOpportunity.update({
+          where: { id: current.id },
+          data: {
+            status: "APPROVED",
+            approvedContent,
+            structuredContentJson: approvedContractJson,
+            ...(current.opportunityType === "SCRIPTURE_GRAPHIC" ? { scriptureVerifiedAt: approvedAt } : {}),
+            ...(approvedQuoteEvidence ? {
+              sourceTranscriptExcerpt: approvedQuoteEvidence.excerpt,
+              sourceTranscriptSegmentIds: approvedQuoteEvidence.segmentIds,
+              sourceStartTimeSeconds: approvedQuoteEvidence.startTimeSeconds,
+              sourceEndTimeSeconds: approvedQuoteEvidence.endTimeSeconds,
+            } : {}),
+            approvedRevisionId: revision.id,
+          },
+        });
+        return;
+      }
+
+      await tx.contentOpportunity.update({
+        where: { id: current.id },
+        data: { status: parsedStatus.data },
+      });
     });
+
+    if (parsedStatus.data === "APPROVED") {
+      await recordContentFunnelEvent({
+        eventType: "APPROVED",
+        sermonId,
+        opportunityId: current.id,
+        dedupeKey: approvedRevisionId
+          ? `content-approved:${approvedRevisionId}`
+          : `content-approved:${current.id}:${Date.now()}`,
+        metadata: {
+          opportunityType: current.opportunityType,
+          fromStatus: current.status,
+          toStatus: "APPROVED",
+        },
+      });
+    }
 
     revalidateOpportunityPaths(sermonId);
     return { success: true, message: `Opportunity marked as ${parsedStatus.data}.` };
@@ -239,23 +549,112 @@ export async function updateContentOpportunityContentAction(
         id: parsed.data.opportunityId,
         sermonId: parsed.data.sermonId,
       },
-      select: { id: true },
+      select: {
+        id: true,
+        status: true,
+        opportunityType: true,
+        title: true,
+        suggestedPlatform: true,
+        sourceTranscriptExcerpt: true,
+        sourceTranscriptSegmentIds: true,
+        sourceStartTimeSeconds: true,
+        sourceEndTimeSeconds: true,
+        relatedScripture: true,
+        scriptureTranslation: true,
+        scriptureVerifiedAt: true,
+        translationReviewState: true,
+        structuredContentJson: true,
+      },
     });
 
     if (!existing) {
       return { success: false, message: "Opportunity not found." };
     }
 
-    await prisma.contentOpportunity.update({
-      where: { id: existing.id },
-      data: {
+    const relatedScripture = parsed.data.relatedScripture === undefined
+      ? existing.relatedScripture
+      : parsed.data.relatedScripture?.trim() || null;
+    const scriptureTranslation = parsed.data.scriptureTranslation === undefined
+      ? existing.scriptureTranslation
+      : parsed.data.scriptureTranslation?.trim().toUpperCase() || null;
+    const translationReviewState = parsed.data.translationConfirmed === undefined
+      ? existing.translationReviewState
+      : parsed.data.translationConfirmed ? "APPROVED" as const : "REVIEW_REQUIRED" as const;
+    const editedContract = convertLegacyBodyContent({
+      opportunityType: existing.opportunityType,
+      bodyContent: parsed.data.content,
+      title: parsed.data.title,
+      sourceTranscriptExcerpt: existing.sourceTranscriptExcerpt,
+      relatedScripture: scriptureReferenceWithVersion(relatedScripture, scriptureTranslation),
+      suggestedPlatform: existing.suggestedPlatform,
+    }).contract;
+    const editedContractJson = contentContractJson(editedContract);
+
+    let editedRevisionId: string | null = null;
+    await prisma.$transaction(async (tx) => {
+      const revision = await createOpportunityRevision(tx, {
+        contentOpportunityId: existing.id,
         title: parsed.data.title,
         shortDescription: parsed.data.shortDescription?.trim() || null,
-        editedContent: parsed.data.content,
-        isManuallyEdited: true,
-        status: "NEEDS_REVIEW",
+        content: parsed.data.content,
+        structuredContentJson: editedContractJson,
+        sourceTranscriptExcerpt: existing.sourceTranscriptExcerpt,
+        sourceTranscriptSegmentIds: asRevisionJson(existing.sourceTranscriptSegmentIds),
+        sourceStartTimeSeconds: existing.sourceStartTimeSeconds,
+        sourceEndTimeSeconds: existing.sourceEndTimeSeconds,
+        relatedScripture,
+        scriptureTranslation,
+        scriptureVerifiedAt: existing.scriptureVerifiedAt,
+        translationReviewState,
+        approvalState: "REAPPROVAL_REQUIRED",
+        createdBy: "opportunity-editor",
+      });
+      editedRevisionId = revision.id;
+      await tx.contentOpportunity.update({
+        where: { id: existing.id },
+        data: {
+          title: parsed.data.title,
+          shortDescription: parsed.data.shortDescription?.trim() || null,
+          editedContent: parsed.data.content,
+          structuredContentJson: editedContractJson,
+          relatedScripture,
+          scriptureTranslation,
+          translationReviewState,
+          scriptureVerifiedAt: translationReviewState === "APPROVED" ? new Date() : null,
+          isManuallyEdited: true,
+          status: "NEEDS_REVIEW",
+        },
+      });
+    });
+
+    await recordContentFunnelEvent({
+      eventType: "EDITED",
+      sermonId: parsed.data.sermonId,
+      opportunityId: existing.id,
+      dedupeKey: editedRevisionId
+        ? `content-edited:${editedRevisionId}`
+        : `content-edited:${existing.id}:${Date.now()}`,
+      metadata: {
+        opportunityType: existing.opportunityType,
+        fromStatus: existing.status,
+        toStatus: "NEEDS_REVIEW",
       },
     });
+    if (existing.status === "APPROVED" || existing.status === "USED") {
+      await recordContentFunnelEvent({
+        eventType: "REAPPROVAL_REQUIRED",
+        sermonId: parsed.data.sermonId,
+        opportunityId: existing.id,
+        dedupeKey: editedRevisionId
+          ? `content-reapproval-required:${editedRevisionId}`
+          : `content-reapproval-required:${existing.id}:${Date.now()}`,
+        metadata: {
+          opportunityType: existing.opportunityType,
+          fromStatus: existing.status,
+          toStatus: "NEEDS_REVIEW",
+        },
+      });
+    }
 
     revalidateOpportunityPaths(parsed.data.sermonId);
     return { success: true, message: "Opportunity content updated." };
@@ -263,4 +662,24 @@ export async function updateContentOpportunityContentAction(
     const message = error instanceof Error ? error.message : "Content update failed.";
     return { success: false, message };
   }
+}
+
+export async function recordContentOpportunityPreviewAction(
+  sermonId: string,
+  opportunityId: string,
+): Promise<{ success: boolean }> {
+  if (!sermonId?.trim() || !opportunityId?.trim()) return { success: false };
+  const opportunity = await prisma.contentOpportunity.findFirst({
+    where: { id: opportunityId, sermonId },
+    select: { id: true, opportunityType: true },
+  });
+  if (!opportunity) return { success: false };
+  await recordContentFunnelEvent({
+    eventType: "PREVIEWED",
+    sermonId,
+    opportunityId,
+    dedupeKey: `content-previewed:${opportunityId}`,
+    metadata: { opportunityType: opportunity.opportunityType },
+  });
+  return { success: true };
 }

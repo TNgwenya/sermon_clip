@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 
 import styles from "@/app/ready-to-post/generated-content-assets.module.css";
@@ -21,7 +21,21 @@ import {
 } from "@/lib/contentPublishingPreflight";
 import type { PublishingServiceHealth } from "@/lib/publishingServiceHealth";
 import { isDesignableContentAssetType } from "@/lib/contentGraphicTemplates";
+import {
+  CONTENT_ASSET_SCHEDULED_EVENT,
+  buildContentScheduleSuccessCopy,
+  getContentScheduleValidationMessage,
+  resolveWrappedDialogFocusIndex,
+  scheduledPostElementId,
+  type ContentAssetScheduleCreatedDetail,
+} from "@/lib/contentScheduleUi";
 import { ContentAssetComposer } from "@/app/opportunities/content-asset-composer";
+import { ContentIdeasPostingGuide } from "@/components/content-ideas-posting-guide";
+import {
+  buildOpportunityHref,
+  buildScheduledPostHref,
+  hasApprovedAssetPublishingRevision,
+} from "@/lib/contentWorkflowUi";
 import { scheduleContentAssetAction } from "@/server/actions/contentAssets";
 
 export type ReadyContentAsset = {
@@ -37,6 +51,14 @@ export type ReadyContentAsset = {
   caption: string | null;
   hashtags: string[];
   callToAction: string | null;
+  currentRevisionId: string | null;
+  approvedRevisionId: string | null;
+  currentRevision: {
+    revisionNumber: number;
+    approvalState: "DRAFT" | "APPROVED" | "REAPPROVAL_REQUIRED";
+    approvedAt: string | null;
+  } | null;
+  sourceOpportunityStatus: "DRAFT" | "NEEDS_REVIEW" | "APPROVED" | "REJECTED" | "USED" | "ARCHIVED" | null;
   files: Array<{
     id: string;
     fileName: string;
@@ -66,6 +88,7 @@ type ContentAssetScheduleModalProps = {
   publishingServiceHealth?: Pick<PublishingServiceHealth, "status" | "dryRun" | "summary"> | null;
   open: boolean;
   onClose: () => void;
+  onScheduled: (detail: ContentAssetScheduleCreatedDetail) => void;
 };
 
 type ContentAssetAutomationMode = "MANUAL" | "AUTOMATIC";
@@ -100,8 +123,11 @@ function ContentAssetScheduleModal({
   publishingServiceHealth,
   open,
   onClose,
+  onScheduled,
 }: ContentAssetScheduleModalProps) {
   const router = useRouter();
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const initialFocusRef = useRef<HTMLButtonElement | null>(null);
   const [isPending, startTransition] = useTransition();
   const [platform, setPlatform] = useState<ContentPublishingPlatform>(asset.platform ?? "INSTAGRAM");
   const [automationMode, setAutomationMode] = useState<ContentAssetAutomationMode>("MANUAL");
@@ -146,11 +172,103 @@ function ContentAssetScheduleModal({
     : null;
   const needsPublicUpload = automationMode === "AUTOMATIC"
     && publishingFiles.some((file) => !/^https:\/\//i.test(file.publicUrl?.trim() ?? ""));
+  const validationMessage = getContentScheduleValidationMessage({
+    scheduledFor,
+    timezone,
+    title,
+    caption,
+  });
+  const blockingMessage = automaticBlocker ?? validationMessage;
+
+  useEffect(() => {
+    if (!open || typeof document === "undefined") return;
+
+    const returnFocusTo = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const body = document.body;
+    const root = document.documentElement;
+    const previousBodyOverflow = body.style.overflow;
+    const previousBodyPaddingRight = body.style.paddingRight;
+    const previousRootOverflow = root.style.overflow;
+    const scrollbarWidth = Math.max(0, window.innerWidth - root.clientWidth);
+    const bodyPaddingRight = Number.parseFloat(window.getComputedStyle(body).paddingRight) || 0;
+    const backdrop = dialogRef.current?.parentElement ?? null;
+    const backgroundState = Array.from(body.children)
+      .filter((element): element is HTMLElement => element instanceof HTMLElement && element !== backdrop)
+      .map((element) => ({ element, inert: element.inert }));
+
+    body.style.overflow = "hidden";
+    root.style.overflow = "hidden";
+    if (scrollbarWidth > 0) body.style.paddingRight = `${bodyPaddingRight + scrollbarWidth}px`;
+    backgroundState.forEach(({ element }) => {
+      element.inert = true;
+    });
+
+    const focusFrame = window.requestAnimationFrame(() => initialFocusRef.current?.focus());
+
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      body.style.overflow = previousBodyOverflow;
+      body.style.paddingRight = previousBodyPaddingRight;
+      root.style.overflow = previousRootOverflow;
+      backgroundState.forEach(({ element, inert }) => {
+        element.inert = inert;
+      });
+      window.requestAnimationFrame(() => {
+        if (returnFocusTo?.isConnected) returnFocusTo.focus();
+      });
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || typeof document === "undefined") return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        if (!isPending) {
+          event.preventDefault();
+          onClose();
+        } else {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusableElements = Array.from(dialog.querySelectorAll<HTMLElement>([
+        "a[href]",
+        "button:not([disabled])",
+        "input:not([disabled])",
+        "select:not([disabled])",
+        "textarea:not([disabled])",
+        "[tabindex]:not([tabindex='-1'])",
+      ].join(","))).filter((element) => (
+        element.getAttribute("aria-hidden") !== "true"
+        && window.getComputedStyle(element).visibility !== "hidden"
+      ));
+      const currentIndex = focusableElements.indexOf(document.activeElement as HTMLElement);
+      const targetIndex = resolveWrappedDialogFocusIndex(currentIndex, focusableElements.length, event.shiftKey);
+      if (targetIndex === null) return;
+      event.preventDefault();
+      focusableElements[targetIndex]?.focus();
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isPending, onClose, open]);
 
   if (!open || typeof document === "undefined") return null;
 
   function schedule() {
     setFeedback(null);
+    if (blockingMessage) {
+      setFeedback({ message: blockingMessage, success: false });
+      return;
+    }
     startTransition(async () => {
       const result = await scheduleContentAssetAction({
         assetId: asset.id,
@@ -164,10 +282,23 @@ function ContentAssetScheduleModal({
         automationMode,
         socialAccountId: automationMode === "AUTOMATIC" ? socialAccountId : undefined,
       });
-      setFeedback({ message: result.message, success: result.success });
-      if (!result.success) return;
+      if (!result.success || !result.scheduledPostId) {
+        setFeedback({
+          message: result.success ? "The post was scheduled, but its calendar entry could not be confirmed. Refresh the publishing desk." : result.message,
+          success: false,
+        });
+        return;
+      }
+      const detail: ContentAssetScheduleCreatedDetail = {
+        scheduledPostId: result.scheduledPostId,
+        scheduledFor,
+        timezone,
+        automationMode,
+        title: title.trim(),
+        platformLabel: formatContentPublishingPlatform(platform),
+      };
       router.refresh();
-      onClose();
+      onScheduled(detail);
     });
   }
 
@@ -175,12 +306,28 @@ function ContentAssetScheduleModal({
     <div className="feature-modal-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget && !isPending) onClose();
     }}>
-      <section className="feature-modal content-asset-schedule-modal" role="dialog" aria-modal="true" aria-labelledby="content-asset-schedule-title">
-        <button type="button" className="feature-modal-close" onClick={onClose} disabled={isPending}>Close</button>
+      <section
+        ref={dialogRef}
+        className="feature-modal content-asset-schedule-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="content-asset-schedule-title"
+        aria-describedby="content-asset-schedule-description"
+      >
+        <button
+          ref={initialFocusRef}
+          type="button"
+          className="feature-modal-close"
+          onClick={onClose}
+          disabled={isPending}
+          aria-label="Close scheduling dialog"
+        >
+          Close
+        </button>
         <div className="stack-sm">
           <p className="kicker">Mixed-content calendar</p>
           <h2 id="content-asset-schedule-title">Schedule generated content</h2>
-          <p className="muted">Choose a manual media-team handoff or let Sermon Clip publish eligible Meta images at the planned time.</p>
+          <p id="content-asset-schedule-description" className="muted">Choose a manual media-team handoff or let Sermon Clip publish eligible Meta images at the planned time.</p>
         </div>
 
         <div className="content-asset-manual-notice">
@@ -245,7 +392,15 @@ function ContentAssetScheduleModal({
           {automationMode === "AUTOMATIC" ? (
             <label className="content-asset-composer-wide">
               Publishing account
-              <select value={socialAccountId} onChange={(event) => setSocialAccountId(event.target.value)} disabled={isPending || automaticAccounts.length === 0}>
+              <select
+                value={socialAccountId}
+                onChange={(event) => {
+                  setSocialAccountId(event.target.value);
+                  setFeedback(null);
+                }}
+                disabled={isPending || automaticAccounts.length === 0}
+                aria-invalid={!socialAccountId}
+              >
                 <option value="">Choose a connected account</option>
                 {automaticAccounts.map((account) => (
                   <option key={account.id} value={account.id}>
@@ -257,28 +412,95 @@ function ContentAssetScheduleModal({
           ) : null}
           <label>
             Date and time
-            <input type="datetime-local" value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} disabled={isPending} />
+            <input
+              type="datetime-local"
+              value={scheduledFor}
+              onChange={(event) => {
+                setScheduledFor(event.target.value);
+                setFeedback(null);
+              }}
+              disabled={isPending}
+              required
+              aria-invalid={!scheduledFor || Boolean(validationMessage?.includes("date and time"))}
+              aria-describedby={validationMessage ? "content-asset-schedule-validation" : undefined}
+            />
           </label>
           <label>
             Timezone
-            <input value={timezone} onChange={(event) => setTimezone(event.target.value)} maxLength={100} disabled={isPending} />
+            <input
+              value={timezone}
+              onChange={(event) => {
+                setTimezone(event.target.value);
+                setFeedback(null);
+              }}
+              maxLength={100}
+              disabled={isPending}
+              required
+              aria-invalid={Boolean(validationMessage?.toLowerCase().includes("timezone"))}
+              aria-describedby={validationMessage ? "content-asset-schedule-validation" : undefined}
+            />
           </label>
           <label>
             Post title
-            <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={255} disabled={isPending} />
+            <input
+              value={title}
+              onChange={(event) => {
+                setTitle(event.target.value);
+                setFeedback(null);
+              }}
+              maxLength={255}
+              disabled={isPending}
+              required
+              aria-invalid={!title.trim()}
+              aria-describedby={!title.trim() ? "content-asset-schedule-validation" : undefined}
+            />
           </label>
           <label className="content-asset-composer-wide">
             Post copy
-            <textarea value={caption} onChange={(event) => setCaption(event.target.value)} rows={7} maxLength={63_206} disabled={isPending} />
+            <textarea
+              value={caption}
+              onChange={(event) => {
+                setCaption(event.target.value);
+                setFeedback(null);
+              }}
+              rows={7}
+              maxLength={63_206}
+              disabled={isPending}
+              required
+              aria-invalid={!caption.trim()}
+              aria-describedby={!caption.trim() ? "content-asset-schedule-validation" : undefined}
+            />
           </label>
           <label className="content-asset-composer-wide">
             Optional note
-            <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} maxLength={500} disabled={isPending} />
+            <textarea
+              value={note}
+              onChange={(event) => {
+                setNote(event.target.value);
+                setFeedback(null);
+              }}
+              rows={2}
+              maxLength={500}
+              disabled={isPending}
+            />
           </label>
         </div>
 
-        {automaticBlocker ? <p className="error-banner">{automaticBlocker}</p> : null}
-        {feedback ? <p className={feedback.success ? "success-banner" : "error-banner"}>{feedback.message}</p> : null}
+        {blockingMessage ? (
+          <p id="content-asset-schedule-validation" className="error-banner" role="alert" aria-live="assertive" aria-atomic="true">
+            {blockingMessage}
+          </p>
+        ) : null}
+        {feedback ? (
+          <p
+            className={feedback.success ? "success-banner" : "error-banner"}
+            role={feedback.success ? "status" : "alert"}
+            aria-live={feedback.success ? "polite" : "assertive"}
+            aria-atomic="true"
+          >
+            {feedback.message}
+          </p>
+        ) : null}
 
         <div className="feature-modal-footer">
           <button type="button" className="button secondary" onClick={onClose} disabled={isPending}>Cancel</button>
@@ -286,7 +508,7 @@ function ContentAssetScheduleModal({
             type="button"
             className="button primary"
             onClick={schedule}
-            disabled={isPending || Boolean(automaticBlocker) || !scheduledFor || !title.trim() || !caption.trim() || !timezone.trim()}
+            disabled={isPending || Boolean(blockingMessage)}
           >
             {isPending ? "Scheduling..." : automationMode === "AUTOMATIC" ? "Schedule automatic post" : "Add manual handoff"}
           </button>
@@ -338,6 +560,7 @@ export function GeneratedContentAssets({
   const router = useRouter();
   const [composerAssetId, setComposerAssetId] = useState<string | null>(null);
   const [scheduleAssetId, setScheduleAssetId] = useState<string | null>(null);
+  const [scheduleConfirmation, setScheduleConfirmation] = useState<ContentAssetScheduleCreatedDetail | null>(null);
   const [copiedAssetId, setCopiedAssetId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"ACTIVE" | ReadyContentAsset["status"]>(() => {
     const focusedStatus = focusedAssetId ? assets.find((asset) => asset.id === focusedAssetId)?.status : null;
@@ -350,6 +573,15 @@ export function GeneratedContentAssets({
   )), [assets, statusFilter]);
   const composerAsset = composerAssetId ? assets.find((asset) => asset.id === composerAssetId) ?? null : null;
   const scheduleAsset = scheduleAssetId ? assets.find((asset) => asset.id === scheduleAssetId) ?? null : null;
+  const scheduleSuccessCopy = scheduleConfirmation
+    ? buildContentScheduleSuccessCopy(scheduleConfirmation)
+    : null;
+
+  function showScheduledPost(detail: ContentAssetScheduleCreatedDetail) {
+    window.dispatchEvent(new CustomEvent<ContentAssetScheduleCreatedDetail>(CONTENT_ASSET_SCHEDULED_EVENT, {
+      detail,
+    }));
+  }
 
   if (assets.length === 0) {
     return (
@@ -359,6 +591,7 @@ export function GeneratedContentAssets({
           <h2>No prepared non-video posts yet</h2>
           <p className="muted">Approve a quote, carousel, prayer, devotional, discussion post, or invitation, then choose Prepare for publishing.</p>
         </div>
+        <ContentIdeasPostingGuide compact />
         <a className="button primary" href="/opportunities">Open Publishing Ideas</a>
       </section>
     );
@@ -390,6 +623,31 @@ export function GeneratedContentAssets({
         <li><span>3</span><div><strong>Schedule</strong><small>Choose a date only when it is ready.</small></div></li>
       </ol>
 
+      <ContentIdeasPostingGuide compact />
+
+      {scheduleConfirmation && scheduleSuccessCopy ? (
+        <div className={`success-banner ${styles.scheduleSuccess}`} role="status" aria-live="polite" aria-atomic="true">
+          <div className={styles.scheduleSuccessCopy}>
+            <strong>{scheduleSuccessCopy.heading}</strong>
+            <span>{scheduleSuccessCopy.description}</span>
+            <small>{scheduleSuccessCopy.scheduledTime} · {scheduleConfirmation.timezone}</small>
+          </div>
+          <div className={styles.scheduleSuccessActions}>
+            <button
+              type="button"
+              className="button secondary"
+              onClick={() => showScheduledPost(scheduleConfirmation)}
+              aria-controls={scheduledPostElementId(scheduleConfirmation.scheduledPostId)}
+            >
+              View in calendar
+            </button>
+            <button type="button" className="button tertiary" onClick={() => setScheduleConfirmation(null)}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="generated-content-asset-grid">
         {visibleAssets.map((asset) => {
           const latestSchedule = asset.scheduledPosts[0] ?? null;
@@ -399,6 +657,18 @@ export function GeneratedContentAssets({
           const supportsManualWithoutMedia = supportsManualContentHandoffWithoutMedia(asset.assetType);
           const previewFile = selectPreviewFile(asset);
           const isDesignable = isDesignableContentAssetType(asset.assetType);
+          const hasApprovedPublishingRevision = hasApprovedAssetPublishingRevision({
+            currentRevisionId: asset.currentRevisionId,
+            approvedRevisionId: asset.approvedRevisionId,
+            currentRevisionApprovalState: asset.currentRevision?.approvalState,
+          });
+          const revisionNeedsApproval = !hasApprovedPublishingRevision;
+          const approvedVersion = hasApprovedPublishingRevision
+            ? asset.currentRevision?.revisionNumber ?? null
+            : null;
+          const sourceIdeaHref = asset.contentOpportunityId
+            ? buildOpportunityHref(asset.sermonId, asset.contentOpportunityId)
+            : null;
           return (
             <article key={asset.id} className={`generated-content-asset-card ${asset.id === focusedAssetId ? "is-focused" : ""}`}>
               <div className="generated-content-asset-card-head">
@@ -408,8 +678,8 @@ export function GeneratedContentAssets({
                 </div>
                 <div className="clip-badge-row">
                   <span className="status-pill">{CONTENT_ASSET_TYPE_LABELS[asset.assetType]}</span>
-                  <span className={`status-pill ${asset.status === "READY" ? "status-exported" : asset.status === "PUBLISHED" ? "status-approved" : ""}`}>
-                    {asset.status.toLowerCase()}
+                  <span className={`status-pill ${revisionNeedsApproval ? "tone-warning" : asset.status === "READY" ? "status-exported" : asset.status === "PUBLISHED" ? "status-approved" : ""}`}>
+                    {revisionNeedsApproval ? "review required" : asset.status.toLowerCase()}
                   </span>
                 </div>
               </div>
@@ -467,37 +737,63 @@ export function GeneratedContentAssets({
                         : "This version preserves what was published. Make a fresh version from Content Ideas for future changes."}
                     </p>
                   ) : null}
+                  <div className={`${styles.approvalState} ${revisionNeedsApproval ? styles.needsApproval : ""}`}>
+                    <strong>{revisionNeedsApproval
+                      ? "Review required"
+                      : approvedVersion
+                        ? `Approved publishing version v${approvedVersion}`
+                        : "Publishing version ready"}</strong>
+                    <span>{revisionNeedsApproval
+                      ? "This publishing version is not approved. Review its words and evidence before placing it on the calendar."
+                      : approvedVersion
+                        ? "The exact approved words and artwork stay attached to every scheduled post."
+                        : "A protected revision will be recorded when this post is scheduled."}</span>
+                  </div>
                 </div>
               </div>
 
               <div className={styles.primaryActions}>
-                {isDesignable ? (
-                  <a className="button secondary" href={`/ready-to-post/content-assets/${asset.id}/studio`}>
-                    {previewFile ? "Review design" : "Create artwork"}
+                {revisionNeedsApproval ? (
+                  <button type="button" className="button primary" onClick={() => setComposerAssetId(asset.id)}>
+                    Review publishing version
+                  </button>
+                ) : asset.status === "PREPARED" && isDesignable ? (
+                  <a className="button primary" href={`/ready-to-post/content-assets/${asset.id}/studio`}>
+                    Create final artwork
                   </a>
-                ) : null}
-                {isVersionLocked ? (
-                  <a className="button secondary" href={`/opportunities?sermonId=${asset.sermonId}`}>Create a fresh version</a>
+                ) : latestSchedule && (asset.status === "SCHEDULED" || asset.status === "PUBLISHED") ? (
+                  <a className="button primary" href={buildScheduledPostHref(latestSchedule.id)}>
+                    View in calendar
+                  </a>
                 ) : (
-                  <button type="button" className="button secondary" onClick={() => setComposerAssetId(asset.id)}>Edit words &amp; details</button>
+                  <button
+                    type="button"
+                    className="button primary"
+                    onClick={() => setScheduleAssetId(asset.id)}
+                    disabled={!(["READY", "SCHEDULED"] as ReadyContentAsset["status"][]).includes(asset.status)}
+                  >
+                    Choose date &amp; time
+                  </button>
                 )}
-                <button
-                  type="button"
-                  className="button primary"
-                  onClick={() => setScheduleAssetId(asset.id)}
-                  disabled={!(["READY", "SCHEDULED"] as ReadyContentAsset["status"][]).includes(asset.status)}
-                >
-                  {asset.status === "SCHEDULED"
-                    ? "Plan another time"
-                    : asset.status === "PREPARED"
-                      ? "Finish artwork to schedule"
-                      : "Choose date & time"}
-                </button>
               </div>
 
               <details className={styles.handoffDetails}>
-                <summary>Download or hand off</summary>
+                <summary>More options &amp; downloads</summary>
                 <div className={styles.handoffActions}>
+                  {!isVersionLocked ? (
+                    <button type="button" className="button tertiary" onClick={() => setComposerAssetId(asset.id)}>Edit words &amp; details</button>
+                  ) : sourceIdeaHref ? (
+                    <a className="button tertiary" href={sourceIdeaHref}>Create a fresh version</a>
+                  ) : null}
+                  {isDesignable ? (
+                    <a className="button tertiary" href={`/ready-to-post/content-assets/${asset.id}/studio`}>
+                      {previewFile ? "Review design" : "Create artwork"}
+                    </a>
+                  ) : null}
+                  {sourceIdeaHref ? <a className="button tertiary" href={sourceIdeaHref}>Open source idea</a> : null}
+                  {latestSchedule && asset.status === "SCHEDULED" ? (
+                    <button type="button" className="button tertiary" onClick={() => setScheduleAssetId(asset.id)}>Plan another time</button>
+                  ) : null}
                   <button
                     type="button"
                     className="button tertiary"
@@ -569,6 +865,11 @@ export function GeneratedContentAssets({
           publishingServiceHealth={publishingServiceHealth}
           open
           onClose={() => setScheduleAssetId(null)}
+          onScheduled={(detail) => {
+            setScheduleConfirmation(detail);
+            setScheduleAssetId(null);
+            showScheduledPost(detail);
+          }}
         />
       ) : null}
     </section>

@@ -4,8 +4,10 @@ import {
   buildEditableCaptionCuesFromTranscriptSegments,
   buildSrtFromEditableCues,
   buildTimedCaptionCuesFromTranscriptSegments,
+  buildTimedCaptionCuesFromTranscriptWords,
   hashtagsToEditorInput,
   mergeCaptionCueTextOverrides,
+  parseCaptionSourceWords,
   parseHashtagEditorInput,
   resolveClipStudioInitialCaptionCues,
   validateCaptionCuesFromTranscript,
@@ -186,6 +188,20 @@ describe("hashtagsToEditorInput", () => {
   });
 });
 
+describe("parseCaptionSourceWords", () => {
+  it("normalizes persisted provider words and skips malformed timings", () => {
+    expect(parseCaptionSourceWords([
+      { text: "  Grace ", startTimeSeconds: 10.1, endTimeSeconds: 10.5 },
+      { text: "wins", startTimeSeconds: 10.8, endTimeSeconds: 11.2 },
+      { text: "Bad", startTimeSeconds: "11.3", endTimeSeconds: 11.7 },
+      { text: "Backwards", startTimeSeconds: 12, endTimeSeconds: 11.9 },
+    ])).toEqual([
+      { text: "Grace", startTimeSeconds: 10.1, endTimeSeconds: 10.5 },
+      { text: "wins", startTimeSeconds: 10.8, endTimeSeconds: 11.2 },
+    ]);
+  });
+});
+
 describe("validateEditableCaptionCues", () => {
   it("normalizes valid editable caption cues", () => {
     const result = validateEditableCaptionCues([
@@ -195,6 +211,50 @@ describe("validateEditableCaptionCues", () => {
     expect(result.isValid).toBe(true);
     expect(result.cues).toEqual([
       { index: 1, startSeconds: 0, endSeconds: 2.5, text: "God is faithful" },
+    ]);
+  });
+
+  it("normalizes valid exact word timings with their parent cue", () => {
+    const result = validateEditableCaptionCues([
+      {
+        index: 4,
+        startSeconds: 0,
+        endSeconds: 2.5,
+        text: "  God   is faithful  ",
+        wordTimings: [
+          { text: " God ", startSeconds: 0, endSeconds: 0.5556 },
+          { text: "is", startSeconds: 0.62, endSeconds: 0.9 },
+          { text: "faithful", startSeconds: 1, endSeconds: 2.5 },
+        ],
+      },
+    ], 10);
+
+    expect(result.isValid).toBe(true);
+    expect(result.cues[0]?.wordTimings).toEqual([
+      { text: "God", startSeconds: 0, endSeconds: 0.556 },
+      { text: "is", startSeconds: 0.62, endSeconds: 0.9 },
+      { text: "faithful", startSeconds: 1, endSeconds: 2.5 },
+    ]);
+  });
+
+  it("drops the complete word timing payload when one timing is invalid", () => {
+    const result = validateEditableCaptionCues([
+      {
+        index: 1,
+        startSeconds: 0,
+        endSeconds: 5,
+        text: "God is faithful",
+        wordTimings: [
+          { text: "God", startSeconds: 0, endSeconds: 1 },
+          { text: "is", startSeconds: 1, endSeconds: 2 },
+          { text: "faithful", startSeconds: 2, endSeconds: 6 },
+        ],
+      },
+    ], 10);
+
+    expect(result.isValid).toBe(true);
+    expect(result.cues).toEqual([
+      { index: 1, startSeconds: 0, endSeconds: 5, text: "God is faithful" },
     ]);
   });
 
@@ -308,7 +368,7 @@ describe("resolveClipStudioInitialCaptionCues", () => {
     expect(result).toEqual(transcriptCues);
   });
 
-  it("continues to prefer transcript cues when saved cues were not manually edited", () => {
+  it("keeps valid saved generated cues so hydration matches the approved preview", () => {
     const result = resolveClipStudioInitialCaptionCues({
       savedCues: [
         { index: 1, startSeconds: 0, endSeconds: 30, text: "Older generated caption" },
@@ -318,7 +378,9 @@ describe("resolveClipStudioInitialCaptionCues", () => {
       savedCuesManuallyEdited: false,
     });
 
-    expect(result).toEqual(transcriptCues);
+    expect(result).toEqual([
+      { index: 1, startSeconds: 0, endSeconds: 30, text: "Older generated caption" },
+    ]);
   });
 });
 
@@ -400,6 +462,8 @@ describe("buildTimedCaptionCuesFromTranscriptSegments", () => {
     });
 
     expect(cues.map((cue) => cue.text)).toEqual(["God is faithful", "through every season"]);
+    expect(cues[0]?.wordTimings?.map((timing) => timing.text)).toEqual(["God", "is", "faithful"]);
+    expect(cues[1]?.wordTimings?.map((timing) => timing.text)).toEqual(["through", "every", "season"]);
     expect(cues[1]?.startSeconds).toBeGreaterThan(cues[0]?.startSeconds ?? 0);
     expect(cues[1]?.endSeconds).toBe(6);
   });
@@ -416,6 +480,66 @@ describe("buildTimedCaptionCuesFromTranscriptSegments", () => {
     expect(cues.map((cue) => cue.text)).toEqual(["bb", "cc"]);
     expect(cues[0]).toMatchObject({ index: 1, startSeconds: 0, endSeconds: 2, text: "bb" });
     expect(cues[1]).toMatchObject({ index: 2, startSeconds: 2, endSeconds: 4, text: "cc" });
+  });
+});
+
+describe("buildTimedCaptionCuesFromTranscriptWords", () => {
+  it("uses exact provider word timestamps and excludes words outside the clip", () => {
+    const cues = buildTimedCaptionCuesFromTranscriptWords({
+      startTimeSeconds: 10,
+      endTimeSeconds: 12,
+      words: [
+        { text: "Before", startTimeSeconds: 9.4, endTimeSeconds: 9.9 },
+        { text: "Grace", startTimeSeconds: 10.15, endTimeSeconds: 10.62 },
+        { text: "wins", startTimeSeconds: 10.74, endTimeSeconds: 11.18 },
+        { text: "After", startTimeSeconds: 12.1, endTimeSeconds: 12.4 },
+      ],
+    });
+
+    expect(cues).toEqual([
+      {
+        index: 1,
+        startSeconds: 0.15,
+        endSeconds: 0.62,
+        text: "Grace",
+        wordTimings: [{ text: "Grace", startSeconds: 0.15, endSeconds: 0.62 }],
+      },
+      {
+        index: 2,
+        startSeconds: 0.74,
+        endSeconds: 1.18,
+        text: "wins",
+        wordTimings: [{ text: "wins", startSeconds: 0.74, endSeconds: 1.18 }],
+      },
+    ]);
+  });
+
+  it("keeps every exact word range when grouping words into a phrase", () => {
+    const cues = buildTimedCaptionCuesFromTranscriptWords({
+      startTimeSeconds: 10,
+      endTimeSeconds: 13,
+      words: [
+        { text: "Grace", startTimeSeconds: 10.1, endTimeSeconds: 10.5 },
+        { text: "still", startTimeSeconds: 10.8, endTimeSeconds: 11.2 },
+        { text: "wins", startTimeSeconds: 11.7, endTimeSeconds: 12.3 },
+      ],
+      maxWordsPerCue: 5,
+      maxCueDurationSeconds: 4,
+    });
+
+    expect(cues).toEqual([
+      {
+        index: 1,
+        startSeconds: 0.1,
+        endSeconds: 2.3,
+        text: "Grace still wins",
+        wordTimings: [
+          { text: "Grace", startSeconds: 0.1, endSeconds: 0.5 },
+          { text: "still", startSeconds: 0.8, endSeconds: 1.2 },
+          { text: "wins", startSeconds: 1.7, endSeconds: 2.3 },
+        ],
+      },
+    ]);
   });
 });
 

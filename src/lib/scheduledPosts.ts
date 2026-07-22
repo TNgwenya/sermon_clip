@@ -1,4 +1,5 @@
 import type {
+  Prisma,
   PostingAutomationMode as PrismaPostingAutomationMode,
   PostingPlatform as PrismaPostingPlatform,
   ScheduledPostStatus as PrismaScheduledPostStatus,
@@ -50,6 +51,8 @@ export type ScheduledPost = {
   createdAt: string;
   contentAssets?: Array<{
     id: string;
+    revisionId?: string | null;
+    revisionApprovalState?: string | null;
     title: string;
     assetType: string;
     status: string;
@@ -194,6 +197,15 @@ function toScheduledPost(input: {
     externalPlatform: string | null;
   } | null;
   contentAssetLinks?: Array<{
+    contentAssetRevision?: {
+      id: string;
+      approvalState: string;
+      title: string;
+      bodyContent: string | null;
+      caption: string | null;
+      hashtagsJson: unknown;
+      callToAction: string | null;
+    } | null;
     contentAsset: {
       id: string;
       title: string;
@@ -203,7 +215,7 @@ function toScheduledPost(input: {
       bodyContent: string | null;
       callToAction: string | null;
       hashtagsJson: unknown;
-      files: Array<{
+      files?: Array<{
         id: string;
         fileName: string;
         mimeType: string;
@@ -251,16 +263,18 @@ function toScheduledPost(input: {
     mediaUploadedAt: input.mediaUploadedAt?.toISOString() ?? null,
     idempotencyKey: input.idempotencyKey,
     createdAt: input.createdAt.toISOString(),
-    contentAssets: (input.contentAssetLinks ?? []).map(({ contentAsset }) => ({
+    contentAssets: (input.contentAssetLinks ?? []).map(({ contentAsset, contentAssetRevision }) => ({
       id: contentAsset.id,
-      title: contentAsset.title,
+      revisionId: contentAssetRevision?.id ?? null,
+      revisionApprovalState: contentAssetRevision?.approvalState ?? null,
+      title: contentAssetRevision?.title ?? contentAsset.title,
       assetType: contentAsset.assetType,
       status: contentAsset.status,
-      caption: contentAsset.caption,
-      bodyContent: contentAsset.bodyContent,
-      callToAction: contentAsset.callToAction,
-      hashtags: contentAsset.hashtagsJson,
-      files: contentAsset.files.map((file) => ({
+      caption: contentAssetRevision?.caption ?? contentAsset.caption,
+      bodyContent: contentAssetRevision?.bodyContent ?? contentAsset.bodyContent,
+      callToAction: contentAssetRevision?.callToAction ?? contentAsset.callToAction,
+      hashtags: contentAssetRevision?.hashtagsJson ?? contentAsset.hashtagsJson,
+      files: (contentAsset.files ?? []).map((file) => ({
         id: file.id,
         fileName: file.fileName,
         mimeType: file.mimeType,
@@ -297,11 +311,34 @@ async function recoverStaleScheduledPostClaimsForRead(): Promise<void> {
   await stalePostingRecoveryRead;
 }
 
-export async function listScheduledPosts(): Promise<ScheduledPost[]> {
+export type ListScheduledPostsOptions = {
+  scheduledPostId?: string | null;
+  contentAssetId?: string | null;
+  take?: number;
+  includeContentAssetFiles?: boolean;
+};
+
+function normalizeScheduledPostListTake(value: number | undefined, hasExactId: boolean): number {
+  if (hasExactId) return 1;
+  if (!Number.isFinite(value)) return 100;
+  return Math.max(1, Math.min(100, Math.trunc(value ?? 100)));
+}
+
+export async function listScheduledPosts(
+  options: ListScheduledPostsOptions = {},
+): Promise<ScheduledPost[]> {
   // Worker-facing queue reads still recover every time. Pastor-facing list
   // reads only need to run the 15-minute stale-claim repair once per minute.
   await recoverStaleScheduledPostClaimsForRead();
+  const scheduledPostId = options.scheduledPostId?.trim() || null;
+  const contentAssetId = options.contentAssetId?.trim() || null;
   const posts = await prisma.scheduledPost.findMany({
+    where: {
+      ...(scheduledPostId ? { id: scheduledPostId } : {}),
+      ...(contentAssetId
+        ? { contentAssetLinks: { some: { contentAssetId } } }
+        : {}),
+    },
     include: {
       socialAccount: {
         select: {
@@ -324,29 +361,33 @@ export async function listScheduledPosts(): Promise<ScheduledPost[]> {
               bodyContent: true,
               callToAction: true,
               hashtagsJson: true,
-              files: {
-                orderBy: { sortOrder: "asc" },
-                select: {
-                  id: true,
-                  fileName: true,
-                  mimeType: true,
-                  filePath: true,
-                  objectKey: true,
-                  publicUrl: true,
-                  width: true,
-                  height: true,
-                  sizeBytes: true,
-                  sortOrder: true,
-                  metadataJson: true,
-                },
-              },
+              ...(options.includeContentAssetFiles === false
+                ? {}
+                : {
+                    files: {
+                      orderBy: { sortOrder: "asc" as const },
+                      select: {
+                        id: true,
+                        fileName: true,
+                        mimeType: true,
+                        filePath: true,
+                        objectKey: true,
+                        publicUrl: true,
+                        width: true,
+                        height: true,
+                        sizeBytes: true,
+                        sortOrder: true,
+                        metadataJson: true,
+                      },
+                    },
+                  }),
             },
           },
         },
       },
     },
     orderBy: { createdAt: "desc" },
-    take: 100,
+    take: normalizeScheduledPostListTake(options.take, Boolean(scheduledPostId)),
   });
 
   return posts.map(toScheduledPost);
@@ -526,7 +567,12 @@ export async function restoreScheduledPostStatus(input: {
       externalPostId: null,
       publishedUrl: null,
       finalPrivacyStatus: null,
-      ...(input.status === "PLANNED" ? { automationMode: "AUTOMATIC" as const } : {}),
+      ...(input.status === "PLANNED"
+        ? {
+            automationMode: "AUTOMATIC" as const,
+            contentAssetLinks: approvedContentAssetLinkFilter,
+          }
+        : {}),
     },
     data: {
       status: input.status,
@@ -583,6 +629,9 @@ export async function updateScheduledPostSchedule(input: {
       externalPostId: null,
       publishedUrl: null,
       finalPrivacyStatus: null,
+      ...(existing.automationMode === "AUTOMATIC"
+        ? { contentAssetLinks: approvedContentAssetLinkFilter }
+        : {}),
     },
     data: {
       scheduledFor: input.scheduledFor,
@@ -669,6 +718,7 @@ export async function postScheduledPostNow(input: {
       finalPrivacyStatus: null,
       claimedAt: null,
       workerStatus: { notIn: ["CLAIMED", "POSTING"] },
+      contentAssetLinks: approvedContentAssetLinkFilter,
     },
     data: {
       status: "PLANNED",
@@ -719,6 +769,150 @@ export type AutomationUpcomingPost = ScheduledPost & {
 };
 
 const ACTIVE_AUTOMATION_STATUSES: PrismaScheduledPostStatus[] = ["PLANNED"];
+const approvedContentAssetLinkFilter = {
+  every: {
+    contentAssetRevision: {
+      is: { approvalState: "APPROVED" as const },
+    },
+  },
+};
+
+const automationScheduledPostInclude = {
+  socialAccount: {
+    select: {
+      label: true,
+      externalProvider: true,
+      externalAccountId: true,
+      externalPlatform: true,
+    },
+  },
+  contentAssetLinks: {
+    orderBy: { sortOrder: "asc" as const },
+    select: {
+      contentAssetRevision: {
+        select: {
+          id: true,
+          approvalState: true,
+          title: true,
+          bodyContent: true,
+          caption: true,
+          hashtagsJson: true,
+          callToAction: true,
+        },
+      },
+      contentAsset: {
+        select: {
+          id: true,
+          title: true,
+          assetType: true,
+          status: true,
+          caption: true,
+          bodyContent: true,
+          callToAction: true,
+          hashtagsJson: true,
+          files: {
+            orderBy: { sortOrder: "asc" as const },
+            select: {
+              id: true,
+              fileName: true,
+              mimeType: true,
+              filePath: true,
+              objectKey: true,
+              publicUrl: true,
+              width: true,
+              height: true,
+              sizeBytes: true,
+              sortOrder: true,
+              metadataJson: true,
+            },
+          },
+        },
+      },
+    },
+  },
+} satisfies Prisma.ScheduledPostInclude;
+
+type AutomationScheduledPostRecord = Prisma.ScheduledPostGetPayload<{
+  include: typeof automationScheduledPostInclude;
+}>;
+
+async function buildReadyAutomationPosts(
+  posts: AutomationScheduledPostRecord[],
+): Promise<AutomationUpcomingPost[]> {
+  const clipIds = Array.from(new Set(posts.flatMap((post) => normalizeClipIds(post.clipIdsJson))));
+  const clips = await prisma.clipCandidate.findMany({
+    where: { id: { in: clipIds } },
+    select: {
+      id: true,
+      title: true,
+      caption: true,
+      durationSeconds: true,
+      hashtags: true,
+      exportStatus: true,
+      exportFreshness: true,
+      exportFormat: true,
+      exportedFilePath: true,
+      exportPath: true,
+      transcriptSafetyStatus: true,
+      sermon: {
+        select: {
+          id: true,
+          title: true,
+          churchName: true,
+        },
+      },
+    },
+  });
+  const readyClipEntries = clips.map((clip) => {
+    if (clip.transcriptSafetyStatus === "REVIEW_REQUIRED") {
+      return null;
+    }
+
+    const outputPath = clip.exportStatus === "COMPLETED"
+      && clip.exportFreshness === "UP_TO_DATE"
+      && clip.exportFormat === "VERTICAL_9_16"
+      ? clip.exportedFilePath?.trim() || clip.exportPath?.trim() || null
+      : null;
+    if (!outputPath) {
+      return null;
+    }
+
+    const readyClip: AutomationUpcomingPost["clips"][number] = {
+      id: clip.id,
+      title: clip.title,
+      caption: clip.caption,
+      durationSeconds: clip.durationSeconds,
+      hashtags: clip.hashtags,
+      // The posting worker must receive one canonical final export. Supplying
+      // overlay, caption-burn, or raw-render fallbacks can publish an older or
+      // partially composed artifact after a Studio edit.
+      localFileCandidates: [outputPath],
+      sermon: clip.sermon,
+    };
+
+    return [clip.id, readyClip] as const;
+  });
+  const readyClipsById = new Map(readyClipEntries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)));
+
+  return posts.flatMap((post) => {
+    const scheduledPost = toScheduledPost(post);
+    const readyClips = scheduledPost.clipIds.flatMap((clipId) => {
+      const clip = readyClipsById.get(clipId);
+      return clip ? [clip] : [];
+    });
+
+    // A post that references any missing, stale, review-blocked, or otherwise
+    // unready clip stays planned but is withheld from the automation worker.
+    if (readyClips.length !== scheduledPost.clipIds.length) {
+      return [];
+    }
+
+    return [{
+      ...scheduledPost,
+      clips: readyClips,
+    }];
+  });
+}
 
 export async function listUpcomingAutomationPosts(input: {
   now?: Date;
@@ -738,110 +932,21 @@ export async function listUpcomingAutomationPosts(input: {
         lte: windowEnd,
       },
       status: { in: ACTIVE_AUTOMATION_STATUSES },
+      contentAssetLinks: approvedContentAssetLinkFilter,
     },
-    include: {
-      socialAccount: {
-        select: {
-          label: true,
-          externalProvider: true,
-          externalAccountId: true,
-          externalPlatform: true,
-        },
-      },
-      contentAssetLinks: {
-        orderBy: { sortOrder: "asc" },
-        select: {
-          contentAsset: {
-            select: {
-              id: true,
-              title: true,
-              assetType: true,
-              status: true,
-              caption: true,
-              bodyContent: true,
-              callToAction: true,
-              hashtagsJson: true,
-              files: {
-                orderBy: { sortOrder: "asc" },
-                select: {
-                  id: true,
-                  fileName: true,
-                  mimeType: true,
-                  filePath: true,
-                  objectKey: true,
-                  publicUrl: true,
-                  width: true,
-                  height: true,
-                  sizeBytes: true,
-                  sortOrder: true,
-                  metadataJson: true,
-                },
-              },
-            },
-          },
-        },
-      },
-    },
+    include: automationScheduledPostInclude,
     orderBy: { scheduledFor: "asc" },
     take: 100,
   });
 
-  const clipIds = Array.from(new Set(posts.flatMap((post) => normalizeClipIds(post.clipIdsJson))));
-  const clips = await prisma.clipCandidate.findMany({
-    where: { id: { in: clipIds } },
-    select: {
-      id: true,
-      title: true,
-      caption: true,
-      durationSeconds: true,
-      hashtags: true,
-      exportedFilePath: true,
-      exportPath: true,
-      overlayVideoPath: true,
-      captionedVideoPath: true,
-      renderedFilePath: true,
-      sermon: {
-        select: {
-          id: true,
-          title: true,
-          churchName: true,
-        },
-      },
-    },
-  });
-  const clipsById = new Map(clips.map((clip) => [clip.id, clip]));
-
-  return posts.map((post) => {
-    const scheduledPost = toScheduledPost(post);
-    return {
-      ...scheduledPost,
-      clips: scheduledPost.clipIds
-        .map((clipId) => clipsById.get(clipId))
-        .filter((clip): clip is NonNullable<typeof clip> => Boolean(clip))
-    .map((clip) => ({
-          id: clip.id,
-          title: clip.title,
-          caption: clip.caption,
-          durationSeconds: clip.durationSeconds,
-          hashtags: clip.hashtags,
-          localFileCandidates: [
-            clip.exportedFilePath,
-            clip.exportPath,
-            clip.overlayVideoPath,
-            clip.captionedVideoPath,
-            clip.renderedFilePath,
-          ].filter((filePath): filePath is string => Boolean(filePath)),
-          sermon: clip.sermon,
-        })),
-    };
-  });
+  return buildReadyAutomationPosts(posts);
 }
 
 export async function claimScheduledPost(input: {
   id: string;
   workerId: string;
   now?: Date;
-}): Promise<ScheduledPost | null> {
+}): Promise<AutomationUpcomingPost | null> {
   const now = input.now ?? new Date();
   const claimResult = await prisma.scheduledPost.updateMany({
     where: {
@@ -849,6 +954,7 @@ export async function claimScheduledPost(input: {
       automationMode: "AUTOMATIC",
       scheduledFor: { lte: now },
       status: { in: ACTIVE_AUTOMATION_STATUSES },
+      contentAssetLinks: approvedContentAssetLinkFilter,
       OR: [
         { claimedAt: null },
         { claimedAt: { lt: new Date(now.getTime() - 15 * 60_000) } },
@@ -862,6 +968,11 @@ export async function claimScheduledPost(input: {
       lastAttemptAt: now,
       attemptCount: { increment: 1 },
       publishError: null,
+      // Staged video metadata is not tied to a clip composition revision yet.
+      // Clear it so the worker stages the exact export returned by this claim.
+      mediaObjectKey: null,
+      mediaPublicUrl: null,
+      mediaUploadedAt: null,
     },
   });
 
@@ -871,19 +982,33 @@ export async function claimScheduledPost(input: {
 
   const post = await prisma.scheduledPost.findUnique({
     where: { id: input.id },
-    include: {
-      socialAccount: {
-        select: {
-          label: true,
-          externalProvider: true,
-          externalAccountId: true,
-          externalPlatform: true,
-        },
-      },
+    include: automationScheduledPostInclude,
+  });
+  const readyPost = post ? (await buildReadyAutomationPosts([post]))[0] ?? null : null;
+  if (readyPost) {
+    return readyPost;
+  }
+
+  // A clip can be edited or invalidated between the worker's queue sync and
+  // this claim. Release the claim without publishing the cached artifact.
+  await prisma.scheduledPost.updateMany({
+    where: {
+      id: input.id,
+      status: "POSTING",
+      workerStatus: "CLAIMED",
+      workerId: input.workerId,
+      claimedAt: now,
+    },
+    data: {
+      status: "PLANNED",
+      workerStatus: "IDLE",
+      claimedAt: null,
+      workerId: null,
+      publishError: "Publishing paused because the clip's final export is missing, stale, or still needs review.",
     },
   });
 
-  return post ? toScheduledPost(post) : null;
+  return null;
 }
 
 export async function renewScheduledPostClaim(input: {

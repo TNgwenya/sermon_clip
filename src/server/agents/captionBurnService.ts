@@ -20,20 +20,22 @@ import {
 } from "@/server/agents/storage";
 import { checkFfmpegInstalled } from "@/server/media/ffmpeg";
 import {
-  markCaptionBurnAssetCompleted,
-  markCaptionBurnAssetFailed,
-} from "@/server/regeneration/dependencies";
-import {
   isCaptionStylePresetId,
   resolveCaptionStylePreset,
   type CaptionStylePresetId,
 } from "@/lib/captionStylePresets";
 import {
   DEFAULT_CAPTION_APPEARANCE_SETTINGS,
+  extractCaptionRevealMode,
+  extractCaptionSyncOffsetSeconds,
   normalizeCaptionAppearanceSettings,
   type CaptionAppearanceSettings,
   type CaptionPosition,
 } from "@/lib/clipStudio";
+import {
+  normalizeCaptionCueWordTimings,
+  type CaptionCueWordTiming,
+} from "@/lib/clipStudioEditing";
 import { getBrandingSettings } from "@/server/branding/settings";
 import { getSharp } from "@/server/agents/sharpClient";
 import {
@@ -42,8 +44,14 @@ import {
   type SpeechCleanupCutPlan,
 } from "@/lib/speechCleanupPlan";
 import {
+  assertClipEditPlanStillActive,
+  isStaleClipCompositionError,
+  preferStaleClipCompositionError,
   recordClipArtifact,
+  tryUpdateClipCandidateForActiveEditPlan,
+  updateClipCandidateForActiveEditPlan,
   upsertActiveClipEditPlanForClip,
+  type ClipEditPlanGuard,
 } from "@/server/agents/clipEditPlanService";
 import { validateTranscriptSafetyForPublishing } from "@/server/agents/localLanguageTranscriptSafety";
 import {
@@ -52,6 +60,11 @@ import {
   resolvePreferredVideoEncoder as resolveSharedPreferredVideoEncoder,
   shouldRetryWithSoftwareEncoder,
 } from "@/server/media/videoEncoding";
+import {
+  capturePromotedMediaIdentity,
+  discardPromotedMediaIfUnchanged,
+  type PromotedMediaIdentity,
+} from "@/server/agents/mediaPromotionGuard";
 
 type CaptionBurnOptions = {
   ffmpegPath?: string;
@@ -72,6 +85,7 @@ type ClipForCaptionBurn = Pick<
   | "srtPath"
   | "captionData"
   | "captionBurnStatus"
+  | "captionBurnFreshness"
   | "captionedVideoPath"
   | "transcriptSafetyStatus"
 >;
@@ -104,14 +118,18 @@ type CaptionCueOverlay = {
   startSeconds: number;
   endSeconds: number;
   text: string;
+  wordTimings?: CaptionCueWordTiming[];
   activeWordIndex?: number;
 };
 
 type CaptionSafeArea = "STANDARD" | "RAISED" | "LOWER_MINIMAL";
 
 const FALLBACK_VIDEO_ENCODER = SOFTWARE_VIDEO_ENCODER;
-const MAX_WORD_HIGHLIGHT_OVERLAY_CUES = 120;
-const CAPTION_RENDERER_VERSION = 2;
+// Typical 60–120 second clips regularly exceed 120 spoken words. Keep active-
+// word final renders aligned with Studio preview for those normal short-form
+// lengths while retaining a guardrail for unusually large FFmpeg graphs.
+const MAX_WORD_HIGHLIGHT_OVERLAY_CUES = 360;
+const CAPTION_RENDERER_VERSION = 3;
 
 function commandFor(binaryPath?: string): string {
   return binaryPath?.trim() || "ffmpeg";
@@ -129,8 +147,9 @@ function buildVideoEncoderArgs(encoder: string): string[] {
   return buildSharedVideoEncoderArgs(encoder, "caption");
 }
 
-function getTempBurnPath(outputPath: string): string {
-  return outputPath.replace(/\.mp4$/i, ".captioning.partial.mp4");
+function getTempBurnPath(outputPath: string, editPlanId: string): string {
+  const planSuffix = editPlanId.replace(/[^a-zA-Z0-9_-]/g, "");
+  return outputPath.replace(/\.mp4$/i, `.plan-${planSuffix}.captioning.partial.mp4`);
 }
 
 function escapeForFfmpegSubtitlesPath(filePath: string): string {
@@ -170,7 +189,11 @@ function withCaptionPlacement(style: string, safeArea: CaptionSafeArea, captionP
   return withCaptionSafeArea(style, safeArea);
 }
 
-function withCaptionAppearance(style: string, appearance?: CaptionAppearanceSettings): string {
+function withCaptionAppearance(
+  style: string,
+  appearance: CaptionAppearanceSettings | undefined,
+  captionPosition: CaptionPosition,
+): string {
   if (!appearance) {
     return style;
   }
@@ -191,7 +214,12 @@ function withCaptionAppearance(style: string, appearance?: CaptionAppearanceSett
   }
 
   return withFontSize.replace(/MarginV=(\d+)/, (_match, margin: string) => {
-    const shiftedMargin = Math.max(0, Math.round(Number(margin) + appearance.verticalOffset));
+    // ASS top-aligned margins grow downward, while lower-aligned margins grow
+    // upward. Studio's positive offset consistently means "move up".
+    const offset = captionPosition === "top"
+      ? -appearance.verticalOffset
+      : appearance.verticalOffset;
+    const shiftedMargin = Math.max(0, Math.round(Number(margin) + offset));
     return `MarginV=${shiftedMargin}`;
   });
 }
@@ -205,7 +233,7 @@ function buildCaptionForceStyle(
   const preset = resolveCaptionStylePreset(presetId);
   const base = "FontName=Arial,BorderStyle=1,Shadow=0,MarginL=60,MarginR=60,Spacing=0.3";
   const boxedBase = base.replace("BorderStyle=1", "BorderStyle=3");
-  const applyAppearance = (style: string) => withCaptionAppearance(style, appearance);
+  const applyAppearance = (style: string) => withCaptionAppearance(style, appearance, captionPosition);
 
   if (preset.id === "clean-lower") {
     return applyAppearance(withCaptionPlacement(`${boxedBase},FontSize=21,PrimaryColour=&H00111111,OutlineColour=&H00FFFFFF,BackColour=&HEEFFFFFF,Outline=2,Shadow=1,Alignment=2,MarginV=58`, safeArea, captionPosition));
@@ -315,11 +343,7 @@ function shouldApplyCaptionsToClip(captionData: unknown): boolean {
 }
 
 function shouldUseWordHighlightOverlay(captionData: unknown): boolean {
-  if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
-    return false;
-  }
-
-  return (captionData as Record<string, unknown>)["wordHighlightEnabled"] === true;
+  return extractCaptionRevealMode(captionData) === "active-word";
 }
 
 function hasCurrentCaptionRendererVersion(captionData: unknown): boolean {
@@ -414,6 +438,35 @@ function wrapCaptionWords(value: string, maxLineLength = 34): CaptionOverlayWord
   return lines;
 }
 
+function normalizeCaptionWordIdentity(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function resolveMatchingCaptionWordTimings(cue: CaptionCueOverlay): CaptionCueWordTiming[] | null {
+  const words = splitCaptionOverlayWords(cue.text);
+  const timings = normalizeCaptionCueWordTimings(
+    cue.wordTimings,
+    cue.startSeconds,
+    cue.endSeconds,
+  );
+  if (
+    !timings
+    || timings.length !== words.length
+    || !words.every((word, index) => {
+      const visibleWord = normalizeCaptionWordIdentity(word);
+      const timedWord = normalizeCaptionWordIdentity(timings[index]?.text ?? "");
+      return visibleWord.length > 0 && visibleWord === timedWord;
+    })
+  ) {
+    return null;
+  }
+
+  return timings;
+}
+
 function extractCaptionCueOverlays(captionData: unknown): CaptionCueOverlay[] {
   if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
     return [];
@@ -438,13 +491,56 @@ function extractCaptionCueOverlays(captionData: unknown): CaptionCueOverlay[] {
       return [];
     }
 
+    const wordTimings = normalizeCaptionCueWordTimings(record["wordTimings"], startSeconds, endSeconds);
+
     return [{
       index: Number(record["index"]) || index + 1,
       startSeconds,
       endSeconds,
       text,
+      ...(wordTimings ? { wordTimings } : {}),
     }];
   });
+}
+
+function shiftCaptionCueOverlays(
+  cues: CaptionCueOverlay[],
+  offsetSeconds: number,
+): CaptionCueOverlay[] {
+  if (!Number.isFinite(offsetSeconds) || Math.abs(offsetSeconds) < 0.001) {
+    return cues;
+  }
+
+  return cues.flatMap((cue) => {
+    const shiftedStartSeconds = cue.startSeconds + offsetSeconds;
+    const shiftedEndSeconds = cue.endSeconds + offsetSeconds;
+    if (shiftedEndSeconds <= 0) {
+      return [];
+    }
+
+    const startSeconds = Number(Math.max(0, shiftedStartSeconds).toFixed(3));
+    const endSeconds = Number(shiftedEndSeconds.toFixed(3));
+    const wordTimings = cue.wordTimings?.flatMap((timing) => {
+      const wordStartSeconds = timing.startSeconds + offsetSeconds;
+      const wordEndSeconds = timing.endSeconds + offsetSeconds;
+      if (wordEndSeconds <= 0) {
+        return [];
+      }
+
+      return [{
+        ...timing,
+        startSeconds: Number(Math.max(0, wordStartSeconds).toFixed(3)),
+        endSeconds: Number(wordEndSeconds.toFixed(3)),
+      }];
+    });
+
+    return [{
+      ...cue,
+      startSeconds,
+      endSeconds,
+      ...(wordTimings && wordTimings.length > 0 ? { wordTimings } : { wordTimings: undefined }),
+    }];
+  }).map((cue, index) => ({ ...cue, index: index + 1 }));
 }
 
 function remapCaptionCueOverlaysForSpeechCleanup(
@@ -465,11 +561,27 @@ function remapCaptionCueOverlaysForSpeechCleanup(
       return [];
     }
 
+    const wordTimings = cue.wordTimings?.flatMap((timing) => {
+      const remappedWord = remapTimelineRangeToCleanedTime({
+        startSeconds: timing.startSeconds,
+        endSeconds: timing.endSeconds,
+        plan,
+      });
+      return remappedWord
+        ? [{
+            ...timing,
+            startSeconds: remappedWord.startSeconds,
+            endSeconds: remappedWord.endSeconds,
+          }]
+        : [];
+    });
+
     return [{
       ...cue,
       index: index + 1,
       startSeconds: remapped.startSeconds,
       endSeconds: remapped.endSeconds,
+      ...(wordTimings && wordTimings.length > 0 ? { wordTimings } : { wordTimings: undefined }),
     }];
   });
 }
@@ -526,9 +638,10 @@ function splitCaptionCueOverlaysForLayout(
   cues: CaptionCueOverlay[],
   appearance: CaptionAppearanceSettings = DEFAULT_CAPTION_APPEARANCE_SETTINGS,
 ): CaptionCueOverlay[] {
-  const targetLines = Math.max(1, Math.min(2, appearance.maxLines));
+  const targetLines = Math.max(2, Math.min(4, appearance.maxLines));
   const maxCharacters = captionOverlayLineLength(appearance) * targetLines;
-  const maxWords = appearance.fontScale === "large" ? 7 : appearance.fontScale === "compact" ? 10 : 8;
+  const wordsPerLine = appearance.fontScale === "large" ? 4 : appearance.fontScale === "compact" ? 6 : 5;
+  const maxWords = wordsPerLine * targetLines;
 
   return cues.flatMap((cue) => {
     const words = splitCaptionOverlayWords(cue.text);
@@ -568,15 +681,21 @@ function splitCaptionCueOverlaysForLayout(
     ));
     const totalWeight = weights.reduce((total, weight) => total + weight, 0);
     const durationSeconds = cue.endSeconds - cue.startSeconds;
+    const exactWordTimings = resolveMatchingCaptionWordTimings(cue);
     let cumulativeWeight = 0;
     let cursorSeconds = cue.startSeconds;
+    let wordCursor = 0;
 
     return chunks.map((chunk, index) => {
+      const chunkWordTimings = exactWordTimings?.slice(wordCursor, wordCursor + chunk.length);
+      wordCursor += chunk.length;
       cumulativeWeight += weights[index];
-      const nextEndSeconds = index === chunks.length - 1
-        ? cue.endSeconds
-        : cue.startSeconds + durationSeconds * (cumulativeWeight / totalWeight);
-      const startSeconds = Number(cursorSeconds.toFixed(3));
+      const nextEndSeconds = chunkWordTimings?.at(-1)?.endSeconds ?? (
+        index === chunks.length - 1
+          ? cue.endSeconds
+          : cue.startSeconds + durationSeconds * (cumulativeWeight / totalWeight)
+      );
+      const startSeconds = Number((chunkWordTimings?.[0]?.startSeconds ?? cursorSeconds).toFixed(3));
       const endSeconds = Number(nextEndSeconds.toFixed(3));
       cursorSeconds = endSeconds;
       return {
@@ -585,6 +704,7 @@ function splitCaptionCueOverlaysForLayout(
         startSeconds,
         endSeconds,
         text: chunk.join(" "),
+        ...(chunkWordTimings ? { wordTimings: chunkWordTimings } : { wordTimings: undefined }),
         activeWordIndex: undefined,
       };
     });
@@ -654,21 +774,23 @@ function expandCaptionCueWordHighlightOverlays(cues: CaptionCueOverlay[]): Capti
       return [];
     }
 
-    const weights = words.map(getCaptionOverlayWordWeight);
-    const totalWeight = weights.reduce((total, weight) => total + weight, 0);
-    if (totalWeight <= 0) {
-      return [];
-    }
+    const exactWordTimings = resolveMatchingCaptionWordTimings(cue);
+    const weights = exactWordTimings ? [] : words.map(getCaptionOverlayWordWeight);
+    const totalWeight = exactWordTimings ? 0 : weights.reduce((total, weight) => total + weight, 0);
+    if (!exactWordTimings && totalWeight <= 0) return [];
 
     let cursorSeconds = cue.startSeconds;
     let cumulativeWeight = 0;
 
     return words.map((_, wordIndex) => {
-      const wordStartSeconds = cursorSeconds;
-      cumulativeWeight += weights[wordIndex];
-      const wordEndSeconds = wordIndex === words.length - 1
-        ? cue.endSeconds
-        : cue.startSeconds + durationSeconds * (cumulativeWeight / totalWeight);
+      const exactWordTiming = exactWordTimings?.[wordIndex];
+      const wordStartSeconds = exactWordTiming?.startSeconds ?? cursorSeconds;
+      cumulativeWeight += weights[wordIndex] ?? 0;
+      const wordEndSeconds = exactWordTiming?.endSeconds ?? (
+        wordIndex === words.length - 1
+          ? cue.endSeconds
+          : cue.startSeconds + durationSeconds * (cumulativeWeight / totalWeight)
+      );
       cursorSeconds = wordEndSeconds;
 
       return {
@@ -776,6 +898,7 @@ async function loadClipForCaptionBurn(clipId: string): Promise<ClipForCaptionBur
       srtPath: true,
       captionData: true,
       captionBurnStatus: true,
+      captionBurnFreshness: true,
       captionedVideoPath: true,
       transcriptSafetyStatus: true,
     },
@@ -788,10 +911,17 @@ async function loadClipForCaptionBurn(clipId: string): Promise<ClipForCaptionBur
   return clip;
 }
 
-async function claimCaptionBurnStart(clipId: string): Promise<void> {
+async function claimCaptionBurnStart(guard: ClipEditPlanGuard): Promise<void> {
   const result = await prisma.clipCandidate.updateMany({
     where: {
-      id: clipId,
+      id: guard.clipCandidateId,
+      editPlans: {
+        some: {
+          id: guard.editPlanId,
+          planHash: guard.planHash,
+          status: "ACTIVE",
+        },
+      },
       captionBurnStatus: {
         not: "BURNING",
       },
@@ -803,6 +933,7 @@ async function claimCaptionBurnStart(clipId: string): Promise<void> {
   });
 
   if (result.count === 0) {
+    await assertClipEditPlanStillActive(guard);
     throw new Error("Caption burn is already running for this clip.");
   }
 }
@@ -940,6 +1071,37 @@ function captionOverlayYExpression(
   return `H-h-${lowerMargin}`;
 }
 
+function buildCaptionOverlayFilterGraph(
+  cues: CaptionCueOverlay[],
+  overlayY: string,
+  animateWordPop = false,
+): string {
+  let previous = "[0:v]";
+  const filterParts: string[] = [];
+
+  cues.forEach((cue, index) => {
+    let overlayInput = `[${index + 1}:v]`;
+    if (animateWordPop) {
+      const durationSeconds = Math.max(0.05, cue.endSeconds - cue.startSeconds);
+      const animationSeconds = Math.min(0.16, Math.max(0.05, durationSeconds / 2));
+      const popInput = `[caption-pop-${index}]`;
+      const progress = `min(t/${animationSeconds.toFixed(3)}\\,1)`;
+      filterParts.push(
+        `${overlayInput}trim=duration=${durationSeconds.toFixed(3)},setpts=PTS-STARTPTS,scale=w='trunc(iw*(0.92+0.08*${progress})/2)*2':h='trunc(ih*(0.92+0.08*${progress})/2)*2':eval=frame,fade=t=in:st=0:d=${animationSeconds.toFixed(3)}:alpha=1,setpts=PTS+${cue.startSeconds.toFixed(3)}/TB${popInput}`,
+      );
+      overlayInput = popInput;
+    }
+
+    const output = index === cues.length - 1 ? "[v]" : `[captioned${index}]`;
+    filterParts.push(
+      `${previous}${overlayInput}overlay=(W-w)/2:${overlayY}:enable='between(t,${cue.startSeconds.toFixed(3)},${cue.endSeconds.toFixed(3)})':eof_action=pass${output}`,
+    );
+    previous = output;
+  });
+
+  return filterParts.join(";");
+}
+
 async function runFfmpegCaptionOverlayFallback(input: {
   sermonId: string;
   renderedPath: string;
@@ -951,6 +1113,7 @@ async function runFfmpegCaptionOverlayFallback(input: {
   appearance?: CaptionAppearanceSettings;
   captionStylePresetId?: CaptionStylePresetId;
   captionSafeArea?: CaptionSafeArea;
+  animateWordPop?: boolean;
 }): Promise<void> {
   if (input.cues.length === 0) {
     throw new Error("Caption overlay fallback could not find any caption cues.");
@@ -964,16 +1127,8 @@ async function runFfmpegCaptionOverlayFallback(input: {
   });
 
   const command = commandFor(input.ffmpegPath);
-  let previous = "[0:v]";
-  const filterParts: string[] = [];
   const overlayY = captionOverlayYExpression(input.captionPosition, input.appearance, input.captionSafeArea);
-  input.cues.forEach((cue, index) => {
-    const output = index === input.cues.length - 1 ? "[v]" : `[captioned${index}]`;
-    filterParts.push(
-      `${previous}[${index + 1}:v]overlay=(W-w)/2:${overlayY}:enable='between(t,${cue.startSeconds.toFixed(3)},${cue.endSeconds.toFixed(3)})':eof_action=pass${output}`,
-    );
-    previous = output;
-  });
+  const filterGraph = buildCaptionOverlayFilterGraph(input.cues, overlayY, input.animateWordPop);
 
   const buildArgs = (videoEncoder: string): string[] => {
     const args = ["-y", "-i", input.renderedPath];
@@ -983,7 +1138,7 @@ async function runFfmpegCaptionOverlayFallback(input: {
 
     args.push(
       "-filter_complex",
-      filterParts.join(";"),
+      filterGraph,
       "-map",
       "[v]",
       "-map",
@@ -1070,22 +1225,32 @@ async function burnCaptionsForClipCore(
   clip: ClipForCaptionBurn,
   options: CaptionBurnOptions | undefined,
   jobId: string,
+  editPlanGuard: ClipEditPlanGuard,
 ): Promise<CaptionBurnResult> {
   await ensureSermonFolders(clip.sermonId);
 
   const renderedPath = clip.renderedFilePath?.trim() || getClipOutputPath(clip.sermonId, clip.id);
   const subtitlePath = clip.subtitleFilePath?.trim() || clip.srtPath?.trim() || getClipSrtPath(clip.sermonId, clip.id);
   const captionedVideoPath = getCaptionedClipPath(clip.sermonId, clip.id);
-  const tempCaptionedVideoPath = getTempBurnPath(captionedVideoPath);
+  const tempCaptionedVideoPath = getTempBurnPath(captionedVideoPath, editPlanGuard.editPlanId);
   const speechCleanupPlan = extractSpeechCleanupCutPlan(clip.captionData);
   const sourceCaptionCues = extractCaptionCueOverlays(clip.captionData);
-  const renderCaptionCues = remapCaptionCueOverlaysForSpeechCleanup(sourceCaptionCues, speechCleanupPlan);
+  const captionSyncOffsetSeconds = extractCaptionSyncOffsetSeconds(clip.captionData);
+  const syncedCaptionCues = shiftCaptionCueOverlays(sourceCaptionCues, captionSyncOffsetSeconds);
+  const renderCaptionCues = remapCaptionCueOverlaysForSpeechCleanup(syncedCaptionCues, speechCleanupPlan);
   const renderCaptionData = clip.captionData && typeof clip.captionData === "object" && !Array.isArray(clip.captionData)
     ? { ...(clip.captionData as Record<string, unknown>), cues: renderCaptionCues }
     : clip.captionData;
 
   const renderedClipExists = await fileExists(renderedPath);
   const subtitleExists = await fileExists(subtitlePath) || renderCaptionCues.length > 0;
+  const existingOutput = await fileExists(captionedVideoPath);
+  const canReuseExistingOutput = existingOutput
+    && clip.captionBurnStatus === "COMPLETED"
+    && clip.captionBurnFreshness === "UP_TO_DATE"
+    && hasCurrentCaptionRendererVersion(clip.captionData)
+    && !options?.force
+    && !options?.allowReburn;
 
   const eligibility = validateCaptionBurnEligibility({
     status: clip.status,
@@ -1094,7 +1259,7 @@ async function burnCaptionsForClipCore(
     captionBurnStatus: clip.captionBurnStatus,
     renderedClipExists,
     subtitleExists,
-    allowReburn: Boolean(options?.allowReburn),
+    allowReburn: Boolean(options?.allowReburn || canReuseExistingOutput),
     transcriptSafetyStatus: clip.transcriptSafetyStatus,
   });
 
@@ -1106,18 +1271,7 @@ async function burnCaptionsForClipCore(
     throw new Error("Captions are disabled for this clip in Clip Studio.");
   }
 
-  const existingOutput = await fileExists(captionedVideoPath);
-  if (
-    existingOutput
-    && !options?.force
-    && !options?.allowReburn
-    && hasCurrentCaptionRendererVersion(clip.captionData)
-  ) {
-    await upsertActiveClipEditPlanForClip({
-      clipCandidateId: clip.id,
-      createdBy: "caption_burn",
-      createdReason: "existing_captioned_video_reused",
-    });
+  if (canReuseExistingOutput) {
     const outputStat = await stat(captionedVideoPath).catch(() => null);
     const burnedAt = new Date();
     const brandingSettings = await getBrandingSettings();
@@ -1127,19 +1281,22 @@ async function burnCaptionsForClipCore(
     );
     const captionPosition = resolveCaptionPosition(renderCaptionData);
     const captionAppearance = resolveCaptionAppearance(renderCaptionData);
-    await prisma.clipCandidate.update({
-      where: { id: clip.id },
-      data: buildCaptionBurnMetadata({
-        outputPath: captionedVideoPath,
-        burnedAt,
-        captionStylePresetId,
-        captionSafeArea: resolveCaptionSafeArea(clip.captionData),
-        captionPosition,
-        captionAppearance,
-        captionData: clip.captionData,
-      }),
+    await updateClipCandidateForActiveEditPlan({
+      guard: editPlanGuard,
+      data: {
+        ...buildCaptionBurnMetadata({
+          outputPath: captionedVideoPath,
+          burnedAt,
+          captionStylePresetId,
+          captionSafeArea: resolveCaptionSafeArea(clip.captionData),
+          captionPosition,
+          captionAppearance,
+          captionData: clip.captionData,
+        }),
+        captionBurnFreshness: "UP_TO_DATE",
+        assetInvalidationReason: null,
+      },
     });
-    await markCaptionBurnAssetCompleted(clip.id, false);
     await recordClipArtifact({
       clipCandidateId: clip.id,
       kind: "CAPTIONED",
@@ -1149,6 +1306,10 @@ async function burnCaptionsForClipCore(
         reusedExistingFile: true,
         captionStylePresetId,
         captionPosition,
+      },
+      editPlan: {
+        editPlanId: editPlanGuard.editPlanId,
+        planHash: editPlanGuard.planHash,
       },
     });
 
@@ -1163,6 +1324,8 @@ async function burnCaptionsForClipCore(
     };
   }
 
+  await assertClipEditPlanStillActive(editPlanGuard);
+
   const ffmpegInstalled = await checkFfmpegInstalled(options?.ffmpegPath);
   if (!ffmpegInstalled) {
     throw new Error("FFmpeg is not installed or not executable.");
@@ -1176,26 +1339,54 @@ async function burnCaptionsForClipCore(
   const captionSafeArea = resolveCaptionSafeArea(clip.captionData);
   const captionPosition = resolveCaptionPosition(renderCaptionData);
   const captionAppearance = resolveCaptionAppearance(renderCaptionData);
+  const captionRevealMode = extractCaptionRevealMode(clip.captionData);
   const layoutCaptionCues = splitCaptionCueOverlaysForLayout(renderCaptionCues, captionAppearance);
+  const styledLayoutCaptionCues = layoutCaptionCues.map((cue) => ({
+    ...cue,
+    text: formatCaptionOverlayText(cue.text, captionAppearance, captionStylePresetId),
+    ...(cue.wordTimings
+      ? {
+          wordTimings: cue.wordTimings.map((timing) => ({
+            ...timing,
+            text: formatCaptionOverlayText(timing.text, captionAppearance, captionStylePresetId),
+          })),
+        }
+      : {}),
+  }));
   const layoutWasSplit = layoutCaptionCues.length !== renderCaptionCues.length;
-  const remappedSubtitlePath = (speechCleanupPlan?.enabled || layoutWasSplit) && layoutCaptionCues.length > 0
-    ? tempCaptionedVideoPath.replace(/\.mp4$/i, ".speech-cleanup.srt")
+  const captionTextWasAdjusted = styledLayoutCaptionCues.some(
+    (cue, index) => cue.text !== layoutCaptionCues[index]?.text,
+  );
+  const subtitleFileExists = await fileExists(subtitlePath);
+  const captionTimingWasAdjusted = Boolean(speechCleanupPlan?.enabled) || Math.abs(captionSyncOffsetSeconds) >= 0.001;
+  const shouldMaterializeCaptionCues = styledLayoutCaptionCues.length > 0
+    && (captionTimingWasAdjusted || layoutWasSplit || captionTextWasAdjusted || !subtitleFileExists);
+  const remappedSubtitlePath = shouldMaterializeCaptionCues
+    ? (subtitleFileExists
+        ? tempCaptionedVideoPath.replace(/\.mp4$/i, ".studio-captions.srt")
+        : subtitlePath)
     : null;
 
   if (remappedSubtitlePath) {
-    await writeFile(/* turbopackIgnore: true */ remappedSubtitlePath, buildSrtFromCaptionCueOverlays(layoutCaptionCues), "utf8");
+    await writeFile(/* turbopackIgnore: true */ remappedSubtitlePath, buildSrtFromCaptionCueOverlays(styledLayoutCaptionCues), "utf8");
     await appendJobLog(
       jobId,
       speechCleanupPlan?.enabled
         ? "Caption timing remapped to the speech-cleaned render timeline with readable phrase windows."
+        : Math.abs(captionSyncOffsetSeconds) >= 0.001
+          ? `Caption sync adjusted by ${captionSyncOffsetSeconds > 0 ? "+" : ""}${captionSyncOffsetSeconds.toFixed(2)} seconds.`
         : "Long caption cues split into readable phrase windows without dropping spoken words.",
     );
   }
 
   let usedWordHighlightOverlay = false;
   const wordHighlightCues = shouldUseWordHighlightOverlay(clip.captionData)
-    ? expandCaptionCueWordHighlightOverlays(layoutCaptionCues)
+    ? expandCaptionCueWordHighlightOverlays(styledLayoutCaptionCues)
     : [];
+  const requiresPrecisePlacementOverlay = captionPosition === "middle"
+    && captionAppearance.verticalOffset !== 0;
+  const useSingleWordPopOverlay = captionRevealMode === "single-word"
+    && styledLayoutCaptionCues.length <= MAX_WORD_HIGHLIGHT_OVERLAY_CUES;
 
   if (wordHighlightCues.length > 0 && wordHighlightCues.length <= MAX_WORD_HIGHLIGHT_OVERLAY_CUES) {
     usedWordHighlightOverlay = true;
@@ -1212,6 +1403,26 @@ async function burnCaptionsForClipCore(
       appearance: captionAppearance,
       captionStylePresetId,
       captionSafeArea,
+    });
+  } else if (requiresPrecisePlacementOverlay || useSingleWordPopOverlay) {
+    await appendJobLog(
+      jobId,
+      useSingleWordPopOverlay
+        ? "Caption burn using animated one-word image overlays."
+        : "Caption burn using image overlays for precise middle-position offset.",
+    );
+    await runFfmpegCaptionOverlayFallback({
+      sermonId: clip.sermonId,
+      renderedPath,
+      outputPath: tempCaptionedVideoPath,
+      ffmpegPath: options?.ffmpegPath,
+      jobId,
+      cues: styledLayoutCaptionCues,
+      captionPosition,
+      appearance: captionAppearance,
+      captionStylePresetId,
+      captionSafeArea,
+      animateWordPop: useSingleWordPopOverlay,
     });
   } else {
     if (wordHighlightCues.length > MAX_WORD_HIGHLIGHT_OVERLAY_CUES) {
@@ -1245,7 +1456,7 @@ async function burnCaptionsForClipCore(
         outputPath: tempCaptionedVideoPath,
         ffmpegPath: options?.ffmpegPath,
         jobId,
-        cues: layoutCaptionCues,
+        cues: styledLayoutCaptionCues,
         captionPosition,
         appearance: captionAppearance,
         captionStylePresetId,
@@ -1257,70 +1468,75 @@ async function burnCaptionsForClipCore(
     await unlink(/* turbopackIgnore: true */ remappedSubtitlePath).catch(() => undefined);
   }
 
+  let promotedOutputIdentity: PromotedMediaIdentity | null = null;
   try {
+    await assertClipEditPlanStillActive(editPlanGuard);
     await rename(tempCaptionedVideoPath, captionedVideoPath);
+    promotedOutputIdentity = await capturePromotedMediaIdentity(captionedVideoPath);
   } catch (error) {
     await unlink(tempCaptionedVideoPath).catch(() => undefined);
     throw error;
   }
 
-  const outputStat = await stat(captionedVideoPath);
-  if (outputStat.size <= 0) {
-    throw new Error("Caption burn produced an empty output file.");
-  }
+  try {
+    const outputStat = await stat(captionedVideoPath);
+    if (outputStat.size <= 0) {
+      throw new Error("Caption burn produced an empty output file.");
+    }
 
-  const burnedAt = new Date();
-  await prisma.clipCandidate.update({
-    where: { id: clip.id },
-    data: buildCaptionBurnMetadata({
-      outputPath: captionedVideoPath,
+    const burnedAt = new Date();
+    await updateClipCandidateForActiveEditPlan({
+      guard: editPlanGuard,
+      data: {
+        ...buildCaptionBurnMetadata({
+          outputPath: captionedVideoPath,
+          burnedAt,
+          captionStylePresetId,
+          captionSafeArea,
+          captionPosition,
+          captionAppearance,
+          captionData: clip.captionData,
+        }),
+        captionBurnFreshness: "UP_TO_DATE",
+        captionBurnAssetVersion: { increment: 1 },
+        overlayFreshness: "NEEDS_REGENERATION",
+        exportFreshness: "NEEDS_REGENERATION",
+        assetInvalidationReason: "Caption burn regenerated. Overlay and export assets now require regeneration.",
+      },
+    });
+    await recordClipArtifact({
+      clipCandidateId: clip.id,
+      kind: "CAPTIONED",
+      filePath: captionedVideoPath,
+      sizeBytes: outputStat.size,
+      metadata: {
+        reusedExistingFile: false,
+        captionStylePresetId,
+        captionPosition,
+        wordHighlightOverlay: usedWordHighlightOverlay,
+      },
+      editPlan: {
+        editPlanId: editPlanGuard.editPlanId,
+        planHash: editPlanGuard.planHash,
+      },
+    });
+
+    await appendJobLog(jobId, `Caption burn completed for clip ${clip.id}.`);
+    await appendPipelineLog(clip.sermonId, `Caption burn completed for clip ${clip.id}.`);
+
+    return {
+      clipId: clip.id,
+      captionedVideoPath,
       burnedAt,
-      captionStylePresetId,
-      captionSafeArea,
-      captionPosition,
-      captionAppearance,
-      captionData: clip.captionData,
-    }),
-  });
-  await markCaptionBurnAssetCompleted(clip.id, true);
-  await upsertActiveClipEditPlanForClip({
-    clipCandidateId: clip.id,
-    createdBy: "caption_burn",
-    createdReason: "caption_burn_completed",
-  });
-  await recordClipArtifact({
-    clipCandidateId: clip.id,
-    kind: "CAPTIONED",
-    filePath: captionedVideoPath,
-    sizeBytes: outputStat.size,
-    metadata: {
       reusedExistingFile: false,
-      captionStylePresetId,
-      captionPosition,
-      wordHighlightOverlay: usedWordHighlightOverlay,
-    },
-  });
-
-  await appendJobLog(jobId, `Caption burn completed for clip ${clip.id}.`);
-  await appendPipelineLog(clip.sermonId, `Caption burn completed for clip ${clip.id}.`);
-
-  return {
-    clipId: clip.id,
-    captionedVideoPath,
-    burnedAt,
-    reusedExistingFile: false,
-  };
-}
-
-async function failCaptionBurn(clipId: string, message: string): Promise<void> {
-  await prisma.clipCandidate.update({
-    where: { id: clipId },
-    data: {
-      captionBurnStatus: "FAILED",
-      captionBurnError: message,
-    },
-  });
-  await markCaptionBurnAssetFailed(clipId);
+    };
+  } catch (error) {
+    const completionError = await preferStaleClipCompositionError(editPlanGuard, error);
+    if (promotedOutputIdentity && isStaleClipCompositionError(completionError)) {
+      await discardPromotedMediaIfUnchanged(captionedVideoPath, promotedOutputIdentity);
+    }
+    throw completionError;
+  }
 }
 
 export async function burnCaptionsIntoRenderedClip(
@@ -1332,10 +1548,23 @@ export async function burnCaptionsIntoRenderedClip(
     throw new Error("Clip id is required for caption burn.");
   }
 
+  const { plan: startedEditPlan } = await upsertActiveClipEditPlanForClip({
+    clipCandidateId: normalizedClipId,
+    createdBy: "caption_burn",
+    createdReason: "caption_burn_input_snapshot",
+  });
+  const editPlanGuard = {
+    clipCandidateId: normalizedClipId,
+    editPlanId: startedEditPlan.id,
+    planHash: startedEditPlan.planHash,
+  };
+
   const clip = await loadClipForCaptionBurn(normalizedClipId);
+  await assertClipEditPlanStillActive(editPlanGuard);
   const job = await createProcessingJob(clip.sermonId, "BURN_SUBTITLES");
   const renderedPath = clip.renderedFilePath?.trim() || getClipOutputPath(clip.sermonId, clip.id);
   const subtitlePath = clip.subtitleFilePath?.trim() || clip.srtPath?.trim() || getClipSrtPath(clip.sermonId, clip.id);
+  const storedCaptionCues = extractCaptionCueOverlays(clip.captionData);
 
   const eligibility = validateCaptionBurnEligibility({
     status: clip.status,
@@ -1343,7 +1572,7 @@ export async function burnCaptionsIntoRenderedClip(
     captionStatus: clip.captionStatus,
     captionBurnStatus: clip.captionBurnStatus,
     renderedClipExists: await fileExists(renderedPath),
-    subtitleExists: await fileExists(subtitlePath),
+    subtitleExists: await fileExists(subtitlePath) || storedCaptionCues.length > 0,
     allowReburn: Boolean(options?.allowReburn),
     transcriptSafetyStatus: clip.transcriptSafetyStatus,
   });
@@ -1353,15 +1582,19 @@ export async function burnCaptionsIntoRenderedClip(
   }
 
   let didClaimBurnStart = false;
-
   try {
-    await claimCaptionBurnStart(clip.id);
+    await claimCaptionBurnStart(editPlanGuard);
     didClaimBurnStart = true;
     await markJobRunning(job.id);
     await appendJobLog(job.id, `Caption burn started for clip ${clip.id}.`);
     await appendPipelineLog(clip.sermonId, `Caption burn requested for clip ${clip.id}.`);
 
-    const result = await burnCaptionsForClipCore(clip, options, job.id);
+    const result = await burnCaptionsForClipCore(
+      clip,
+      options,
+      job.id,
+      editPlanGuard,
+    );
 
     await markJobSucceeded(
       job.id,
@@ -1372,16 +1605,37 @@ export async function burnCaptionsIntoRenderedClip(
 
     return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown caption burn error.";
-    if (didClaimBurnStart) {
-      await failCaptionBurn(clip.id, message).catch(() => undefined);
+    const completionError = await preferStaleClipCompositionError(editPlanGuard, error);
+    const message = completionError instanceof Error ? completionError.message : "Unknown caption burn error.";
+    const captionedVideoPath = getCaptionedClipPath(clip.sermonId, clip.id);
+    await unlink(getTempBurnPath(captionedVideoPath, editPlanGuard.editPlanId)).catch(() => undefined);
+    if (isStaleClipCompositionError(completionError)) {
+      await markJobFailed(job.id, message, "Stale caption burn discarded after newer Clip Studio changes.").catch(() => undefined);
+      await appendPipelineLog(clip.sermonId, `Discarded stale caption burn for clip ${clip.id}: ${message}`).catch(() => undefined);
+      throw completionError;
     }
-    await recordClipArtifact({
-      clipCandidateId: clip.id,
-      kind: "CAPTIONED",
-      status: "FAILED",
-      errorMessage: message,
-    }).catch(() => undefined);
+    const failureRecorded = didClaimBurnStart
+      ? await tryUpdateClipCandidateForActiveEditPlan({
+          guard: editPlanGuard,
+          data: {
+            captionBurnStatus: "FAILED",
+            captionBurnError: message,
+            captionBurnFreshness: "FAILED",
+          },
+        }).catch(() => false)
+      : false;
+    if (failureRecorded) {
+      await recordClipArtifact({
+        clipCandidateId: clip.id,
+        kind: "CAPTIONED",
+        status: "FAILED",
+        errorMessage: message,
+        editPlan: {
+          editPlanId: editPlanGuard.editPlanId,
+          planHash: editPlanGuard.planHash,
+        },
+      }).catch(() => undefined);
+    }
     await markJobFailed(job.id, message, "Caption burn failed.");
     await appendPipelineLog(clip.sermonId, `Caption burn failed for clip ${clip.id}: ${message}`);
     throw new Error(message);
@@ -1399,10 +1653,14 @@ export const __captionBurnTestUtils = {
   shouldUseWordHighlightOverlay,
   hasCurrentCaptionRendererVersion,
   extractCaptionCueOverlays,
+  resolveMatchingCaptionWordTimings,
+  shiftCaptionCueOverlays,
   remapCaptionCueOverlaysForSpeechCleanup,
   expandCaptionCueWordHighlightOverlays,
   buildSrtFromCaptionCueOverlays,
+  formatCaptionOverlayText,
   buildCaptionOverlaySvg,
+  buildCaptionOverlayFilterGraph,
   splitCaptionCueOverlaysForLayout,
   captionOverlayYExpression,
   shouldUseCaptionOverlayFallback,

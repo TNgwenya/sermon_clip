@@ -124,14 +124,27 @@ function queuedJobResult(input: {
   existingGenerationSummary: unknown;
   requestedGenerationSummary: unknown;
 }): QueuedProcessingJobResult {
+  const existingIntentKey = input.existingGenerationSummary
+    && typeof input.existingGenerationSummary === "object"
+    && !Array.isArray(input.existingGenerationSummary)
+    && typeof (input.existingGenerationSummary as { intentKey?: unknown }).intentKey === "string"
+    ? (input.existingGenerationSummary as { intentKey: string }).intentKey
+    : null;
+  const requestedIntentKey = input.requestedGenerationSummary
+    && typeof input.requestedGenerationSummary === "object"
+    && !Array.isArray(input.requestedGenerationSummary)
+    && typeof (input.requestedGenerationSummary as { intentKey?: unknown }).intentKey === "string"
+    ? (input.requestedGenerationSummary as { intentKey: string }).intentKey
+    : null;
   return {
     id: input.id,
     reusedExisting: true,
     intentConflict: input.type === "GENERATE_CLIPS"
-      && !clipGenerationIntentsMatch(
-        input.existingGenerationSummary,
-        input.requestedGenerationSummary,
-      ),
+      ? !clipGenerationIntentsMatch(
+          input.existingGenerationSummary,
+          input.requestedGenerationSummary,
+        )
+      : requestedIntentKey !== null && existingIntentKey !== requestedIntentKey,
   };
 }
 

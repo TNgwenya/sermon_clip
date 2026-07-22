@@ -6,13 +6,20 @@ import {
   mapSourceSecondsToCleanedPreviewSeconds,
   resolveActiveCaptionCueText,
   resolveActiveCaptionWordIndex,
+  resolveCaptionLookupSeconds,
   resolveCompositionPreviewDuration,
   resolveHookOverlayAnimationFrame,
+  resolvePreviewSeekSourceSeconds,
   resolveSpeechCleanupJumpTarget,
   shouldShowHookOverlay,
   synchronizePreviewBackdropMedia,
 } from "@/lib/clipStudioPreviewTimeline";
-import { createSpeechCleanupEditsFromPlan } from "@/lib/speechCleanupPlan";
+import {
+  createSpeechCleanupEditsFromPlan,
+  normalizeSpeechCleanupEdits,
+  resizeSpeechCleanupEditableCut,
+  resolveSpeechCleanupEditableCuts,
+} from "@/lib/speechCleanupPlan";
 
 const baseHook = {
   enabled: true,
@@ -229,6 +236,14 @@ describe("resolveActiveCaptionCueText", () => {
   });
 });
 
+describe("resolveCaptionLookupSeconds", () => {
+  it("delays positive offsets and advances negative offsets without clamping the opening gap", () => {
+    expect(resolveCaptionLookupSeconds(0, 0.25)).toBe(-0.25);
+    expect(resolveCaptionLookupSeconds(1, 0.25)).toBe(0.75);
+    expect(resolveCaptionLookupSeconds(1, -0.2)).toBe(1.2);
+  });
+});
+
 describe("resolveActiveCaptionWordIndex", () => {
   it("advances the active word inside a full visible caption line", () => {
     const cue = {
@@ -256,6 +271,49 @@ describe("resolveActiveCaptionWordIndex", () => {
 
     expect(words[1]).toBe("grows");
     expect(resolveActiveCaptionWordIndex({ activeCue: cue, words, previewSeconds: 5.28 })).toBe(1);
+  });
+
+  it("prefers exact word ranges when normalized visible words still match", () => {
+    const cue = {
+      index: 1,
+      startSeconds: 0,
+      endSeconds: 8,
+      text: "A elephant!",
+      wordTimings: [
+        { text: "a", startSeconds: 0, endSeconds: 5 },
+        { text: "elephant", startSeconds: 5, endSeconds: 8 },
+      ],
+    };
+
+    expect(resolveActiveCaptionWordIndex({
+      activeCue: cue,
+      words: ["A", "ELEPHANT!"],
+      previewSeconds: 2,
+    })).toBe(0);
+    expect(resolveActiveCaptionWordIndex({
+      activeCue: cue,
+      words: ["A", "ELEPHANT!"],
+      previewSeconds: 5,
+    })).toBe(1);
+  });
+
+  it("falls back to weighted timing when edited cue words no longer match", () => {
+    const cue = {
+      index: 1,
+      startSeconds: 0,
+      endSeconds: 8,
+      text: "A edited",
+      wordTimings: [
+        { text: "a", startSeconds: 0, endSeconds: 5 },
+        { text: "elephant", startSeconds: 5, endSeconds: 8 },
+      ],
+    };
+
+    expect(resolveActiveCaptionWordIndex({
+      activeCue: cue,
+      words: cue.text.split(" "),
+      previewSeconds: 2,
+    })).toBe(1);
   });
 });
 
@@ -472,6 +530,72 @@ describe("speech cleanup preview timeline", () => {
     expect(resizedPlan.cleanedDurationSeconds).toBe(9);
   });
 
+  it("keeps the detected pause length while the removal amount is reduced or expanded", () => {
+    const captionCues = [
+      { index: 1, startSeconds: 0, endSeconds: 2, text: "Opening words" },
+      { index: 2, startSeconds: 4, endSeconds: 6, text: "Closing words" },
+    ];
+    const speechCleanup = {
+      removeDeadAir: false,
+      tightenLongPauses: true,
+      flagFillerWords: true,
+      intensity: "normal" as const,
+    };
+    const basePlan = buildSpeechCleanupPreviewPlan({
+      captionCues,
+      durationSeconds: 6,
+      speechCleanup,
+    });
+    const edits = createSpeechCleanupEditsFromPlan(basePlan);
+    const detectedCut = edits.cuts[0];
+
+    expect(detectedCut).toMatchObject({
+      startSeconds: 2.18,
+      endSeconds: 3.82,
+      removedSeconds: 1.64,
+      rawGapSeconds: 2,
+    });
+
+    const reducedCut = resizeSpeechCleanupEditableCut({
+      cut: detectedCut,
+      removedSeconds: 0.6,
+      minStartSeconds: 0,
+      maxEndSeconds: 6,
+    });
+    expect(reducedCut).toMatchObject({
+      startSeconds: 2.7,
+      endSeconds: 3.3,
+      removedSeconds: 0.6,
+      rawGapSeconds: 2,
+    });
+    expect(normalizeSpeechCleanupEdits({ version: 1, cuts: [reducedCut] }, 6)?.cuts[0]?.rawGapSeconds).toBe(2);
+
+    const editsAfterLegacyRangeUpdate = {
+      version: 1 as const,
+      cuts: [{ ...reducedCut, rawGapSeconds: reducedCut.removedSeconds }],
+    };
+    const reducedPlan = buildSpeechCleanupPreviewPlan({
+      captionCues,
+      durationSeconds: 6,
+      speechCleanup,
+      speechCleanupEdits: editsAfterLegacyRangeUpdate,
+    });
+    const restoredCut = resolveSpeechCleanupEditableCuts(reducedPlan, editsAfterLegacyRangeUpdate)[0];
+
+    expect(restoredCut.rawGapSeconds).toBe(2);
+    expect(resizeSpeechCleanupEditableCut({
+      cut: restoredCut,
+      removedSeconds: 2,
+      minStartSeconds: 0,
+      maxEndSeconds: 6,
+    })).toMatchObject({
+      startSeconds: 2,
+      endSeconds: 4,
+      removedSeconds: 2,
+      rawGapSeconds: 2,
+    });
+  });
+
   it("maps between cleaned preview time and source video time", () => {
     const plan = buildSpeechCleanupPreviewPlan({
       captionCues: [
@@ -490,6 +614,38 @@ describe("speech cleanup preview timeline", () => {
     expect(mapSourceSecondsToCleanedPreviewSeconds(1.28, plan)).toBe(0);
     expect(mapCleanedPreviewSecondsToSourceSeconds(3, plan)).toBe(6.92);
     expect(resolveSpeechCleanupJumpTarget(5, plan)).toBe(6.82);
+  });
+
+  it("keeps source-time transcript seeks separate from cleaned preview seeks", () => {
+    const plan = buildSpeechCleanupPreviewPlan({
+      captionCues: [
+        { index: 1, startSeconds: 1.4, endSeconds: 4, text: "Opening words" },
+        { index: 2, startSeconds: 7, endSeconds: 10, text: "Closing words" },
+      ],
+      durationSeconds: 12,
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "normal",
+      },
+    });
+
+    expect(resolvePreviewSeekSourceSeconds({
+      requestedSeconds: 7,
+      timeDomain: "source",
+      plan,
+    })).toBe(7);
+    expect(resolvePreviewSeekSourceSeconds({
+      requestedSeconds: 5,
+      timeDomain: "cleaned",
+      plan,
+    })).toBe(8.92);
+    expect(resolvePreviewSeekSourceSeconds({
+      requestedSeconds: 5,
+      timeDomain: "source",
+      plan,
+    })).toBe(6.82);
   });
 
   it("does not enable speech cleanup preview without transcript timing", () => {

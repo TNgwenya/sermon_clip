@@ -21,6 +21,7 @@ import {
   buildSpeechCleanupPreviewPlan,
 } from "@/lib/clipStudioPreviewTimeline";
 import {
+  resizeSpeechCleanupEditableCut,
   resolveSpeechCleanupEditableCuts,
   type SpeechCleanupEditableCut,
 } from "@/lib/speechCleanupPlan";
@@ -116,6 +117,10 @@ function formatCleanupDuration(seconds: number): string {
   return formatSecondsForPastorView(safeSeconds);
 }
 
+function removeCleanupMarkerAriaLabel(index: number): string {
+  return `Remove cleanup marker ${index + 1}`;
+}
+
 function formatCleanupRangeLabel(startSeconds: number, endSeconds: number): string {
   const durationSeconds = Math.max(0, endSeconds - startSeconds);
   if (durationSeconds > 0 && durationSeconds < 1) {
@@ -182,33 +187,39 @@ function isTranscriptSegmentCurrent(
   );
 }
 
-function findCaptionCueForTranscriptSegment({
-  activeClipStartSeconds,
-  activeClipEndSeconds,
-  captionCues,
-  segment,
-}: {
-  activeClipStartSeconds: number;
-  activeClipEndSeconds: number;
-  captionCues: EditableCaptionCue[];
-  segment: TranscriptSegment;
-}): EditableCaptionCue | null {
-  const overlapStart = Math.max(activeClipStartSeconds, segment.startTimeSeconds);
-  const overlapEnd = Math.min(activeClipEndSeconds, segment.endTimeSeconds);
-  if (overlapEnd <= overlapStart) {
-    return null;
+type TranscriptSegmentClipStatus = "included" | "partial" | "outside";
+
+function resolveTranscriptSegmentClipStatus(
+  segment: TranscriptSegment,
+  clipStartSeconds: number,
+  clipEndSeconds: number,
+): TranscriptSegmentClipStatus {
+  if (
+    segment.endTimeSeconds <= clipStartSeconds
+    || segment.startTimeSeconds >= clipEndSeconds
+  ) {
+    return "outside";
   }
 
-  const relativeStart = Number((overlapStart - activeClipStartSeconds).toFixed(3));
-  const relativeEnd = Number((overlapEnd - activeClipStartSeconds).toFixed(3));
+  if (
+    segment.startTimeSeconds >= clipStartSeconds
+    && segment.endTimeSeconds <= clipEndSeconds
+  ) {
+    return "included";
+  }
 
-  return (
-    captionCues.find(
-      (cue) =>
-        Math.abs(cue.startSeconds - relativeStart) < 0.08 &&
-        Math.abs(cue.endSeconds - relativeEnd) < 0.08,
-    ) ?? null
-  );
+  return "partial";
+}
+
+function transcriptSegmentClipStatusLabel(status: TranscriptSegmentClipStatus): string {
+  switch (status) {
+    case "included":
+      return "Included in clip";
+    case "partial":
+      return "Partially included in clip";
+    case "outside":
+      return "Outside clip";
+  }
 }
 
 function getInitialFocusedSegmentId(
@@ -223,6 +234,47 @@ function getInitialFocusedSegmentId(
     transcriptSegments[0]?.id ??
     ""
   );
+}
+
+function activateTranscriptSegment({
+  segment,
+  setFocusedSegmentId,
+  seekToAbsolute,
+  requestPreviewPlayback,
+}: {
+  segment: TranscriptSegment;
+  setFocusedSegmentId: (segmentId: string) => void;
+  seekToAbsolute: (seconds: number) => void;
+  requestPreviewPlayback?: () => void;
+}) {
+  setFocusedSegmentId(segment.id);
+  seekToAbsolute(segment.startTimeSeconds);
+  requestPreviewPlayback?.();
+}
+
+function resolveTimelineBoundarySeconds({
+  command,
+  seconds,
+  timelineStart,
+  timelineEnd,
+  activeClipStartSeconds,
+  activeClipEndSeconds,
+}: {
+  command: "set-start-seconds" | "set-end-seconds";
+  seconds: number;
+  timelineStart: number;
+  timelineEnd: number;
+  activeClipStartSeconds: number;
+  activeClipEndSeconds: number;
+}): number | null {
+  if (!Number.isFinite(seconds)) {
+    return null;
+  }
+
+  const nextSeconds = command === "set-start-seconds"
+    ? clampSeconds(seconds, timelineStart, activeClipEndSeconds - 0.1)
+    : clampSeconds(seconds, activeClipStartSeconds + 0.1, timelineEnd);
+  return Number(nextSeconds.toFixed(3));
 }
 
 function useClipStudioTranscriptState({
@@ -241,7 +293,7 @@ function useClipStudioTranscriptState({
     isDraftDirty,
     previewClock,
     requestPreviewPlayback,
-    seekPreviewTo,
+    seekSourcePreviewTo,
   } = useClipStudioPreview();
   const activeClipStartSeconds = editPreview.startSeconds ?? clipStartSeconds;
   const activeClipEndSeconds = editPreview.endSeconds ?? clipEndSeconds;
@@ -252,7 +304,7 @@ function useClipStudioTranscriptState({
     Math.max(activeClipEndSeconds, transcriptSegments.at(-1)?.endTimeSeconds ?? activeClipEndSeconds),
   );
   const timelineDuration = timelineEnd - timelineStart;
-  const absolutePlayheadSeconds = activeClipStartSeconds + previewClock.currentSeconds;
+  const absolutePlayheadSeconds = activeClipStartSeconds + previewClock.sourceCurrentSeconds;
   const playheadPercent = markerPercent(absolutePlayheadSeconds, timelineStart, timelineDuration);
   const selectedStartPercent = markerPercent(activeClipStartSeconds, timelineStart, timelineDuration);
   const selectedEndPercent = markerPercent(activeClipEndSeconds, timelineStart, timelineDuration);
@@ -304,7 +356,7 @@ function useClipStudioTranscriptState({
   ].filter((tag): tag is string => Boolean(tag && tag.trim()));
 
   function seekToAbsolute(seconds: number) {
-    seekPreviewTo(Math.max(0, seconds - activeClipStartSeconds));
+    seekSourcePreviewTo(Math.max(0, seconds - activeClipStartSeconds));
   }
 
   return {
@@ -344,28 +396,19 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
   const [focusedSegmentId, setFocusedSegmentId] = useState(() =>
     getInitialFocusedSegmentId(transcriptSegments, clipStartSeconds, clipEndSeconds),
   );
+  const [followPlayback, setFollowPlayback] = useState(true);
   const {
     absolutePlayheadSeconds,
-    activeCaptionCues,
     activeClipEndSeconds,
     activeClipStartSeconds,
     durationSeconds,
     isDraftDirty,
+    previewClock,
+    requestPreviewPlayback,
     seekToAbsolute,
     selectedSegmentIds,
     tags,
   } = useClipStudioTranscriptState(props);
-  function getSegmentDisplayText(segment: TranscriptSegment): string {
-    return (
-      findCaptionCueForTranscriptSegment({
-        activeClipEndSeconds,
-        activeClipStartSeconds,
-        captionCues: activeCaptionCues,
-        segment,
-      })?.text ?? segment.text
-    );
-  }
-
   const currentSegment = useMemo(
     () =>
       transcriptSegments.find((segment, index) =>
@@ -380,12 +423,13 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
   );
   const focusedSegment = useMemo(
     () =>
+      (followPlayback && previewClock.isPlaying ? currentSegment : null) ??
       transcriptSegments.find((segment) => segment.id === focusedSegmentId) ??
       currentSegment ??
       transcriptSegments.find((segment) => selectedSegmentIds.has(segment.id)) ??
       transcriptSegments[0] ??
       null,
-    [currentSegment, focusedSegmentId, selectedSegmentIds, transcriptSegments],
+    [currentSegment, focusedSegmentId, followPlayback, previewClock.isPlaying, selectedSegmentIds, transcriptSegments],
   );
 
   useEffect(() => {
@@ -409,14 +453,22 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     }
   }, [focusedSegment?.id]);
 
+  function focusSegment(segment: TranscriptSegment) {
+    activateTranscriptSegment({ segment, setFocusedSegmentId, seekToAbsolute });
+  }
+
   function previewSegment(segment: TranscriptSegment) {
-    setFocusedSegmentId(segment.id);
-    seekToAbsolute(segment.startTimeSeconds);
+    activateTranscriptSegment({
+      segment,
+      setFocusedSegmentId,
+      seekToAbsolute,
+      requestPreviewPlayback,
+    });
   }
 
   function dispatchTranscriptCommand(command: ClipStudioTranscriptCommand, segment?: TranscriptSegment) {
     if (segment) {
-      previewSegment(segment);
+      focusSegment(segment);
     } else if (command === "reset-ai") {
       setFocusedSegmentId(transcriptSegments[0]?.id ?? "");
     }
@@ -431,35 +483,42 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     );
   }
 
-  function dispatchTranscriptTextUpdate(segment: TranscriptSegment, text: string) {
-    window.dispatchEvent(
-      new CustomEvent(CLIP_STUDIO_TRANSCRIPT_COMMAND_EVENT, {
-        detail: {
-          command: "update-text",
-          segmentId: segment.id,
-          text,
-        },
-      }),
-    );
-  }
-
   return (
     <aside
       id="clip-studio-transcript"
       className="card clip-studio-transcript-rail stack-md"
-      aria-label="Clip transcript editor"
+      aria-label="Spoken transcript and clip boundaries"
       data-testid="clip-studio-transcript-panel"
       tabIndex={-1}
     >
       <div className="section-heading-row">
         <div>
-          <p className="kicker">Clip transcript</p>
-          <h2>On-video words</h2>
+          <p className="kicker">Spoken transcript</p>
+          <h2>Choose what stays</h2>
         </div>
         <StatusBadge tone={isDraftDirty ? "warning" : "success"}>
           {isDraftDirty ? "Unsaved draft" : "Saved settings"}
         </StatusBadge>
       </div>
+
+      <p className="muted small">
+        Highlighted lines stay in the clip. Select a line to hear it, then choose where the clip starts or ends.
+      </p>
+
+      <div className="clip-studio-ministry-tags" aria-label="Spoken transcript guide">
+        <span>Highlighted: in clip</span>
+        <span>Playing: current words</span>
+        <span>Selected: boundary controls ready</span>
+      </div>
+
+      <label className="muted small">
+        <input
+          type="checkbox"
+          checked={followPlayback}
+          onChange={(event) => setFollowPlayback(event.target.checked)}
+        />{" "}
+        Follow playback
+      </label>
 
       <div className="clip-studio-transcript-range">
         <article>
@@ -491,15 +550,10 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
             <strong>
               {formatSecondsForPastorView(focusedSegment.startTimeSeconds)} - {formatSecondsForPastorView(focusedSegment.endTimeSeconds)}
             </strong>
-            <label className="stack-sm clip-studio-transcript-word-editor">
-              On-video words
-              <textarea
-                aria-label="Edit on-video words for the selected line"
-                className="clip-studio-caption-textarea"
-                value={getSegmentDisplayText(focusedSegment)}
-                onChange={(event) => dispatchTranscriptTextUpdate(focusedSegment, event.target.value)}
-              />
-            </label>
+            <p className="clip-studio-transcript-spoken-line">{focusedSegment.text}</p>
+            <p className="muted small">
+              This transcript controls which spoken audio stays in the clip. To change words shown on screen, use Captions in the Edit panel.
+            </p>
           </div>
           <div className="clip-studio-transcript-actions" aria-label="Transcript line actions">
             <button
@@ -507,14 +561,14 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
               className="button secondary"
               onClick={() => dispatchTranscriptCommand("set-start", focusedSegment)}
             >
-              Set start
+              Start clip here
             </button>
             <button
               type="button"
               className="button secondary"
               onClick={() => dispatchTranscriptCommand("set-end", focusedSegment)}
             >
-              Set end
+              End clip here
             </button>
             <button
               type="button"
@@ -525,15 +579,6 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
             </button>
           </div>
           <div className="clip-studio-transcript-actions compact" aria-label="Transcript timing actions">
-            {getSegmentDisplayText(focusedSegment).trim() !== focusedSegment.text.trim() ? (
-              <button
-                type="button"
-                className="button secondary"
-                onClick={() => dispatchTranscriptCommand("reset-text", focusedSegment)}
-              >
-                Reset words
-              </button>
-            ) : null}
             <button
               type="button"
               className="button secondary"
@@ -552,7 +597,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
         </div>
       ) : null}
 
-      <div ref={transcriptListRef} className="clip-studio-transcript-list" aria-label="Clip transcript lines">
+      <div ref={transcriptListRef} className="clip-studio-transcript-list" aria-label="Spoken transcript lines">
         {transcriptSegments.length > 0 ? (
           transcriptSegments.map((segment, index) => {
             const isSelected = selectedSegmentIds.has(segment.id);
@@ -562,17 +607,24 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
               transcriptSegments,
               absolutePlayheadSeconds,
             );
+            const clipStatus = resolveTranscriptSegmentClipStatus(
+              segment,
+              activeClipStartSeconds,
+              activeClipEndSeconds,
+            );
+            const clipStatusLabel = transcriptSegmentClipStatusLabel(clipStatus);
 
-            const displayText = getSegmentDisplayText(segment);
+            const displayText = segment.text;
 
             return (
               <button
                 key={segment.id}
                 type="button"
-                aria-label={`Preview transcript line at ${formatSecondsForPastorView(segment.startTimeSeconds)}: ${displayText}`}
-                aria-pressed={focusedSegment?.id === segment.id}
+                aria-label={`Play spoken transcript line at ${formatSecondsForPastorView(segment.startTimeSeconds)}: ${displayText}. ${clipStatusLabel}.`}
+                aria-current={isCurrent ? "true" : undefined}
                 data-testid="clip-studio-transcript-line"
                 data-transcript-segment-id={segment.id}
+                data-clip-status={clipStatus}
                 ref={focusedSegment?.id === segment.id ? focusedLineRef : undefined}
                 className={[
                   "clip-studio-transcript-line",
@@ -814,6 +866,22 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
     );
   }
 
+  function updateTimelineBoundary(command: "set-start-seconds" | "set-end-seconds", seconds: number) {
+    const nextSeconds = resolveTimelineBoundarySeconds({
+      command,
+      seconds,
+      timelineStart,
+      timelineEnd,
+      activeClipStartSeconds,
+      activeClipEndSeconds,
+    });
+    if (nextSeconds === null) {
+      return;
+    }
+
+    dispatchTimelineBoundary(command, nextSeconds);
+  }
+
   function dispatchTimelineCommand(command: "snap-to-sentence" | "reset-ai") {
     window.dispatchEvent(
       new CustomEvent(CLIP_STUDIO_TRANSCRIPT_COMMAND_EVENT, {
@@ -909,6 +977,35 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
     requestPreviewPlayback();
   }
 
+  const getCleanupCutBounds = useCallback((cut: SpeechCleanupEditableCut) => {
+    const earlierCuts = editableCleanupCuts.filter((item) => item.id !== cut.id && item.endSeconds <= cut.startSeconds);
+    const laterCuts = editableCleanupCuts.filter((item) => item.id !== cut.id && item.startSeconds >= cut.endSeconds);
+
+    return {
+      minStartSeconds: Math.max(0, ...earlierCuts.map((item) => item.endSeconds + CLEANUP_CUT_GAP_SECONDS)),
+      maxEndSeconds: Math.min(durationSeconds, ...laterCuts.map((item) => item.startSeconds - CLEANUP_CUT_GAP_SECONDS)),
+    };
+  }, [durationSeconds, editableCleanupCuts]);
+
+  function updateCleanupCutRemovalDuration(cut: SpeechCleanupEditableCut, nextRemovedSeconds: number) {
+    const bounds = getCleanupCutBounds(cut);
+    const resizedCut = resizeSpeechCleanupEditableCut({
+      cut,
+      removedSeconds: nextRemovedSeconds,
+      ...bounds,
+      minRemovedSeconds: MIN_CLEANUP_CUT_SECONDS,
+    });
+
+    setSelectedCleanupCutId(cut.id);
+    setCleanupReviewOpen(true);
+    dispatchCleanupEdit({
+      command: "update-cut",
+      cutId: cut.id,
+      startSeconds: resizedCut.startSeconds,
+      endSeconds: resizedCut.endSeconds,
+    });
+  }
+
   const constrainCleanupCutRange = useCallback(({
     cut,
     mode,
@@ -920,10 +1017,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
     proposedStartSeconds: number;
     proposedEndSeconds: number;
   }): { startSeconds: number; endSeconds: number } => {
-    const earlierCuts = editableCleanupCuts.filter((item) => item.id !== cut.id && item.endSeconds <= cut.startSeconds);
-    const laterCuts = editableCleanupCuts.filter((item) => item.id !== cut.id && item.startSeconds >= cut.endSeconds);
-    const minStartSeconds = Math.max(0, ...earlierCuts.map((item) => item.endSeconds + CLEANUP_CUT_GAP_SECONDS));
-    const maxEndSeconds = Math.min(durationSeconds, ...laterCuts.map((item) => item.startSeconds - CLEANUP_CUT_GAP_SECONDS));
+    const { minStartSeconds, maxEndSeconds } = getCleanupCutBounds(cut);
 
     if (mode === "start") {
       const startSeconds = clampSeconds(proposedStartSeconds, minStartSeconds, cut.endSeconds - MIN_CLEANUP_CUT_SECONDS);
@@ -947,7 +1041,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
       startSeconds: Number(startSeconds.toFixed(3)),
       endSeconds: Number((startSeconds + cutDurationSeconds).toFixed(3)),
     };
-  }, [durationSeconds, editableCleanupCuts]);
+  }, [getCleanupCutBounds]);
 
   function startCleanupCutDrag(
     event: PointerEvent<HTMLElement>,
@@ -1100,6 +1194,86 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
             Reset
           </button>
         </div>
+      </div>
+
+      <div className="clip-studio-transcript-range" aria-label="Precise clip timing">
+        <article>
+          <label className="stack-sm" htmlFor="clip-studio-timeline-in-seconds">
+            <span className="kicker">In (seconds)</span>
+            <input
+              id="clip-studio-timeline-in-seconds"
+              type="number"
+              min={timelineStart}
+              max={activeClipEndSeconds - 0.1}
+              step={0.1}
+              value={Number(activeClipStartSeconds.toFixed(3))}
+              aria-describedby="clip-studio-timeline-boundary-help"
+              onChange={(event) => updateTimelineBoundary("set-start-seconds", event.currentTarget.valueAsNumber)}
+            />
+          </label>
+          <div className="clip-studio-transcript-actions compact">
+            <button
+              type="button"
+              className="button tertiary"
+              aria-label="Move In point earlier by 0.1 seconds"
+              disabled={activeClipStartSeconds <= timelineStart}
+              onClick={() => updateTimelineBoundary("set-start-seconds", activeClipStartSeconds - 0.1)}
+            >
+              -0.1
+            </button>
+            <button
+              type="button"
+              className="button tertiary"
+              aria-label="Move In point later by 0.1 seconds"
+              disabled={activeClipStartSeconds >= activeClipEndSeconds - 0.1}
+              onClick={() => updateTimelineBoundary("set-start-seconds", activeClipStartSeconds + 0.1)}
+            >
+              +0.1
+            </button>
+          </div>
+        </article>
+        <article>
+          <label className="stack-sm" htmlFor="clip-studio-timeline-out-seconds">
+            <span className="kicker">Out (seconds)</span>
+            <input
+              id="clip-studio-timeline-out-seconds"
+              type="number"
+              min={activeClipStartSeconds + 0.1}
+              max={timelineEnd}
+              step={0.1}
+              value={Number(activeClipEndSeconds.toFixed(3))}
+              aria-describedby="clip-studio-timeline-boundary-help"
+              onChange={(event) => updateTimelineBoundary("set-end-seconds", event.currentTarget.valueAsNumber)}
+            />
+          </label>
+          <div className="clip-studio-transcript-actions compact">
+            <button
+              type="button"
+              className="button tertiary"
+              aria-label="Move Out point earlier by 0.1 seconds"
+              disabled={activeClipEndSeconds <= activeClipStartSeconds + 0.1}
+              onClick={() => updateTimelineBoundary("set-end-seconds", activeClipEndSeconds - 0.1)}
+            >
+              -0.1
+            </button>
+            <button
+              type="button"
+              className="button tertiary"
+              aria-label="Move Out point later by 0.1 seconds"
+              disabled={activeClipEndSeconds >= timelineEnd}
+              onClick={() => updateTimelineBoundary("set-end-seconds", activeClipEndSeconds + 0.1)}
+            >
+              +0.1
+            </button>
+          </div>
+        </article>
+        <article>
+          <span className="kicker">Clip length</span>
+          <strong>{formatSecondsForPastorView(durationSeconds)}</strong>
+          <span id="clip-studio-timeline-boundary-help" className="muted small">
+            Type a time or nudge either edge.
+          </span>
+        </article>
       </div>
 
       <div className="clip-studio-pacing-panel" aria-label="Pacing cleanup">
@@ -1280,7 +1454,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
             max={timelineEnd}
             step={0.1}
             value={activeClipStartSeconds}
-            onChange={(event) => dispatchTimelineBoundary("set-start-seconds", Number(event.target.value))}
+            onChange={(event) => updateTimelineBoundary("set-start-seconds", Number(event.target.value))}
             aria-label="Clip start handle"
           />
           <input
@@ -1290,7 +1464,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
             max={timelineEnd}
             step={0.1}
             value={activeClipEndSeconds}
-            onChange={(event) => dispatchTimelineBoundary("set-end-seconds", Number(event.target.value))}
+            onChange={(event) => updateTimelineBoundary("set-end-seconds", Number(event.target.value))}
             aria-label="Clip end handle"
           />
         </div>
@@ -1304,6 +1478,12 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                   const cutEnd = activeClipStartSeconds + cut.endSeconds;
                   const cutRangeLabel = formatCleanupRangeLabel(cutStart, cutEnd);
                   const isSelected = selectedCleanupCut?.id === cut.id;
+                  const cutBounds = getCleanupCutBounds(cut);
+                  const maximumRemovedSeconds = Math.max(
+                    MIN_CLEANUP_CUT_SECONDS,
+                    Math.min(cut.rawGapSeconds, cutBounds.maxEndSeconds - cutBounds.minStartSeconds),
+                  );
+                  const removalControlId = `clip-studio-pause-removal-${index + 1}`;
 
                   return (
                     <article
@@ -1320,6 +1500,34 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                         <p className="muted small">
                           {formatCleanupDuration(cut.removedSeconds)} {cut.enabled ? "removed" : "kept"} · {cut.confidence === "confirmed" ? "Confirmed" : "Review"}
                         </p>
+                        <label className="stack-sm" htmlFor={`${removalControlId}-range`}>
+                          Remove from detected pause
+                          <input
+                            id={`${removalControlId}-range`}
+                            type="range"
+                            min={MIN_CLEANUP_CUT_SECONDS}
+                            max={maximumRemovedSeconds}
+                            step={0.1}
+                            value={Math.min(cut.removedSeconds, maximumRemovedSeconds)}
+                            aria-valuetext={`${formatCleanupDuration(cut.removedSeconds)} removed from a ${formatCleanupDuration(cut.rawGapSeconds)} pause`}
+                            onChange={(event) => updateCleanupCutRemovalDuration(cut, event.currentTarget.valueAsNumber)}
+                          />
+                        </label>
+                        <label className="stack-sm" htmlFor={`${removalControlId}-seconds`}>
+                          Removal (seconds)
+                          <input
+                            id={`${removalControlId}-seconds`}
+                            type="number"
+                            min={MIN_CLEANUP_CUT_SECONDS}
+                            max={maximumRemovedSeconds}
+                            step={0.1}
+                            value={Number(Math.min(cut.removedSeconds, maximumRemovedSeconds).toFixed(3))}
+                            onChange={(event) => updateCleanupCutRemovalDuration(cut, event.currentTarget.valueAsNumber)}
+                          />
+                        </label>
+                        <span className="muted small">
+                          Detected pause: {formatCleanupDuration(cut.rawGapSeconds)}. Adjust how much silence disappears.
+                        </span>
                       </div>
                       <div className="clip-studio-cleanup-review-actions">
                         <StatusBadge tone={cut.enabled ? "success" : "neutral"}>
@@ -1345,9 +1553,9 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                           type="button"
                           className="button tertiary"
                           onClick={() => deleteCleanupCut(cut)}
-                          aria-label={`Delete pause ${index + 1}`}
+                          aria-label={removeCleanupMarkerAriaLabel(index)}
                         >
-                          Delete
+                          Remove marker
                         </button>
                       </div>
                     </article>
@@ -1401,3 +1609,10 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
     </section>
   );
 }
+
+export const __clipStudioTranscriptPanelTestUtils = {
+  activateTranscriptSegment,
+  removeCleanupMarkerAriaLabel,
+  resolveTranscriptSegmentClipStatus,
+  resolveTimelineBoundarySeconds,
+};

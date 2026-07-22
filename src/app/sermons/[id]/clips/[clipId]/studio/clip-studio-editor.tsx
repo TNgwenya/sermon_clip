@@ -6,6 +6,9 @@ import { SectionCard, StatusBadge } from "@/components/ui";
 import { formatSecondsForPastorView, formatSecondsForTimestampInput } from "@/lib/sermonSegment";
 import {
   buildEditableCaptionCuesFromTranscriptSegments,
+  buildTimedCaptionCuesFromTranscriptSegments,
+  buildTimedCaptionCuesFromTranscriptWords,
+  type CaptionSourceWord,
   type EditableCaptionCue,
   hashtagsToEditorInput,
   validateClipStudioTiming,
@@ -38,9 +41,11 @@ import {
   type CaptionFontScale,
   type CaptionMaxLines,
   type CaptionPosition,
+  type CaptionRevealMode,
   type HookOverlayConfig,
   inferBrollCardTone,
   labelForBrollTone,
+  normalizeCaptionSyncOffsetSeconds,
   normalizeHookOverlayForClipDuration,
   resolveNextBrollCardStart,
   type SpeechCleanupIntensity,
@@ -70,6 +75,8 @@ type ClipStudioEditorProps = {
   initialCaptionStylePresetId: string;
   initialCaptionPosition: CaptionPosition;
   initialCaptionAppearance: CaptionAppearanceSettings;
+  initialCaptionRevealMode: CaptionRevealMode;
+  initialCaptionSyncOffsetSeconds: number;
   brandCaptionStylePresetId: string;
   suggestedHook: string;
   suggestedCaption: string;
@@ -89,6 +96,7 @@ type ClipStudioEditorProps = {
     endTimeSeconds: number;
     text: string;
   }>;
+  transcriptWords?: CaptionSourceWord[];
   knownDurationSeconds: number | null;
   captionQualityScore: number | null;
   captionQualityReason: string | null;
@@ -160,6 +168,8 @@ type StudioDraftSnapshot = {
   captionStylePresetId: string;
   captionPosition: CaptionPosition;
   captionAppearance: CaptionAppearanceSettings;
+  captionRevealMode: CaptionRevealMode;
+  captionSyncOffsetSeconds: number;
   captionCueTextEdits: Record<string, string>;
   hookOverlay: HookOverlayConfig;
   brollLayer: BrollLayerConfig;
@@ -363,6 +373,8 @@ export function ClipStudioEditor({
   initialCaptionStylePresetId,
   initialCaptionPosition,
   initialCaptionAppearance,
+  initialCaptionRevealMode,
+  initialCaptionSyncOffsetSeconds,
   brandCaptionStylePresetId,
   suggestedHook,
   suggestedCaption,
@@ -377,6 +389,7 @@ export function ClipStudioEditor({
   initialAudioSilenceAnalyzed,
   audioSilenceReviewUrl,
   transcriptSegments,
+  transcriptWords = [],
   knownDurationSeconds,
   captionQualityScore,
   captionQualityReason,
@@ -389,6 +402,7 @@ export function ClipStudioEditor({
     previewClock,
     requestPreviewPlayback,
     seekPreviewTo,
+    seekSourcePreviewTo,
     updateEditPreview,
   } = useClipStudioPreview();
   const isPending = false;
@@ -424,6 +438,9 @@ export function ClipStudioEditor({
   const [captionStylePresetId, setCaptionStylePresetId] = useState(initialCaptionStylePresetId);
   const [captionPosition, setCaptionPosition] = useState<CaptionPosition>(initialCaptionPosition);
   const [captionAppearance, setCaptionAppearance] = useState<CaptionAppearanceSettings>(initialCaptionAppearance);
+  const [captionRevealMode, setCaptionRevealMode] = useState<CaptionRevealMode>(initialCaptionRevealMode);
+  const [captionSyncOffsetSeconds, setCaptionSyncOffsetSeconds] = useState(initialCaptionSyncOffsetSeconds);
+  const [captionResyncNonce, setCaptionResyncNonce] = useState(0);
   const [captionCueTextEdits, setCaptionCueTextEdits] = useState<Record<string, string>>(
     () => buildCaptionCueTextEditSeed(initialCaptionCues),
   );
@@ -547,11 +564,37 @@ export function ClipStudioEditor({
   } = timingPreview.fieldErrors;
   const generatedCaptionCues = useMemo(() => {
     if (timingPreview.startSeconds !== null && timingPreview.endSeconds !== null) {
-      const transcriptCues = buildEditableCaptionCuesFromTranscriptSegments({
+      const savedTimingIsCurrent =
+        Math.abs(timingPreview.startSeconds - initialStartTimeSeconds) < 0.001 &&
+        Math.abs(timingPreview.endSeconds - initialEndTimeSeconds) < 0.001 &&
+        captionRevealMode === initialCaptionRevealMode &&
+        captionResyncNonce === 0;
+      if (savedTimingIsCurrent && initialCaptionCues.length > 0) {
+        return initialCaptionCues;
+      }
+
+      const timedWordCues = transcriptWords.length > 0
+        ? buildTimedCaptionCuesFromTranscriptWords({
+            startTimeSeconds: timingPreview.startSeconds,
+            endTimeSeconds: timingPreview.endSeconds,
+            words: transcriptWords,
+            maxWordsPerCue: captionRevealMode === "single-word" ? 1 : 5,
+            maxCueDurationSeconds: captionRevealMode === "single-word" ? 1.4 : 2.4,
+          })
+        : [];
+      const transcriptCues = timedWordCues.length > 0
+        ? timedWordCues
+        : captionRevealMode === "single-word"
+          ? buildTimedCaptionCuesFromTranscriptSegments({
+              startTimeSeconds: timingPreview.startSeconds,
+              endTimeSeconds: timingPreview.endSeconds,
+              segments: transcriptSegments,
+            })
+          : buildEditableCaptionCuesFromTranscriptSegments({
         startTimeSeconds: timingPreview.startSeconds,
         endTimeSeconds: timingPreview.endSeconds,
         segments: transcriptSegments,
-      });
+            });
 
       if (transcriptCues.length > 0) {
         return transcriptCues;
@@ -559,7 +602,18 @@ export function ClipStudioEditor({
     }
 
     return initialCaptionCues;
-  }, [initialCaptionCues, timingPreview.endSeconds, timingPreview.startSeconds, transcriptSegments]);
+  }, [
+    captionResyncNonce,
+    captionRevealMode,
+    initialCaptionCues,
+    initialCaptionRevealMode,
+    initialEndTimeSeconds,
+    initialStartTimeSeconds,
+    timingPreview.endSeconds,
+    timingPreview.startSeconds,
+    transcriptSegments,
+    transcriptWords,
+  ]);
   const captionCues = useMemo(
     () =>
       generatedCaptionCues.map((cue, index) => ({
@@ -570,7 +624,9 @@ export function ClipStudioEditor({
     [captionCueTextEdits, generatedCaptionCues],
   );
   const onVideoCaptionText = captionCues.map((cue) => cue.text.trim()).filter(Boolean).join(" ");
-  const captionLineLabel = `${captionCues.length} ${captionCues.length === 1 ? "line" : "lines"}`;
+  const captionLineLabel = captionRevealMode === "single-word"
+    ? `${captionCues.length} ${captionCues.length === 1 ? "word pop" : "word pops"}`
+    : `${captionCues.length} ${captionCues.length === 1 ? "line" : "lines"}`;
   const captionDropdownPreview = onVideoCaptionText || "No on-video caption text yet.";
 
   const durationLabel =
@@ -636,7 +692,7 @@ export function ClipStudioEditor({
       return null;
     }
 
-    const absoluteSeconds = timingPreview.startSeconds + previewClock.currentSeconds;
+    const absoluteSeconds = timingPreview.startSeconds + previewClock.sourceCurrentSeconds;
     if (absoluteSeconds < localTimeline.start || absoluteSeconds > localTimeline.end) {
       return null;
     }
@@ -646,7 +702,7 @@ export function ClipStudioEditor({
       percent: clampSeconds(((absoluteSeconds - localTimeline.start) / localTimeline.duration) * 100, 0, 100),
       label: formatSecondsForPastorView(absoluteSeconds),
     };
-  }, [localTimeline.duration, localTimeline.end, localTimeline.start, previewClock.currentSeconds, timingPreview.startSeconds]);
+  }, [localTimeline.duration, localTimeline.end, localTimeline.start, previewClock.sourceCurrentSeconds, timingPreview.startSeconds]);
   const audioSilenceMatchesCurrentTiming =
     timingPreview.startSeconds !== null &&
     timingPreview.endSeconds !== null &&
@@ -798,6 +854,8 @@ export function ClipStudioEditor({
       captionStylePresetId,
       captionPosition,
       captionAppearance,
+      captionRevealMode,
+      captionSyncOffsetSeconds,
       captionCueTextEdits,
       hookOverlay,
       brollLayer,
@@ -811,6 +869,8 @@ export function ClipStudioEditor({
       applyCaptionsToClip,
       brollLayer,
       captionAppearance,
+      captionRevealMode,
+      captionSyncOffsetSeconds,
       captionCueTextEdits,
       captionPosition,
       captionStylePresetId,
@@ -856,6 +916,8 @@ export function ClipStudioEditor({
       captionStylePresetId: resolvedCaptionStyle.id,
       captionPosition,
       captionAppearance,
+      captionRevealMode,
+      captionSyncOffsetSeconds,
       hookOverlay,
       brollLayer,
       speechCleanup,
@@ -877,6 +939,8 @@ export function ClipStudioEditor({
       onVideoCaptionText,
       applyCaptionsToClip,
       captionAppearance,
+      captionRevealMode,
+      captionSyncOffsetSeconds,
       captionPosition,
       platformCaption,
       resolvedCaptionStyle.id,
@@ -982,6 +1046,8 @@ export function ClipStudioEditor({
     setCaptionStylePresetId(nextSnapshot.captionStylePresetId);
     setCaptionPosition(nextSnapshot.captionPosition);
     setCaptionAppearance(nextSnapshot.captionAppearance);
+    setCaptionRevealMode(nextSnapshot.captionRevealMode);
+    setCaptionSyncOffsetSeconds(nextSnapshot.captionSyncOffsetSeconds);
     setCaptionCueTextEdits(nextSnapshot.captionCueTextEdits);
     setHookOverlay(nextSnapshot.hookOverlay);
     setBrollLayer(nextSnapshot.brollLayer);
@@ -1071,7 +1137,7 @@ export function ClipStudioEditor({
       return;
     }
 
-    seekPreviewTo(Math.max(0, absoluteSeconds - timingPreview.startSeconds));
+    seekSourcePreviewTo(Math.max(0, absoluteSeconds - timingPreview.startSeconds));
   }
 
   function onTimelineClick(event: MouseEvent<HTMLDivElement>) {
@@ -1237,7 +1303,7 @@ export function ClipStudioEditor({
       setLastSegmentId(lastSegment.id);
       setFocusedSegmentId(lastSegment.id);
     }
-    seekPreviewTo(Math.max(0, nextEnd - currentStart));
+    seekSourcePreviewTo(Math.max(0, nextEnd - currentStart));
     setStatusSuccess(true);
     setStatusMessage("End point set from the timeline.");
   }
@@ -1248,6 +1314,35 @@ export function ClipStudioEditor({
       ...current,
       [cueKey]: text,
     }));
+  }
+
+  function changeCaptionRevealMode(nextMode: CaptionRevealMode) {
+    if (nextMode === captionRevealMode) {
+      return;
+    }
+
+    setCaptionRevealMode(nextMode);
+    setCaptionResyncNonce((current) => current + 1);
+    setStatusSuccess(true);
+    setStatusMessage(
+      nextMode === "single-word"
+        ? "One-word pop captions synced from the spoken transcript."
+        : nextMode === "active-word"
+          ? "Active-word captions synced from the spoken transcript."
+          : "Phrase captions synced from the spoken transcript.",
+    );
+  }
+
+  function resyncCaptionsFromSpeech() {
+    setCaptionCueTextEdits({});
+    setCaptionSyncOffsetSeconds(0);
+    setCaptionResyncNonce((current) => current + 1);
+    setStatusSuccess(true);
+    setStatusMessage("Caption timing re-synced from the spoken transcript and the timing offset reset.");
+  }
+
+  function setCaptionSyncOffset(nextSeconds: number) {
+    setCaptionSyncOffsetSeconds(normalizeCaptionSyncOffsetSeconds(nextSeconds));
   }
 
   function resetCaptionCueText(cue: EditableCaptionCue) {
@@ -1523,7 +1618,7 @@ export function ClipStudioEditor({
     const clipDurationSeconds = timingPreview.durationSeconds ?? 60;
     const startSeconds = resolveNextBrollCardStart({
       clipDurationSeconds,
-      previewSeconds: previewClock.currentSeconds,
+      previewSeconds: previewClock.sourceCurrentSeconds,
       cards: brollLayer.cards,
     });
     const durationSeconds = Math.min(5, Math.max(1, clipDurationSeconds - startSeconds));
@@ -1781,13 +1876,13 @@ export function ClipStudioEditor({
 
       if (event.code === "BracketLeft") {
         event.preventDefault();
-        applyBoundaryFromAbsoluteSeconds((timingPreview.startSeconds ?? initialStartTimeSeconds) + previewClock.currentSeconds, "start");
+        applyBoundaryFromAbsoluteSeconds((timingPreview.startSeconds ?? initialStartTimeSeconds) + previewClock.sourceCurrentSeconds, "start");
         return;
       }
 
       if (event.code === "BracketRight") {
         event.preventDefault();
-        applyBoundaryFromAbsoluteSeconds((timingPreview.startSeconds ?? initialStartTimeSeconds) + previewClock.currentSeconds, "end");
+        applyBoundaryFromAbsoluteSeconds((timingPreview.startSeconds ?? initialStartTimeSeconds) + previewClock.sourceCurrentSeconds, "end");
         return;
       }
 
@@ -2736,12 +2831,98 @@ export function ClipStudioEditor({
             </span>
           </label>
 
+          <section className="clip-studio-caption-timing-panel" aria-labelledby="caption-reveal-heading">
+            <div className="section-heading-row compact">
+              <div>
+                <p className="kicker">Words on screen</p>
+                <h3 id="caption-reveal-heading">Choose how captions appear</h3>
+              </div>
+              <StatusBadge tone="accent">
+                {captionRevealMode === "single-word" ? "1 word pop" : captionRevealMode === "active-word" ? "Active word" : "Phrase"}
+              </StatusBadge>
+            </div>
+            <div className="clip-studio-caption-reveal-options" role="group" aria-label="Caption reveal style">
+              <button
+                type="button"
+                className={captionRevealMode === "phrase" ? "clip-studio-caption-reveal-option is-active" : "clip-studio-caption-reveal-option"}
+                aria-pressed={captionRevealMode === "phrase"}
+                onClick={() => changeCaptionRevealMode("phrase")}
+                disabled={isPending || !applyCaptionsToClip}
+              >
+                <strong>Phrase</strong>
+                <span>Readable lines</span>
+              </button>
+              <button
+                type="button"
+                className={captionRevealMode === "active-word" ? "clip-studio-caption-reveal-option is-active" : "clip-studio-caption-reveal-option"}
+                aria-pressed={captionRevealMode === "active-word"}
+                onClick={() => changeCaptionRevealMode("active-word")}
+                disabled={isPending || !applyCaptionsToClip}
+              >
+                <strong>Active word</strong>
+                <span>Current word lights up</span>
+              </button>
+              <button
+                type="button"
+                className={captionRevealMode === "single-word" ? "clip-studio-caption-reveal-option is-active" : "clip-studio-caption-reveal-option"}
+                aria-pressed={captionRevealMode === "single-word"}
+                onClick={() => changeCaptionRevealMode("single-word")}
+                disabled={isPending || !applyCaptionsToClip}
+              >
+                <strong>1 word pop</strong>
+                <span>One spoken word at a time</span>
+              </button>
+            </div>
+
+            <div className="clip-studio-caption-sync-control">
+              <div>
+                <strong>Caption sync</strong>
+                <p className="muted small">If every caption feels early or late, move all words together.</p>
+              </div>
+              <label className="stack-sm">
+                Timing offset
+                <input
+                  aria-label="Caption timing offset"
+                  type="range"
+                  min={-2}
+                  max={2}
+                  step={0.05}
+                  value={captionSyncOffsetSeconds}
+                  onChange={(event) => setCaptionSyncOffset(Number(event.target.value))}
+                  disabled={isPending || !applyCaptionsToClip}
+                />
+              </label>
+              <div className="clip-studio-caption-sync-actions">
+                <button type="button" className="button tertiary" onClick={() => setCaptionSyncOffset(captionSyncOffsetSeconds - 0.1)} disabled={isPending || !applyCaptionsToClip}>
+                  Earlier 0.1s
+                </button>
+                <button type="button" className="button tertiary" onClick={() => setCaptionSyncOffset(0)} disabled={isPending || !applyCaptionsToClip || captionSyncOffsetSeconds === 0}>
+                  Reset
+                </button>
+                <button type="button" className="button tertiary" onClick={() => setCaptionSyncOffset(captionSyncOffsetSeconds + 0.1)} disabled={isPending || !applyCaptionsToClip}>
+                  Later 0.1s
+                </button>
+                <output aria-live="polite">
+                  {captionSyncOffsetSeconds === 0 ? "On time" : `${captionSyncOffsetSeconds > 0 ? "+" : ""}${captionSyncOffsetSeconds.toFixed(2)}s`}
+                </output>
+              </div>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={resyncCaptionsFromSpeech}
+                disabled={isPending || !applyCaptionsToClip || transcriptSegments.length === 0}
+              >
+                Re-sync words from speech
+              </button>
+            </div>
+          </section>
+
           <details className="clip-studio-caption-dropdown">
-            <summary>
+            <summary aria-label={`Caption lines, ${captionLineLabel}, captions ${applyCaptionsToClip ? "on" : "off"}`}>
               <span className="clip-studio-caption-dropdown-copy">
                 <span className="kicker">Caption lines</span>
                 <strong>{captionLineLabel}</strong>
-                <span className="clip-studio-caption-dropdown-preview">{captionDropdownPreview}</span>
+                <span aria-hidden="true" className="clip-studio-caption-dropdown-preview">{captionDropdownPreview}</span>
               </span>
               <span className="clip-studio-caption-dropdown-meta">
                 <StatusBadge tone={applyCaptionsToClip ? "success" : "neutral"}>
@@ -2752,7 +2933,16 @@ export function ClipStudioEditor({
             </summary>
 
             <div className="clip-studio-caption-dropdown-body">
-              <div className="clip-studio-caption-cue-list">
+              {captionRevealMode === "single-word" ? (
+                <div className="clip-studio-caption-word-pop-summary">
+                  <strong>{captionCues.length} spoken-word pops</strong>
+                  <p className="muted small">
+                    Each pop follows detected speech timing. Re-sync rebuilds that timing; review or correct wording in Transcript review. Style, size, position, and sync offset remain customizable below.
+                  </p>
+                  <p>{captionCues.slice(0, 12).map((cue) => cue.text).join(" · ")}{captionCues.length > 12 ? " …" : ""}</p>
+                </div>
+              ) : (
+                <div className="clip-studio-caption-cue-list">
                 {captionCues.map((cue, index) => {
                   const cueTextEdited = isCaptionCueTextEdited(cue);
 
@@ -2805,7 +2995,8 @@ export function ClipStudioEditor({
                     </div>
                   );
                 })}
-              </div>
+                </div>
+              )}
               {fieldErrors?.captionCues ? (
                 <span className="error-text small">{fieldErrors.captionCues}</span>
               ) : null}
@@ -2928,7 +3119,7 @@ export function ClipStudioEditor({
               </label>
             </div>
 
-            <details className="clip-studio-editor-disclosure compact">
+            <details className="clip-studio-editor-disclosure compact" open>
               <summary>
                 <span>Change caption style</span>
                 <span className="muted small">Show all style previews</span>

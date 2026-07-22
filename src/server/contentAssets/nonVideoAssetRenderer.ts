@@ -1,20 +1,32 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
-  estimateContentSingleLineCapacity,
+  getContentArtworkBackground,
+  normalizeContentArtworkSettings,
+  normalizeContentArtworkTextOverrides,
+  type ContentArtworkSettings,
+  type ContentArtworkTextOverrides,
+} from "@/lib/contentArtworkDesign";
+import {
   renderBrandedContentSvg,
-  resolveContentTextLayout,
+  resolveContentArtworkTextMetrics,
   splitCarouselSlides,
   type ContentAssetBranding,
+  type ContentSafeArea,
 } from "@/lib/contentAssetRenderer";
 import {
-  getContentGraphicTemplate,
   getDefaultTemplateId,
   type CarouselSlideRole,
   type CarouselStudioSlide,
   type ContentGraphicTemplateId,
 } from "@/lib/contentGraphicTemplates";
+import {
+  detectProductionCopyIssues,
+  extractQuoteTextFromContent,
+  validateScriptureReference,
+  verifyQuoteTextAgainstTranscript,
+} from "@/lib/contentIntegrity";
 import { getSharp } from "@/server/agents/sharpClient";
 import { getSermonStoragePath } from "@/server/agents/storage";
 
@@ -57,8 +69,12 @@ export type ApprovedNonVideoAssetInput = {
   approvedContent: string | null | undefined;
   sourceTranscriptExcerpt?: string | null;
   relatedScripture?: string | null;
+  scriptureTranslation?: string | null;
+  scriptureAccuracyConfirmed?: boolean;
   branding: ContentAssetBranding;
   templateId?: ContentGraphicTemplateId;
+  artwork?: ContentArtworkSettings | Partial<ContentArtworkSettings> | null;
+  textOverrides?: ContentArtworkTextOverrides | Partial<ContentArtworkTextOverrides> | null;
   carouselSlides?: CarouselStudioSlide[];
 };
 
@@ -67,6 +83,10 @@ export type NonVideoAssetDiagnosticCode =
   | "APPROVED_CONTENT_MISSING"
   | "TITLE_MISSING"
   | "QUOTE_TRANSCRIPT_EVIDENCE_MISSING"
+  | "QUOTE_TRANSCRIPT_MISMATCH"
+  | "SCRIPTURE_REFERENCE_INVALID"
+  | "SCRIPTURE_ACCURACY_UNCONFIRMED"
+  | "PRODUCTION_COPY_UNSAFE"
   | "INVALID_IDENTIFIER"
   | "INVALID_BRANDING"
   | "CONTENT_WILL_TRUNCATE"
@@ -92,6 +112,14 @@ export type TextLayoutAnalysis = {
   truncated: boolean;
   horizontalOverflow: boolean;
   verticalOverflow: boolean;
+  baseFontSize: number;
+  fontSize: number;
+  lineHeight: number;
+  startY: number;
+  safeBottom: number;
+  referenceY: number;
+  brandY: number;
+  safeArea: ContentSafeArea;
 };
 
 export type PlannedNonVideoAssetFile = {
@@ -104,6 +132,7 @@ export type PlannedNonVideoAssetFile = {
   title: string;
   scripture?: string | null;
   templateId: ContentGraphicTemplateId;
+  textOverrides?: ContentArtworkTextOverrides;
   slideId?: string;
   slideRole?: CarouselSlideRole;
   slideNumber?: number;
@@ -134,6 +163,10 @@ export type RenderedContentAssetFile = {
     slideNumber?: number;
     slideCount?: number;
     templateId: ContentGraphicTemplateId;
+    artworkVersion?: 1;
+    backgroundId?: ContentArtworkSettings["backgroundId"];
+    paletteId?: ContentArtworkSettings["paletteId"];
+    typographyPresetId?: ContentArtworkSettings["typographyPresetId"];
     slideId?: string;
     slideRole?: CarouselSlideRole;
   };
@@ -191,6 +224,21 @@ function isCarousel(input: ApprovedNonVideoAssetInput): boolean {
   return input.opportunityType === "CAROUSEL_IDEA" || input.opportunityType === "CAROUSEL";
 }
 
+export function resolveRenderedScriptureReference(input: {
+  relatedScripture?: string | null;
+  scriptureTranslation?: string | null;
+}): string | null {
+  const reference = input.relatedScripture?.trim();
+  if (!reference) return null;
+  const translation = input.scriptureTranslation?.trim().replace(/^\((.+)\)$/u, "$1").toUpperCase();
+  if (!translation) return reference;
+
+  const validated = validateScriptureReference(reference);
+  const normalizedReference = validated.normalizedReference
+    ?? reference.replace(/\s*(?:\([A-Za-z][A-Za-z0-9-]{1,14}\)|[A-Z][A-Z0-9-]{1,14})\s*$/u, "").trim();
+  return `${normalizedReference} ${translation}`;
+}
+
 function splitAllCarouselSlides(content: string): string[] {
   const normalized = content.replace(/\r/g, "").trim();
   if (!normalized) return [];
@@ -209,13 +257,21 @@ export function analyzeNonVideoTextLayout(
   width: number,
   height: number,
   title = "Prepared content",
+  reference?: string | null,
+  artwork?: ContentArtworkSettings | Partial<ContentArtworkSettings> | null,
+  templateId?: ContentGraphicTemplateId,
+  hasLogo = false,
 ): TextLayoutAnalysis {
-  return resolveContentTextLayout({
+  return resolveContentArtworkTextMetrics({
     content,
+    title,
+    reference,
     width,
     height,
-    hasTitle: Boolean(title.trim()),
-  });
+    templateId,
+    artwork,
+    hasLogo,
+  }).layout;
 }
 
 function buildPlannedFiles(
@@ -223,6 +279,9 @@ function buildPlannedFiles(
   variants: NonVideoRasterVariant[],
 ): PlannedNonVideoAssetFile[] {
   const content = input.approvedContent?.trim() ?? "";
+  const globalTextOverrides = input.textOverrides == null
+    ? undefined
+    : normalizeContentArtworkTextOverrides(input.textOverrides);
   if (isCarousel(input)) {
     const slides = input.carouselSlides?.length
       ? input.carouselSlides.slice(0, 10)
@@ -244,16 +303,29 @@ function buildPlannedFiles(
       title: slide.title,
       scripture: slide.scripture,
       templateId: slide.templateId,
+      textOverrides: slide.textOverrides == null
+        ? globalTextOverrides
+        : normalizeContentArtworkTextOverrides(slide.textOverrides),
       slideId: slide.id,
       slideRole: slide.role,
       slideNumber: index + 1,
       slideCount: slides.length,
-      layout: analyzeNonVideoTextLayout(slide.body, 1080, 1350, slide.title),
+      layout: analyzeNonVideoTextLayout(
+        slide.body,
+        1080,
+        1350,
+        slide.title,
+        slide.scripture,
+        input.artwork,
+        slide.templateId,
+        Boolean(input.branding.logoDataUrl),
+      ),
     }));
   }
 
   return variants.map((variant, index) => {
     const format = NON_VIDEO_RASTER_FORMATS[variant];
+    const renderedScripture = resolveRenderedScriptureReference(input);
     return {
       variant,
       name: format.fileName,
@@ -262,9 +334,19 @@ function buildPlannedFiles(
       order: index,
       content,
       title: input.title,
-      scripture: input.relatedScripture,
+      scripture: renderedScripture,
       templateId: input.templateId ?? getDefaultTemplateId({ assetType: input.opportunityType }),
-      layout: analyzeNonVideoTextLayout(content, format.width, format.height, input.title),
+      textOverrides: globalTextOverrides,
+      layout: analyzeNonVideoTextLayout(
+        content,
+        format.width,
+        format.height,
+        input.title,
+        renderedScripture,
+        input.artwork,
+        input.templateId ?? getDefaultTemplateId({ assetType: input.opportunityType }),
+        Boolean(input.branding.logoDataUrl),
+      ),
     };
   });
 }
@@ -301,19 +383,22 @@ function pushLayoutDiagnostics(
     });
   }
 
-  const template = getContentGraphicTemplate(planned.templateId);
-  const titleCapacity = estimateContentSingleLineCapacity({
+  const metrics = resolveContentArtworkTextMetrics({
+    content: planned.content,
+    title: planned.title,
+    reference: planned.scripture,
     width: planned.width,
     height: planned.height,
-    role: "title",
-    titleScale: template.surface === "BOLD" ? 0.82 : 0.64,
+    templateId: planned.templateId,
+    artwork: input.artwork,
+    hasLogo: Boolean(input.branding.logoDataUrl),
   });
-  if (normalizeText(planned.title).length > titleCapacity) {
+  if (metrics.title.exceedsCapacity) {
     diagnostics.push({
       code: "TITLE_MAY_OVERFLOW",
       severity: "ERROR",
       blocking: true,
-      message: `${location} title may overflow its safe area (approximately ${titleCapacity} characters available).`,
+      message: `${location} title may overflow its safe area (approximately ${metrics.title.capacity} characters available).`,
       variant: planned.variant,
       slideNumber: planned.slideNumber,
     });
@@ -324,17 +409,12 @@ function pushLayoutDiagnostics(
       ? planned.scripture ?? ""
       : planned.scripture ?? input.relatedScripture ?? "",
   );
-  const scriptureCapacity = estimateContentSingleLineCapacity({
-    width: planned.width,
-    height: planned.height,
-    role: "scripture",
-  });
-  if (scripture.length > scriptureCapacity) {
+  if (scripture && metrics.reference.exceedsCapacity) {
     diagnostics.push({
       code: "SCRIPTURE_MAY_OVERFLOW",
       severity: "ERROR",
       blocking: true,
-      message: `${location} Scripture reference may overflow its safe area (approximately ${scriptureCapacity} characters available).`,
+      message: `${location} Scripture reference may overflow its safe area (approximately ${metrics.reference.capacity} characters available).`,
       variant: planned.variant,
       slideNumber: planned.slideNumber,
     });
@@ -381,6 +461,62 @@ export function preflightApprovedNonVideoAssets(
       severity: "ERROR",
       blocking: true,
       message: "A quote graphic requires transcript evidence before it can be rendered.",
+    });
+  }
+
+  if (
+    input.opportunityType === "QUOTE_GRAPHIC"
+    && input.approvedContent?.trim()
+    && input.sourceTranscriptExcerpt?.trim()
+  ) {
+    const quoteIntegrity = verifyQuoteTextAgainstTranscript({
+      quoteText: extractQuoteTextFromContent(input.approvedContent),
+      sourceTranscriptExcerpt: input.sourceTranscriptExcerpt,
+    });
+    if (!quoteIntegrity.verified) {
+      diagnostics.push({
+        code: "QUOTE_TRANSCRIPT_MISMATCH",
+        severity: "ERROR",
+        blocking: true,
+        message: quoteIntegrity.message,
+      });
+    }
+  }
+
+  if (input.opportunityType === "SCRIPTURE_GRAPHIC") {
+    const renderedReference = resolveRenderedScriptureReference(input);
+    const scripture = validateScriptureReference(renderedReference);
+    if (!scripture.valid || scripture.versionStatus !== "RECOGNIZED") {
+      diagnostics.push({
+        code: "SCRIPTURE_REFERENCE_INVALID",
+        severity: "ERROR",
+        blocking: true,
+        message: scripture.errors[0]
+          ?? (scripture.versionStatus === "MISSING"
+            ? "Add a recognized Bible translation/version, for example NIV, NLT, ESV, or KJV."
+            : "Use a valid Bible reference and recognized translation/version label."),
+      });
+    }
+    if (input.scriptureAccuracyConfirmed !== true) {
+      diagnostics.push({
+        code: "SCRIPTURE_ACCURACY_UNCONFIRMED",
+        severity: "ERROR",
+        blocking: true,
+        message: "Confirm that the verse wording and reference match the displayed Bible translation before rendering.",
+      });
+    }
+  }
+
+  if (
+    (input.opportunityType === "QUOTE_GRAPHIC" || input.opportunityType === "SCRIPTURE_GRAPHIC")
+    && input.approvedContent?.trim()
+    && detectProductionCopyIssues({ artworkText: input.approvedContent }).length > 0
+  ) {
+    diagnostics.push({
+      code: "PRODUCTION_COPY_UNSAFE",
+      severity: "ERROR",
+      blocking: true,
+      message: "Remove internal production instructions or placeholders from the artwork before rendering.",
     });
   }
 
@@ -470,6 +606,28 @@ export function toContentAssetFilePersistenceInput(
   };
 }
 
+async function resolveBuiltInArtworkBackgroundDataUrl(
+  artwork: ContentArtworkSettings | null,
+): Promise<string | null> {
+  if (!artwork) return null;
+  const background = getContentArtworkBackground(artwork.backgroundId);
+  if (background.kind !== "IMAGE" || !background.imagePath?.startsWith("/artwork-backgrounds/")) {
+    return null;
+  }
+
+  const publicRoot = path.resolve(process.cwd(), "public");
+  const resolvedPath = path.resolve(publicRoot, background.imagePath.slice(1));
+  if (!resolvedPath.startsWith(`${publicRoot}${path.sep}`)) {
+    throw new Error("The selected artwork background is outside the public artwork library.");
+  }
+  const bytes = await readFile(resolvedPath);
+  if (bytes.byteLength > 8_000_000) {
+    throw new Error("The selected artwork background exceeds the production renderer limit.");
+  }
+  const mime = resolvedPath.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
+  return `data:${mime};base64,${bytes.toString("base64")}`;
+}
+
 export async function renderApprovedNonVideoAssets(
   input: ApprovedNonVideoAssetInput,
   options: RenderApprovedNonVideoAssetsOptions = {},
@@ -491,6 +649,10 @@ export async function renderApprovedNonVideoAssets(
   );
   const sharp = await getSharp();
   const files: RenderedContentAssetFile[] = [];
+  const baseArtwork = input.artwork
+    ? normalizeContentArtworkSettings(input.artwork, input.templateId)
+    : null;
+  const backgroundImageHref = await resolveBuiltInArtworkBackgroundDataUrl(baseArtwork);
 
   for (const planned of preflight.plannedFiles) {
     const outputPath = path.join(outputDirectory, planned.name);
@@ -505,6 +667,11 @@ export async function renderApprovedNonVideoAssets(
       width: planned.width,
       height: planned.height,
       templateId: planned.templateId,
+      artwork: input.artwork
+        ? normalizeContentArtworkSettings(input.artwork, planned.templateId)
+        : undefined,
+      textOverrides: planned.textOverrides,
+      backgroundImageHref,
     });
     const info = await sharp(Buffer.from(svg))
       .png({ compressionLevel: 9, adaptiveFiltering: true })
@@ -524,6 +691,14 @@ export async function renderApprovedNonVideoAssets(
         opportunityType: input.opportunityType,
         sourceStatus: input.status as ApprovedContentStatus,
         publishingFormat: "PNG",
+        ...(baseArtwork
+          ? {
+              artworkVersion: baseArtwork.version,
+              backgroundId: baseArtwork.backgroundId,
+              paletteId: baseArtwork.paletteId,
+              typographyPresetId: baseArtwork.typographyPresetId,
+            }
+          : {}),
         ...(planned.slideNumber ? { slideNumber: planned.slideNumber } : {}),
         ...(planned.slideCount ? { slideCount: planned.slideCount } : {}),
         templateId: planned.templateId,
@@ -547,6 +722,11 @@ export async function renderApprovedNonVideoAssets(
       width: planned.width,
       height: planned.height,
       templateId: planned.templateId,
+      artwork: input.artwork
+        ? normalizeContentArtworkSettings(input.artwork, planned.templateId)
+        : undefined,
+      textOverrides: planned.textOverrides,
+      backgroundImageHref,
     });
     const info = await sharp(Buffer.from(svg))
       .flatten({ background: input.branding.primaryColor })
@@ -567,6 +747,14 @@ export async function renderApprovedNonVideoAssets(
         opportunityType: input.opportunityType,
         sourceStatus: input.status as ApprovedContentStatus,
         publishingFormat: "JPEG",
+        ...(baseArtwork
+          ? {
+              artworkVersion: baseArtwork.version,
+              backgroundId: baseArtwork.backgroundId,
+              paletteId: baseArtwork.paletteId,
+              typographyPresetId: baseArtwork.typographyPresetId,
+            }
+          : {}),
         ...(planned.slideNumber ? { slideNumber: planned.slideNumber } : {}),
         ...(planned.slideCount ? { slideCount: planned.slideCount } : {}),
         templateId: planned.templateId,

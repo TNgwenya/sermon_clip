@@ -149,6 +149,24 @@ describe("queueSermonProcessingJob", () => {
     });
   });
 
+  it("treats different content-generation intent keys as a conflict", async () => {
+    mocks.findFirst.mockResolvedValueOnce(processingJob({
+      type: "GENERATE_CONTENT_OPPORTUNITIES",
+      status: "PENDING",
+      generationSummary: { intentKey: "content-pack:weekly" },
+    }));
+
+    await expect(queueSermonProcessingJob(
+      "sermon-1",
+      "GENERATE_CONTENT_OPPORTUNITIES",
+      { intentKey: "regenerate-type:quote" },
+    )).resolves.toEqual({
+      id: "job-winner",
+      reusedExisting: true,
+      intentConflict: true,
+    });
+  });
+
   it("checks the unique-index winner's intent when two enqueue requests race", async () => {
     const winner = processingJob({
       type: "GENERATE_CLIPS",

@@ -79,6 +79,64 @@ describe("validateOverlayEligibility — missing rendered clip failure", () => {
   });
 });
 
+describe("overlay source selection", () => {
+  const currentPreparedSources = {
+    renderStatus: "COMPLETED" as const,
+    renderFreshness: "UP_TO_DATE" as const,
+    renderedFilePath: "/tmp/rendered.mp4",
+    captionBurnStatus: "COMPLETED" as const,
+    captionBurnFreshness: "UP_TO_DATE" as const,
+    captionedVideoPath: "/tmp/captioned.mp4",
+  };
+
+  it("requires the current completed caption burn when Studio captions are enabled", () => {
+    expect(__clipOverlayTestUtils.resolveOverlaySourceSelection({
+      ...currentPreparedSources,
+      captionData: { applyCaptionsToClip: true },
+    })).toEqual({
+      sourcePath: "/tmp/captioned.mp4",
+      sourceWasCaptioned: true,
+    });
+  });
+
+  it("does not fall back to raw video after a requested caption burn fails", () => {
+    expect(() => __clipOverlayTestUtils.resolveOverlaySourceSelection({
+      ...currentPreparedSources,
+      captionBurnStatus: "FAILED",
+      captionBurnFreshness: "FAILED",
+      captionData: { applyCaptionsToClip: true },
+    })).toThrow("captioned video is stale or incomplete");
+  });
+
+  it("does not use an outdated captioned file when captions are requested", () => {
+    expect(() => __clipOverlayTestUtils.resolveOverlaySourceSelection({
+      ...currentPreparedSources,
+      captionBurnFreshness: "OUTDATED",
+      captionData: { applyCaptionsToClip: true },
+    })).toThrow("captioned video is stale or incomplete");
+  });
+
+  it("uses the current raw render only when Studio captions are disabled", () => {
+    expect(__clipOverlayTestUtils.resolveOverlaySourceSelection({
+      ...currentPreparedSources,
+      captionBurnStatus: "FAILED",
+      captionBurnFreshness: "FAILED",
+      captionData: { applyCaptionsToClip: false },
+    })).toEqual({
+      sourcePath: "/tmp/rendered.mp4",
+      sourceWasCaptioned: false,
+    });
+  });
+
+  it("rejects stale raw media even when captions are disabled", () => {
+    expect(() => __clipOverlayTestUtils.resolveOverlaySourceSelection({
+      ...currentPreparedSources,
+      renderFreshness: "OUTDATED",
+      captionData: { applyCaptionsToClip: false },
+    })).toThrow("prepared render is stale or incomplete");
+  });
+});
+
 describe("validateOverlayEligibility — missing sermon metadata warning", () => {
   it("blocks when neither sermon title nor pastor name is present", () => {
     const result = validateOverlayEligibility(

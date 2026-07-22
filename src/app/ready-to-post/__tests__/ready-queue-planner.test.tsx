@@ -132,4 +132,13 @@ describe("ready-to-post compact planner", () => {
 
     expect(markup).toContain("Grace for today");
   });
+
+  it("gives every planned post a programmatic calendar focus target", () => {
+    const markup = renderPlanner();
+
+    expect(markup).toContain('id="posting-calendar"');
+    expect(markup).toContain('tabindex="-1"');
+    expect(markup).toContain('id="scheduled-post-post-0"');
+    expect(markup).toContain("Instagram: Planned message 0. Manual media-team handoff.");
+  });
 });
