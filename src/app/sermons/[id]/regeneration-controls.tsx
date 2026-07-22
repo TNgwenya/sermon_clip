@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 
 import {
+  refreshBlockedClipProcessesAction,
   regenerateAllExportsAction,
   regenerateAllOutdatedAssetsAction,
   regenerateAllOutdatedCaptionsAction,
@@ -24,6 +26,7 @@ const emptySummary: RegenerationBatchActionState = {
 };
 
 export function RegenerationControls({ sermonId }: RegenerationControlsProps) {
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [summary, setSummary] = useState<RegenerationBatchActionState>(emptySummary);
 
@@ -33,6 +36,7 @@ export function RegenerationControls({ sermonId }: RegenerationControlsProps) {
     startTransition(async () => {
       const result = await action(sermonId);
       setSummary(result);
+      router.refresh();
     });
   }
 
@@ -42,6 +46,14 @@ export function RegenerationControls({ sermonId }: RegenerationControlsProps) {
         Advanced recovery tools for clips that need to be prepared again. Other clips will continue even if one item fails.
       </p>
       <div className="actions-row">
+        <button
+          type="button"
+          className="button secondary"
+          onClick={() => runBatch(refreshBlockedClipProcessesAction)}
+          disabled={isPending}
+        >
+          {isPending ? "Checking processes..." : "Refresh blocked processes"}
+        </button>
         <button
           type="button"
           className="button secondary"
@@ -74,7 +86,7 @@ export function RegenerationControls({ sermonId }: RegenerationControlsProps) {
 
       {summary.attempted > 0 ? (
         <p className="muted small">
-          Checked: {summary.attempted} | Ready: {summary.completed} | Already okay: {summary.skipped} | Needs attention: {summary.failed}
+          Checked: {summary.attempted} | Released or rebuilt: {summary.completed} | Changed since check: {summary.skipped} | Needs attention: {summary.failed}
         </p>
       ) : null}
 

@@ -91,6 +91,7 @@ import {
 import { getQueuedMediaAssetsForRemoteBatchAction } from "@/lib/clipReview";
 import { buildClipGenerationRetryPlan } from "@/lib/clipGenerationRetry";
 import { isStaleActiveProcessingJob } from "@/lib/pastorWorkflow";
+import { buildStaleClipOperationRecovery } from "@/lib/staleClipOperations";
 import { prunePostingPackageHistoryByClipIds } from "@/lib/postingPackages";
 import {
   deriveBackgroundMode,
@@ -6083,6 +6084,131 @@ export type RegenerationBatchActionState = {
   failed: number;
   failures: Array<{ clipId: string; asset: ClipAssetKind; reason: string }>;
 };
+
+export async function refreshBlockedClipProcessesAction(sermonIdInput: string): Promise<RegenerationBatchActionState> {
+  const sermonId = sermonIdInput.trim();
+  const emptyState = (success: boolean, message: string): RegenerationBatchActionState => ({
+    success,
+    message,
+    attempted: 0,
+    completed: 0,
+    skipped: 0,
+    failed: 0,
+    failures: [],
+  });
+
+  if (!sermonId) {
+    return emptyState(false, "Missing sermon id for blocked-process refresh.");
+  }
+
+  const [sermon, jobs, clips] = await Promise.all([
+    prisma.sermon.findUnique({ where: { id: sermonId }, select: { id: true } }),
+    prisma.processingJob.findMany({
+      where: { sermonId, status: { in: ["PENDING", "RUNNING"] } },
+      select: { id: true, type: true, status: true, updatedAt: true, heartbeatAt: true },
+    }),
+    prisma.clipCandidate.findMany({
+      where: {
+        sermonId,
+        OR: [
+          { renderStatus: { in: ["QUEUED", "RENDERING"] } },
+          { captionStatus: "GENERATING" },
+          { captionBurnStatus: "BURNING" },
+          { overlayStatus: "RENDERING" },
+          { exportStatus: { in: ["QUEUED", "EXPORTING"] } },
+        ],
+      },
+      select: {
+        id: true,
+        updatedAt: true,
+        renderStatus: true,
+        captionStatus: true,
+        captionBurnStatus: true,
+        overlayStatus: true,
+        exportStatus: true,
+      },
+    }),
+  ]);
+
+  if (!sermon) {
+    return emptyState(false, "This sermon was not found. Refresh the page and try again.");
+  }
+
+  const activeJob = jobs.find((job) => !isStaleActiveProcessingJob(job));
+  if (activeJob) {
+    return emptyState(false, "A sermon job is still active, so no process was released. Wait for it to finish, then refresh this page.");
+  }
+
+  const staleJobs = jobs.filter((job) => isStaleActiveProcessingJob(job));
+  const staleClips = clips
+    .map((clip) => ({ clip, recovery: buildStaleClipOperationRecovery(clip) }))
+    .filter((entry) => entry.recovery.operations.length > 0);
+
+  if (staleJobs.length === 0 && staleClips.length === 0) {
+    return emptyState(true, "No stale blocked processes were found. Any visible preparation is still within the safe processing window.");
+  }
+
+  return runOperationWithLogging<RegenerationBatchActionState>(
+    { sermonId, operation: "refresh_blocked_processes" },
+    async () => {
+      const releasedJobIds: string[] = [];
+      const releasedClipIds: string[] = [];
+
+      for (const job of staleJobs) {
+        await markJobFailed(
+          job.id,
+          "Marked as stale by Refresh blocked processes after more than two hours without a worker heartbeat.",
+          "Released stale blocked process without retrying it.",
+        );
+        releasedJobIds.push(job.id);
+      }
+
+      for (const { clip, recovery } of staleClips) {
+        const update = await prisma.clipCandidate.updateMany({
+          where: {
+            id: clip.id,
+            updatedAt: { lte: clip.updatedAt },
+            OR: [
+              { renderStatus: { in: ["QUEUED", "RENDERING"] } },
+              { captionStatus: "GENERATING" },
+              { captionBurnStatus: "BURNING" },
+              { overlayStatus: "RENDERING" },
+              { exportStatus: { in: ["QUEUED", "EXPORTING"] } },
+            ],
+          },
+          data: recovery.data,
+        });
+        if (update.count > 0) {
+          releasedClipIds.push(clip.id);
+        }
+      }
+
+      await appendPipelineLog(
+        sermonId,
+        `Refresh blocked processes released ${releasedJobIds.length} stale job(s) and ${releasedClipIds.length} stale clip operation(s). No retry was started.`,
+      );
+      revalidatePath(`/sermons/${sermonId}`);
+      revalidatePath(`/sermons/${sermonId}/review`);
+      revalidatePath("/ready-to-post");
+      revalidatePath("/");
+
+      const attempted = staleJobs.length + staleClips.length;
+      const completed = releasedJobIds.length + releasedClipIds.length;
+      const skipped = attempted - completed;
+      return {
+        success: true,
+        message: completed === 0
+          ? "The blocked-process check found only work that had changed since the page loaded, so nothing was released. Refresh the page to see its current state."
+          : `Released ${completed} stale blocked process${completed === 1 ? "" : "es"}. Nothing was retried automatically; you can now redo clips or use the normal retry action.`,
+        attempted,
+        completed,
+        skipped,
+        failed: 0,
+        failures: [],
+      };
+    },
+  );
+}
 
 async function regenerateSingleAsset(clipId: string, asset: ClipAssetKind): Promise<{ ok: boolean; reason?: string }> {
   const preflight = await preflightRegenerationAsset(clipId, asset);
