@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildRetryablePreviewUrl,
   hasPreviewMetadata,
   isFreshRemotePreview,
   listBestPreviewCandidates,
+  resolveFreshRemotePreviewUrl,
   resolveClipPreviewRecovery,
   resolveBestPreviewCandidate,
 } from "@/lib/clipPreview";
@@ -98,6 +100,30 @@ describe("clip preview helpers", () => {
         renderFreshness: "NEEDS_REGENERATION",
       }),
     ).toBe(false);
+  });
+
+  it("only exposes a trimmed remote URL while it matches the current render", () => {
+    const preview = {
+      remotePreviewUrl: "  https://cdn.example.com/clip.mp4?v=2  ",
+      renderedAt: "2026-07-03T08:00:00.000Z",
+      remotePreviewUploadedAt: "2026-07-03T08:01:00.000Z",
+      renderFreshness: "UP_TO_DATE" as const,
+    };
+
+    expect(resolveFreshRemotePreviewUrl(preview)).toBe("https://cdn.example.com/clip.mp4?v=2");
+    expect(resolveFreshRemotePreviewUrl({
+      ...preview,
+      remotePreviewUploadedAt: "2026-07-03T07:59:00.000Z",
+    })).toBeNull();
+  });
+
+  it("keeps the normal preview URL cacheable until the user explicitly retries", () => {
+    expect(buildRetryablePreviewUrl("https://cdn.example.com/clip.mp4?v=2", 0)).toBe(
+      "https://cdn.example.com/clip.mp4?v=2",
+    );
+    expect(buildRetryablePreviewUrl("https://cdn.example.com/clip.mp4?v=2", 3)).toBe(
+      "https://cdn.example.com/clip.mp4?v=2&retry=3",
+    );
   });
 
   it("offers a real recovery action for a missing or failed suggested preview", () => {

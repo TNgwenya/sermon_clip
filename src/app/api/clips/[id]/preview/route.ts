@@ -7,6 +7,8 @@ import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPrevi
 import { videoFileResponse } from "@/server/http/videoFileResponse";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
+const REMOTE_PREVIEW_REDIRECT_CACHE_CONTROL = "private, max-age=30, must-revalidate";
+
 async function fileHasBytes(filePath: string): Promise<boolean> {
   try {
     const fileStat = await stat(/* turbopackIgnore: true */ filePath);
@@ -14,6 +16,15 @@ async function fileHasBytes(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function remotePreviewRedirect(remotePreviewUrl: string): NextResponse {
+  return NextResponse.redirect(remotePreviewUrl, {
+    status: 302,
+    headers: {
+      "Cache-Control": REMOTE_PREVIEW_REDIRECT_CACHE_CONTROL,
+    },
+  });
 }
 
 export async function GET(
@@ -57,7 +68,7 @@ export async function GET(
 
   if (!canRunLocalMediaProcessing()) {
     if (remotePreviewUrl) {
-      return NextResponse.redirect(remotePreviewUrl, { status: 302 });
+      return remotePreviewRedirect(remotePreviewUrl);
     }
 
     return NextResponse.json(
@@ -79,7 +90,7 @@ export async function GET(
 
     if (!bestPath) {
       if (remotePreviewUrl) {
-        return NextResponse.redirect(remotePreviewUrl, { status: 302 });
+        return remotePreviewRedirect(remotePreviewUrl);
       }
       return NextResponse.json({ error: "No preview file is available for this clip yet." }, { status: 409 });
     }
@@ -97,7 +108,7 @@ export async function GET(
   const filePath = pathByVariant[variant];
   if (!filePath) {
     if (remotePreviewUrl) {
-      return NextResponse.redirect(remotePreviewUrl, { status: 302 });
+      return remotePreviewRedirect(remotePreviewUrl);
     }
     return NextResponse.json({ error: `Preview variant not available: ${variant}.` }, { status: 409 });
   }
@@ -105,10 +116,12 @@ export async function GET(
   const hasBytes = await fileHasBytes(filePath);
   if (!hasBytes) {
     if (remotePreviewUrl) {
-      return NextResponse.redirect(remotePreviewUrl, { status: 302 });
+      return remotePreviewRedirect(remotePreviewUrl);
     }
     return NextResponse.json({ error: "Preview file is missing or empty on disk." }, { status: 404 });
   }
 
   return videoFileResponse({ request, filePath, disposition: "inline" });
 }
+
+export const HEAD = GET;

@@ -81,6 +81,22 @@ export function isFreshRemotePreview(paths: Pick<
   return uploadedAt >= renderedAt;
 }
 
+export function resolveFreshRemotePreviewUrl(paths: Pick<
+  ClipPreviewPaths,
+  "remotePreviewUrl" | "remotePreviewUploadedAt" | "renderedAt" | "renderFreshness"
+>): string | null {
+  return isFreshRemotePreview(paths) ? paths.remotePreviewUrl?.trim() ?? null : null;
+}
+
+export function buildRetryablePreviewUrl(previewUrl: string, retryNonce: number): string {
+  if (!Number.isFinite(retryNonce) || retryNonce <= 0) {
+    return previewUrl;
+  }
+
+  const separator = previewUrl.includes("?") ? "&" : "?";
+  return `${previewUrl}${separator}retry=${Math.floor(retryNonce)}`;
+}
+
 export function resolveBestPreviewCandidate(paths: ClipPreviewPaths): { variant: ClipPreviewVariant; path: string } | null {
   for (const candidate of BEST_PREVIEW_CANDIDATES) {
     const path = paths[candidate.pathKey];

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  __clipRemotePreviewStorageTestUtils,
   buildClipPreviewObjectKey,
   isClipPreviewObjectKeyForSermon,
   isPostingMediaObjectKeyForScheduledPost,
@@ -13,6 +14,21 @@ describe("clip remote preview storage", () => {
       clipId: "clip/1",
       filename: "preview.mp4",
     })).toBe("clip-previews/sermon-1/clip-1.mp4");
+  });
+
+  it("uploads versioned playback media with long-lived browser cache metadata", () => {
+    expect(__clipRemotePreviewStorageTestUtils.buildClipPreviewUploadMetadata({
+      videoSize: 1_234,
+    })).toEqual({
+      ContentLength: 1_234,
+      ContentType: "video/mp4",
+      CacheControl: "public, max-age=31536000, immutable",
+      ContentDisposition: "inline",
+    });
+    expect(__clipRemotePreviewStorageTestUtils.buildClipPreviewPublicVersion(
+      "compact-v1",
+      new Date("2026-07-22T10:00:00.000Z"),
+    )).toBe("compact-v1-1784714400000");
   });
 
   it("only accepts preview object keys scoped to the sermon being deleted", () => {

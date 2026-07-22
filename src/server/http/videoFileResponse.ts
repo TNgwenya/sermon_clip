@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 
 import { NextResponse } from "next/server";
 
@@ -48,96 +49,30 @@ function headerMatchesModifiedTime(header: string | null, modifiedTime: Date): b
 }
 
 function requestHasFreshInlineCache(request: Request, entityTag: string, modifiedTime: Date): boolean {
-  return headerMatchesEntityTag(request.headers.get("if-none-match"), entityTag)
-    || headerMatchesModifiedTime(request.headers.get("if-modified-since"), modifiedTime);
+  const ifNoneMatch = request.headers.get("if-none-match");
+  if (ifNoneMatch !== null) {
+    return headerMatchesEntityTag(ifNoneMatch, entityTag);
+  }
+
+  return headerMatchesModifiedTime(request.headers.get("if-modified-since"), modifiedTime);
+}
+
+function requestAllowsRange(request: Request, entityTag: string, modifiedTime: Date): boolean {
+  const ifRange = request.headers.get("if-range")?.trim();
+  if (!ifRange) {
+    return true;
+  }
+
+  if (ifRange.startsWith("\"") || ifRange.startsWith("W/\"")) {
+    return !ifRange.startsWith("W/") && ifRange === entityTag;
+  }
+
+  return headerMatchesModifiedTime(ifRange, modifiedTime);
 }
 
 function streamFile(filePath: string, start?: number, end?: number): BodyInit {
   const fileStream = createReadStream(filePath, { start, end });
-  let streamSettled = false;
-  let streamCanceled = false;
-
-  const isInvalidStateError = (error: unknown): boolean => {
-    if (!(error instanceof Error)) {
-      return false;
-    }
-
-    return (error as Error & { code?: unknown }).code === "ERR_INVALID_STATE";
-  };
-
-  const settleStream = () => {
-    streamSettled = true;
-    fileStream.removeAllListeners("data");
-    fileStream.removeAllListeners("end");
-    fileStream.removeAllListeners("close");
-    fileStream.removeAllListeners("error");
-  };
-
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      const closeController = () => {
-        if (streamSettled || streamCanceled) {
-          return;
-        }
-
-        settleStream();
-
-        try {
-          controller.close();
-        } catch (error) {
-          if (!isInvalidStateError(error)) {
-            throw error;
-          }
-        }
-      };
-
-      const errorController = (error: unknown) => {
-        if (streamSettled || streamCanceled) {
-          return;
-        }
-
-        settleStream();
-
-        try {
-          controller.error(error);
-        } catch (controllerError) {
-          if (!isInvalidStateError(controllerError)) {
-            throw controllerError;
-          }
-        }
-      };
-
-      fileStream.on("data", (chunk) => {
-        if (streamSettled || streamCanceled) {
-          return;
-        }
-
-        const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-
-        try {
-          controller.enqueue(new Uint8Array(bytes));
-        } catch (error) {
-          if (isInvalidStateError(error)) {
-            streamCanceled = true;
-            settleStream();
-            fileStream.destroy();
-            return;
-          }
-
-          throw error;
-        }
-      });
-
-      fileStream.once("end", closeController);
-      fileStream.once("close", closeController);
-      fileStream.once("error", errorController);
-    },
-    cancel() {
-      streamCanceled = true;
-      settleStream();
-      fileStream.destroy();
-    },
-  });
+  return Readable.toWeb(fileStream) as unknown as BodyInit;
 }
 
 export function resolveByteRange(rangeHeader: string, fileSize: number): { start: number; end: number } | null {
@@ -188,6 +123,7 @@ export async function videoFileResponse({
   const fileSize = fileStat.size;
   const entityTag = buildEntityTag(fileStat);
   const lastModified = fileStat.mtime.toUTCString();
+  const isHeadRequest = request.method.toUpperCase() === "HEAD";
 
   if (fileSize <= 0) {
     return NextResponse.json(
@@ -196,7 +132,10 @@ export async function videoFileResponse({
     );
   }
 
-  const range = request.headers.get("range");
+  const requestedRange = isHeadRequest ? null : request.headers.get("range");
+  const range = requestedRange && requestAllowsRange(request, entityTag, fileStat.mtime)
+    ? requestedRange
+    : null;
   const baseHeaders = {
     "Accept-Ranges": "bytes",
     "Cache-Control": disposition === "inline" ? "private, max-age=0, must-revalidate" : "no-store",
@@ -206,7 +145,7 @@ export async function videoFileResponse({
     "Content-Type": "video/mp4",
   };
 
-  if (disposition === "inline" && !range && requestHasFreshInlineCache(request, entityTag, fileStat.mtime)) {
+  if (disposition === "inline" && requestHasFreshInlineCache(request, entityTag, fileStat.mtime)) {
     return new NextResponse(null, {
       status: 304,
       headers: baseHeaders,
@@ -214,7 +153,7 @@ export async function videoFileResponse({
   }
 
   if (!range) {
-    return new NextResponse(streamFile(filePath), {
+    return new NextResponse(isHeadRequest ? null : streamFile(filePath), {
       status: 200,
       headers: {
         ...baseHeaders,

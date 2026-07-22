@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
 import { prisma } from "@/lib/prisma";
-import { hasPreviewMetadata, isFreshRemotePreview } from "@/lib/clipPreview";
+import { hasPreviewMetadata, resolveFreshRemotePreviewUrl } from "@/lib/clipPreview";
 import { ReviewExperience } from "@/app/sermons/[id]/review/review-experience";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import { extractTranscriptReviewEvidence } from "@/lib/transcriptReviewGuidance";
@@ -120,7 +120,7 @@ function canAttemptClipPreview(
   clip: ReviewPageData["clipCandidates"][number],
   localMediaAvailable: boolean,
 ): boolean {
-  if (isFreshRemotePreview(clip)) {
+  if (resolveFreshRemotePreviewUrl(clip)) {
     return true;
   }
 
@@ -254,6 +254,7 @@ async function SermonReviewContent({ id }: { id: string }) {
   }
 
   const clips = sermon.clipCandidates.map((clip) => {
+    const remotePreviewUrl = resolveFreshRemotePreviewUrl(clip);
     const clientClip = { ...clip };
     for (const key of SERVER_ONLY_PREVIEW_KEYS) {
       delete (clientClip as Record<string, unknown>)[key];
@@ -274,6 +275,7 @@ async function SermonReviewContent({ id }: { id: string }) {
       suggestedHook: clip.suggestedHook ?? null,
       suggestedCaption: clip.suggestedCaption ?? null,
       canPreviewVideo: canAttemptClipPreview(clip, localMediaAvailable),
+      remotePreviewUrl,
       createdAt: clip.createdAt.toISOString(),
     };
   });

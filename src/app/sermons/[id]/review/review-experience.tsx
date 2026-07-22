@@ -771,7 +771,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                           preload="none"
                           aria-label={`Preview ${clip.title}`}
                           poster={`/api/clips/${clip.id}/thumbnail`}
-                          src={`/api/clips/${clip.id}/preview?variant=best`}
+                          src={clip.remotePreviewUrl ?? `/api/clips/${clip.id}/preview?variant=best`}
                           onError={() => {
                             setFailedPreviewClipIds((current) =>
                               current.includes(clip.id) ? current : [...current, clip.id],

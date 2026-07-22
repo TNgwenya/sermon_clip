@@ -10,6 +10,12 @@ import {
   remotePreviewStorageConfigured,
   uploadClipPreviewToR2,
 } from "@/server/agents/clipRemotePreviewStorage";
+import {
+  COMPACT_CLIP_PREVIEW_VERSION,
+  compactClipPreviewUrlIsCurrent,
+  createCompactClipPreview,
+  removeCompactClipPreview,
+} from "@/server/agents/clipPreviewProxyService";
 
 type ReviewAssetClip = {
   id: string;
@@ -71,7 +77,7 @@ function shouldUploadRemotePreview(
     remotePreviewStorageConfigured() &&
     clip.renderStatus === "COMPLETED" &&
     Boolean(clip.renderedFilePath) &&
-    (Boolean(force) || !isFreshRemotePreview(clip))
+    (Boolean(force) || !isFreshRemotePreview(clip) || !compactClipPreviewUrlIsCurrent(clip.remotePreviewUrl))
   );
 }
 
@@ -187,12 +193,38 @@ async function uploadRemotePreviewBestEffort(input: {
     return false;
   }
 
+  let compactPreviewPath: string | null = null;
+  let uploadPath = input.renderedFilePath;
+  let uploadSize = input.fileSizeBytes;
+  let versionTag: string | undefined;
+
   try {
+    try {
+      const compactPreview = await createCompactClipPreview({
+        sourcePath: input.renderedFilePath,
+      });
+      compactPreviewPath = compactPreview.filePath;
+      uploadPath = compactPreview.filePath;
+      uploadSize = compactPreview.fileSizeBytes;
+      versionTag = compactPreview.version;
+      await appendPipelineLog(
+        input.sermonId,
+        `Compact preview ${COMPACT_CLIP_PREVIEW_VERSION} prepared for clip ${input.clipId}: ${compactPreview.fileSizeBytes} bytes (master: ${input.fileSizeBytes} bytes).`,
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Unknown compact preview encoding error.";
+      await appendPipelineLog(
+        input.sermonId,
+        `Compact preview encoding failed for clip ${input.clipId}; uploading the full-quality master as a temporary fallback. Reason: ${reason}`,
+      );
+    }
+
     const uploaded = await uploadClipPreviewToR2({
       sermonId: input.sermonId,
       clipId: input.clipId,
-      videoPath: input.renderedFilePath,
-      videoSize: input.fileSizeBytes,
+      videoPath: uploadPath,
+      videoSize: uploadSize,
+      versionTag,
     });
     await prisma.clipCandidate.update({
       where: { id: input.clipId },
@@ -207,6 +239,10 @@ async function uploadRemotePreviewBestEffort(input: {
     const reason = error instanceof Error ? error.message : "Unknown remote preview upload error.";
     await appendPipelineLog(input.sermonId, `Remote preview upload failed for clip ${input.clipId}: ${reason}`);
     return false;
+  } finally {
+    if (compactPreviewPath) {
+      await removeCompactClipPreview(compactPreviewPath);
+    }
   }
 }
 
@@ -326,4 +362,5 @@ export async function prepareGeneratedClipReviewAssets(input: {
 export const __clipReviewAssetServiceTestUtils = {
   shouldPreparePreview,
   shouldRenderReviewPreview,
+  shouldUploadRemotePreview,
 };

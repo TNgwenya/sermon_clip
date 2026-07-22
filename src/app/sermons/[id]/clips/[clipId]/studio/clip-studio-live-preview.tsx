@@ -15,6 +15,7 @@ import {
 } from "@/lib/clipBranding";
 import { resolveCaptionStylePreset } from "@/lib/captionStylePresets";
 import { resolveFramingDisplayLabel } from "@/lib/clipExportSettings";
+import { buildRetryablePreviewUrl } from "@/lib/clipPreview";
 import {
   buildSpeechCleanupPreviewPlan,
   mapSourceSecondsToCleanedPreviewSeconds,
@@ -26,7 +27,6 @@ import {
   resolvePreviewSeekSourceSeconds,
   resolveSpeechCleanupJumpTarget,
   shouldShowHookOverlay,
-  synchronizePreviewBackdropMedia,
 } from "@/lib/clipStudioPreviewTimeline";
 import { remapTimelineRangeToCleanedTime } from "@/lib/speechCleanupPlan";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
@@ -179,7 +179,6 @@ export function ClipStudioLivePreview({
   } = useClipStudioPreview();
   const frameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const backdropVideoRef = useRef<HTMLVideoElement | null>(null);
   const [overlayDragState, setOverlayDragState] = useState<OverlayDragState | null>(null);
   const [previewSeconds, setPreviewSeconds] = useState(0);
   const [sourcePreviewSeconds, setSourcePreviewSeconds] = useState(0);
@@ -189,6 +188,7 @@ export function ClipStudioLivePreview({
   const [previewReadySrc, setPreviewReadySrc] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
   const [playbackNotice, setPlaybackNotice] = useState<string | null>(null);
+  const [playbackState, setPlaybackState] = useState<"loading" | "ready" | "waiting" | "stalled" | "playing" | "paused" | "error">("loading");
   const brandingEnabled = brandingConfig.enabled && brandingConfig.preset !== "NO_BRANDING";
   const captionsRequireSafeBrandingPlacement = shouldBrandingLowerThirdYieldToCaptions({
     applyCaptionsToClip: editPreview.applyCaptionsToClip,
@@ -217,10 +217,10 @@ export function ClipStudioLivePreview({
       return null;
     }
 
-    const separator = activePreviewSrc.includes("?") ? "&" : "?";
-    return `${activePreviewSrc}${separator}retry=${retryNonce}`;
+    return buildRetryablePreviewUrl(activePreviewSrc, retryNonce);
   }, [activePreviewSrc, retryNonce]);
   const previewMediaReady = Boolean(playbackSrc && previewReadySrc === playbackSrc && !previewError);
+  const previewBuffering = playbackState === "waiting" || playbackState === "stalled";
   const draftDurationSeconds = editPreview.durationSeconds;
   const introDurationSeconds = normalizeBrandingDurationSeconds(
     brandingConfig.introDurationSeconds,
@@ -497,9 +497,6 @@ export function ClipStudioLivePreview({
 
     setOverlayDragState(null);
   }
-  const syncBackdropToForeground = useCallback(() => {
-    synchronizePreviewBackdropMedia(videoRef.current, backdropVideoRef.current);
-  }, []);
   const updatePreviewSeconds = useCallback(() => {
     const video = videoRef.current;
     const videoSeconds = video?.currentTime ?? 0;
@@ -526,14 +523,13 @@ export function ClipStudioLivePreview({
     setPreviewSeconds(currentSeconds);
     setPreviewDurationSeconds(durationSeconds);
     setIsPreviewPlaying(isPlaying);
-    syncBackdropToForeground();
     updatePreviewClock({
       currentSeconds,
       sourceCurrentSeconds: sourceSeconds,
       durationSeconds,
       isPlaying,
     });
-  }, [draftDurationSeconds, draftStartSeconds, hasSourcePreview, isDraftTrimPreview, speechCleanupPreviewPlan, syncBackdropToForeground, updatePreviewClock]);
+  }, [draftDurationSeconds, draftStartSeconds, hasSourcePreview, isDraftTrimPreview, speechCleanupPreviewPlan, updatePreviewClock]);
 
   const clampVideoToDraftWindow = useCallback((options?: { restartAtEnd?: boolean }) => {
     const video = videoRef.current;
@@ -628,6 +624,10 @@ export function ClipStudioLivePreview({
     }
 
     clampVideoToDraftWindow({ restartAtEnd: true });
+    if (video.readyState < 3) {
+      setPlaybackState("waiting");
+      setPlaybackNotice("Buffering the preview. Playback will begin as soon as enough video is ready.");
+    }
 
     try {
       await video.play();
@@ -653,6 +653,7 @@ export function ClipStudioLivePreview({
 
     if (!video.paused && !video.ended) {
       video.pause();
+      setPlaybackState("paused");
       setPlaybackNotice(null);
       updatePreviewSeconds();
       return;
@@ -719,30 +720,32 @@ export function ClipStudioLivePreview({
             {canPreview && playbackSrc ? (
               <>
                 {exportSettings.backgroundMode === "BLURRED" ? (
-                  <video
-                    ref={backdropVideoRef}
+                  <div
                     className="clip-studio-live-backdrop"
-                    muted
-                    playsInline
-                    preload="metadata"
-                    src={playbackSrc}
                     aria-hidden="true"
-                    onLoadedMetadata={syncBackdropToForeground}
+                    style={{
+                      background: `radial-gradient(circle at 50% 32%, ${colorWithOpacity(brandingConfig.themeColor ?? "#75d9b8", 0.72)} 0%, #172033 42%, #05070b 100%)`,
+                    }}
                   />
                 ) : null}
                 <video
                   ref={videoRef}
                   className="review-video clip-studio-video"
-                  preload="metadata"
+                  preload="auto"
+                  playsInline
                   src={playbackSrc}
                   onLoadedMetadata={() => {
                     setPreviewErrorState(null);
-                    setPreviewReadySrc(playbackSrc);
                     updatePreviewSeconds();
                   }}
                   onLoadedData={() => {
                     setPreviewErrorState(null);
+                  }}
+                  onCanPlay={() => {
+                    setPreviewErrorState(null);
                     setPreviewReadySrc(playbackSrc);
+                    setPlaybackState(videoRef.current && !videoRef.current.paused ? "playing" : "ready");
+                    setPlaybackNotice(null);
                   }}
                   onError={() => {
                     setPreviewErrorState({
@@ -751,6 +754,19 @@ export function ClipStudioLivePreview({
                     });
                     setPreviewReadySrc(null);
                     setIsPreviewPlaying(false);
+                    setPlaybackState("error");
+                  }}
+                  onWaiting={() => {
+                    setPlaybackState("waiting");
+                    setPlaybackNotice("Buffering the preview. Playback will continue automatically.");
+                  }}
+                  onStalled={() => {
+                    setPlaybackState("stalled");
+                    setPlaybackNotice("The preview connection paused. Retrying the video stream…");
+                  }}
+                  onPlaying={() => {
+                    setPlaybackState("playing");
+                    setPlaybackNotice(null);
                   }}
                   onTimeUpdate={() => {
                     clampVideoToDraftWindow();
@@ -765,8 +781,12 @@ export function ClipStudioLivePreview({
                     clampVideoToDraftWindow();
                     updatePreviewSeconds();
                   }}
-                  onPause={updatePreviewSeconds}
+                  onPause={() => {
+                    setPlaybackState("paused");
+                    updatePreviewSeconds();
+                  }}
                   onEnded={() => {
+                    setPlaybackState("ready");
                     clampVideoToDraftWindow();
                     updatePreviewSeconds();
                   }}
@@ -781,6 +801,8 @@ export function ClipStudioLivePreview({
                       onClick={() => {
                         setPreviewErrorState(null);
                         setPreviewReadySrc(null);
+                        setPlaybackState("loading");
+                        setPlaybackNotice(null);
                         setRetryNonce((current) => current + 1);
                       }}
                     >
@@ -788,15 +810,23 @@ export function ClipStudioLivePreview({
                     </button>
                   </div>
                 ) : null}
-                {!previewError && !previewMediaReady ? (
+                {!previewError && (!previewMediaReady || previewBuffering) ? (
                   <div className="clip-studio-preview-error is-loading" role="status">
-                    <strong>Loading preview media</strong>
-                    <span>The video metadata is not ready yet, so overlays are paused until the media loads.</span>
+                    <strong>{previewBuffering ? "Buffering preview" : "Loading preview media"}</strong>
+                    <span>
+                      {playbackState === "stalled"
+                        ? "The connection paused briefly. The Studio is retrying the stream."
+                        : previewBuffering
+                          ? "Playback will continue automatically as soon as enough video is ready."
+                          : "The Studio is loading enough video to start smoothly."}
+                    </span>
                     <button
                       type="button"
                       className="button secondary"
                       onClick={() => {
                         setPreviewReadySrc(null);
+                        setPlaybackState("loading");
+                        setPlaybackNotice(null);
                         setRetryNonce((current) => current + 1);
                       }}
                     >

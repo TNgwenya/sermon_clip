@@ -11,6 +11,32 @@ type UploadedRemotePreview = {
 
 let client: S3Client | null = null;
 const DEFAULT_REMOTE_PREVIEW_UPLOAD_TIMEOUT_MS = 5 * 60_000;
+const CLIP_PREVIEW_CACHE_CONTROL = "public, max-age=31536000, immutable";
+const CLIP_PREVIEW_CONTENT_DISPOSITION = "inline";
+
+function buildClipPreviewUploadMetadata(input: {
+  videoSize: number;
+  contentType?: string;
+}): {
+  ContentLength: number;
+  ContentType: string;
+  CacheControl: string;
+  ContentDisposition: string;
+} {
+  return {
+    ContentLength: input.videoSize,
+    ContentType: input.contentType ?? "video/mp4",
+    CacheControl: CLIP_PREVIEW_CACHE_CONTROL,
+    ContentDisposition: CLIP_PREVIEW_CONTENT_DISPOSITION,
+  };
+}
+
+function buildClipPreviewPublicVersion(versionTag: string | undefined, uploadedAt: Date): string | number {
+  const normalizedVersionTag = versionTag?.trim();
+  return normalizedVersionTag
+    ? `${normalizedVersionTag}-${uploadedAt.getTime()}`
+    : uploadedAt.getTime();
+}
 
 function cleanPathSegment(value: string): string {
   const cleaned = value.trim().replace(/[^A-Za-z0-9._-]/g, "-").replace(/-+/g, "-");
@@ -163,6 +189,7 @@ export async function uploadClipPreviewToR2(input: {
   videoPath: string;
   videoSize: number;
   contentType?: string;
+  versionTag?: string;
 }): Promise<UploadedRemotePreview> {
   const objectKey = buildClipPreviewObjectKey({
     sermonId: input.sermonId,
@@ -179,8 +206,7 @@ export async function uploadClipPreviewToR2(input: {
         Bucket: requiredEnv("R2_BUCKET"),
         Key: objectKey,
         Body: createReadStream(input.videoPath),
-        ContentLength: input.videoSize,
-        ContentType: input.contentType ?? "video/mp4",
+        ...buildClipPreviewUploadMetadata(input),
       }),
       { abortSignal: abortController.signal },
     );
@@ -192,7 +218,10 @@ export async function uploadClipPreviewToR2(input: {
 
   return {
     objectKey,
-    publicUrl: buildR2PublicUrl(objectKey, uploadedAt.getTime()),
+    publicUrl: buildR2PublicUrl(
+      objectKey,
+      buildClipPreviewPublicVersion(input.versionTag, uploadedAt),
+    ),
     uploadedAt,
   };
 }
@@ -245,3 +274,10 @@ export async function deletePostingMediaFromR2(input: {
 
   await deleteR2Object(objectKey);
 }
+
+export const __clipRemotePreviewStorageTestUtils = {
+  CLIP_PREVIEW_CACHE_CONTROL,
+  CLIP_PREVIEW_CONTENT_DISPOSITION,
+  buildClipPreviewPublicVersion,
+  buildClipPreviewUploadMetadata,
+};
