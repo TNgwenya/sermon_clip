@@ -72,6 +72,25 @@ describe("clip generation retry planning", () => {
     });
   });
 
+  it("preserves a redo source range when retrying failed clip discovery", () => {
+    expect(buildClipGenerationRetryPlan({
+      existingActiveSuggestionCount: 0,
+      failedJobErrorMessage: "AI clip selection timed out.",
+      failedJobGenerationSummary: {
+        mode: "redo",
+        sermonStartSeconds: 1_200,
+        sermonEndSeconds: 3_600,
+        analyzeFullRecording: false,
+      },
+    }).generationSummary).toEqual({
+      mode: "redo",
+      existingActiveSuggestionCount: 0,
+      sermonStartSeconds: 1_200,
+      sermonEndSeconds: 3_600,
+      analyzeFullRecording: false,
+    });
+  });
+
   it("keeps a genuine generation retry forced when it is not an append", () => {
     const plan = buildClipGenerationRetryPlan({
       existingActiveSuggestionCount: 5,
@@ -138,6 +157,18 @@ describe("clip generation retry planning", () => {
     expect(clipGenerationIntentsMatch(undefined, {})).toBe(true);
     expect(clipGenerationIntentsMatch({ append: true }, { mode: CLIP_GENERATION_RETRY_MODE, append: true })).toBe(true);
     expect(clipGenerationIntentsMatch({ mode: "redo" }, { mode: "redo", failure: {} })).toBe(true);
+    expect(clipGenerationIntentsMatch(
+      { mode: "redo", sermonStartSeconds: 1_200, sermonEndSeconds: null, analyzeFullRecording: false },
+      { mode: "redo", sermonStartSeconds: 1_200, sermonEndSeconds: null, analyzeFullRecording: false },
+    )).toBe(true);
+    expect(clipGenerationIntentsMatch(
+      { mode: "redo", sermonStartSeconds: 1_200, sermonEndSeconds: null, analyzeFullRecording: false },
+      { mode: "redo", sermonStartSeconds: 1_800, sermonEndSeconds: null, analyzeFullRecording: false },
+    )).toBe(false);
+    expect(clipGenerationIntentsMatch(
+      { mode: "redo" },
+      { mode: "redo", sermonStartSeconds: null, sermonEndSeconds: null, analyzeFullRecording: true },
+    )).toBe(true);
     expect(clipGenerationIntentsMatch({ append: true }, { mode: "redo" })).toBe(false);
     expect(clipGenerationIntentsMatch(undefined, { append: true })).toBe(false);
     expect(clipGenerationIntentsMatch(

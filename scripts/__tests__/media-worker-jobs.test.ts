@@ -4,6 +4,7 @@ import {
   runCaptionBurnBatch,
   runClipGenerationWorkerJob,
   runOverlayAndExportBatch,
+  resolveRedoClipGenerationWorkerSourceWindow,
   summarizeCaptionBatch,
   summarizePreviewPreparation,
   summarizeQualityRefreshBatch,
@@ -59,6 +60,25 @@ describe("media worker caption outcomes", () => {
 });
 
 describe("media worker clip-generation outcomes", () => {
+  it("restores the selected source range for a queued redo job", () => {
+    expect(resolveRedoClipGenerationWorkerSourceWindow({
+      mode: "redo",
+      sermonStartSeconds: 1_200,
+      sermonEndSeconds: 3_600,
+      analyzeFullRecording: false,
+    })).toEqual({
+      sermonStartSeconds: 1_200,
+      sermonEndSeconds: 3_600,
+      analyzeFullRecording: false,
+    });
+    expect(resolveRedoClipGenerationWorkerSourceWindow({ mode: "redo" })).toEqual({
+      sermonStartSeconds: null,
+      sermonEndSeconds: null,
+      analyzeFullRecording: true,
+    });
+    expect(resolveRedoClipGenerationWorkerSourceWindow({ append: true })).toBeNull();
+  });
+
   it("returns the preview summary when every generated preview succeeds or is skipped", () => {
     expect(summarizePreviewPreparation({
       prepared: 3,

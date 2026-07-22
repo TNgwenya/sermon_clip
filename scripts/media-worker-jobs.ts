@@ -49,6 +49,12 @@ type RedoClipGenerationResult = {
   message: string;
 };
 
+export type RedoClipGenerationWorkerSourceWindow = {
+  sermonStartSeconds: number | null;
+  sermonEndSeconds: number | null;
+  analyzeFullRecording: boolean;
+};
+
 type ExportLayoutStrategy =
   | "CENTER_CROP"
   | "LEFT_FOCUS"
@@ -106,6 +112,29 @@ function failureDetails(errors: BatchError[] | undefined): string {
     .slice(0, 3)
     .map((error) => `${error.clipId}: ${error.reason}`)
     .join(" | ")}`;
+}
+
+function optionalNonNegativeSeconds(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+export function resolveRedoClipGenerationWorkerSourceWindow(
+  generationSummary: unknown,
+): RedoClipGenerationWorkerSourceWindow | null {
+  if (!generationSummary || typeof generationSummary !== "object" || Array.isArray(generationSummary)) {
+    return null;
+  }
+  const summary = generationSummary as Record<string, unknown>;
+  if (summary["mode"] !== "redo") return null;
+  const sermonStartSeconds = optionalNonNegativeSeconds(summary["sermonStartSeconds"]);
+  const sermonEndSeconds = optionalNonNegativeSeconds(summary["sermonEndSeconds"]);
+  return {
+    sermonStartSeconds,
+    sermonEndSeconds,
+    analyzeFullRecording: typeof summary["analyzeFullRecording"] === "boolean"
+      ? summary["analyzeFullRecording"]
+      : sermonStartSeconds === null && sermonEndSeconds === null,
+  };
 }
 
 /**

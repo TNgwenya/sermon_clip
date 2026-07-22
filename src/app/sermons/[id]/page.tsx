@@ -1671,6 +1671,9 @@ export default async function SermonDetailPage({
                   sermonId={sermon.id}
                   hasTranscriptSegments={hasTranscriptSegments}
                   clipCount={clipCounts.total}
+                  defaultStartSeconds={sermon.analyzeFullRecording ? null : sermon.sermonStartSeconds}
+                  defaultEndSeconds={sermon.analyzeFullRecording ? null : sermon.sermonEndSeconds}
+                  durationSeconds={sermon.sourceDurationSeconds}
                 />
               </article>
               <article className="troubleshoot-action-item">

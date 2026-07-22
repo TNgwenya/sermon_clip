@@ -42,6 +42,7 @@ import type { ClipQualityRefreshSummary } from "@/server/agents/clipQualityRefre
 import type { ClipSuggestionCurationSummary } from "@/server/agents/clipSuggestionCurationService";
 import { prepareGeneratedClipReviewAssets } from "@/server/agents/clipReviewAssetService";
 import {
+  buildRedoClipGenerationSourceWindow,
   redoClipGenerationFromTranscript,
   validateRedoClipGenerationReadiness,
 } from "@/server/agents/clipRedoService";
@@ -129,7 +130,10 @@ import {
   localMediaProcessingUnavailableMessage,
 } from "@/server/runtime/workerRuntime";
 import { assertMediaStorageCapacity } from "@/server/media/storageCapacity";
-import { formatSecondsForTimestampInput } from "@/lib/sermonSegment";
+import {
+  formatSecondsForTimestampInput,
+  parseSermonTimestampInput,
+} from "@/lib/sermonSegment";
 import { isCaptionStylePresetId, type CaptionStylePresetId } from "@/lib/captionStylePresets";
 import {
   normalizeBrollLayerConfig,
@@ -433,6 +437,10 @@ export type GenerateClipSuggestionsFormState = {
 export type RedoClipGenerationFormState = {
   success: boolean;
   message: string;
+  fieldErrors?: {
+    sermonStartTimestamp?: string;
+    sermonEndTimestamp?: string;
+  };
   deletedClips?: number;
   generatedClips?: number;
   clearedDrafts?: number;
@@ -1971,6 +1979,8 @@ export async function redoClipGenerationFromTranscriptAction(
 ): Promise<RedoClipGenerationFormState> {
   const sermonId = String(formData.get("sermonId") ?? "").trim();
   const confirmation = String(formData.get("confirmation") ?? "").trim();
+  const sermonStartTimestamp = String(formData.get("sermonStartTimestamp") ?? "").trim();
+  const sermonEndTimestamp = String(formData.get("sermonEndTimestamp") ?? "").trim();
 
   if (!sermonId) {
     return {
@@ -1986,11 +1996,37 @@ export async function redoClipGenerationFromTranscriptAction(
     };
   }
 
-  const readiness = await validateRedoClipGenerationReadiness(sermonId);
+  const parsedStart = parseSermonTimestampInput(sermonStartTimestamp);
+  const parsedEnd = parseSermonTimestampInput(sermonEndTimestamp);
+  if (parsedStart.error || parsedEnd.error) {
+    return {
+      success: false,
+      message: "Enter a valid source video range before redoing the clips.",
+      fieldErrors: {
+        sermonStartTimestamp: parsedStart.error,
+        sermonEndTimestamp: parsedEnd.error,
+      },
+    };
+  }
+
+  const sourceWindow = buildRedoClipGenerationSourceWindow(
+    parsedStart.seconds,
+    parsedEnd.seconds,
+  );
+
+  const readiness = await validateRedoClipGenerationReadiness(sermonId, { sourceWindow });
   if (!readiness.ok) {
     return {
       success: false,
       message: readiness.message,
+      fieldErrors: {
+        ...(readiness.message.toLowerCase().includes("start time")
+          ? { sermonStartTimestamp: readiness.message }
+          : {}),
+        ...(readiness.message.toLowerCase().includes("end time")
+          ? { sermonEndTimestamp: readiness.message }
+          : {}),
+      },
     };
   }
 
@@ -1998,7 +2034,12 @@ export async function redoClipGenerationFromTranscriptAction(
     const job = await queueSermonProcessingJob(
       sermonId,
       "GENERATE_CLIPS",
-      { mode: "redo" },
+      {
+        mode: "redo",
+        sermonStartSeconds: sourceWindow.sermonStartSeconds,
+        sermonEndSeconds: sourceWindow.sermonEndSeconds,
+        analyzeFullRecording: sourceWindow.analyzeFullRecording,
+      },
     );
     if (job.intentConflict) {
       return {
@@ -2019,7 +2060,7 @@ export async function redoClipGenerationFromTranscriptAction(
   }
 
   try {
-    const result = await redoClipGenerationFromTranscript(sermonId);
+    const result = await redoClipGenerationFromTranscript(sermonId, { sourceWindow });
 
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath(`/sermons/${sermonId}/review`);

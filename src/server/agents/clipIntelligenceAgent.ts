@@ -142,6 +142,60 @@ type TranscriptSegmentRecord = {
   speakerLabel?: string | null;
 };
 
+type ClipGenerationSermonWindow = {
+  sermonStartSeconds: number | null;
+  sermonEndSeconds: number | null;
+  analyzeFullRecording: boolean;
+};
+
+function hasConfiguredClipGenerationWindow(window: ClipGenerationSermonWindow): boolean {
+  return !window.analyzeFullRecording && (
+    typeof window.sermonStartSeconds === "number"
+    || typeof window.sermonEndSeconds === "number"
+  );
+}
+
+function overlapsClipGenerationWindow(
+  startTimeSeconds: number,
+  endTimeSeconds: number,
+  window: ClipGenerationSermonWindow,
+): boolean {
+  if (!hasConfiguredClipGenerationWindow(window)) return true;
+  if (typeof window.sermonStartSeconds === "number" && endTimeSeconds <= window.sermonStartSeconds) {
+    return false;
+  }
+  if (typeof window.sermonEndSeconds === "number" && startTimeSeconds >= window.sermonEndSeconds) {
+    return false;
+  }
+  return true;
+}
+
+function filterTranscriptSegmentsToClipGenerationWindow<T extends TranscriptSegmentRecord>(
+  segments: T[],
+  window: ClipGenerationSermonWindow,
+): T[] {
+  return hasConfiguredClipGenerationWindow(window)
+    ? segments.filter((segment) => overlapsClipGenerationWindow(
+        segment.startTimeSeconds,
+        segment.endTimeSeconds,
+        window,
+      ))
+    : segments;
+}
+
+function filterMinistryMomentsToClipGenerationWindow<T extends MinistryMomentRecord>(
+  moments: T[],
+  window: ClipGenerationSermonWindow,
+): T[] {
+  if (!hasConfiguredClipGenerationWindow(window)) return moments;
+  return moments.filter((moment) => {
+    if (typeof moment.startTimeSeconds !== "number" || typeof moment.endTimeSeconds !== "number") {
+      return true;
+    }
+    return overlapsClipGenerationWindow(moment.startTimeSeconds, moment.endTimeSeconds, window);
+  });
+}
+
 const WINDOW_STEP_SECONDS = 60;
 const MIN_WINDOW_SECONDS = 30;
 const MAX_WINDOW_SECONDS = 90;
@@ -1943,11 +1997,45 @@ function clampCandidateToBounds<T extends LooseClipCandidate>(
       ...candidate,
       startTimeSeconds,
       endTimeSeconds,
+      adjustedStartTimeSeconds: startTimeSeconds,
+      adjustedEndTimeSeconds: endTimeSeconds,
       durationSeconds: Number((endTimeSeconds - startTimeSeconds).toFixed(2)),
       transcriptText: transcriptText || candidate.transcriptText,
       boundaryQuality: endTimeSeconds > startTimeSeconds ? "GOOD" as const : "BAD" as const,
     },
     warnings: adjusted ? ["SERMON_BOUNDARY_CLAMPED"] : [],
+  };
+}
+
+function constrainCandidateToClipGenerationWindow<T extends LooseClipCandidate>(
+  candidate: T,
+  segments: TranscriptSegmentRecord[],
+  window: ClipGenerationSermonWindow,
+): { accepted: true; adjusted: boolean; candidate: T } | { accepted: false; reason: string } {
+  if (!hasConfiguredClipGenerationWindow(window)) {
+    return { accepted: true, adjusted: false, candidate };
+  }
+
+  const bounded = clampCandidateToBounds(candidate, segments, {
+    ...(typeof window.sermonStartSeconds === "number"
+      ? { startTimeSeconds: window.sermonStartSeconds }
+      : {}),
+    ...(typeof window.sermonEndSeconds === "number"
+      ? { endTimeSeconds: window.sermonEndSeconds }
+      : {}),
+  });
+  const durationSeconds = (bounded.candidate.endTimeSeconds ?? 0) - (bounded.candidate.startTimeSeconds ?? 0);
+  if (durationSeconds < TARGET_MIN_DURATION_SECONDS) {
+    return {
+      accepted: false,
+      reason: `candidate leaves only ${durationSeconds.toFixed(1)}s inside the selected source range`,
+    };
+  }
+
+  return {
+    accepted: true,
+    adjusted: bounded.adjusted,
+    candidate: bounded.candidate,
   };
 }
 
@@ -2833,6 +2921,9 @@ export async function generateClipSuggestions(
       speakerName: true,
       churchName: true,
       language: true,
+      sermonStartSeconds: true,
+      sermonEndSeconds: true,
+      analyzeFullRecording: true,
     },
   });
 
@@ -2861,7 +2952,7 @@ export async function generateClipSuggestions(
     await updateSermonStatus(sermon.id, "GENERATING_CLIPS");
 
     failureStage = "transcript_loading";
-    const segments = await prisma.transcriptSegment.findMany({
+    const allSegments = await prisma.transcriptSegment.findMany({
       where: { sermonId: sermon.id },
       orderBy: { startTimeSeconds: "asc" },
       select: {
@@ -2872,11 +2963,27 @@ export async function generateClipSuggestions(
         speakerLabel: true,
       },
     });
+    const clipGenerationWindow: ClipGenerationSermonWindow = {
+      sermonStartSeconds: sermon.sermonStartSeconds,
+      sermonEndSeconds: sermon.sermonEndSeconds,
+      analyzeFullRecording: sermon.analyzeFullRecording,
+    };
+    const segments = filterTranscriptSegmentsToClipGenerationWindow(allSegments, clipGenerationWindow);
 
     if (segments.length === 0) {
       failureCode = "TRANSCRIPT_SEGMENTS_MISSING";
       failureRetryable = false;
-      throw new Error("Cannot generate clip suggestions because no transcript segments exist.");
+      throw new Error(hasConfiguredClipGenerationWindow(clipGenerationWindow)
+        ? "Cannot generate clip suggestions because no transcript content exists inside the selected source range."
+        : "Cannot generate clip suggestions because no transcript segments exist.");
+    }
+    if (segments.length < allSegments.length) {
+      const startLabel = clipGenerationWindow.sermonStartSeconds ?? 0;
+      const endLabel = clipGenerationWindow.sermonEndSeconds ?? "end";
+      await appendJobLog(
+        job.id,
+        `Clip discovery limited to source range ${startLabel}s-${endLabel}s (${segments.length} of ${allSegments.length} transcript segments).`,
+      );
     }
     const transcriptReadiness = assessTranscriptReadinessForClipping(segments);
     const transcriptAwareVolumeTarget = resolveTranscriptAwareClipVolumeTarget(transcriptReadiness);
@@ -2928,7 +3035,7 @@ export async function generateClipSuggestions(
       },
     });
 
-    const ministryMoments = await prisma.ministryMoment.findMany({
+    const allMinistryMoments = await prisma.ministryMoment.findMany({
       where: { sermonId: sermon.id, isAiGenerated: true },
       orderBy: [{ confidenceScore: "desc" }, { startTimeSeconds: "asc" }],
       select: {
@@ -2946,6 +3053,10 @@ export async function generateClipSuggestions(
         clipCategory: true,
       },
     });
+    const ministryMoments = filterMinistryMomentsToClipGenerationWindow(
+      allMinistryMoments,
+      clipGenerationWindow,
+    );
 
     const existingSuggestionCount = await prisma.clipCandidate.count({
       where: {
@@ -3160,7 +3271,20 @@ export async function generateClipSuggestions(
         boundaryAdjustedCount += 1;
       }
 
-      boundaryAdjusted.push(enrichCandidate(adjustedResult.candidate, ministryMoments));
+      const boundedResult = constrainCandidateToClipGenerationWindow(
+        adjustedResult.candidate,
+        segments,
+        clipGenerationWindow,
+      );
+      if (!boundedResult.accepted) {
+        boundaryRejected.push(`candidate ${index + 1}: ${boundedResult.reason}`);
+        continue;
+      }
+      if (boundedResult.adjusted) {
+        boundaryAdjustedCount += 1;
+      }
+
+      boundaryAdjusted.push(enrichCandidate(boundedResult.candidate, ministryMoments));
     }
 
     const overlapDeduped = dedupeCandidates(boundaryAdjusted);
@@ -3220,7 +3344,21 @@ export async function generateClipSuggestions(
           boundaryAdjustedCount += 1;
         }
 
-        topUpBoundaryAdjusted.push(enrichCandidate(adjustedResult.candidate, ministryMoments));
+        const boundedResult = constrainCandidateToClipGenerationWindow(
+          adjustedResult.candidate,
+          segments,
+          clipGenerationWindow,
+        );
+        if (!boundedResult.accepted) {
+          topUpBoundaryRejectedCount += 1;
+          boundaryRejected.push(`top-up candidate ${index + 1}: ${boundedResult.reason}`);
+          continue;
+        }
+        if (boundedResult.adjusted) {
+          boundaryAdjustedCount += 1;
+        }
+
+        topUpBoundaryAdjusted.push(enrichCandidate(boundedResult.candidate, ministryMoments));
       }
 
       const topUpTimingDeduped = excludeCandidatesOverlappingExisting(
@@ -3269,7 +3407,21 @@ export async function generateClipSuggestions(
             boundaryAdjustedCount += 1;
           }
 
-          coverageBoundaryAdjusted.push(enrichCandidate(adjustedResult.candidate, ministryMoments));
+          const boundedResult = constrainCandidateToClipGenerationWindow(
+            adjustedResult.candidate,
+            segments,
+            clipGenerationWindow,
+          );
+          if (!boundedResult.accepted) {
+            topUpBoundaryRejectedCount += 1;
+            boundaryRejected.push(`coverage top-up candidate ${index + 1}: ${boundedResult.reason}`);
+            continue;
+          }
+          if (boundedResult.adjusted) {
+            boundaryAdjustedCount += 1;
+          }
+
+          coverageBoundaryAdjusted.push(enrichCandidate(boundedResult.candidate, ministryMoments));
         }
 
         const coverageTimingDeduped = excludeCandidatesOverlappingExisting(
@@ -3544,6 +3696,11 @@ export async function generateClipSuggestions(
 }
 
 export const __clipIntelligenceTestUtils = {
+  hasConfiguredClipGenerationWindow,
+  overlapsClipGenerationWindow,
+  filterTranscriptSegmentsToClipGenerationWindow,
+  filterMinistryMomentsToClipGenerationWindow,
+  constrainCandidateToClipGenerationWindow,
   shouldReuseExistingSuggestions,
   shouldCompleteClipGenerationJob,
   buildSuggestionDeleteWhere,

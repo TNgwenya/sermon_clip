@@ -13,6 +13,7 @@ import {
   runCaptionBurnBatch,
   runClipGenerationWorkerJob,
   runOverlayAndExportBatch,
+  resolveRedoClipGenerationWorkerSourceWindow,
   summarizeCaptionBatch,
   summarizeQualityRefreshBatch,
   summarizeRedoClipGeneration,
@@ -375,7 +376,11 @@ async function runJob(job: ProcessingJob): Promise<string> {
     case "GENERATE_CLIPS": {
       if (shouldRedoGeneratedClips(job)) {
         const { redoClipGenerationFromTranscript } = await import("../src/server/agents/clipRedoService");
-        const result = await redoClipGenerationFromTranscript(sermonId, { currentJobId: job.id });
+        const sourceWindow = resolveRedoClipGenerationWorkerSourceWindow(job.generationSummary);
+        const result = await redoClipGenerationFromTranscript(sermonId, {
+          currentJobId: job.id,
+          ...(sourceWindow ? { sourceWindow } : {}),
+        });
         const summary = summarizeRedoClipGeneration(result);
         await restoreCompletedClipGenerationStatus(sermonId);
         return summary;

@@ -11,6 +11,9 @@ export type ClipGenerationRetryPlan = {
     mode: ClipGenerationRetryMode | "redo";
     existingActiveSuggestionCount: number;
     append?: true;
+    sermonStartSeconds?: number | null;
+    sermonEndSeconds?: number | null;
+    analyzeFullRecording?: boolean;
   };
 };
 
@@ -25,6 +28,46 @@ function asSummary(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+type RedoClipGenerationWindowIntent = {
+  sermonStartSeconds: number | null;
+  sermonEndSeconds: number | null;
+  analyzeFullRecording: boolean;
+};
+
+function finiteSecondsOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function resolveRedoClipGenerationWindowIntent(value: unknown): RedoClipGenerationWindowIntent | null {
+  const summary = asSummary(value);
+  if (summary?.["mode"] !== "redo") return null;
+  const sermonStartSeconds = finiteSecondsOrNull(summary["sermonStartSeconds"]);
+  const sermonEndSeconds = finiteSecondsOrNull(summary["sermonEndSeconds"]);
+  return {
+    sermonStartSeconds,
+    sermonEndSeconds,
+    analyzeFullRecording: typeof summary["analyzeFullRecording"] === "boolean"
+      ? summary["analyzeFullRecording"]
+      : sermonStartSeconds === null && sermonEndSeconds === null,
+  };
+}
+
+function preservedRedoClipGenerationWindow(value: unknown): Partial<RedoClipGenerationWindowIntent> {
+  const summary = asSummary(value);
+  if (summary?.["mode"] !== "redo") return {};
+  return {
+    ...(Object.prototype.hasOwnProperty.call(summary, "sermonStartSeconds")
+      ? { sermonStartSeconds: finiteSecondsOrNull(summary["sermonStartSeconds"]) }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(summary, "sermonEndSeconds")
+      ? { sermonEndSeconds: finiteSecondsOrNull(summary["sermonEndSeconds"]) }
+      : {}),
+    ...(typeof summary["analyzeFullRecording"] === "boolean"
+      ? { analyzeFullRecording: summary["analyzeFullRecording"] }
+      : {}),
+  };
 }
 
 function failedAtPreviewPreparation(
@@ -89,6 +132,7 @@ export function buildClipGenerationRetryPlan(input: {
       generationSummary: {
         mode: "redo",
         existingActiveSuggestionCount: input.existingActiveSuggestionCount,
+        ...preservedRedoClipGenerationWindow(failedSummary),
       },
     };
   }
@@ -126,7 +170,12 @@ export function resolveClipGenerationIntent(value: unknown): ClipGenerationInten
 }
 
 export function clipGenerationIntentsMatch(existing: unknown, requested: unknown): boolean {
-  return resolveClipGenerationIntent(existing) === resolveClipGenerationIntent(requested);
+  const existingIntent = resolveClipGenerationIntent(existing);
+  const requestedIntent = resolveClipGenerationIntent(requested);
+  if (existingIntent !== requestedIntent) return false;
+  if (existingIntent !== "redo") return true;
+  return JSON.stringify(resolveRedoClipGenerationWindowIntent(existing))
+    === JSON.stringify(resolveRedoClipGenerationWindowIntent(requested));
 }
 
 export function buildClipGenerationPreviewCheckpoint(value: unknown): Record<string, unknown> {

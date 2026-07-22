@@ -35,6 +35,105 @@ describe("clip intelligence generation summary", () => {
     };
   }
 
+  it("limits redo discovery to transcript segments overlapping the selected source range", () => {
+    const segments = [
+      { startTimeSeconds: 0, endTimeSeconds: 60, text: "Opening" },
+      { startTimeSeconds: 1_190, endTimeSeconds: 1_210, text: "Crosses the selected start" },
+      { startTimeSeconds: 1_210, endTimeSeconds: 1_260, text: "Inside the selected range" },
+      { startTimeSeconds: 2_400, endTimeSeconds: 2_460, text: "After the selected end" },
+    ];
+
+    expect(__clipIntelligenceTestUtils.filterTranscriptSegmentsToClipGenerationWindow(segments, {
+      sermonStartSeconds: 1_200,
+      sermonEndSeconds: 2_400,
+      analyzeFullRecording: false,
+    }).map((segment) => segment.text)).toEqual([
+      "Crosses the selected start",
+      "Inside the selected range",
+    ]);
+  });
+
+  it("keeps the complete transcript when redo explicitly requests the full recording", () => {
+    const segments = [
+      { startTimeSeconds: 0, endTimeSeconds: 60, text: "Opening" },
+      { startTimeSeconds: 1_210, endTimeSeconds: 1_260, text: "Later message" },
+    ];
+
+    expect(__clipIntelligenceTestUtils.filterTranscriptSegmentsToClipGenerationWindow(segments, {
+      sermonStartSeconds: 1_200,
+      sermonEndSeconds: null,
+      analyzeFullRecording: true,
+    })).toEqual(segments);
+  });
+
+  it("hard-clamps generated clips to the requested redo boundaries", () => {
+    const segments = [
+      { startTimeSeconds: 1_190, endTimeSeconds: 1_210, text: "Crossing words" },
+      { startTimeSeconds: 1_210, endTimeSeconds: 1_260, text: "Words inside the range" },
+    ];
+    const result = __clipIntelligenceTestUtils.constrainCandidateToClipGenerationWindow({
+      startTimeSeconds: 1_190,
+      endTimeSeconds: 1_250,
+      durationSeconds: 60,
+      transcriptText: "Crossing words Words inside the range",
+    }, segments, {
+      sermonStartSeconds: 1_200,
+      sermonEndSeconds: 2_400,
+      analyzeFullRecording: false,
+    });
+
+    expect(result).toMatchObject({
+      accepted: true,
+      adjusted: true,
+      candidate: {
+        startTimeSeconds: 1_200,
+        endTimeSeconds: 1_250,
+        durationSeconds: 50,
+      },
+    });
+  });
+
+  it("rejects a boundary-crossing clip when too little remains inside the redo range", () => {
+    const result = __clipIntelligenceTestUtils.constrainCandidateToClipGenerationWindow({
+      startTimeSeconds: 1_190,
+      endTimeSeconds: 1_210,
+      durationSeconds: 20,
+      transcriptText: "Too short after the selected start",
+    }, [{ startTimeSeconds: 1_190, endTimeSeconds: 1_210, text: "Too short" }], {
+      sermonStartSeconds: 1_200,
+      sermonEndSeconds: null,
+      analyzeFullRecording: false,
+    });
+
+    expect(result).toMatchObject({ accepted: false });
+  });
+
+  it("removes timed ministry moments outside the selected redo range", () => {
+    const baseMoment = {
+      id: "moment",
+      momentType: "TEACHING",
+      title: "Moment",
+      description: "Description",
+      confidenceScore: 0.9,
+      transcriptExcerpt: null,
+      whyDetected: null,
+      suggestedAudience: null,
+      suggestedUsage: null,
+      clipCategory: null,
+    };
+    const moments = [
+      { ...baseMoment, id: "before", startTimeSeconds: 300, endTimeSeconds: 360 },
+      { ...baseMoment, id: "inside", startTimeSeconds: 1_300, endTimeSeconds: 1_360 },
+      { ...baseMoment, id: "untimed", startTimeSeconds: null, endTimeSeconds: null },
+    ];
+
+    expect(__clipIntelligenceTestUtils.filterMinistryMomentsToClipGenerationWindow(moments, {
+      sermonStartSeconds: 1_200,
+      sermonEndSeconds: null,
+      analyzeFullRecording: false,
+    }).map((moment) => moment.id)).toEqual(["inside", "untimed"]);
+  });
+
   it("keeps worker-owned generation jobs active until preview preparation finishes", () => {
     expect(__clipIntelligenceTestUtils.shouldCompleteClipGenerationJob()).toBe(true);
     expect(__clipIntelligenceTestUtils.shouldCompleteClipGenerationJob({
