@@ -1990,6 +1990,11 @@ function clampCandidateToBounds<T extends LooseClipCandidate>(
     segment.endTimeSeconds > startTimeSeconds &&
     segment.startTimeSeconds < endTimeSeconds
   )));
+  const boundaryQuality = endTimeSeconds <= startTimeSeconds
+    ? "BAD" as const
+    : adjusted
+      ? candidate.boundaryQuality === "BAD" ? "BAD" as const : "NEEDS_REVIEW" as const
+      : candidate.boundaryQuality ?? "GOOD" as const;
 
   return {
     adjusted,
@@ -2001,7 +2006,9 @@ function clampCandidateToBounds<T extends LooseClipCandidate>(
       adjustedEndTimeSeconds: endTimeSeconds,
       durationSeconds: Number((endTimeSeconds - startTimeSeconds).toFixed(2)),
       transcriptText: transcriptText || candidate.transcriptText,
-      boundaryQuality: endTimeSeconds > startTimeSeconds ? "GOOD" as const : "BAD" as const,
+      // A hard source-window clamp can cut through a spoken thought. It must
+      // never improve the quality assigned by transcript-aware refinement.
+      boundaryQuality,
     },
     warnings: adjusted ? ["SERMON_BOUNDARY_CLAMPED"] : [],
   };

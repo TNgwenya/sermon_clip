@@ -89,7 +89,56 @@ describe("clip intelligence generation summary", () => {
         startTimeSeconds: 1_200,
         endTimeSeconds: 1_250,
         durationSeconds: 50,
+        boundaryQuality: "NEEDS_REVIEW",
       },
+    });
+  });
+
+  it("preserves needs-review boundary quality when a clip already fits the redo range", () => {
+    const result = __clipIntelligenceTestUtils.constrainCandidateToClipGenerationWindow({
+      startTimeSeconds: 1_210,
+      endTimeSeconds: 1_260,
+      durationSeconds: 50,
+      transcriptText: "Words already inside the selected range",
+      boundaryQuality: "NEEDS_REVIEW",
+    }, [{
+      startTimeSeconds: 1_210,
+      endTimeSeconds: 1_260,
+      text: "Words already inside the selected range",
+    }], {
+      sermonStartSeconds: 1_200,
+      sermonEndSeconds: 2_400,
+      analyzeFullRecording: false,
+    });
+
+    expect(result).toMatchObject({
+      accepted: true,
+      adjusted: false,
+      candidate: { boundaryQuality: "NEEDS_REVIEW" },
+    });
+  });
+
+  it("keeps a bad boundary bad when the redo range also clamps it", () => {
+    const result = __clipIntelligenceTestUtils.constrainCandidateToClipGenerationWindow({
+      startTimeSeconds: 1_190,
+      endTimeSeconds: 1_250,
+      durationSeconds: 60,
+      transcriptText: "Boundary still requires correction",
+      boundaryQuality: "BAD",
+    }, [{
+      startTimeSeconds: 1_190,
+      endTimeSeconds: 1_250,
+      text: "Boundary still requires correction",
+    }], {
+      sermonStartSeconds: 1_200,
+      sermonEndSeconds: null,
+      analyzeFullRecording: false,
+    });
+
+    expect(result).toMatchObject({
+      accepted: true,
+      adjusted: true,
+      candidate: { boundaryQuality: "BAD" },
     });
   });
 
@@ -3341,7 +3390,7 @@ describe("clip intelligence generation summary", () => {
     expect(repaired.details.reason).toContain("no stronger setup");
   });
 
-  it("keeps a clean sermon-boundary clamp post-ready eligible when final validation passes", () => {
+  it("keeps a clean sermon-boundary clamp review-gated until final validation runs", () => {
     const segments = [
       { startTimeSeconds: 0, endTimeSeconds: 20, text: "God gives every believer a gift for the body." },
       { startTimeSeconds: 20, endTimeSeconds: 40, text: "Fear tries to make obedience feel unsafe." },
@@ -3373,7 +3422,7 @@ describe("clip intelligence generation summary", () => {
     expect(clamped.adjusted).toBe(true);
     expect(clamped.candidate.endTimeSeconds).toBe(58);
     expect(clamped.candidate.durationSeconds).toBe(58);
-    expect(clamped.candidate.boundaryQuality).toBe("GOOD");
+    expect(clamped.candidate.boundaryQuality).toBe("NEEDS_REVIEW");
     expect(clamped.warnings).toEqual(["SERMON_BOUNDARY_CLAMPED"]);
   });
 
