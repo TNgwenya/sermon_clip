@@ -187,8 +187,6 @@ export function getMetaOAuthScopes(): string[] {
   const baseScopes = [
     "pages_show_list",
     "pages_manage_posts",
-    "instagram_basic",
-    "instagram_content_publish",
   ];
   const extraScopes = (process.env.META_OAUTH_EXTRA_SCOPES ?? "")
     .split(",")

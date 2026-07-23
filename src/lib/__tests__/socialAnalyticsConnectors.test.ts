@@ -53,8 +53,8 @@ describe("social analytics connector OAuth helpers", () => {
     expect(youtubeUrl.searchParams.get("scope")).toContain("youtube.upload");
     expect(metaUrl.searchParams.get("scope")).toContain("pages_show_list");
     expect(metaUrl.searchParams.get("scope")).toContain("pages_manage_posts");
-    expect(metaUrl.searchParams.get("scope")).toContain("instagram_basic");
-    expect(metaUrl.searchParams.get("scope")).toContain("instagram_content_publish");
+    expect(metaUrl.searchParams.get("scope")).not.toContain("instagram_basic");
+    expect(metaUrl.searchParams.get("scope")).not.toContain("instagram_content_publish");
     expect(metaUrl.searchParams.get("scope")).not.toContain("instagram_manage_insights");
     expect(tiktokUrl.searchParams.get("scope")).toContain("video.publish");
     expect(tiktokUrl.searchParams.get("scope")).toContain("video.list");
