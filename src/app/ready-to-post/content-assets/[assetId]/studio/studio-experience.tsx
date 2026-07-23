@@ -741,6 +741,9 @@ export function ContentAssetDesignStudio({
                 These downloads show the last approved render. The live preview includes {brandingIsStale ? "new branding" : "your unsaved changes"}.
               </p>
             ) : null}
+            <a className="button tertiary" href={`/api/content-assets/${initialAsset.id}/download`}>
+              Download production files
+            </a>
             <div>
               {initialAsset.files.map((file) => (
                 <a key={file.id} href={`/api/content-assets/${initialAsset.id}/files/${file.id}`} target="_blank" rel="noreferrer">
