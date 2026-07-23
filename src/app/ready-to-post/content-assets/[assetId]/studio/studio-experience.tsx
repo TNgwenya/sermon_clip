@@ -291,6 +291,7 @@ export function ContentAssetDesignStudio({
   const [bodyContent, setBodyContent] = useState(initialAsset.bodyContent);
   const [relatedScripture, setRelatedScripture] = useState(initialAsset.relatedScripture ?? "");
   const [scriptureAccuracyConfirmed, setScriptureAccuracyConfirmed] = useState(false);
+  const [quoteWordingOverrideConfirmed, setQuoteWordingOverrideConfirmed] = useState(false);
   const [templateId, setTemplateId] = useState<ContentGraphicTemplateId>(initialAsset.design.templateId);
   const [artwork, setArtwork] = useState<ContentArtworkSettings>(() => normalizeContentArtworkSettings(
     initialAsset.design.artwork ?? createDefaultContentArtworkSettings(initialAsset.design.templateId),
@@ -586,6 +587,7 @@ export function ContentAssetDesignStudio({
         templateId,
         bodyContent: isCarousel ? undefined : bodyContent,
         relatedScripture: relatedScripture.trim() || null,
+        quoteWordingOverrideConfirmed,
         slides: isCarousel ? slides : [],
         artwork,
         textOverrides,
@@ -1196,6 +1198,7 @@ export function ContentAssetDesignStudio({
                     value={bodyContent}
                     onChange={(event) => {
                       setBodyContent(event.target.value);
+                      setQuoteWordingOverrideConfirmed(false);
                       if (scriptureAccuracyRequired) {
                         setScriptureAccuracyConfirmed(false);
                         setWordsEditorOpen(true);
@@ -1205,9 +1208,23 @@ export function ContentAssetDesignStudio({
                     maxLength={20_000}
                     disabled={isPending || isReadOnly}
                   />
-                  <small className="muted">
+                <small className="muted">
                     {bodyContent.length.toLocaleString(DISPLAY_LOCALE)} characters · {countWords(bodyContent)} words. {copyGuidance(initialAsset.assetType)}
-                  </small>
+                </small>
+                {initialAsset.assetType === "QUOTE_GRAPHIC" ? (
+                  <label className={styles.accuracyConfirmation}>
+                    <input
+                      type="checkbox"
+                      checked={quoteWordingOverrideConfirmed}
+                      onChange={(event) => setQuoteWordingOverrideConfirmed(event.target.checked)}
+                      disabled={isPending || isReadOnly}
+                    />
+                    <span>
+                      <strong>Render as edited wording</strong>
+                      I understand this version may not be an exact transcript quote and want to use it as edited artwork copy.
+                    </span>
+                  </label>
+                ) : null}
                 </label>
                 <label>
                   {referenceCopy.label} <span className={styles.optionalLabel}>{scriptureAccuracyRequired ? "Required" : "Optional"}</span>

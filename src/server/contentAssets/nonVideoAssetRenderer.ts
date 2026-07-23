@@ -68,6 +68,7 @@ export type ApprovedNonVideoAssetInput = {
   title: string;
   approvedContent: string | null | undefined;
   sourceTranscriptExcerpt?: string | null;
+  quoteWordingOverrideConfirmed?: boolean;
   relatedScripture?: string | null;
   scriptureTranslation?: string | null;
   scriptureAccuracyConfirmed?: boolean;
@@ -473,7 +474,7 @@ export function preflightApprovedNonVideoAssets(
       quoteText: extractQuoteTextFromContent(input.approvedContent),
       sourceTranscriptExcerpt: input.sourceTranscriptExcerpt,
     });
-    if (!quoteIntegrity.verified) {
+    if (!quoteIntegrity.verified && !input.quoteWordingOverrideConfirmed) {
       diagnostics.push({
         code: "QUOTE_TRANSCRIPT_MISMATCH",
         severity: "ERROR",
