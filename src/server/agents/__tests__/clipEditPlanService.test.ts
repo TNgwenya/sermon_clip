@@ -115,6 +115,45 @@ describe("clip edit plan composition guards", () => {
     });
   });
 
+  it("supersedes the plan when only the canonical caption design changes", () => {
+    const clean = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(snapshotInput({
+      applyCaptionsToClip: true,
+      captionStylePresetId: "clean-lower",
+      captionDesign: {
+        version: 1,
+        presetId: "clean-lower",
+        colors: {
+          textColor: "#FFFFFF",
+          activeTextColor: "#FACC15",
+        },
+      },
+    }));
+    const branded = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(snapshotInput({
+      applyCaptionsToClip: true,
+      captionStylePresetId: "clean-lower",
+      captionDesign: {
+        version: 1,
+        presetId: "clean-lower",
+        colors: {
+          textColor: "#FFFFFF",
+          activeTextColor: "#0F766E",
+        },
+      },
+    }));
+
+    expect(branded.planHash).not.toBe(clean.planHash);
+    expect(branded.planJson).toMatchObject({
+      schemaVersion: 2,
+      captions: {
+        captionDesign: {
+          colors: {
+            activeTextColor: "#0F766E",
+          },
+        },
+      },
+    });
+  });
+
   it("accepts the exact active plan captured when a media job started", async () => {
     prismaMock.clipEditPlan.findFirst.mockResolvedValue({
       id: guard.editPlanId,

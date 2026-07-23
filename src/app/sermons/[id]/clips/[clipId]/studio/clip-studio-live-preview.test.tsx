@@ -7,7 +7,10 @@ vi.mock("@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context", 
   useClipStudioPreview: () => previewContext.current,
 }));
 
-import { ClipStudioLivePreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-live-preview";
+import {
+  ClipStudioLivePreview,
+  resolveClipStudioPreviewSource,
+} from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-live-preview";
 
 describe("ClipStudioLivePreview media loading", () => {
   beforeEach(() => {
@@ -50,6 +53,7 @@ describe("ClipStudioLivePreview media loading", () => {
         captionCues: [],
         applyCaptionsToClip: false,
         captionStylePresetId: "clean-lower",
+        captionStyleSource: "clip",
         captionPosition: "lower",
         captionAppearance: {
           fontScale: "regular",
@@ -114,5 +118,28 @@ describe("ClipStudioLivePreview media loading", () => {
     expect(markup).toContain('src="https://media.example.com/clip.mp4?v=2"');
     expect(markup).not.toContain("retry=0");
     expect(markup).toContain('class="clip-studio-live-backdrop"');
+  });
+
+  it("falls back to the prepared clip after the sermon source is unavailable", () => {
+    expect(resolveClipStudioPreviewSource({
+      hasPreview: true,
+      previewSrc: "/api/clips/clip-1/preview",
+      sourcePreviewSrc: "/api/sermons/sermon-1/source-preview",
+      unavailableSourcePreviewSrc: null,
+    })).toMatchObject({
+      activePreviewSrc: "/api/sermons/sermon-1/source-preview",
+      hasSourcePreview: true,
+    });
+
+    expect(resolveClipStudioPreviewSource({
+      hasPreview: true,
+      previewSrc: "/api/clips/clip-1/preview",
+      sourcePreviewSrc: "/api/sermons/sermon-1/source-preview",
+      unavailableSourcePreviewSrc: "/api/sermons/sermon-1/source-preview",
+    })).toEqual({
+      activePreviewSrc: "/api/clips/clip-1/preview",
+      canPreview: true,
+      hasSourcePreview: false,
+    });
   });
 });

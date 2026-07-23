@@ -10,6 +10,7 @@ import {
   extractCaptionPackage,
   extractCaptionGuidance,
   extractCaptionAppearanceSettings,
+  extractCaptionDesignSettings,
   extractApplyCaptionsToClip,
   extractCaptionPosition,
   extractCaptionRevealMode,
@@ -326,8 +327,22 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   const savedOnVideoCaptionCues = extractOnVideoCaptionCues(clip.captionData, null, null);
   const fallbackOnVideoCaptionCues = extractOnVideoCaptionCues(null, clip.transcriptText, clip.durationSeconds);
   const captionStyleOverride = extractCaptionStyleOverride(clip.captionData);
-  const captionPosition = extractCaptionPosition(clip.captionData);
-  const captionAppearance = extractCaptionAppearanceSettings(clip.captionData);
+  const legacyCaptionPosition = extractCaptionPosition(clip.captionData);
+  const captionDesign = extractCaptionDesignSettings(
+    clip.captionData,
+    captionStyleOverride || appBranding?.defaultCaptionStyleName || DEFAULT_CAPTION_STYLE_PRESET_ID,
+  );
+  const captionPosition = captionDesign.layout.verticalPosition ?? legacyCaptionPosition;
+  const captionAppearance = {
+    fontScale: captionDesign.typography.fontSizePx <= 33
+      ? "compact" as const
+      : captionDesign.typography.fontSizePx >= 41
+        ? "large" as const
+        : "regular" as const,
+    maxLines: captionDesign.layout.maxLines,
+    uppercase: captionDesign.typography.textCase === "uppercase",
+    verticalOffset: Math.max(-48, Math.min(48, captionDesign.layout.verticalOffset)),
+  } satisfies ReturnType<typeof extractCaptionAppearanceSettings>;
   const captionRevealMode = extractCaptionRevealMode(clip.captionData);
   const captionSyncOffsetSeconds = extractCaptionSyncOffsetSeconds(clip.captionData);
   const applyCaptionsToClip = extractApplyCaptionsToClip(clip.captionData);
@@ -445,8 +460,10 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     captionCues: onVideoCaptionCues,
     applyCaptionsToClip,
     captionStylePresetId: captionStyleOverride || appBranding?.defaultCaptionStyleName || DEFAULT_CAPTION_STYLE_PRESET_ID,
+    captionStyleSource: captionStyleOverride ? "clip" as const : "brand-kit" as const,
     captionPosition,
     captionAppearance,
+    captionDesign,
     captionRevealMode,
     captionSyncOffsetSeconds,
     hookOverlay,
@@ -716,9 +733,12 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 initialCaptionStylePresetId={captionStyleOverride}
                 initialCaptionPosition={captionPosition}
                 initialCaptionAppearance={captionAppearance}
+                initialCaptionDesign={captionDesign}
                 initialCaptionRevealMode={captionRevealMode}
                 initialCaptionSyncOffsetSeconds={captionSyncOffsetSeconds}
                 brandCaptionStylePresetId={appBranding?.defaultCaptionStyleName ?? DEFAULT_CAPTION_STYLE_PRESET_ID}
+                brandPrimaryColor={appBranding?.primaryBrandColor ?? null}
+                brandSecondaryColor={appBranding?.secondaryBrandColor ?? null}
                 suggestedHook={clip.suggestedHook ?? ""}
                 suggestedCaption={clip.suggestedCaption ?? ""}
                 titleOptions={captionPackage.titleOptions}

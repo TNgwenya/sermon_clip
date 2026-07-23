@@ -32,8 +32,8 @@ describe("clip studio overlay positioning", () => {
   });
 
   it("keeps caption fine offsets inside the render-safe range", () => {
-    expect(clampCaptionOverlayOffset(-80.2)).toBe(-48);
+    expect(clampCaptionOverlayOffset(-180.2)).toBe(-160);
     expect(clampCaptionOverlayOffset(11.6)).toBe(12);
-    expect(clampCaptionOverlayOffset(99)).toBe(48);
+    expect(clampCaptionOverlayOffset(199)).toBe(160);
   });
 });

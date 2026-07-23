@@ -1,5 +1,22 @@
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
-import { isCaptionStylePresetId as isKnownCaptionStylePresetId, type CaptionStylePresetId } from "@/lib/captionStylePresets";
+import {
+  CAPTION_DESIGN_VERSION,
+  CAPTION_FONT_LIBRARY,
+  isCaptionStylePresetId as isKnownCaptionStylePresetId,
+  resolveCaptionHighlightDefaults,
+  resolveCaptionStylePreset,
+  type CaptionBackgroundTreatment,
+  type CaptionDesignSettingsV1,
+  type CaptionFontFamilyId,
+  type CaptionHexColor,
+  type CaptionHighlightIntensity,
+  type CaptionHorizontalPosition,
+  type CaptionSafeWidth,
+  type CaptionStylePresetId,
+  type CaptionTextAlignment,
+  type CaptionTextCase,
+  type CaptionVerticalPosition,
+} from "@/lib/captionStylePresets";
 import {
   normalizeCaptionCueWordTimings,
   type EditableCaptionCue,
@@ -39,10 +56,11 @@ export type HookOverlayPosition = "top" | "center" | "lower";
 export type HookOverlaySize = "small" | "medium" | "large";
 export type BrollCardTone = "scripture" | "quote" | "application" | "context";
 export type BrollCardPosition = "full" | "upper" | "lower";
-export type CaptionPosition = "top" | "middle" | "lower";
+export type CaptionPosition = CaptionVerticalPosition;
 export type CaptionRevealMode = "phrase" | "active-word" | "single-word";
 export type CaptionFontScale = "compact" | "regular" | "large";
 export type CaptionMaxLines = 2 | 3 | 4;
+export type CaptionStyleSource = "brand-kit" | "clip";
 export type SpeechCleanupIntensity = "normal" | "more" | "strong" | "maximum";
 
 export type HookOverlayConfig = {
@@ -309,15 +327,44 @@ export function extractOnVideoCaptionCues(
   }];
 }
 
+export function extractCaptionStyleSource(captionData: unknown): CaptionStyleSource {
+  const data = asObject(captionData);
+  const source = data?.["captionStyleSource"];
+  if (source === "brand-kit" || source === "clip") {
+    return source;
+  }
+
+  // Backward compatibility: historically an absent preset meant “use the
+  // church default”, while a valid saved preset was an explicit clip override.
+  return isCaptionStylePresetId(data?.["captionStylePresetId"]) ? "clip" : "brand-kit";
+}
+
 export function extractCaptionStyleOverride(captionData: unknown): CaptionStylePresetId | "" {
   const data = asObject(captionData);
-  const value = data?.["captionStylePresetId"];
+  if (extractCaptionStyleSource(data) === "brand-kit") {
+    return "";
+  }
 
+  const value = data?.["captionStylePresetId"];
   return isCaptionStylePresetId(value) ? value : "";
 }
 
 export function extractCaptionPosition(captionData: unknown): CaptionPosition {
   const data = asObject(captionData);
+  const captionDesign = asObject(data?.["captionDesign"] ?? data?.["captionDesignSettings"]);
+  const layout = asObject(captionDesign?.["layout"]);
+  const canonicalPosition = layout?.["verticalPosition"];
+  if (
+    captionDesign?.["version"] === CAPTION_DESIGN_VERSION
+    && (
+      canonicalPosition === "top"
+      || canonicalPosition === "middle"
+      || canonicalPosition === "lower"
+    )
+  ) {
+    return canonicalPosition;
+  }
+
   const value = data?.["captionPosition"];
 
   return value === "top" || value === "middle" || value === "lower" ? value : "lower";
@@ -392,6 +439,445 @@ export function normalizeCaptionAppearanceSettings(value: unknown): CaptionAppea
 export function extractCaptionAppearanceSettings(captionData: unknown): CaptionAppearanceSettings {
   const data = asObject(captionData);
   return normalizeCaptionAppearanceSettings(data?.["captionAppearance"]);
+}
+
+export type NormalizeCaptionDesignOptions = {
+  presetId?: string | null;
+  legacyAppearance?: unknown;
+  legacyPosition?: unknown;
+};
+
+const CAPTION_FONT_FAMILY_IDS = new Set(
+  CAPTION_FONT_LIBRARY.map((font) => font.id),
+);
+const CAPTION_TEXT_CASES = new Set<CaptionTextCase>(["sentence", "uppercase", "lowercase"]);
+const CAPTION_TEXT_ALIGNMENTS = new Set<CaptionTextAlignment>(["left", "center", "right"]);
+const CAPTION_BACKGROUND_TREATMENTS = new Set<CaptionBackgroundTreatment>([
+  "none",
+  "solid",
+  "rounded",
+  "soft-panel",
+]);
+const CAPTION_HIGHLIGHT_INTENSITIES = new Set<CaptionHighlightIntensity>([
+  "subtle",
+  "balanced",
+  "energetic",
+  "maximum",
+]);
+const CAPTION_VERTICAL_POSITIONS = new Set<CaptionVerticalPosition>(["top", "middle", "lower"]);
+const CAPTION_HORIZONTAL_POSITIONS = new Set<CaptionHorizontalPosition>(["left", "center", "right"]);
+const CAPTION_SAFE_WIDTHS = new Set<CaptionSafeWidth>(["narrow", "standard", "wide"]);
+
+function clampCaptionDesignNumber(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+  precision = 2,
+): number {
+  const number = asNumber(value);
+  if (number === null) {
+    return fallback;
+  }
+
+  const factor = 10 ** precision;
+  return Math.round(Math.max(min, Math.min(max, number)) * factor) / factor;
+}
+
+function normalizeCaptionDesignColor(value: unknown, fallback: CaptionHexColor): CaptionHexColor {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const normalized = value.trim();
+  const short = normalized.match(/^#([0-9a-f]{3})$/i);
+  if (short) {
+    return `#${short[1].split("").map((character) => character.repeat(2)).join("").toUpperCase()}`;
+  }
+
+  return /^#[0-9a-f]{6}$/i.test(normalized)
+    ? normalized.toUpperCase() as CaptionHexColor
+    : fallback;
+}
+
+function normalizeCaptionFontFamilyId(
+  value: unknown,
+  fallback: CaptionFontFamilyId,
+): CaptionFontFamilyId {
+  return typeof value === "string" && CAPTION_FONT_FAMILY_IDS.has(value as CaptionFontFamilyId)
+    ? value as CaptionFontFamilyId
+    : fallback;
+}
+
+function normalizeCaptionTextCase(value: unknown, fallback: CaptionTextCase): CaptionTextCase {
+  return typeof value === "string" && CAPTION_TEXT_CASES.has(value as CaptionTextCase)
+    ? value as CaptionTextCase
+    : fallback;
+}
+
+function normalizeCaptionTextAlignment(
+  value: unknown,
+  fallback: CaptionTextAlignment,
+): CaptionTextAlignment {
+  return typeof value === "string" && CAPTION_TEXT_ALIGNMENTS.has(value as CaptionTextAlignment)
+    ? value as CaptionTextAlignment
+    : fallback;
+}
+
+function normalizeCaptionBackgroundTreatment(
+  value: unknown,
+  fallback: CaptionBackgroundTreatment,
+): CaptionBackgroundTreatment {
+  return typeof value === "string" && CAPTION_BACKGROUND_TREATMENTS.has(value as CaptionBackgroundTreatment)
+    ? value as CaptionBackgroundTreatment
+    : fallback;
+}
+
+function normalizeCaptionHighlightIntensity(
+  value: unknown,
+  fallback: CaptionHighlightIntensity,
+): CaptionHighlightIntensity {
+  return typeof value === "string" && CAPTION_HIGHLIGHT_INTENSITIES.has(value as CaptionHighlightIntensity)
+    ? value as CaptionHighlightIntensity
+    : fallback;
+}
+
+function normalizeCaptionVerticalPosition(
+  value: unknown,
+  fallback: CaptionVerticalPosition,
+): CaptionVerticalPosition {
+  return typeof value === "string" && CAPTION_VERTICAL_POSITIONS.has(value as CaptionVerticalPosition)
+    ? value as CaptionVerticalPosition
+    : fallback;
+}
+
+function normalizeCaptionHorizontalPosition(
+  value: unknown,
+  fallback: CaptionHorizontalPosition,
+): CaptionHorizontalPosition {
+  return typeof value === "string" && CAPTION_HORIZONTAL_POSITIONS.has(value as CaptionHorizontalPosition)
+    ? value as CaptionHorizontalPosition
+    : fallback;
+}
+
+function normalizeCaptionSafeWidth(value: unknown, fallback: CaptionSafeWidth): CaptionSafeWidth {
+  return typeof value === "string" && CAPTION_SAFE_WIDTHS.has(value as CaptionSafeWidth)
+    ? value as CaptionSafeWidth
+    : fallback;
+}
+
+function normalizeCaptionMaxLines(value: unknown, fallback: 2 | 3 | 4): 2 | 3 | 4 {
+  const parsed = asNumber(value);
+  return parsed === 2 || parsed === 3 || parsed === 4 ? parsed : fallback;
+}
+
+function legacyFontSize(value: unknown): number | null {
+  if (value === "compact") return 32;
+  if (value === "regular") return 36;
+  if (value === "large") return 42;
+  return null;
+}
+
+/**
+ * Produces a complete, safe v1 design from persisted input. Unknown/future
+ * versions deliberately fall back to preset defaults instead of partially
+ * applying a contract this renderer does not understand.
+ */
+export function normalizeCaptionDesignSettings(
+  value: unknown,
+  options: NormalizeCaptionDesignOptions = {},
+): CaptionDesignSettingsV1 {
+  const candidate = asObject(value);
+  const candidateVersion = candidate?.["version"];
+  const design = candidateVersion === undefined || candidateVersion === CAPTION_DESIGN_VERSION
+    ? candidate
+    : null;
+  const requestedPresetId =
+    (isCaptionStylePresetId(design?.["presetId"]) ? design?.["presetId"] : null)
+    ?? (isCaptionStylePresetId(options.presetId) ? options.presetId : null);
+  const preset = resolveCaptionStylePreset(requestedPresetId);
+  const fallback = preset.design;
+  const typography = asObject(design?.["typography"]);
+  const colors = asObject(design?.["colors"]);
+  const background = asObject(design?.["background"]);
+  const readability = asObject(design?.["readability"]);
+  const highlighting = asObject(design?.["highlighting"]);
+  const layout = asObject(design?.["layout"]);
+  const legacyAppearance = asObject(options.legacyAppearance);
+  const legacySize = legacyFontSize(legacyAppearance?.["fontScale"]);
+  const highlightIntensity = normalizeCaptionHighlightIntensity(
+    highlighting?.["intensity"],
+    fallback.highlighting.intensity,
+  );
+  const highlightDefaults = resolveCaptionHighlightDefaults(highlightIntensity);
+  const highlightIntensityChanged = highlightIntensity !== fallback.highlighting.intensity;
+  const fallbackHighlightScale = highlightIntensityChanged
+    ? highlightDefaults.scale
+    : fallback.highlighting.scale;
+  const fallbackHighlightBackgroundOpacity = highlightIntensityChanged
+    ? highlightDefaults.backgroundOpacity
+    : fallback.highlighting.backgroundOpacity;
+  const fallbackHighlightFontWeightBoost = highlightIntensityChanged
+    ? highlightDefaults.fontWeightBoost
+    : fallback.highlighting.fontWeightBoost;
+  const legacyUppercase = legacyAppearance?.["uppercase"] === true;
+
+  return {
+    version: CAPTION_DESIGN_VERSION,
+    presetId: preset.id,
+    typography: {
+      fontFamilyId: normalizeCaptionFontFamilyId(
+        typography?.["fontFamilyId"],
+        fallback.typography.fontFamilyId,
+      ),
+      fontSizePx: Math.round(clampCaptionDesignNumber(
+        typography?.["fontSizePx"],
+        legacySize ?? fallback.typography.fontSizePx,
+        24,
+        64,
+        0,
+      )),
+      fontWeight: Math.round(
+        clampCaptionDesignNumber(
+          typography?.["fontWeight"],
+          fallback.typography.fontWeight,
+          400,
+          900,
+          0,
+        ) / 100,
+      ) * 100,
+      italic:
+        typeof typography?.["italic"] === "boolean"
+          ? typography["italic"]
+          : fallback.typography.italic,
+      textCase: normalizeCaptionTextCase(
+        typography?.["textCase"],
+        legacyUppercase ? "uppercase" : fallback.typography.textCase,
+      ),
+      letterSpacingPx: clampCaptionDesignNumber(
+        typography?.["letterSpacingPx"],
+        fallback.typography.letterSpacingPx,
+        -2,
+        8,
+      ),
+      lineHeight: clampCaptionDesignNumber(
+        typography?.["lineHeight"],
+        fallback.typography.lineHeight,
+        0.9,
+        1.6,
+      ),
+      wordSpacingPx: clampCaptionDesignNumber(
+        typography?.["wordSpacingPx"],
+        fallback.typography.wordSpacingPx,
+        -2,
+        16,
+      ),
+      alignment: normalizeCaptionTextAlignment(
+        typography?.["alignment"],
+        fallback.typography.alignment,
+      ),
+    },
+    colors: {
+      textColor: normalizeCaptionDesignColor(
+        colors?.["textColor"],
+        fallback.colors.textColor,
+      ),
+      activeTextColor: normalizeCaptionDesignColor(
+        colors?.["activeTextColor"],
+        fallback.colors.activeTextColor,
+      ),
+      highlightBackgroundColor: normalizeCaptionDesignColor(
+        colors?.["highlightBackgroundColor"],
+        fallback.colors.highlightBackgroundColor,
+      ),
+    },
+    background: {
+      treatment: normalizeCaptionBackgroundTreatment(
+        background?.["treatment"],
+        fallback.background.treatment,
+      ),
+      color: normalizeCaptionDesignColor(background?.["color"], fallback.background.color),
+      opacity: clampCaptionDesignNumber(
+        background?.["opacity"],
+        fallback.background.opacity,
+        0,
+        1,
+      ),
+      borderColor: normalizeCaptionDesignColor(
+        background?.["borderColor"],
+        fallback.background.borderColor,
+      ),
+      borderOpacity: clampCaptionDesignNumber(
+        background?.["borderOpacity"],
+        fallback.background.borderOpacity,
+        0,
+        1,
+      ),
+      borderWidthPx: clampCaptionDesignNumber(
+        background?.["borderWidthPx"],
+        fallback.background.borderWidthPx,
+        0,
+        8,
+      ),
+      borderRadiusPx: clampCaptionDesignNumber(
+        background?.["borderRadiusPx"],
+        fallback.background.borderRadiusPx,
+        0,
+        80,
+        0,
+      ),
+      paddingX: clampCaptionDesignNumber(
+        background?.["paddingX"],
+        fallback.background.paddingX,
+        8,
+        80,
+        0,
+      ),
+      paddingY: clampCaptionDesignNumber(
+        background?.["paddingY"],
+        fallback.background.paddingY,
+        6,
+        60,
+        0,
+      ),
+    },
+    readability: {
+      outlineColor: normalizeCaptionDesignColor(
+        readability?.["outlineColor"],
+        fallback.readability.outlineColor,
+      ),
+      outlineWidthPx: clampCaptionDesignNumber(
+        readability?.["outlineWidthPx"],
+        fallback.readability.outlineWidthPx,
+        0,
+        12,
+      ),
+      shadowColor: normalizeCaptionDesignColor(
+        readability?.["shadowColor"],
+        fallback.readability.shadowColor,
+      ),
+      shadowOpacity: clampCaptionDesignNumber(
+        readability?.["shadowOpacity"],
+        fallback.readability.shadowOpacity,
+        0,
+        1,
+      ),
+      shadowBlurPx: clampCaptionDesignNumber(
+        readability?.["shadowBlurPx"],
+        fallback.readability.shadowBlurPx,
+        0,
+        40,
+      ),
+      shadowOffsetX: clampCaptionDesignNumber(
+        readability?.["shadowOffsetX"],
+        fallback.readability.shadowOffsetX,
+        -32,
+        32,
+      ),
+      shadowOffsetY: clampCaptionDesignNumber(
+        readability?.["shadowOffsetY"],
+        fallback.readability.shadowOffsetY,
+        -32,
+        32,
+      ),
+    },
+    highlighting: {
+      intensity: highlightIntensity,
+      scale: clampCaptionDesignNumber(
+        highlighting?.["scale"],
+        fallbackHighlightScale,
+        1,
+        1.2,
+      ),
+      backgroundOpacity: clampCaptionDesignNumber(
+        highlighting?.["backgroundOpacity"],
+        fallbackHighlightBackgroundOpacity,
+        0,
+        0.6,
+      ),
+      fontWeightBoost: Math.round(
+        clampCaptionDesignNumber(
+          highlighting?.["fontWeightBoost"],
+          fallbackHighlightFontWeightBoost,
+          0,
+          400,
+          0,
+        ) / 100,
+      ) * 100,
+      reducedMotion:
+        typeof highlighting?.["reducedMotion"] === "boolean"
+          ? highlighting["reducedMotion"]
+          : fallback.highlighting.reducedMotion,
+    },
+    layout: {
+      verticalPosition: normalizeCaptionVerticalPosition(
+        layout?.["verticalPosition"],
+        normalizeCaptionVerticalPosition(
+          options.legacyPosition,
+          fallback.layout.verticalPosition,
+        ),
+      ),
+      horizontalPosition: normalizeCaptionHorizontalPosition(
+        layout?.["horizontalPosition"],
+        fallback.layout.horizontalPosition,
+      ),
+      horizontalOffset: clampCaptionDesignNumber(
+        layout?.["horizontalOffset"],
+        fallback.layout.horizontalOffset,
+        -160,
+        160,
+        0,
+      ),
+      verticalOffset: clampCaptionDesignNumber(
+        layout?.["verticalOffset"],
+        asNumber(legacyAppearance?.["verticalOffset"]) ?? fallback.layout.verticalOffset,
+        -160,
+        160,
+        0,
+      ),
+      safeWidth: normalizeCaptionSafeWidth(
+        layout?.["safeWidth"],
+        fallback.layout.safeWidth,
+      ),
+      maxLines: normalizeCaptionMaxLines(
+        layout?.["maxLines"],
+        normalizeCaptionMaxLines(legacyAppearance?.["maxLines"], fallback.layout.maxLines),
+      ),
+    },
+  };
+}
+
+export function extractCaptionDesignSettings(
+  captionData: unknown,
+  fallbackPresetId?: string | null,
+): CaptionDesignSettingsV1 {
+  const data = asObject(captionData);
+  const hasCurrentBrandFallback = fallbackPresetId !== undefined && fallbackPresetId !== null;
+  const followsBrandKit =
+    extractCaptionStyleSource(data) === "brand-kit"
+    && hasCurrentBrandFallback;
+  const presetId = followsBrandKit
+    ? fallbackPresetId
+    : isCaptionStylePresetId(data?.["captionStylePresetId"])
+    ? data?.["captionStylePresetId"]
+    : fallbackPresetId;
+
+  return normalizeCaptionDesignSettings(
+    followsBrandKit
+      ? undefined
+      : data?.["captionDesign"] ?? data?.["captionDesignSettings"],
+    {
+      presetId,
+      legacyAppearance: followsBrandKit ? undefined : data?.["captionAppearance"],
+      legacyPosition: followsBrandKit ? undefined : data?.["captionPosition"],
+    },
+  );
+}
+
+export function hasCaptionDesignSettings(captionData: unknown): boolean {
+  const data = asObject(captionData);
+  const design = asObject(data?.["captionDesign"] ?? data?.["captionDesignSettings"]);
+  return design?.["version"] === CAPTION_DESIGN_VERSION;
 }
 
 export function extractSpeechCleanupSettings(captionData: unknown): SpeechCleanupSettings {

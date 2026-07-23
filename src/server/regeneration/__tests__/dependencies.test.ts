@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const prismaMocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
+  findMany: vi.fn(),
   update: vi.fn(),
   updateMany: vi.fn(),
 }));
@@ -10,6 +11,7 @@ vi.mock("@/lib/prisma", () => ({
   prisma: {
     clipCandidate: {
       findUnique: prismaMocks.findUnique,
+      findMany: prismaMocks.findMany,
       update: prismaMocks.update,
       updateMany: prismaMocks.updateMany,
     },
@@ -29,6 +31,7 @@ describe("regeneration dependency tracking", () => {
     vi.clearAllMocks();
     prismaMocks.update.mockResolvedValue({});
     prismaMocks.updateMany.mockResolvedValue({ count: 2 });
+    prismaMocks.findMany.mockResolvedValue([]);
     prismaMocks.findUnique.mockResolvedValue({
       id: "clip-1",
       sermonId: "sermon-1",
@@ -90,6 +93,41 @@ describe("regeneration dependency tracking", () => {
         overlayFreshness: "OUTDATED",
         exportFreshness: "OUTDATED",
         assetInvalidationReason: "branding changed",
+      },
+    });
+  });
+
+  it("also invalidates burned captions that still follow a changed Brand Kit default", async () => {
+    prismaMocks.findMany.mockResolvedValue([
+      {
+        id: "linked",
+        captionData: {
+          applyCaptionsToClip: true,
+          captionStyleSource: "brand-kit",
+          captionStylePresetId: "clean-lower",
+        },
+      },
+      {
+        id: "explicit",
+        captionData: {
+          applyCaptionsToClip: true,
+          captionStyleSource: "clip",
+          captionStylePresetId: "clean-lower",
+        },
+      },
+    ]);
+
+    await invalidateAfterBrandingChange("caption style changed", {
+      captionStyleChanged: true,
+    });
+
+    expect(prismaMocks.updateMany).toHaveBeenLastCalledWith({
+      where: { id: { in: ["linked"] } },
+      data: {
+        captionBurnFreshness: "OUTDATED",
+        overlayFreshness: "OUTDATED",
+        exportFreshness: "OUTDATED",
+        assetInvalidationReason: "caption style changed",
       },
     });
   });

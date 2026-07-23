@@ -6,10 +6,12 @@ import {
   extractApplyCaptionsToClip,
   extractBrollLayerConfig,
   extractCaptionAppearanceSettings,
+  extractCaptionDesignSettings,
   extractCaptionPosition,
   extractCaptionRevealMode,
   extractCaptionSyncOffsetSeconds,
   extractCaptionStyleOverride,
+  extractCaptionStyleSource,
   extractCaptionGuidance,
   extractHookOverlayConfig,
   extractCaptionPackage,
@@ -22,15 +24,18 @@ import {
   formatSocialScore,
   formatTranscriptExcerpt,
   hasCaptionPackage,
+  hasCaptionDesignSettings,
   inferBrollCardTone,
   labelForBrollTone,
   normalizeBrollLayerConfig,
+  normalizeCaptionDesignSettings,
   normalizeCaptionRevealMode,
   normalizeCaptionSyncOffsetSeconds,
   normalizeHookOverlayForClipDuration,
   renderStatusLabel,
   resolveNextBrollCardStart,
 } from "@/lib/clipStudio";
+import { resolveCaptionStylePreset } from "@/lib/captionStylePresets";
 
 // ─── Caption Package ────────────────────────────────────────────────────────
 
@@ -303,10 +308,40 @@ describe("Studio on-video caption settings", () => {
     expect(extractCaptionStyleOverride({ captionStylePresetId: "unknown" })).toBe("");
   });
 
+  it("keeps Brand Kit inheritance separate from its saved design snapshot", () => {
+    const linkedCaptionData = {
+      captionStyleSource: "brand-kit",
+      captionStylePresetId: "clean-lower",
+      captionDesign: resolveCaptionStylePreset("clean-lower").design,
+    };
+
+    expect(extractCaptionStyleSource(linkedCaptionData)).toBe("brand-kit");
+    expect(extractCaptionStyleOverride(linkedCaptionData)).toBe("");
+    expect(
+      extractCaptionDesignSettings(linkedCaptionData, "golden-hour").presetId,
+    ).toBe("golden-hour");
+  });
+
+  it("preserves legacy explicit presets and infers missing presets as Brand Kit defaults", () => {
+    expect(extractCaptionStyleSource({ captionStylePresetId: "scripture-focus" })).toBe("clip");
+    expect(extractCaptionStyleSource({})).toBe("brand-kit");
+    expect(extractCaptionStyleOverride({
+      captionStyleSource: "clip",
+      captionStylePresetId: "scripture-focus",
+    })).toBe("scripture-focus");
+  });
+
   it("extracts caption position settings with a lower default", () => {
     expect(extractCaptionPosition(null)).toBe("lower");
     expect(extractCaptionPosition({ captionPosition: "middle" })).toBe("middle");
     expect(extractCaptionPosition({ captionPosition: "sideways" })).toBe("lower");
+    expect(extractCaptionPosition({
+      captionPosition: "lower",
+      captionDesign: {
+        version: 1,
+        layout: { verticalPosition: "top" },
+      },
+    })).toBe("top");
   });
 
   it("normalizes modern caption reveal modes", () => {
@@ -735,5 +770,122 @@ describe("buildClipTimingDisplay", () => {
     const display = buildClipTimingDisplay(3600, 3720, 120);
     expect(display.startLabel).toBe("1:00:00");
     expect(display.endLabel).toBe("1:02:00");
+  });
+});
+
+describe("caption design settings", () => {
+  it("migrates legacy Studio appearance and placement into the complete v1 contract", () => {
+    const design = extractCaptionDesignSettings({
+      captionStylePresetId: "scripture-focus",
+      captionAppearance: {
+        fontScale: "large",
+        maxLines: 4,
+        uppercase: true,
+        verticalOffset: 24,
+      },
+      captionPosition: "top",
+    });
+
+    expect(design).toMatchObject({
+      version: 1,
+      presetId: "scripture-focus",
+      typography: {
+        fontFamilyId: "traditional-preaching",
+        fontSizePx: 42,
+        textCase: "uppercase",
+      },
+      highlighting: {
+        reducedMotion: false,
+      },
+      layout: {
+        verticalPosition: "top",
+        verticalOffset: 24,
+        maxLines: 4,
+      },
+    });
+    expect(hasCaptionDesignSettings({
+      captionStylePresetId: "scripture-focus",
+      captionPosition: "top",
+    })).toBe(false);
+  });
+
+  it("normalizes editable design values, colours, intensity defaults and safe limits", () => {
+    const design = normalizeCaptionDesignSettings({
+      version: 1,
+      presetId: "clean-lower",
+      typography: {
+        fontFamilyId: "elegant-serif",
+        fontSizePx: 200,
+        fontWeight: 755,
+        textCase: "lowercase",
+      },
+      colors: {
+        textColor: "#abc",
+        activeTextColor: "not-a-colour",
+      },
+      background: {
+        opacity: 8,
+        borderRadiusPx: -20,
+      },
+      highlighting: {
+        intensity: "maximum",
+        reducedMotion: true,
+      },
+      layout: {
+        horizontalPosition: "left",
+        horizontalOffset: 999,
+        verticalOffset: -999,
+        safeWidth: "wide",
+        maxLines: 4,
+      },
+    });
+
+    expect(design.typography).toMatchObject({
+      fontFamilyId: "elegant-serif",
+      fontSizePx: 64,
+      fontWeight: 800,
+      textCase: "lowercase",
+    });
+    expect(design.colors.textColor).toBe("#AABBCC");
+    expect(design.colors.activeTextColor).toBe(
+      resolveCaptionStylePreset("clean-lower").design.colors.activeTextColor,
+    );
+    expect(design.background.opacity).toBe(1);
+    expect(design.background.borderRadiusPx).toBe(0);
+    expect(design.highlighting).toMatchObject({
+      intensity: "maximum",
+      scale: 1.12,
+      backgroundOpacity: 0.24,
+      fontWeightBoost: 100,
+      reducedMotion: true,
+    });
+    expect(design.layout).toMatchObject({
+      horizontalPosition: "left",
+      horizontalOffset: 160,
+      verticalOffset: -160,
+      safeWidth: "wide",
+      maxLines: 4,
+    });
+  });
+
+  it("fails closed to known preset defaults for future contract versions", () => {
+    const expected = resolveCaptionStylePreset("clean-lower").design;
+    const design = normalizeCaptionDesignSettings(
+      {
+        version: 99,
+        presetId: "kinetic-pop",
+        typography: { fontSizePx: 64, textCase: "uppercase" },
+        highlighting: { reducedMotion: true },
+      },
+      { presetId: "clean-lower" },
+    );
+
+    expect(design).toEqual(expected);
+  });
+
+  it("recognizes the canonical field and the read-compatible settings alias", () => {
+    expect(hasCaptionDesignSettings({ captionDesign: { version: 1 } })).toBe(true);
+    expect(hasCaptionDesignSettings({ captionDesignSettings: { version: 1 } })).toBe(true);
+    expect(hasCaptionDesignSettings({ captionDesign: { version: 2 } })).toBe(false);
   });
 });

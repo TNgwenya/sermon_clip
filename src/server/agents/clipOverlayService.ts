@@ -20,7 +20,13 @@ import { spawn } from "node:child_process";
 import type { ClipCandidate, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import { resolveCaptionStylePreset, type CaptionStylePresetId } from "@/lib/captionStylePresets";
+import {
+  resolveCaptionFontFamily,
+  resolveCaptionSafeWidthPercent,
+  resolveCaptionStylePreset,
+  type CaptionDesignSettingsV1,
+  type CaptionStylePresetId,
+} from "@/lib/captionStylePresets";
 import {
   appendJobLog,
   createProcessingJob,
@@ -52,7 +58,9 @@ import {
 } from "@/lib/speechCleanupPlan";
 import {
   extractBrollLayerConfig,
+  extractCaptionDesignSettings,
   extractCaptionPosition,
+  extractCaptionStyleOverride,
   type BrollCardPosition,
   type BrollCardTone,
 } from "@/lib/clipStudio";
@@ -110,6 +118,7 @@ type SermonMetadataForOverlay = {
 
 type BrandingForOverlay = {
   primaryBrandColor: string;
+  defaultCaptionStyleName?: string;
   churchName?: string;
   churchLogoPath?: string | null;
   watermarkPosition?: "TOP_LEFT" | "TOP_RIGHT" | "BOTTOM_LEFT" | "BOTTOM_RIGHT" | "CENTER";
@@ -125,6 +134,7 @@ type HookOverlaySpec = {
   size: "small" | "medium" | "large";
   bold: boolean;
   captionStylePresetId?: CaptionStylePresetId;
+  captionDesign?: CaptionDesignSettingsV1;
   width: number;
   height: number;
 };
@@ -141,6 +151,13 @@ type BrollCardOverlaySpec = {
   width: number;
   height: number;
 };
+
+function resolveHookCaptionDesign(spec: HookOverlaySpec): CaptionDesignSettingsV1 {
+  return spec.captionDesign ?? extractCaptionDesignSettings(
+    { captionStylePresetId: spec.captionStylePresetId },
+    spec.captionStylePresetId,
+  );
+}
 
 export type OverlayEligibilityInput = {
   status: ClipCandidate["status"];
@@ -306,19 +323,27 @@ function buildHookOverlayFilter(captionData: unknown): string | null {
 
   const fontSize = spec.size === "large" ? 64 : spec.size === "small" ? 38 : 50;
   const baseY = spec.position === "center" ? "(h-text_h)/2" : spec.position === "lower" ? "h-430" : "120";
-  const text = escapeDrawtext(spec.text);
-  const fontWeightShadow = spec.bold === false ? "shadowx=1:shadowy=1" : "shadowx=2:shadowy=2";
+  const design = resolveHookCaptionDesign(spec);
+  const displayText =
+    design.typography.textCase === "uppercase"
+      ? spec.text.toUpperCase()
+      : design.typography.textCase === "lowercase"
+        ? spec.text.toLowerCase()
+        : spec.text;
+  const text = escapeDrawtext(displayText);
+  const font = resolveCaptionFontFamily(design.typography.fontFamilyId);
+  const effectiveAnimation = design.highlighting.reducedMotion ? "none" : spec.animation;
   const introWindow = Math.min(0.45, Math.max(0.18, spec.durationSeconds / 4));
   const outroWindow = Math.min(0.35, Math.max(0.15, spec.durationSeconds / 5));
   const introEnd = spec.startSeconds + introWindow;
   const outroStart = Math.max(spec.startSeconds, spec.endSeconds - outroWindow);
-  const xExpression = spec.animation === "pan-in"
+  const xExpression = effectiveAnimation === "pan-in"
     ? `'((w-text_w)/2)-if(lt(t,${introEnd.toFixed(2)}),(1-((t-${spec.startSeconds.toFixed(2)})/${introWindow.toFixed(2)}))*120,0)'`
     : "(w-text_w)/2";
-  const yExpression = spec.animation === "pop"
+  const yExpression = effectiveAnimation === "pop"
     ? `'(${baseY})+if(lt(t,${introEnd.toFixed(2)}),(1-((t-${spec.startSeconds.toFixed(2)})/${introWindow.toFixed(2)}))*18,0)'`
     : baseY;
-  const alphaExpression = spec.animation === "fade"
+  const alphaExpression = effectiveAnimation === "fade"
     ? [
         "alpha=",
         `'if(lt(t,${introEnd.toFixed(2)}),`,
@@ -331,16 +356,19 @@ function buildHookOverlayFilter(captionData: unknown): string | null {
 
   const filterParts = [
     `drawtext=text='${text}'`,
-    "fontcolor=white",
+    `fontcolor=${design.colors.textColor.replace("#", "0x")}`,
     `fontsize=${fontSize}`,
-    "fontname=Arial",
+    `fontname=${font.renderFamily}`,
     `x=${xExpression}`,
     `y=${yExpression}`,
-    "box=1",
-    "boxcolor=black@0.62",
-    "boxborderw=28",
-    "shadowcolor=black@0.75",
-    fontWeightShadow,
+    `box=${design.background.treatment === "none" ? 0 : 1}`,
+    `boxcolor=${design.background.color.replace("#", "0x")}@${design.background.opacity}`,
+    `boxborderw=${Math.round(design.background.paddingX)}`,
+    `borderw=${Math.round(design.readability.outlineWidthPx)}`,
+    `bordercolor=${design.readability.outlineColor.replace("#", "0x")}`,
+    `shadowcolor=${design.readability.shadowColor.replace("#", "0x")}@${design.readability.shadowOpacity}`,
+    `shadowx=${Math.round(design.readability.shadowOffsetX)}`,
+    `shadowy=${Math.round(design.readability.shadowOffsetY)}`,
     `enable='between(t,${spec.startSeconds.toFixed(2)},${spec.endSeconds.toFixed(2)})'`,
   ];
 
@@ -351,7 +379,10 @@ function buildHookOverlayFilter(captionData: unknown): string | null {
   return filterParts.join(":");
 }
 
-function extractHookOverlaySpec(captionData: unknown): HookOverlaySpec | null {
+function extractHookOverlaySpec(
+  captionData: unknown,
+  fallbackCaptionStylePresetId?: string,
+): HookOverlaySpec | null {
   if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
     return null;
   }
@@ -392,10 +423,9 @@ function extractHookOverlaySpec(captionData: unknown): HookOverlaySpec | null {
   }
   const remappedDurationSeconds = remappedRange.endSeconds - remappedRange.startSeconds;
   const captionStylePresetId = resolveCaptionStylePreset(
-    typeof (captionData as Record<string, unknown>)["captionStylePresetId"] === "string"
-      ? (captionData as Record<string, unknown>)["captionStylePresetId"] as string
-      : undefined,
+    extractCaptionStyleOverride(captionData) || fallbackCaptionStylePresetId,
   ).id;
+  const captionDesign = extractCaptionDesignSettings(captionData, captionStylePresetId);
 
   return {
     text: record["text"].trim(),
@@ -406,8 +436,9 @@ function extractHookOverlaySpec(captionData: unknown): HookOverlaySpec | null {
     animation,
     size,
     bold: record["bold"] !== false,
-    captionStylePresetId,
-    width: 960,
+    captionStylePresetId: captionDesign.presetId,
+    captionDesign,
+    width: Math.round(1080 * resolveCaptionSafeWidthPercent(captionDesign.layout.safeWidth) / 100),
     height: size === "large" ? 260 : size === "small" ? 180 : 220,
   };
 }
@@ -518,27 +549,57 @@ function wrapOverlayText(value: string, maxLineLength: number, maxLines = 3): st
 }
 
 function buildHookOverlaySvg(spec: HookOverlaySpec): string {
-  const visual = resolveCaptionStylePreset(spec.captionStylePresetId).visual;
-  const fontSize = spec.size === "large" ? 56 : spec.size === "small" ? 34 : 44;
-  const lineHeight = Math.round(fontSize * 1.18);
-  const displayText = visual.uppercase ? spec.text.toUpperCase() : spec.text;
+  const design = resolveHookCaptionDesign(spec);
+  const font = resolveCaptionFontFamily(design.typography.fontFamilyId);
+  const sizeMultiplier = spec.size === "large" ? 1.3 : spec.size === "small" ? 0.9 : 1.1;
+  const fontSize = Math.max(28, Math.min(64, Math.round(design.typography.fontSizePx * sizeMultiplier)));
+  const lineHeight = Math.round(fontSize * design.typography.lineHeight);
+  const displayText =
+    design.typography.textCase === "uppercase"
+      ? spec.text.toUpperCase()
+      : design.typography.textCase === "lowercase"
+        ? spec.text.toLowerCase()
+        : spec.text;
   const lines = wrapOverlayText(displayText, spec.size === "large" ? 26 : spec.size === "small" ? 38 : 32);
   const totalTextHeight = Math.max(lineHeight, lines.length * lineHeight);
   const firstY = Math.round((spec.height - totalTextHeight) / 2) + 4;
-  const fontWeight = spec.bold ? visual.fontWeight : 700;
-  const fontFamily = visual.fontFamily === "serif"
-    ? "Georgia, Times New Roman, serif"
-    : "Arial, Helvetica, sans-serif";
+  const fontWeight = spec.bold ? design.typography.fontWeight : Math.max(400, design.typography.fontWeight - 100);
+  const borderRadius = design.background.treatment === "solid" ? 0 : design.background.borderRadiusPx;
+  const showBackground = design.background.treatment !== "none" && design.background.opacity > 0;
+  const textX =
+    design.typography.alignment === "left"
+      ? design.background.paddingX
+      : design.typography.alignment === "right"
+        ? spec.width - design.background.paddingX
+        : spec.width / 2;
+  const textAnchor =
+    design.typography.alignment === "left"
+      ? "start"
+      : design.typography.alignment === "right"
+        ? "end"
+        : "middle";
+  const showShadow =
+    design.readability.shadowOpacity > 0
+    && (
+      design.readability.shadowBlurPx > 0
+      || design.readability.shadowOffsetX !== 0
+      || design.readability.shadowOffsetY !== 0
+    );
 
   return `
     <svg xmlns="http://www.w3.org/2000/svg" width="${spec.width}" height="${spec.height}" viewBox="0 0 ${spec.width} ${spec.height}">
-      <rect x="0" y="0" width="${spec.width}" height="${spec.height}" rx="${visual.borderRadius}" fill="${visual.backgroundColor}" fill-opacity="${visual.backgroundOpacity}" />
-      ${visual.borderWidth > 0 && visual.borderOpacity > 0
-        ? `<rect x="${visual.borderWidth / 2}" y="${visual.borderWidth / 2}" width="${spec.width - visual.borderWidth}" height="${spec.height - visual.borderWidth}" rx="${Math.max(0, visual.borderRadius - visual.borderWidth / 2)}" fill="none" stroke="${visual.borderColor}" stroke-opacity="${visual.borderOpacity}" stroke-width="${visual.borderWidth}" />`
+      ${showShadow ? `<defs><filter id="hook-shadow" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="${design.readability.shadowOffsetX}" dy="${design.readability.shadowOffsetY}" stdDeviation="${Number((design.readability.shadowBlurPx / 2).toFixed(2))}" flood-color="${design.readability.shadowColor}" flood-opacity="${design.readability.shadowOpacity}" /></filter></defs>` : ""}
+      <g${showShadow ? ' filter="url(#hook-shadow)"' : ""}>
+      ${showBackground
+        ? `<rect x="0" y="0" width="${spec.width}" height="${spec.height}" rx="${borderRadius}" fill="${design.background.color}" fill-opacity="${design.background.opacity}" />`
+        : ""}
+      ${showBackground && design.background.borderWidthPx > 0 && design.background.borderOpacity > 0
+        ? `<rect x="${design.background.borderWidthPx / 2}" y="${design.background.borderWidthPx / 2}" width="${spec.width - design.background.borderWidthPx}" height="${spec.height - design.background.borderWidthPx}" rx="${Math.max(0, borderRadius - design.background.borderWidthPx / 2)}" fill="none" stroke="${design.background.borderColor}" stroke-opacity="${design.background.borderOpacity}" stroke-width="${design.background.borderWidthPx}" />`
         : ""}
       ${lines.map((line, index) => (
-        `<text x="${spec.width / 2}" y="${firstY + index * lineHeight}" font-family="${fontFamily}" font-size="${fontSize}" font-weight="${fontWeight}" fill="${visual.textColor}" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="${visual.textStrokeColor}" stroke-width="${visual.textStrokeWidth}" stroke-linejoin="round">${escapeSvgText(line)}</text>`
+        `<text x="${textX}" y="${firstY + index * lineHeight}" font-family="${escapeSvgText(`${font.renderFamily}, ${font.glyphSafeFallback}`)}" font-size="${fontSize}" font-weight="${fontWeight}" font-style="${design.typography.italic ? "italic" : "normal"}" fill="${design.colors.textColor}" text-anchor="${textAnchor}" dominant-baseline="hanging" paint-order="stroke fill" stroke="${design.readability.outlineColor}" stroke-width="${design.readability.outlineWidthPx}" stroke-linejoin="round" letter-spacing="${design.typography.letterSpacingPx}px" word-spacing="${design.typography.wordSpacingPx}px">${escapeSvgText(line)}</text>`
       )).join("\n      ")}
+      </g>
     </svg>
   `;
 }
@@ -549,7 +610,16 @@ async function renderHookOverlayPng(outputPath: string, spec: HookOverlaySpec): 
 }
 
 function buildHookOverlayPosition(spec: HookOverlaySpec, avoidsTopBrandRail = false): string {
-  const baseX = "(W-w)/2";
+  const captionDesign = resolveHookCaptionDesign(spec);
+  const horizontalOffset = captionDesign.layout.horizontalOffset;
+  const baseX =
+    captionDesign.layout.horizontalPosition === "left"
+      ? `24${horizontalOffset >= 0 ? "+" : ""}${horizontalOffset}`
+      : captionDesign.layout.horizontalPosition === "right"
+        ? `W-w-24${horizontalOffset >= 0 ? "+" : ""}${horizontalOffset}`
+        : horizontalOffset === 0
+          ? "(W-w)/2"
+          : `(W-w)/2${horizontalOffset >= 0 ? "+" : ""}${horizontalOffset}`;
   const baseY = spec.position === "top"
     ? avoidsTopBrandRail ? "328" : "112"
     : spec.position === "lower"
@@ -557,10 +627,11 @@ function buildHookOverlayPosition(spec: HookOverlaySpec, avoidsTopBrandRail = fa
       : "(H-h)/2";
   const introWindow = Math.min(0.35, Math.max(0.12, spec.durationSeconds / 6));
   const introEnd = spec.startSeconds + introWindow;
-  const x = spec.animation === "pan-in"
+  const effectiveAnimation = captionDesign.highlighting.reducedMotion ? "none" : spec.animation;
+  const x = effectiveAnimation === "pan-in"
     ? `'${baseX}-if(lt(t,${introEnd.toFixed(3)}),(1-((t-${spec.startSeconds.toFixed(3)})/${introWindow.toFixed(3)}))*120,0)'`
     : baseX;
-  const y = spec.animation === "pop"
+  const y = effectiveAnimation === "pop"
     ? `'${baseY}+if(lt(t,${introEnd.toFixed(3)}),(1-((t-${spec.startSeconds.toFixed(3)})/${introWindow.toFixed(3)}))*18,0)'`
     : baseY;
 
@@ -717,7 +788,7 @@ function buildOverlayFilterComplex(input: {
     const fadeDuration = Math.min(0.35, Math.max(0.12, spec.durationSeconds / 6));
     const fadeOutStart = Math.max(spec.startSeconds, spec.endSeconds - fadeDuration);
     const hookLabel = "[hookOverlay]";
-    const hookFilters = spec.animation === "fade"
+    const hookFilters = spec.animation === "fade" && !resolveHookCaptionDesign(spec).highlighting.reducedMotion
       ? `format=rgba,fade=t=in:st=${spec.startSeconds.toFixed(3)}:d=${fadeDuration.toFixed(3)}:alpha=1,fade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeDuration.toFixed(3)}:alpha=1`
       : "format=rgba";
     parts.push(`[${input.hookOverlayInputIndex}:v]${hookFilters}${hookLabel}`);
@@ -829,6 +900,7 @@ async function loadBrandingForOverlay(): Promise<BrandingForOverlay> {
     where: { id: "local" },
     select: {
       primaryBrandColor: true,
+      defaultCaptionStyleName: true,
       churchName: true,
       churchLogoPath: true,
       watermarkPosition: true,
@@ -1088,7 +1160,10 @@ export async function renderClipOverlay(
     const brandingOverlayPath = tempOutputPath.replace(/\.mp4$/i, ".branding.png");
     const introOverlayPath = tempOutputPath.replace(/\.mp4$/i, ".branding-intro.png");
     const outroOverlayPath = tempOutputPath.replace(/\.mp4$/i, ".branding-outro.png");
-    const hookOverlaySpec = extractHookOverlaySpec(clip.captionData);
+    const hookOverlaySpec = extractHookOverlaySpec(
+      clip.captionData,
+      branding?.defaultCaptionStyleName,
+    );
     const brollOverlaySpecs = extractBrollOverlaySpecs(clip.captionData);
     const captionsRequireSafeBrandingPlacement = shouldBrandingLowerThirdYieldToCaptions(clip.captionData);
     const brollOverlayPaths = brollOverlaySpecs.map((_, index) =>

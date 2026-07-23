@@ -13,8 +13,12 @@ import {
   resolveBrandBackgroundOpacity,
   shouldBrandingLowerThirdYieldToCaptions,
 } from "@/lib/clipBranding";
-import { resolveCaptionStylePreset } from "@/lib/captionStylePresets";
-import { resolveFramingDisplayLabel } from "@/lib/clipExportSettings";
+import {
+  resolveCaptionFontFamily,
+  resolveCaptionSafeWidthPercent,
+  resolveCaptionStylePreset,
+} from "@/lib/captionStylePresets";
+import { PLATFORM_PRESET_LABELS, resolveFramingDisplayLabel } from "@/lib/clipExportSettings";
 import { buildRetryablePreviewUrl } from "@/lib/clipPreview";
 import {
   buildSpeechCleanupPreviewPlan,
@@ -40,6 +44,7 @@ import {
   type ClipStudioOverlayPositionDetail,
 } from "@/lib/clipStudioOverlayEvents";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
+import styles from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-live-preview.module.css";
 
 type ClipStudioLivePreviewProps = {
   hasPreview: boolean;
@@ -60,6 +65,12 @@ const formatClassName = {
   SQUARE_1_1: "format-square",
 };
 
+const captionRenderFrameSize = {
+  VERTICAL_9_16: { width: 1080, height: 1920 },
+  HORIZONTAL_16_9: { width: 1920, height: 1080 },
+  SQUARE_1_1: { width: 1080, height: 1080 },
+};
+
 const frameClassName = {
   CENTER_CROP: "frame-center",
   LEFT_FOCUS: "frame-left",
@@ -72,8 +83,12 @@ type OverlayDragState = {
   overlay: "caption" | "hook" | "broll";
   cardId?: string;
   pointerId: number;
+  originClientX: number;
   originClientY: number;
-  originCaptionOffset: number;
+  originCaptionHorizontalOffset: number;
+  originCaptionVerticalOffset: number;
+  renderUnitsPerClientX: number;
+  renderUnitsPerClientY: number;
   frameTop: number;
   frameHeight: number;
 };
@@ -83,6 +98,41 @@ type ManualCropPreviewFrame = {
   centerY: number;
   zoom: number;
 };
+
+const PLATFORM_SAFE_ZONE_INSETS = {
+  INSTAGRAM_REELS: { top: 10, right: 8, bottom: 19, left: 8 },
+  TIKTOK: { top: 10, right: 22, bottom: 24, left: 8 },
+  YOUTUBE_SHORTS: { top: 10, right: 16, bottom: 20, left: 8 },
+  FACEBOOK_REELS: { top: 9, right: 9, bottom: 18, left: 9 },
+  YOUTUBE_HORIZONTAL: { top: 8, right: 8, bottom: 12, left: 8 },
+  WEBSITE_HORIZONTAL: { top: 7, right: 7, bottom: 10, left: 7 },
+} as const;
+
+export function resolveClipStudioPreviewSource({
+  hasPreview,
+  previewSrc,
+  sourcePreviewSrc,
+  unavailableSourcePreviewSrc,
+}: {
+  hasPreview: boolean;
+  previewSrc: string | null;
+  sourcePreviewSrc: string | null;
+  unavailableSourcePreviewSrc: string | null;
+}): {
+  activePreviewSrc: string | null;
+  canPreview: boolean;
+  hasSourcePreview: boolean;
+} {
+  const hasSourcePreview = Boolean(
+    sourcePreviewSrc && sourcePreviewSrc !== unavailableSourcePreviewSrc,
+  );
+
+  return {
+    activePreviewSrc: hasSourcePreview ? sourcePreviewSrc : previewSrc,
+    canPreview: hasPreview || hasSourcePreview,
+    hasSourcePreview,
+  };
+}
 
 function interpolateNumber(start: number, end: number, progress: number): number {
   return start + (end - start) * progress;
@@ -185,9 +235,12 @@ export function ClipStudioLivePreview({
   const [previewDurationSeconds, setPreviewDurationSeconds] = useState<number | null>(null);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const [previewErrorState, setPreviewErrorState] = useState<{ src: string; message: string } | null>(null);
+  const [unavailableSourcePreviewSrc, setUnavailableSourcePreviewSrc] = useState<string | null>(null);
   const [previewReadySrc, setPreviewReadySrc] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
   const [playbackNotice, setPlaybackNotice] = useState<string | null>(null);
+  const [showSafeZoneGuide, setShowSafeZoneGuide] = useState(false);
+  const [previewFrameSize, setPreviewFrameSize] = useState({ width: 0, height: 0 });
   const [playbackState, setPlaybackState] = useState<"loading" | "ready" | "waiting" | "stalled" | "playing" | "paused" | "error">("loading");
   const brandingEnabled = brandingConfig.enabled && brandingConfig.preset !== "NO_BRANDING";
   const captionsRequireSafeBrandingPlacement = shouldBrandingLowerThirdYieldToCaptions({
@@ -208,9 +261,35 @@ export function ClipStudioLivePreview({
   const showLowerThird = lowerThirdRequested;
   const lowerThirdMovedForCaptions = lowerThirdRequested && captionsRequireSafeBrandingPlacement;
   const captionStyle = resolveCaptionStylePreset(editPreview.captionStylePresetId);
-  const activePreviewSrc = sourcePreviewSrc ?? previewSrc;
-  const canPreview = hasPreview || Boolean(sourcePreviewSrc);
-  const hasSourcePreview = Boolean(sourcePreviewSrc);
+  const renderFrameSize = captionRenderFrameSize[exportSettings.primaryFormat];
+  const protectsPreparedVisualLayers =
+    exportSettings.primaryFormat !== "VERTICAL_9_16"
+    && (
+      editPreview.applyCaptionsToClip
+      || editPreview.hookOverlay.enabled
+      || editPreview.brollLayer.enabled
+      || brandingEnabled
+    );
+  const previewFramingMode = protectsPreparedVisualLayers
+    ? "FIT_BLURRED_BACKGROUND"
+    : exportSettings.framingMode;
+  const safeZoneInsets = PLATFORM_SAFE_ZONE_INSETS[exportSettings.platformPreset];
+  const safeZoneStyle = {
+    "--safe-zone-top": `${safeZoneInsets.top}%`,
+    "--safe-zone-right": `${safeZoneInsets.right}%`,
+    "--safe-zone-bottom": `${safeZoneInsets.bottom}%`,
+    "--safe-zone-left": `${safeZoneInsets.left}%`,
+  } as CSSProperties;
+  const {
+    activePreviewSrc,
+    canPreview,
+    hasSourcePreview,
+  } = resolveClipStudioPreviewSource({
+    hasPreview,
+    previewSrc,
+    sourcePreviewSrc,
+    unavailableSourcePreviewSrc,
+  });
   const previewError = previewErrorState?.src === activePreviewSrc ? previewErrorState.message : "";
   const playbackSrc = useMemo(() => {
     if (!activePreviewSrc) {
@@ -344,7 +423,7 @@ export function ClipStudioLivePreview({
       return captionLookupSeconds >= cue.startSeconds && (captionLookupSeconds < cue.endSeconds || (isLastCue && captionLookupSeconds <= cue.endSeconds));
     }) ?? null;
   }, [captionLookupSeconds, editPreview.applyCaptionsToClip, editPreview.captionCues]);
-  const captionPreviewText = useMemo(() => {
+  const activeCaptionCueText = useMemo(() => {
     return resolveActiveCaptionCueText({
       applyCaptionsToClip: editPreview.applyCaptionsToClip,
       captionCues: editPreview.captionCues,
@@ -352,34 +431,101 @@ export function ClipStudioLivePreview({
       previewSeconds: captionLookupSeconds,
     });
   }, [captionLookupSeconds, editPreview.applyCaptionsToClip, editPreview.captionCues, editPreview.onVideoCaptionText]);
-  const captionDisplayText = editPreview.captionAppearance.uppercase || captionStyle.visual.uppercase
+  const activeCaptionCueWords = useMemo(
+    () => activeCaptionCueText.split(/\s+/).filter(Boolean),
+    [activeCaptionCueText],
+  );
+  const resolvedActiveCaptionWordIndex = useMemo(
+    () => resolveActiveCaptionWordIndex({
+      activeCue: activeCaptionCue,
+      words: activeCaptionCueWords,
+      previewSeconds: captionLookupSeconds,
+    }),
+    [activeCaptionCue, activeCaptionCueWords, captionLookupSeconds],
+  );
+  const captionPreviewText = editPreview.captionRevealMode === "single-word"
+    ? activeCaptionCueWords[resolvedActiveCaptionWordIndex] ?? ""
+    : activeCaptionCueText;
+  const captionDesign = editPreview.captionDesign ?? captionStyle.design;
+  const captionFont = resolveCaptionFontFamily(captionDesign.typography.fontFamilyId);
+  const captionDisplayText = captionDesign.typography.textCase === "uppercase"
     ? captionPreviewText.toUpperCase()
-    : captionPreviewText;
+    : captionDesign.typography.textCase === "lowercase"
+      ? captionPreviewText.toLowerCase()
+      : captionPreviewText;
   const captionWords = useMemo(() => captionDisplayText.split(/\s+/).filter(Boolean), [captionDisplayText]);
+  const backgroundVisible = captionDesign.background.treatment !== "none";
+  const horizontalAnchor = captionDesign.layout.horizontalPosition === "left"
+    ? "5%"
+    : captionDesign.layout.horizontalPosition === "right"
+      ? "95%"
+      : "50%";
+  const horizontalTranslate = captionDesign.layout.horizontalPosition === "left"
+    ? "0%"
+    : captionDesign.layout.horizontalPosition === "right"
+      ? "-100%"
+      : "-50%";
   const captionVisualVariables = {
-    "--caption-card-background": colorWithOpacity(captionStyle.visual.backgroundColor, captionStyle.visual.backgroundOpacity),
-    "--caption-card-border": colorWithOpacity(captionStyle.visual.borderColor, captionStyle.visual.borderOpacity),
-    "--caption-card-border-width": `${captionStyle.visual.borderWidth}px`,
-    "--caption-card-radius": `${captionStyle.visual.borderRadius}px`,
-    "--caption-text-color": captionStyle.visual.textColor,
-    "--caption-active-color": captionStyle.visual.activeTextColor,
-    "--caption-font-family": captionStyle.visual.fontFamily === "serif"
-      ? 'Georgia, "Times New Roman", serif'
-      : "Arial, Helvetica, sans-serif",
-    "--caption-font-weight": String(captionStyle.visual.fontWeight),
-    "--caption-text-stroke": captionStyle.visual.textStrokeWidth > 0
-      ? `${Math.max(0.35, captionStyle.visual.textStrokeWidth / 6).toFixed(2)}px ${captionStyle.visual.textStrokeColor}`
+    "--caption-card-background": backgroundVisible
+      ? colorWithOpacity(captionDesign.background.color, captionDesign.background.opacity)
+      : "transparent",
+    "--caption-card-border": backgroundVisible
+      ? colorWithOpacity(captionDesign.background.borderColor, captionDesign.background.borderOpacity)
+      : "transparent",
+    "--caption-card-border-width": `${backgroundVisible ? captionDesign.background.borderWidthPx : 0}px`,
+    "--caption-card-radius": `${captionDesign.background.treatment === "solid" ? 0 : captionDesign.background.borderRadiusPx}px`,
+    "--caption-text-color": captionDesign.colors.textColor,
+    "--caption-active-color": captionDesign.colors.activeTextColor,
+    "--caption-active-background": colorWithOpacity(
+      captionDesign.colors.highlightBackgroundColor,
+      captionDesign.highlighting.backgroundOpacity,
+    ),
+    "--caption-active-scale": captionDesign.highlighting.reducedMotion
+      ? "1"
+      : String(captionDesign.highlighting.scale),
+    "--caption-active-weight": String(Math.min(900, captionDesign.typography.fontWeight + captionDesign.highlighting.fontWeightBoost)),
+    "--caption-font-family": captionFont.cssStack,
+    "--caption-font-size": `${Math.max(0.72, captionDesign.typography.fontSizePx / 36).toFixed(2)}rem`,
+    "--caption-font-weight": String(captionDesign.typography.fontWeight),
+    "--caption-font-style": captionDesign.typography.italic ? "italic" : "normal",
+    "--caption-letter-spacing": `${captionDesign.typography.letterSpacingPx}px`,
+    "--caption-line-height": String(captionDesign.typography.lineHeight),
+    "--caption-word-spacing": `${captionDesign.typography.wordSpacingPx}px`,
+    "--caption-text-align": captionDesign.typography.alignment,
+    "--caption-justify": captionDesign.typography.alignment === "left"
+      ? "flex-start"
+      : captionDesign.typography.alignment === "right"
+        ? "flex-end"
+        : "center",
+    "--caption-padding-x": `${captionDesign.background.paddingX / 16}rem`,
+    "--caption-padding-y": `${captionDesign.background.paddingY / 16}rem`,
+    "--caption-text-stroke": captionDesign.readability.outlineWidthPx > 0
+      ? `${Math.max(0.25, captionDesign.readability.outlineWidthPx / 6).toFixed(2)}px ${captionDesign.readability.outlineColor}`
       : "0 transparent",
+    "--caption-text-shadow": `${captionDesign.readability.shadowOffsetX}px ${captionDesign.readability.shadowOffsetY}px ${captionDesign.readability.shadowBlurPx}px ${colorWithOpacity(
+      captionDesign.readability.shadowColor,
+      captionDesign.readability.shadowOpacity,
+    )}`,
+    "--caption-safe-width": `${resolveCaptionSafeWidthPercent(captionDesign.layout.safeWidth)}%`,
+    "--caption-anchor-x": horizontalAnchor,
+    "--caption-translate-x": horizontalTranslate,
+    "--caption-offset-x": `${captionDesign.layout.horizontalOffset * (
+      previewFrameSize.width > 0 ? previewFrameSize.width / renderFrameSize.width : 0
+    )}px`,
   } as CSSProperties;
   const captionAppearanceStyle = {
     ...captionVisualVariables,
-    "--caption-offset-y": `${editPreview.captionAppearance.verticalOffset}px`,
+    "--caption-offset-y": `${captionDesign.layout.verticalOffset * (
+      previewFrameSize.height > 0 ? previewFrameSize.height / renderFrameSize.height : 0
+    )}px`,
   } as CSSProperties;
   const hookAppearanceStyle = {
     ...captionVisualVariables,
-    fontWeight: hookOverlay.bold ? captionStyle.visual.fontWeight : 700,
+    fontWeight: hookOverlay.bold ? captionDesign.typography.fontWeight : 700,
     opacity: hookAnimationFrame.opacity,
-    translate: `${hookAnimationFrame.translateXPercent}% ${hookAnimationFrame.translateYPercent}%`,
+    translate: captionDesign.highlighting.reducedMotion
+      ? "0% 0%"
+      : `${hookAnimationFrame.translateXPercent}% ${hookAnimationFrame.translateYPercent}%`,
   } as CSSProperties;
   const manualCropPreview = useMemo(
     () => resolveManualCropPreviewFrame(exportSettings.manualCropKeyframes, sourcePreviewSeconds),
@@ -391,12 +537,8 @@ export function ClipStudioLivePreview({
       return -1;
     }
 
-    return resolveActiveCaptionWordIndex({
-      activeCue: activeCaptionCue,
-      words: captionWords,
-      previewSeconds: captionLookupSeconds,
-    });
-  }, [activeCaptionCue, captionLookupSeconds, captionWords, editPreview.captionRevealMode]);
+    return resolvedActiveCaptionWordIndex;
+  }, [editPreview.captionRevealMode, resolvedActiveCaptionWordIndex]);
   const previewStyle = {
     "--clip-brand-color": brandingConfig.themeColor ?? "#75d9b8",
     "--clip-brand-tint-opacity": resolveBrandBackgroundOpacity(brandingConfig.backgroundStyle),
@@ -410,14 +552,53 @@ export function ClipStudioLivePreview({
   } as CSSProperties;
   const backgroundStyleClass = `background-${brandingConfig.backgroundStyle.toLowerCase().replace(/_/g, "-")}`;
   const framingDisplayLabel = resolveFramingDisplayLabel(exportSettings);
-  function updateOverlayPositionFromPointer(state: OverlayDragState, clientY: number) {
+
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) {
+      return undefined;
+    }
+
+    const updateFrameSize = () => {
+      const rect = frame.getBoundingClientRect();
+      setPreviewFrameSize((current) => (
+        Math.abs(current.width - rect.width) < 0.5
+        && Math.abs(current.height - rect.height) < 0.5
+          ? current
+          : { width: rect.width, height: rect.height }
+      ));
+    };
+
+    updateFrameSize();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateFrameSize);
+      return () => window.removeEventListener("resize", updateFrameSize);
+    }
+
+    const observer = new ResizeObserver(updateFrameSize);
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, []);
+
+  function updateOverlayPositionFromPointer(
+    state: OverlayDragState,
+    clientX: number,
+    clientY: number,
+  ) {
     const ratio = clampOverlayRatio((clientY - state.frameTop) / Math.max(1, state.frameHeight));
 
     if (state.overlay === "caption") {
       dispatchOverlayPosition({
         overlay: "caption",
         position: resolveCaptionPositionFromOverlayRatio(ratio),
-        verticalOffset: clampCaptionOverlayOffset(state.originCaptionOffset - (clientY - state.originClientY)),
+        horizontalOffset: clampCaptionOverlayOffset(
+          state.originCaptionHorizontalOffset
+          + (clientX - state.originClientX) * state.renderUnitsPerClientX,
+        ),
+        verticalOffset: clampCaptionOverlayOffset(
+          state.originCaptionVerticalOffset
+          - (clientY - state.originClientY) * state.renderUnitsPerClientY,
+        ),
       });
       return;
     }
@@ -460,14 +641,18 @@ export function ClipStudioLivePreview({
       overlay,
       cardId,
       pointerId: event.pointerId,
+      originClientX: event.clientX,
       originClientY: event.clientY,
-      originCaptionOffset: editPreview.captionAppearance.verticalOffset,
+      originCaptionHorizontalOffset: editPreview.captionDesign.layout.horizontalOffset,
+      originCaptionVerticalOffset: editPreview.captionDesign.layout.verticalOffset,
+      renderUnitsPerClientX: renderFrameSize.width / rect.width,
+      renderUnitsPerClientY: renderFrameSize.height / rect.height,
       frameTop: rect.top,
       frameHeight: rect.height,
     };
 
     setOverlayDragState(nextDragState);
-    updateOverlayPositionFromPointer(nextDragState, event.clientY);
+    updateOverlayPositionFromPointer(nextDragState, event.clientX, event.clientY);
   }
 
   function moveOverlayDrag(event: PointerEvent<HTMLElement>) {
@@ -477,7 +662,7 @@ export function ClipStudioLivePreview({
 
     event.preventDefault();
     event.stopPropagation();
-    updateOverlayPositionFromPointer(overlayDragState, event.clientY);
+    updateOverlayPositionFromPointer(overlayDragState, event.clientX, event.clientY);
   }
 
   function endOverlayDrag(event: PointerEvent<HTMLElement>) {
@@ -487,7 +672,7 @@ export function ClipStudioLivePreview({
 
     event.preventDefault();
     event.stopPropagation();
-    updateOverlayPositionFromPointer(overlayDragState, event.clientY);
+    updateOverlayPositionFromPointer(overlayDragState, event.clientX, event.clientY);
 
     try {
       event.currentTarget.releasePointerCapture(event.pointerId);
@@ -705,14 +890,24 @@ export function ClipStudioLivePreview({
           <p className="kicker">Preview</p>
           <h2>Live preview</h2>
         </div>
-        <StatusBadge tone={renderTone}>{renderLabel}</StatusBadge>
+        <div className={styles.previewHeadingActions}>
+          <button
+            type="button"
+            className="button tertiary"
+            aria-pressed={showSafeZoneGuide}
+            onClick={() => setShowSafeZoneGuide((current) => !current)}
+          >
+            {showSafeZoneGuide ? "Hide safe zones" : "Show safe zones"}
+          </button>
+          <StatusBadge tone={renderTone}>{renderLabel}</StatusBadge>
+        </div>
       </div>
 
       <div className="clip-studio-preview-body">
         <div className="clip-studio-video-shell">
           <div
             ref={frameRef}
-            className={`clip-studio-live-frame ${formatClassName[exportSettings.primaryFormat]} ${frameClassName[exportSettings.framingMode]} ${
+            className={`clip-studio-live-frame ${formatClassName[exportSettings.primaryFormat]} ${frameClassName[previewFramingMode]} ${
               brandingEnabled ? "branding-on" : "branding-off"
             } ${hasManualCropPreview ? "has-manual-crop" : ""} ${overlayDragState ? "is-dragging-overlay" : ""} ${backgroundStyleClass}`}
             style={previewStyle}
@@ -748,6 +943,16 @@ export function ClipStudioLivePreview({
                     setPlaybackNotice(null);
                   }}
                   onError={() => {
+                    if (hasSourcePreview && sourcePreviewSrc && previewSrc) {
+                      setUnavailableSourcePreviewSrc(sourcePreviewSrc);
+                      setPreviewErrorState(null);
+                      setPreviewReadySrc(null);
+                      setIsPreviewPlaying(false);
+                      setPlaybackState("loading");
+                      setPlaybackNotice("The sermon source is unavailable, so Studio is loading the prepared clip instead.");
+                      return;
+                    }
+
                     setPreviewErrorState({
                       src: activePreviewSrc ?? "",
                       message: "Preview media could not be loaded. Check the source video or retry the preview.",
@@ -846,6 +1051,14 @@ export function ClipStudioLivePreview({
               <div className="clip-studio-live-brand-tint" aria-hidden="true" />
             ) : null}
 
+            {showSafeZoneGuide ? (
+              <div className={styles.safeZoneOverlay} style={safeZoneStyle} aria-hidden="true">
+                <div className={styles.safeZoneFrame}>
+                  <span>{PLATFORM_PRESET_LABELS[exportSettings.platformPreset]} safe area</span>
+                </div>
+              </div>
+            ) : null}
+
             {previewMediaReady && showLogo && logoSrc ? (
               <div className={`clip-studio-live-watermark has-logo logo-placement-${lowerThirdPlacement.toLowerCase()}`}>
                 <Image src={logoSrc} alt={`${churchName || "Church"} logo`} width={68} height={68} unoptimized />
@@ -899,16 +1112,18 @@ export function ClipStudioLivePreview({
                 onPointerCancel={endOverlayDrag}
                 title="Drag hook overlay"
               >
-                {captionStyle.visual.uppercase ? hookOverlay.text.toUpperCase() : hookOverlay.text}
+                {captionDesign.typography.textCase === "uppercase"
+                  ? hookOverlay.text.toUpperCase()
+                  : captionDesign.typography.textCase === "lowercase"
+                    ? hookOverlay.text.toLowerCase()
+                    : hookOverlay.text}
               </div>
             ) : null}
 
             {previewMediaReady && captionPreviewText ? (
               <div
                 key={editPreview.captionRevealMode === "single-word" ? `${activeCaptionCue?.index ?? "cue"}-${captionDisplayText}` : "caption"}
-                className={`clip-studio-live-caption ${captionStyle.className} caption-position-${editPreview.captionPosition} caption-size-${editPreview.captionAppearance.fontScale} caption-reveal-${editPreview.captionRevealMode} ${
-                  editPreview.captionAppearance.uppercase ? "caption-uppercase" : ""
-                }`}
+                className={`clip-studio-live-caption ${styles.designedCaption} ${captionDesign.highlighting.reducedMotion ? styles.reducedMotion : ""} ${captionStyle.className} caption-position-${editPreview.captionPosition} caption-size-${editPreview.captionAppearance.fontScale} caption-reveal-${editPreview.captionRevealMode}`}
                 style={captionAppearanceStyle}
                 data-max-lines={editPreview.captionAppearance.maxLines}
                 onPointerDown={(event) => startOverlayDrag(event, "caption")}
@@ -922,7 +1137,12 @@ export function ClipStudioLivePreview({
                     <span
                       key={`${word}-${index}`}
                       aria-hidden="true"
-                      className={index === activeCaptionWordIndex ? "clip-studio-live-caption-word is-active" : "clip-studio-live-caption-word"}
+                      className={[
+                        "clip-studio-live-caption-word",
+                        styles.designWord,
+                        index === activeCaptionWordIndex ? "is-active" : "",
+                        index === activeCaptionWordIndex ? styles.designWordActive : "",
+                      ].filter(Boolean).join(" ")}
                     >
                       {word}
                     </span>
@@ -987,6 +1207,10 @@ export function ClipStudioLivePreview({
             {exportSettings.manualCropKeyframes.length > 1 ? (
               <p className="clip-studio-preview-truth-note">
                 Crop motion follows the saved framing points as this preview plays.
+              </p>
+            ) : protectsPreparedVisualLayers ? (
+              <p className="clip-studio-preview-truth-note">
+                Full-frame fit protects captions and artwork from being cropped in this format.
               </p>
             ) : exportSettings.framingMode === "SMART_CROP" ? (
               <p className="clip-studio-preview-truth-note">

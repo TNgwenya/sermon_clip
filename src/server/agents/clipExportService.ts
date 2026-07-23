@@ -253,6 +253,14 @@ function shouldPreservePreparedManualFraming(input: {
     && input.sourceKind !== "ORIGINAL_SERMON";
 }
 
+function shouldUseSafePreparedVisualFit(input: {
+  format: ExportPreset;
+  sourceKind: ExportSourceKind;
+}): boolean {
+  return input.format !== "VERTICAL_9_16"
+    && (input.sourceKind === "PREPARED_OVERLAY" || input.sourceKind === "PREPARED_CAPTIONED");
+}
+
 function getTempPath(outputPath: string, editPlanId: string): string {
   const planSuffix = editPlanId.replace(/[^a-zA-Z0-9_-]/g, "");
   return outputPath.replace(/\.mp4$/i, `.plan-${planSuffix}.partial.mp4`);
@@ -999,6 +1007,19 @@ export async function exportClipWithPreset(
       };
     }
 
+    const protectsPreparedVisualLayers = shouldUseSafePreparedVisualFit({
+      format,
+      sourceKind: exportSource.kind,
+    });
+    if (protectsPreparedVisualLayers) {
+      effectiveLayoutStrategy = "FIT_BLURRED_BACKGROUND";
+      effectiveSmartCrop = null;
+      await appendPipelineLog(
+        clip.sermonId,
+        `Export preserved the full prepared caption and artwork frame for ${clip.id} in ${format}; safe fit prevents vertical artwork from being cropped.`,
+      );
+    }
+
     if (framingDecision.fallbackApplied) {
       await appendPipelineLog(
         clip.sermonId,
@@ -1311,6 +1332,7 @@ export const __clipExportTestUtils = {
   resolvePreparedExportSource,
   resolveBestExportSource,
   shouldPreservePreparedManualFraming,
+  shouldUseSafePreparedVisualFit,
   buildReadableExportFileStem,
   resolveOutputPath(input: {
     sermonId: string;

@@ -165,6 +165,7 @@
 
 .clip-studio-shell .clip-studio-prepare-button {
   width: 100%;
+  min-width: 0;
 }
 
 .clip-studio-shell .clip-studio-ready-actions {

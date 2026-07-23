@@ -79,9 +79,12 @@ export function ClipStudioPrepareButton({
         ? "Approve & prepare final video"
         : "Save & prepare final video";
   const finalIsReady = hasPreparedMedia && !serverNeedsUpdate && !isDraftDirty && !serverIsPreparing;
-  const captionStyleLabel = editPreview.captionStylePresetId
+  const resolvedCaptionStyleLabel = editPreview.captionStylePresetId
     .replaceAll("-", " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
+  const captionStyleLabel = editPreview.captionStyleSource === "brand-kit"
+    ? `Brand Kit · ${resolvedCaptionStyleLabel}`
+    : resolvedCaptionStyleLabel;
   const enabledCleanupCuts = editPreview.speechCleanupEdits?.cuts.filter((cut) => cut.enabled).length ?? 0;
   const automaticPacingFeatures = [
     editPreview.speechCleanup.removeDeadAir ? "dead air" : null,
@@ -171,8 +174,10 @@ export function ClipStudioPrepareButton({
         captionCues: editPreview.captionCues,
         applyCaptionsToClip: editPreview.applyCaptionsToClip,
         captionStylePresetId: editPreview.captionStylePresetId,
+        captionStyleSource: editPreview.captionStyleSource,
         captionPosition: editPreview.captionPosition,
         captionAppearance: editPreview.captionAppearance,
+        captionDesign: editPreview.captionDesign,
         captionRevealMode: editPreview.captionRevealMode,
         captionSyncOffsetSeconds: editPreview.captionSyncOffsetSeconds,
         hookOverlay: editPreview.hookOverlay,

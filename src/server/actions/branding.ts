@@ -109,7 +109,11 @@ export async function saveBrandingSettingsAction(
     let invalidatedCount = 0;
     if (brandingChanged) {
       invalidatedCount = await invalidateAfterBrandingChange(
-        "Branding settings changed. Overlay assets marked outdated.",
+        "Branding settings changed. Prepared visual assets marked outdated.",
+        {
+          captionStyleChanged:
+            previous.defaultCaptionStyleName !== parsed.data.defaultCaptionStyleName,
+        },
       );
     }
 
@@ -121,7 +125,7 @@ export async function saveBrandingSettingsAction(
       success: true,
       savedChurchLogoPath: parsed.data.churchLogoPath,
       message: brandingChanged
-        ? `Branding settings saved. ${invalidatedCount} clip overlay asset(s) marked outdated.`
+        ? `Branding settings saved. ${invalidatedCount} clip visual asset(s) marked outdated.`
         : "Branding settings saved. No overlay invalidation required.",
     };
   } catch (error) {

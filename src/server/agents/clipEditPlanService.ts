@@ -8,7 +8,7 @@ import {
   extractCaptionSyncOffsetSeconds,
 } from "@/lib/clipStudio";
 
-const CLIP_EDIT_PLAN_SCHEMA_VERSION = 1;
+const CLIP_EDIT_PLAN_SCHEMA_VERSION = 2;
 
 const clipEditPlanSelect = {
   id: true,
@@ -141,10 +141,12 @@ function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot 
     },
     captions: {
       applyCaptionsToClip: readBoolean(captionData, "applyCaptionsToClip", true),
+      captionStyleSource: captionData["captionStyleSource"] ?? null,
       cues: captionCues,
       captionStylePresetId: captionData["captionStylePresetId"] ?? null,
       captionPosition: captionData["captionPosition"] ?? null,
       captionAppearance: captionData["captionAppearance"] ?? null,
+      captionDesign: captionData["captionDesign"] ?? null,
       captionRevealMode: extractCaptionRevealMode(captionData),
       captionSyncOffsetSeconds: extractCaptionSyncOffsetSeconds(captionData),
       wordHighlightEnabled: readBoolean(captionData, "wordHighlightEnabled", false),

@@ -1,6 +1,7 @@
 import type { AssetFreshness, ClipCandidate, ClipStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { extractCaptionStyleSource } from "@/lib/clipStudio";
 
 export type RegenerationStage =
   | "CLIP_DISCOVERY"
@@ -294,7 +295,10 @@ export async function invalidateAfterExportSettingChange(clipId: string, reason:
   });
 }
 
-export async function invalidateAfterBrandingChange(reason: string): Promise<number> {
+export async function invalidateAfterBrandingChange(
+  reason: string,
+  options?: { captionStyleChanged?: boolean },
+): Promise<number> {
   const result = await prisma.clipCandidate.updateMany({
     where: {
       status: { in: ["APPROVED", "EXPORTED"] },
@@ -306,6 +310,43 @@ export async function invalidateAfterBrandingChange(reason: string): Promise<num
       assetInvalidationReason: reason,
     },
   });
+
+  if (options?.captionStyleChanged) {
+    const captionedClips = await prisma.clipCandidate.findMany({
+      where: {
+        status: { in: ["APPROVED", "EXPORTED"] },
+        captionBurnStatus: "COMPLETED",
+      },
+      select: {
+        id: true,
+        captionData: true,
+      },
+    });
+    const linkedClipIds = captionedClips
+      .filter((clip) => {
+        const captionData =
+          clip.captionData && typeof clip.captionData === "object" && !Array.isArray(clip.captionData)
+            ? clip.captionData as Record<string, unknown>
+            : {};
+        return (
+          captionData["applyCaptionsToClip"] !== false
+          && extractCaptionStyleSource(captionData) === "brand-kit"
+        );
+      })
+      .map((clip) => clip.id);
+
+    if (linkedClipIds.length > 0) {
+      await prisma.clipCandidate.updateMany({
+        where: { id: { in: linkedClipIds } },
+        data: {
+          captionBurnFreshness: "OUTDATED",
+          overlayFreshness: "OUTDATED",
+          exportFreshness: "OUTDATED",
+          assetInvalidationReason: reason,
+        },
+      });
+    }
+  }
 
   return result.count;
 }

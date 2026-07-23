@@ -1,0 +1,265 @@
+.workspaceNav {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  padding: 0.42rem;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+
+.workspaceNav button {
+  display: grid;
+  gap: 0.16rem;
+  align-content: start;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 0.78rem;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.72rem 0.76rem;
+  text-align: left;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.workspaceNav button:last-child {
+  grid-column: 1 / -1;
+}
+
+.workspaceNav button:hover,
+.workspaceNav button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  color: var(--text);
+}
+
+.workspaceNav button:active {
+  transform: translateY(1px);
+}
+
+.workspaceNav strong,
+.workspaceNav span {
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.workspaceNav strong {
+  color: inherit;
+  font-size: 0.84rem;
+}
+
+.workspaceNav span {
+  font-size: 0.7rem;
+}
+
+.workspaceNav .workspaceActive {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--text);
+  box-shadow: 0 0.45rem 1rem color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.captionWorkflow {
+  display: flex;
+  flex-direction: column;
+}
+
+.captionJourney {
+  order: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.42rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.captionJourney li {
+  display: flex;
+  gap: 0.42rem;
+  align-items: center;
+  min-width: 0;
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, var(--surface-raised, var(--surface)) 78%, transparent);
+  color: var(--muted);
+  font-size: 0.72rem;
+  padding: 0.46rem 0.55rem;
+}
+
+.captionJourney li:first-child {
+  color: var(--text);
+}
+
+.captionJourney span {
+  display: grid;
+  width: 1.35rem;
+  height: 1.35rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--text);
+  font-size: 0.66rem;
+  font-weight: 900;
+}
+
+.captionToggle {
+  order: 1;
+}
+
+.stylePanel {
+  order: 2;
+  display: flex;
+  flex-direction: column;
+}
+
+.styleHeading {
+  order: 0;
+}
+
+.selectedStyle {
+  order: 2;
+}
+
+.readabilityCheck {
+  order: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 0.72rem;
+  padding: 0.58rem 0.66rem;
+  font-size: 0.75rem;
+}
+
+.readabilityCheck > span:last-child {
+  color: var(--muted);
+}
+
+.readabilityGood {
+  background: color-mix(in srgb, var(--success) 7%, var(--surface));
+}
+
+.readabilityWarning {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+}
+
+.readabilityWarning > span:last-child {
+  color: color-mix(in srgb, var(--danger) 82%, var(--text));
+}
+
+.presetChooser {
+  order: 1;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.presetChooserHeading {
+  display: flex;
+  gap: 0.75rem;
+  align-items: end;
+  justify-content: space-between;
+}
+
+.presetChooserHeading h4 {
+  margin: 0.1rem 0 0;
+}
+
+.positionControl {
+  order: 4;
+}
+
+.quickAppearance {
+  order: 5;
+}
+
+.customizePanel {
+  order: 6;
+}
+
+.customizePanel > summary > span:first-child,
+.customizeSections > details > summary > span {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.customizePanel summary small,
+.customizeSections summary small {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.customizeSections {
+  display: grid;
+  gap: 0.55rem;
+  padding-top: 0.7rem;
+}
+
+.customizeSections > details {
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--surface-raised, var(--surface)) 74%, transparent);
+}
+
+.customizeSections > details > summary {
+  cursor: pointer;
+  padding: 0.72rem 0.78rem;
+}
+
+.customizeBody {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0 0.78rem 0.82rem;
+}
+
+.controlGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.72rem;
+}
+
+.colorGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.62rem;
+}
+
+.colorGrid input[type="color"] {
+  width: 100%;
+  min-height: 2.6rem;
+  border-radius: 0.55rem;
+  padding: 0.16rem;
+}
+
+.cueActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.captionWorkflow > :global(.clip-studio-caption-timing-panel) {
+  order: 3;
+}
+
+.captionWorkflow > :global(.clip-studio-caption-dropdown) {
+  order: 4;
+}
+
+@media (max-width: 880px) {
+  .captionJourney {
+    grid-template-columns: repeat(4, minmax(5.5rem, 1fr));
+    overflow-x: auto;
+  }
+
+  .controlGrid,
+  .colorGrid {
+    grid-template-columns: 1fr;
+  }
+}

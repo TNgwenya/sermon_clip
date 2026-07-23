@@ -1,15 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  breakCaptionTextIntoSemanticLines,
   buildEditableCaptionCuesFromTranscriptSegments,
   buildSrtFromEditableCues,
   buildTimedCaptionCuesFromTranscriptSegments,
   buildTimedCaptionCuesFromTranscriptWords,
+  clampEditableCaptionCueTimeline,
   hashtagsToEditorInput,
+  mergeAdjacentEditableCaptionCues,
   mergeCaptionCueTextOverrides,
   parseCaptionSourceWords,
   parseHashtagEditorInput,
+  resolveClipStudioCaptionCuesForSave,
   resolveClipStudioInitialCaptionCues,
+  splitEditableCaptionCue,
+  updateEditableCaptionCueTiming,
   validateCaptionCuesFromTranscript,
   validateEditableCaptionCues,
   validateClipStudioTiming,
@@ -274,6 +280,16 @@ describe("validateEditableCaptionCues", () => {
     expect(result.errors).toContain("Caption 1 ends after the clip duration.");
   });
 
+  it("rejects overlapping caption cues before they can diverge between preview and export", () => {
+    const result = validateEditableCaptionCues([
+      { index: 1, startSeconds: 0, endSeconds: 4, text: "First thought" },
+      { index: 2, startSeconds: 3.5, endSeconds: 6, text: "Second thought" },
+    ], 8);
+
+    expect(result.isValid).toBe(false);
+    expect(result.errors).toContain("Caption 2 overlaps the previous caption.");
+  });
+
   it("rejects editable captions with very low clip coverage", () => {
     const result = validateEditableCaptionCues([
       { index: 1, startSeconds: 0, endSeconds: 2, text: "Too sparse" },
@@ -293,6 +309,158 @@ describe("validateEditableCaptionCues", () => {
     expect(result.isValid).toBe(true);
     expect(result.warnings).toContain("On-video captions have a noticeable timing gap.");
     expect(result.maxGapSeconds).toBe(31);
+  });
+});
+
+describe("caption cue timing edit primitives", () => {
+  it("sorts and clamps overlapping cues into a chronological timeline", () => {
+    const result = clampEditableCaptionCueTimeline({
+      cues: [
+        { index: 8, startSeconds: 4, endSeconds: 7, text: "Second thought" },
+        { index: 3, startSeconds: -1, endSeconds: 5, text: "First thought" },
+      ],
+      clipDurationSeconds: 8,
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.wasClamped).toBe(true);
+    expect(result.cues).toEqual([
+      { index: 1, startSeconds: 0, endSeconds: 4.5, text: "First thought", wordTimings: undefined },
+      { index: 2, startSeconds: 4.5, endSeconds: 7, text: "Second thought", wordTimings: undefined },
+    ]);
+  });
+
+  it("clamps a timing edit between adjacent cues and preserves chronology", () => {
+    const result = updateEditableCaptionCueTiming({
+      cues: [
+        { index: 1, startSeconds: 0, endSeconds: 2, text: "Opening" },
+        { index: 2, startSeconds: 3, endSeconds: 5, text: "Middle" },
+        { index: 3, startSeconds: 6, endSeconds: 8, text: "Closing" },
+      ],
+      cueIndex: 1,
+      startSeconds: 1,
+      endSeconds: 7,
+      clipDurationSeconds: 8,
+    });
+
+    expect(result.error).toBeNull();
+    expect(result.changed).toBe(true);
+    expect(result.wasClamped).toBe(true);
+    expect(result.cues[1]).toMatchObject({ startSeconds: 2, endSeconds: 6 });
+  });
+
+  it("splits at a sensible boundary without separating a Bible reference", () => {
+    const result = splitEditableCaptionCue({
+      cues: [{
+        index: 1,
+        startSeconds: 0,
+        endSeconds: 6,
+        text: "Read John 3:16 and remember grace",
+      }],
+      cueIndex: 0,
+      splitWordIndex: 2,
+      clipDurationSeconds: 6,
+    });
+
+    expect(result.error).toBeNull();
+    expect(result.cues).toHaveLength(2);
+    expect(result.cues[0]?.text).toBe("Read John 3:16");
+    expect(result.cues[1]?.text).toBe("and remember grace");
+    expect(result.cues[0]?.endSeconds).toBe(result.cues[1]?.startSeconds);
+  });
+
+  it("retains exact word timings on both sides of a split", () => {
+    const result = splitEditableCaptionCue({
+      cues: [{
+        index: 1,
+        startSeconds: 0,
+        endSeconds: 4,
+        text: "Grace will carry you",
+        wordTimings: [
+          { text: "Grace", startSeconds: 0, endSeconds: 0.8 },
+          { text: "will", startSeconds: 0.9, endSeconds: 1.5 },
+          { text: "carry", startSeconds: 1.8, endSeconds: 2.8 },
+          { text: "you", startSeconds: 3, endSeconds: 4 },
+        ],
+      }],
+      cueIndex: 0,
+      splitWordIndex: 2,
+      clipDurationSeconds: 4,
+    });
+
+    expect(result.error).toBeNull();
+    expect(result.cues[0]?.wordTimings?.map((word) => word.text)).toEqual(["Grace", "will"]);
+    expect(result.cues[1]?.wordTimings?.map((word) => word.text)).toEqual(["carry", "you"]);
+    expect(result.cues[0]?.endSeconds).toBe(1.65);
+    expect(result.cues[1]?.startSeconds).toBe(1.65);
+  });
+
+  it("merges adjacent cues and combines complete word timing evidence", () => {
+    const result = mergeAdjacentEditableCaptionCues({
+      cues: [
+        {
+          index: 1,
+          startSeconds: 0,
+          endSeconds: 1,
+          text: "Grace wins",
+          wordTimings: [
+            { text: "Grace", startSeconds: 0, endSeconds: 0.5 },
+            { text: "wins", startSeconds: 0.5, endSeconds: 1 },
+          ],
+        },
+        {
+          index: 2,
+          startSeconds: 1.2,
+          endSeconds: 2.5,
+          text: "every time",
+          wordTimings: [
+            { text: "every", startSeconds: 1.2, endSeconds: 1.8 },
+            { text: "time", startSeconds: 1.8, endSeconds: 2.5 },
+          ],
+        },
+      ],
+      cueIndex: 0,
+      clipDurationSeconds: 3,
+    });
+
+    expect(result.error).toBeNull();
+    expect(result.cues).toEqual([{
+      index: 1,
+      startSeconds: 0,
+      endSeconds: 2.5,
+      text: "Grace wins every time",
+      wordTimings: [
+        { text: "Grace", startSeconds: 0, endSeconds: 0.5 },
+        { text: "wins", startSeconds: 0.5, endSeconds: 1 },
+        { text: "every", startSeconds: 1.2, endSeconds: 1.8 },
+        { text: "time", startSeconds: 1.8, endSeconds: 2.5 },
+      ],
+    }]);
+  });
+});
+
+describe("breakCaptionTextIntoSemanticLines", () => {
+  it("keeps Bible references and titled names together", () => {
+    const scriptureLines = breakCaptionTextIntoSemanticLines(
+      "Pastor Thabang Ngwenya teaches why John 3:16 still matters today",
+      { maxCharactersPerLine: 24, maxLines: 3 },
+    );
+
+    expect(scriptureLines.join(" ")).toBe(
+      "Pastor Thabang Ngwenya teaches why John 3:16 still matters today",
+    );
+    expect(scriptureLines.some((line) => line.includes("Pastor Thabang Ngwenya"))).toBe(true);
+    expect(scriptureLines.some((line) => line.includes("John 3:16"))).toBe(true);
+  });
+
+  it("avoids a one-word orphan when a balanced break is available", () => {
+    const lines = breakCaptionTextIntoSemanticLines(
+      "Faith keeps moving through every difficult season",
+      { maxCharactersPerLine: 22, maxLines: 2 },
+    );
+
+    expect(lines).toHaveLength(2);
+    expect(lines.every((line) => line.split(" ").length >= 2)).toBe(true);
   });
 });
 
@@ -381,6 +549,34 @@ describe("resolveClipStudioInitialCaptionCues", () => {
     expect(result).toEqual([
       { index: 1, startSeconds: 0, endSeconds: 30, text: "Older generated caption" },
     ]);
+  });
+});
+
+describe("resolveClipStudioCaptionCuesForSave", () => {
+  it("preserves the exact manual timing, wording, splits, and merges submitted by Studio", () => {
+    const submittedCues = [
+      { index: 1, startSeconds: 0, endSeconds: 4.2, text: "Human reviewed opening" },
+      { index: 2, startSeconds: 4.2, endSeconds: 9, text: "and a manual split" },
+    ];
+    const regeneratedTranscriptCues = [
+      { index: 1, startSeconds: 0, endSeconds: 9, text: "Server regenerated wording" },
+    ];
+
+    expect(resolveClipStudioCaptionCuesForSave({
+      submittedCues,
+      transcriptCues: regeneratedTranscriptCues,
+    })).toEqual(submittedCues);
+  });
+
+  it("uses transcript-derived cues only when Studio submitted no cues", () => {
+    const transcriptCues = [
+      { index: 1, startSeconds: 0, endSeconds: 3, text: "Transcript fallback" },
+    ];
+
+    expect(resolveClipStudioCaptionCuesForSave({
+      submittedCues: [],
+      transcriptCues,
+    })).toEqual(transcriptCues);
   });
 });
 
@@ -539,6 +735,30 @@ describe("buildTimedCaptionCuesFromTranscriptWords", () => {
           { text: "wins", startSeconds: 1.7, endSeconds: 2.3 },
         ],
       },
+    ]);
+  });
+
+  it("uses semantic grouping without splitting a Bible reference", () => {
+    const cues = buildTimedCaptionCuesFromTranscriptWords({
+      startTimeSeconds: 0,
+      endTimeSeconds: 7,
+      words: [
+        { text: "We", startTimeSeconds: 0, endTimeSeconds: 0.7 },
+        { text: "read", startTimeSeconds: 0.8, endTimeSeconds: 1.4 },
+        { text: "John", startTimeSeconds: 1.5, endTimeSeconds: 2.2 },
+        { text: "3:16", startTimeSeconds: 2.3, endTimeSeconds: 3 },
+        { text: "and", startTimeSeconds: 3.1, endTimeSeconds: 3.7 },
+        { text: "remember", startTimeSeconds: 3.8, endTimeSeconds: 5.2 },
+        { text: "grace", startTimeSeconds: 5.3, endTimeSeconds: 6.5 },
+      ],
+      maxWordsPerCue: 3,
+      maxCueDurationSeconds: 4,
+      groupingStrategy: "semantic",
+    });
+
+    expect(cues.map((cue) => cue.text)).toEqual([
+      "We read John 3:16",
+      "and remember grace",
     ]);
   });
 });

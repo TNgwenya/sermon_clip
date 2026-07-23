@@ -239,6 +239,7 @@ function buildCaptionCueSet(
   const grouping = {
     maxWordsPerCue: singleWordReveal ? 1 : 5,
     maxCueDurationSeconds: singleWordReveal ? 1.4 : 2.4,
+    groupingStrategy: singleWordReveal ? "timed" as const : "semantic" as const,
   };
   const exactCues = transcriptWords.length > 0
     ? buildTimedCaptionCuesFromTranscriptWords({

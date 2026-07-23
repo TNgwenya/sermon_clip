@@ -460,6 +460,25 @@ describe("clip export service", () => {
     })).toBe(false);
   });
 
+  it("uses safe full-frame fit for non-vertical exports with prepared captions or artwork", () => {
+    expect(__clipExportTestUtils.shouldUseSafePreparedVisualFit({
+      format: "HORIZONTAL_16_9",
+      sourceKind: "PREPARED_CAPTIONED",
+    })).toBe(true);
+    expect(__clipExportTestUtils.shouldUseSafePreparedVisualFit({
+      format: "SQUARE_1_1",
+      sourceKind: "PREPARED_OVERLAY",
+    })).toBe(true);
+    expect(__clipExportTestUtils.shouldUseSafePreparedVisualFit({
+      format: "VERTICAL_9_16",
+      sourceKind: "PREPARED_OVERLAY",
+    })).toBe(false);
+    expect(__clipExportTestUtils.shouldUseSafePreparedVisualFit({
+      format: "HORIZONTAL_16_9",
+      sourceKind: "ORIGINAL_SERMON",
+    })).toBe(false);
+  });
+
   it("passes persisted vertical center and zoom into direct smart-crop exports", () => {
     const filter = __clipExportTestUtils.buildVideoFilter(
       { format: "VERTICAL_9_16", width: 1080, height: 1920 },

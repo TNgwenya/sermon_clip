@@ -7,7 +7,7 @@ export function clampOverlayRatio(value: number): number {
 }
 
 export function clampCaptionOverlayOffset(value: number): number {
-  return Math.max(-48, Math.min(48, Math.round(value)));
+  return Math.max(-160, Math.min(160, Math.round(value)));
 }
 
 export function resolveCaptionPositionFromOverlayRatio(ratio: number): CaptionPosition {
@@ -56,6 +56,7 @@ export type ClipStudioOverlayPositionDetail =
   | {
       overlay: "caption";
       position: CaptionPosition;
+      horizontalOffset: number;
       verticalOffset: number;
     }
   | {

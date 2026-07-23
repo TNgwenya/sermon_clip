@@ -127,7 +127,7 @@ describe("caption service helpers", () => {
     ]);
   });
 
-  it("falls back to grouped segment timing when persisted words are unavailable", () => {
+  it("falls back to semantically grouped segment timing when persisted words are unavailable", () => {
     const result = __captionServiceTestUtils.buildCaptionCueSet(
       {
         id: "clip-1",
@@ -143,7 +143,7 @@ describe("caption service helpers", () => {
     );
 
     expect(result.source).toBe("transcript-segments");
-    expect(result.cues.map((cue) => cue.text)).toEqual(["God is", "faithful", "through", "every", "season"]);
+    expect(result.cues.map((cue) => cue.text)).toEqual(["God is faithful", "through every season"]);
     expect(result.cues.every((cue) => (cue.wordTimings?.length ?? 0) > 0)).toBe(true);
   });
 

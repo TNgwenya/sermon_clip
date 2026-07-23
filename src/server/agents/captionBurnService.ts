@@ -20,20 +20,28 @@ import {
 } from "@/server/agents/storage";
 import { checkFfmpegInstalled } from "@/server/media/ffmpeg";
 import {
-  isCaptionStylePresetId,
+  resolveCaptionFontFamily,
+  resolveCaptionSafeWidthPercent,
   resolveCaptionStylePreset,
+  type CaptionDesignSettingsV1,
   type CaptionStylePresetId,
 } from "@/lib/captionStylePresets";
 import {
   DEFAULT_CAPTION_APPEARANCE_SETTINGS,
+  extractCaptionDesignSettings,
   extractCaptionRevealMode,
+  extractCaptionStyleOverride,
   extractCaptionSyncOffsetSeconds,
+  hasCaptionDesignSettings,
+  normalizeCaptionDesignSettings,
   normalizeCaptionAppearanceSettings,
   type CaptionAppearanceSettings,
   type CaptionPosition,
 } from "@/lib/clipStudio";
 import {
+  breakCaptionTextIntoSemanticLines,
   normalizeCaptionCueWordTimings,
+  splitEditableCaptionCue,
   type CaptionCueWordTiming,
 } from "@/lib/clipStudioEditing";
 import { getBrandingSettings } from "@/server/branding/settings";
@@ -129,7 +137,9 @@ const FALLBACK_VIDEO_ENCODER = SOFTWARE_VIDEO_ENCODER;
 // word final renders aligned with Studio preview for those normal short-form
 // lengths while retaining a guardrail for unusually large FFmpeg graphs.
 const MAX_WORD_HIGHLIGHT_OVERLAY_CUES = 360;
-const CAPTION_RENDERER_VERSION = 3;
+const MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES = 180;
+const MAX_SEMANTIC_CAPTION_SPLITS_PER_CUE = 120;
+const CAPTION_RENDERER_VERSION = 5;
 
 function commandFor(binaryPath?: string): string {
   return binaryPath?.trim() || "ffmpeg";
@@ -162,66 +172,63 @@ function escapeForFfmpegSubtitlesPath(filePath: string): string {
     .replace(/\]/g, "\\]");
 }
 
-function withCaptionSafeArea(style: string, safeArea: CaptionSafeArea): string {
-  const margin =
-    safeArea === "RAISED"
+function toAssColor(color: string, opacity = 1): string {
+  const normalized = /^#[0-9a-f]{6}$/i.test(color) ? color.slice(1) : "FFFFFF";
+  const red = normalized.slice(0, 2);
+  const green = normalized.slice(2, 4);
+  const blue = normalized.slice(4, 6);
+  const alpha = Math.round((1 - Math.max(0, Math.min(1, opacity))) * 255)
+    .toString(16)
+    .padStart(2, "0");
+
+  return `&H${alpha}${blue}${green}${red}`.toUpperCase();
+}
+
+function captionAssAlignment(design: CaptionDesignSettingsV1): number {
+  const horizontal =
+    design.layout.horizontalPosition === "left"
+      ? 1
+      : design.layout.horizontalPosition === "right"
+        ? 3
+        : 2;
+  if (design.layout.verticalPosition === "top") return horizontal + 6;
+  if (design.layout.verticalPosition === "middle") return horizontal + 3;
+  return horizontal;
+}
+
+function captionAssVerticalMargin(
+  design: CaptionDesignSettingsV1,
+  safeArea: CaptionSafeArea,
+): number {
+  if (design.layout.verticalPosition === "middle") {
+    return 0;
+  }
+
+  const safeMargin = design.layout.verticalPosition === "top"
+    ? 82
+    : safeArea === "RAISED"
       ? 104
       : safeArea === "LOWER_MINIMAL"
         ? 44
-        : null;
-
-  if (margin === null) {
-    return style;
-  }
-
-  return style.replace(/MarginV=\d+/, `MarginV=${margin}`);
+        : 64;
+  const signedOffset = design.layout.verticalPosition === "top"
+    ? -design.layout.verticalOffset
+    : design.layout.verticalOffset;
+  return Math.max(0, Math.round(safeMargin + signedOffset));
 }
 
-function withCaptionPlacement(style: string, safeArea: CaptionSafeArea, captionPosition: CaptionPosition): string {
-  if (captionPosition === "top") {
-    return style.replace(/Alignment=\d+/, "Alignment=8").replace(/MarginV=\d+/, "MarginV=82");
-  }
+function captionAssHorizontalMargins(design: CaptionDesignSettingsV1): {
+  left: number;
+  right: number;
+} {
+  const widthPercent = resolveCaptionSafeWidthPercent(design.layout.safeWidth);
+  const baseMargin = Math.round((1080 * (1 - widthPercent / 100)) / 2);
+  const offset = design.layout.horizontalOffset;
 
-  if (captionPosition === "middle") {
-    return style.replace(/Alignment=\d+/, "Alignment=5").replace(/MarginV=\d+/, "MarginV=0");
-  }
-
-  return withCaptionSafeArea(style, safeArea);
-}
-
-function withCaptionAppearance(
-  style: string,
-  appearance: CaptionAppearanceSettings | undefined,
-  captionPosition: CaptionPosition,
-): string {
-  if (!appearance) {
-    return style;
-  }
-
-  const fontSizeMultiplier =
-    appearance.fontScale === "compact"
-      ? 0.88
-      : appearance.fontScale === "large"
-        ? 1.16
-        : 1;
-  const withFontSize = style.replace(/FontSize=(\d+)/, (_match, size: string) => {
-    const scaledSize = Math.max(14, Math.round(Number(size) * fontSizeMultiplier));
-    return `FontSize=${scaledSize}`;
-  });
-
-  if (appearance.verticalOffset === 0) {
-    return withFontSize;
-  }
-
-  return withFontSize.replace(/MarginV=(\d+)/, (_match, margin: string) => {
-    // ASS top-aligned margins grow downward, while lower-aligned margins grow
-    // upward. Studio's positive offset consistently means "move up".
-    const offset = captionPosition === "top"
-      ? -appearance.verticalOffset
-      : appearance.verticalOffset;
-    const shiftedMargin = Math.max(0, Math.round(Number(margin) + offset));
-    return `MarginV=${shiftedMargin}`;
-  });
+  return {
+    left: Math.max(12, Math.round(baseMargin + offset)),
+    right: Math.max(12, Math.round(baseMargin - offset)),
+  };
 }
 
 function buildCaptionForceStyle(
@@ -229,65 +236,46 @@ function buildCaptionForceStyle(
   safeArea: CaptionSafeArea = "STANDARD",
   captionPosition: CaptionPosition = "lower",
   appearance?: CaptionAppearanceSettings,
+  captionDesign?: CaptionDesignSettingsV1,
 ): string {
-  const preset = resolveCaptionStylePreset(presetId);
-  const base = "FontName=Arial,BorderStyle=1,Shadow=0,MarginL=60,MarginR=60,Spacing=0.3";
-  const boxedBase = base.replace("BorderStyle=1", "BorderStyle=3");
-  const applyAppearance = (style: string) => withCaptionAppearance(style, appearance, captionPosition);
+  const design = captionDesign ?? normalizeCaptionDesignSettings(undefined, {
+    presetId,
+    legacyAppearance: appearance,
+    legacyPosition: captionPosition,
+  });
+  const font = resolveCaptionFontFamily(design.typography.fontFamilyId);
+  const margins = captionAssHorizontalMargins(design);
+  const shadow = Math.max(
+    0,
+    Math.min(
+      4,
+      Math.round(
+        Math.max(
+          Math.abs(design.readability.shadowOffsetX),
+          Math.abs(design.readability.shadowOffsetY),
+          design.readability.shadowBlurPx / 4,
+        ) * design.readability.shadowOpacity / 2,
+      ),
+    ),
+  );
 
-  if (preset.id === "clean-lower") {
-    return applyAppearance(withCaptionPlacement(`${boxedBase},FontSize=21,PrimaryColour=&H00111111,OutlineColour=&H00FFFFFF,BackColour=&HEEFFFFFF,Outline=2,Shadow=1,Alignment=2,MarginV=58`, safeArea, captionPosition));
-  }
-
-  if (preset.id === "kinetic-pop") {
-    return applyAppearance(withCaptionPlacement(`${base},FontSize=29,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=5,Shadow=2,Alignment=2,MarginV=70`, safeArea, captionPosition));
-  }
-
-  if (preset.id === "creator-highlight") {
-    return applyAppearance(withCaptionPlacement(`${base},FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00111827,BackColour=&H8822D3EE,Outline=3,Shadow=2,Alignment=2,MarginV=66`, safeArea, captionPosition));
-  }
-
-  if (preset.id === "soft-bubble") {
-    return applyAppearance(withCaptionPlacement(`${boxedBase},FontSize=21,PrimaryColour=&H00111827,OutlineColour=&H00FFFFFF,BackColour=&HEEFFFFFF,Outline=2,Shadow=1,Alignment=2,MarginV=58`, safeArea, captionPosition));
-  }
-
-  if (preset.id === "high-contrast") {
-    return applyAppearance(withCaptionPlacement(`${base},FontSize=22,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,Outline=4,Alignment=2,MarginV=64`, safeArea, captionPosition));
-  }
-
-  if (preset.id === "youth-social") {
-    return applyAppearance(withCaptionPlacement(`${base},FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00D84D1D,Outline=4,Shadow=2,Alignment=2,MarginV=72`, safeArea, captionPosition));
-  }
-
-  if (preset.id === "minimal-church") {
-    return applyAppearance(withCaptionPlacement(`${base},FontSize=17,PrimaryColour=&H00FFFFFF,OutlineColour=&H66000000,Outline=1,Shadow=1,Alignment=2,MarginV=42`, safeArea, captionPosition));
-  }
-
-  if (preset.id === "scripture-focus") {
-    return applyAppearance(withCaptionPlacement(`${boxedBase.replace("FontName=Arial", "FontName=Georgia")},FontSize=20,PrimaryColour=&H00111111,OutlineColour=&H00FACC15,BackColour=&HEEFFFFFF,Outline=1,Shadow=1,Alignment=2,MarginV=60`, safeArea, captionPosition));
-  }
-
-  if (preset.id === "cinematic-testimony") {
-    return applyAppearance(withCaptionPlacement(`${base},FontSize=20,PrimaryColour=&H00F8FAFC,OutlineColour=&H00111827,BackColour=&HAA111827,Outline=2,Shadow=2,Alignment=2,MarginV=54`, safeArea, captionPosition));
-  }
-
-  if (preset.id === "golden-hour") {
-    return applyAppearance(withCaptionPlacement(`${boxedBase},FontSize=24,PrimaryColour=&H00EBFBFF,OutlineColour=&H0003141C,BackColour=&HDB08141C,Outline=2,Shadow=2,Alignment=2,MarginV=62`, safeArea, captionPosition));
-  }
-
-  if (preset.id === "royal-focus") {
-    return applyAppearance(withCaptionPlacement(`${boxedBase},FontSize=24,PrimaryColour=&H00FFF3F5,OutlineColour=&H0038131E,BackColour=&HE038131E,Outline=2,Shadow=2,Alignment=2,MarginV=62`, safeArea, captionPosition));
-  }
-
-  if (preset.id === "editorial-serif") {
-    return applyAppearance(withCaptionPlacement(`${boxedBase.replace("FontName=Arial", "FontName=Georgia")},FontSize=21,PrimaryColour=&H00121C24,OutlineColour=&H00E7F8FF,BackColour=&HF0E7F8FF,Outline=1,Shadow=1,Alignment=2,MarginV=56`, safeArea, captionPosition));
-  }
-
-  if (preset.id === "clean-outline") {
-    return applyAppearance(withCaptionPlacement(`${base},FontSize=25,PrimaryColour=&H00FFFFFF,OutlineColour=&H00170602,BackColour=&H75170602,Outline=5,Shadow=2,Alignment=2,MarginV=66`, safeArea, captionPosition));
-  }
-
-  return applyAppearance(withCaptionPlacement(`${base},FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=3,Alignment=2,MarginV=64`, safeArea, captionPosition));
+  return [
+    `FontName=${font.renderFamily}`,
+    `FontSize=${Math.max(14, Math.round(design.typography.fontSizePx * 0.62))}`,
+    `Bold=${design.typography.fontWeight >= 700 ? -1 : 0}`,
+    `Italic=${design.typography.italic ? -1 : 0}`,
+    `Spacing=${design.typography.letterSpacingPx}`,
+    `PrimaryColour=${toAssColor(design.colors.textColor)}`,
+    `OutlineColour=${toAssColor(design.readability.outlineColor)}`,
+    `BackColour=${toAssColor(design.background.color, design.background.opacity)}`,
+    `BorderStyle=${design.background.treatment === "none" ? 1 : 3}`,
+    `Outline=${Math.round(design.readability.outlineWidthPx)}`,
+    `Shadow=${shadow}`,
+    `Alignment=${captionAssAlignment(design)}`,
+    `MarginL=${margins.left}`,
+    `MarginR=${margins.right}`,
+    `MarginV=${captionAssVerticalMargin(design, safeArea)}`,
+  ].join(",");
 }
 
 function resolveCaptionSafeArea(captionData: unknown): CaptionSafeArea {
@@ -305,6 +293,10 @@ function resolveCaptionSafeArea(captionData: unknown): CaptionSafeArea {
 }
 
 function resolveCaptionPosition(captionData: unknown): CaptionPosition {
+  if (hasCaptionDesignSettings(captionData)) {
+    return extractCaptionDesignSettings(captionData).layout.verticalPosition;
+  }
+
   if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
     return "lower";
   }
@@ -321,16 +313,85 @@ function resolveCaptionAppearance(captionData: unknown): CaptionAppearanceSettin
   return normalizeCaptionAppearanceSettings((captionData as Record<string, unknown>)["captionAppearance"]);
 }
 
+function resolveCaptionDesign(
+  captionData: unknown,
+  fallback: CaptionStylePresetId,
+): CaptionDesignSettingsV1 {
+  return extractCaptionDesignSettings(captionData, fallback);
+}
+
+/**
+ * ASS handles the high-frequency caption controls efficiently (font, size,
+ * case, colours, outline and safe placement). SVG remains required whenever
+ * the complete saved design uses visual controls ASS cannot reproduce. This
+ * includes polished stock presets; the bounded renderer below protects
+ * unusually high-cue exports without weakening normal preview/export parity.
+ */
+function requiresCaptionImageOverlayForDesign(
+  captionData: unknown,
+  design: CaptionDesignSettingsV1,
+): boolean {
+  if (!hasCaptionDesignSettings(captionData)) {
+    return false;
+  }
+
+  const backgroundIsVisible =
+    design.background.treatment !== "none"
+    && design.background.opacity > 0;
+  const visibleBorder =
+    backgroundIsVisible
+    && design.background.borderWidthPx > 0
+    && design.background.borderOpacity > 0;
+  const roundedTreatment =
+    design.background.treatment === "rounded"
+    || design.background.treatment === "soft-panel";
+  const explicitPanelPadding =
+    backgroundIsVisible
+    && (design.background.paddingX > 0 || design.background.paddingY > 0);
+  const visibleShadow =
+    design.readability.shadowOpacity > 0
+    && (
+      design.readability.shadowBlurPx > 0
+      || design.readability.shadowOffsetX !== 0
+      || design.readability.shadowOffsetY !== 0
+    );
+  const nonBinaryFontWeight =
+    design.typography.fontWeight !== 400
+    && design.typography.fontWeight !== 700;
+  const customLineMetrics =
+    Math.abs(design.typography.lineHeight - 1.2) > 0.001
+    || Math.abs(design.typography.wordSpacingPx) > 0.001;
+  const independentTextAlignment =
+    design.typography.alignment !== design.layout.horizontalPosition;
+
+  return (
+    customLineMetrics
+    || nonBinaryFontWeight
+    || independentTextAlignment
+    || !Number.isInteger(design.readability.outlineWidthPx)
+    || visibleBorder
+    || roundedTreatment
+    || explicitPanelPadding
+    || visibleShadow
+  );
+}
+
+function shouldUseStaticCaptionImageOverlay(
+  requiresImageOverlay: boolean,
+  cueCount: number,
+): boolean {
+  return (
+    requiresImageOverlay
+    && cueCount > 0
+    && cueCount <= MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES
+  );
+}
+
 function resolveClipCaptionStylePresetId(
   captionData: unknown,
   fallback: CaptionStylePresetId,
 ): CaptionStylePresetId {
-  if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
-    return fallback;
-  }
-
-  const value = (captionData as Record<string, unknown>)["captionStylePresetId"];
-  return isCaptionStylePresetId(value) ? value : fallback;
+  return extractCaptionStyleOverride(captionData) || fallback;
 }
 
 function shouldApplyCaptionsToClip(captionData: unknown): boolean {
@@ -366,30 +427,15 @@ function escapeSvgText(value: string): string {
     .trim();
 }
 
-function wrapCaptionText(value: string, maxLineLength = 34): string[] {
-  const words = value.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
-  const lines: string[] = [];
-  let current = "";
-
-  for (const word of words) {
-    const candidate = current ? `${current} ${word}` : word;
-    if (candidate.length > maxLineLength && current) {
-      lines.push(current);
-      current = word;
-      continue;
-    }
-
-    current = candidate;
-  }
-
-  if (current) {
-    lines.push(current);
-  }
-
-  // Production cues are split into readable windows before rendering. If a
-  // legacy/manual cue still exceeds the preferred line count, keep every word
-  // instead of silently deleting the end of the spoken sentence.
-  return lines;
+function wrapCaptionText(
+  value: string,
+  maxLineLength = 34,
+  maxLines = 3,
+): string[] {
+  return breakCaptionTextIntoSemanticLines(value, {
+    maxCharactersPerLine: maxLineLength,
+    maxLines,
+  });
 }
 
 type CaptionOverlayWord = {
@@ -412,30 +458,24 @@ function getCaptionOverlayWordWeight(word: string): number {
   return Math.max(1, spokenCharacterCount) + punctuationWeight;
 }
 
-function wrapCaptionWords(value: string, maxLineLength = 34): CaptionOverlayWord[][] {
+function wrapCaptionWords(
+  value: string,
+  maxLineLength = 34,
+  maxLines = 3,
+): CaptionOverlayWord[][] {
   const words = splitCaptionOverlayWords(value).map((word, index) => ({ index, text: word }));
-  const lines: CaptionOverlayWord[][] = [];
-  let current: CaptionOverlayWord[] = [];
-  let currentLength = 0;
+  const lineTexts = breakCaptionTextIntoSemanticLines(value, {
+    maxCharactersPerLine: maxLineLength,
+    maxLines,
+  });
+  let cursor = 0;
 
-  for (const word of words) {
-    const nextLength = currentLength + (current.length > 0 ? 1 : 0) + word.text.length;
-    if (nextLength > maxLineLength && current.length > 0) {
-      lines.push(current);
-      current = [word];
-      currentLength = word.text.length;
-      continue;
-    }
-
-    current.push(word);
-    currentLength = nextLength;
-  }
-
-  if (current.length > 0) {
-    lines.push(current);
-  }
-
-  return lines;
+  return lineTexts.map((line) => {
+    const wordCount = splitCaptionOverlayWords(line).length;
+    const lineWords = words.slice(cursor, cursor + wordCount);
+    cursor += wordCount;
+    return lineWords;
+  });
 }
 
 function normalizeCaptionWordIdentity(value: string): string {
@@ -610,7 +650,14 @@ function buildSrtFromCaptionCueOverlays(cues: CaptionCueOverlay[]): string {
     .join("\n\n");
 }
 
-function captionOverlayFontSize(appearance: CaptionAppearanceSettings): number {
+function captionOverlayFontSize(
+  appearance: CaptionAppearanceSettings,
+  design?: CaptionDesignSettingsV1,
+): number {
+  if (design) {
+    return design.typography.fontSizePx;
+  }
+
   if (appearance.fontScale === "compact") {
     return 32;
   }
@@ -622,7 +669,20 @@ function captionOverlayFontSize(appearance: CaptionAppearanceSettings): number {
   return 36;
 }
 
-function captionOverlayLineLength(appearance: CaptionAppearanceSettings): number {
+function captionOverlayLineLength(
+  appearance: CaptionAppearanceSettings,
+  design?: CaptionDesignSettingsV1,
+): number {
+  if (design) {
+    const widthRatio = resolveCaptionSafeWidthPercent(design.layout.safeWidth) / 78;
+    const sizeRatio = 36 / design.typography.fontSizePx;
+    const spacingPenalty = Math.max(
+      0.72,
+      1 - Math.max(0, design.typography.letterSpacingPx + design.typography.wordSpacingPx / 3) / 30,
+    );
+    return Math.max(18, Math.min(52, Math.round(34 * widthRatio * sizeRatio * spacingPenalty)));
+  }
+
   if (appearance.fontScale === "compact") {
     return 40;
   }
@@ -637,77 +697,87 @@ function captionOverlayLineLength(appearance: CaptionAppearanceSettings): number
 function splitCaptionCueOverlaysForLayout(
   cues: CaptionCueOverlay[],
   appearance: CaptionAppearanceSettings = DEFAULT_CAPTION_APPEARANCE_SETTINGS,
+  design?: CaptionDesignSettingsV1,
 ): CaptionCueOverlay[] {
-  const targetLines = Math.max(2, Math.min(4, appearance.maxLines));
-  const maxCharacters = captionOverlayLineLength(appearance) * targetLines;
-  const wordsPerLine = appearance.fontScale === "large" ? 4 : appearance.fontScale === "compact" ? 6 : 5;
+  const targetLines = Math.max(2, Math.min(4, design?.layout.maxLines ?? appearance.maxLines));
+  const maxCharacters = captionOverlayLineLength(appearance, design) * targetLines;
+  const fontSize = captionOverlayFontSize(appearance, design);
+  const wordsPerLine = fontSize >= 40 ? 4 : fontSize <= 32 ? 6 : 5;
   const maxWords = wordsPerLine * targetLines;
 
   return cues.flatMap((cue) => {
-    const words = splitCaptionOverlayWords(cue.text);
-    if (words.length <= 1) {
+    const initialWords = splitCaptionOverlayWords(cue.text);
+    if (
+      initialWords.length <= 1
+      || (initialWords.length <= maxWords && cue.text.length <= maxCharacters)
+    ) {
       return [cue];
     }
 
-    const chunks: string[][] = [];
-    let current: string[] = [];
-    let currentLength = 0;
+    const chunks: CaptionCueOverlay[] = [];
+    let remaining: CaptionCueOverlay = cue;
+    let splitCount = 0;
+    let appendedRemaining = false;
 
-    for (const word of words) {
-      const nextLength = currentLength + (current.length > 0 ? 1 : 0) + word.length;
+    while (splitCount < MAX_SEMANTIC_CAPTION_SPLITS_PER_CUE) {
+      const remainingWords = splitCaptionOverlayWords(remaining.text);
       if (
-        current.length > 0
-        && (current.length >= maxWords || nextLength > maxCharacters)
+        remainingWords.length <= 1
+        || (remainingWords.length <= maxWords && remaining.text.length <= maxCharacters)
       ) {
-        chunks.push(current);
-        current = [word];
-        currentLength = word.length;
-        continue;
+        chunks.push(remaining);
+        appendedRemaining = true;
+        break;
       }
 
-      current.push(word);
-      currentLength = nextLength;
+      let preferredWordIndex = 0;
+      let candidateLength = 0;
+      for (const word of remainingWords) {
+        const nextLength = candidateLength + (preferredWordIndex > 0 ? 1 : 0) + word.length;
+        if (
+          preferredWordIndex > 0
+          && (preferredWordIndex >= maxWords || nextLength > maxCharacters)
+        ) {
+          break;
+        }
+        preferredWordIndex += 1;
+        candidateLength = nextLength;
+      }
+      preferredWordIndex = Math.max(1, Math.min(remainingWords.length - 1, preferredWordIndex));
+      const split = splitEditableCaptionCue({
+        cues: [remaining],
+        cueIndex: 0,
+        splitWordIndex: preferredWordIndex,
+        clipDurationSeconds: Math.max(cue.endSeconds, remaining.endSeconds),
+        minimumCueDurationSeconds: 0.05,
+      });
+      if (!split.changed || split.cues.length !== 2) {
+        chunks.push(remaining);
+        appendedRemaining = true;
+        break;
+      }
+
+      const [left, right] = split.cues;
+      chunks.push({ ...left, activeWordIndex: undefined });
+      remaining = { ...right, activeWordIndex: undefined };
+      splitCount += 1;
     }
 
-    if (current.length > 0) {
-      chunks.push(current);
+    if (!appendedRemaining) {
+      // The guard protects pathological manually-entered cues from unbounded
+      // work. Preserve the full spoken tail even when it remains oversized.
+      chunks.push(remaining);
     }
-    if (chunks.length <= 1) {
+
+    if (chunks.length === 0) {
       return [cue];
     }
 
-    const weights = chunks.map((chunk) => (
-      chunk.reduce((total, word) => total + getCaptionOverlayWordWeight(word), 0)
-    ));
-    const totalWeight = weights.reduce((total, weight) => total + weight, 0);
-    const durationSeconds = cue.endSeconds - cue.startSeconds;
-    const exactWordTimings = resolveMatchingCaptionWordTimings(cue);
-    let cumulativeWeight = 0;
-    let cursorSeconds = cue.startSeconds;
-    let wordCursor = 0;
-
-    return chunks.map((chunk, index) => {
-      const chunkWordTimings = exactWordTimings?.slice(wordCursor, wordCursor + chunk.length);
-      wordCursor += chunk.length;
-      cumulativeWeight += weights[index];
-      const nextEndSeconds = chunkWordTimings?.at(-1)?.endSeconds ?? (
-        index === chunks.length - 1
-          ? cue.endSeconds
-          : cue.startSeconds + durationSeconds * (cumulativeWeight / totalWeight)
-      );
-      const startSeconds = Number((chunkWordTimings?.[0]?.startSeconds ?? cursorSeconds).toFixed(3));
-      const endSeconds = Number(nextEndSeconds.toFixed(3));
-      cursorSeconds = endSeconds;
-      return {
-        ...cue,
-        index: cue.index * 100 + index + 1,
-        startSeconds,
-        endSeconds,
-        text: chunk.join(" "),
-        ...(chunkWordTimings ? { wordTimings: chunkWordTimings } : { wordTimings: undefined }),
-        activeWordIndex: undefined,
-      };
-    });
+    return chunks.map((chunk, index) => ({
+      ...chunk,
+      index: cue.index * 100 + index + 1,
+      activeWordIndex: undefined,
+    }));
   });
 }
 
@@ -715,52 +785,288 @@ function formatCaptionOverlayText(
   value: string,
   appearance: CaptionAppearanceSettings,
   presetId?: CaptionStylePresetId,
+  captionDesign?: CaptionDesignSettingsV1,
 ): string {
   const normalized = value.replace(/\s+/g, " ").trim();
-  const preset = resolveCaptionStylePreset(presetId);
-  return appearance.uppercase || preset.visual.uppercase ? normalized.toUpperCase() : normalized;
+  const design = captionDesign ?? normalizeCaptionDesignSettings(undefined, {
+    presetId,
+    legacyAppearance: appearance,
+  });
+  if (design.typography.textCase === "uppercase") {
+    return normalized.toUpperCase();
+  }
+  if (design.typography.textCase === "lowercase") {
+    return normalized.toLowerCase();
+  }
+  return normalized;
+}
+
+function estimateCaptionSvgWordWidth(
+  value: string,
+  fontSize: number,
+  letterSpacingPx: number,
+): number {
+  let emWidth = 0;
+  for (const character of Array.from(value)) {
+    if (/[MW@%&]/.test(character)) {
+      emWidth += 0.78;
+    } else if (/[ilI1|.,'`:;]/.test(character)) {
+      emWidth += 0.3;
+    } else if (/[A-Z0-9]/.test(character)) {
+      emWidth += 0.62;
+    } else if (/[a-z]/.test(character)) {
+      emWidth += 0.54;
+    } else {
+      // A safe width for accented Latin and other glyphs in multilingual text.
+      emWidth += 0.62;
+    }
+  }
+
+  const characters = Array.from(value).length;
+  return emWidth * fontSize + Math.max(0, characters - 1) * letterSpacingPx;
+}
+
+function captionSvgWordGapWidth(
+  fontSize: number,
+  design: CaptionDesignSettingsV1,
+): number {
+  return fontSize * 0.33 + design.typography.wordSpacingPx;
+}
+
+function estimateCaptionSvgLineWidth(
+  value: string,
+  fontSize: number,
+  design: CaptionDesignSettingsV1,
+): number {
+  const words = splitCaptionOverlayWords(value);
+  return (
+    words.reduce(
+      (total, word) => total + estimateCaptionSvgWordWidth(
+        word,
+        fontSize,
+        design.typography.letterSpacingPx,
+      ),
+      0,
+    )
+    + Math.max(0, words.length - 1) * captionSvgWordGapWidth(fontSize, design)
+  );
+}
+
+function estimateCaptionSvgOverlayWordLineWidth(
+  line: CaptionOverlayWord[],
+  activeWordIndex: number | undefined,
+  fontSize: number,
+  activeFontSize: number,
+  design: CaptionDesignSettingsV1,
+): number {
+  return (
+    line.reduce(
+      (total, word) => total + estimateCaptionSvgWordWidth(
+        word.text,
+        word.index === activeWordIndex ? activeFontSize : fontSize,
+        design.typography.letterSpacingPx,
+      ),
+      0,
+    )
+    + Math.max(0, line.length - 1) * captionSvgWordGapWidth(fontSize, design)
+  );
+}
+
+function buildActiveCaptionWordRect(input: {
+  line: CaptionOverlayWord[];
+  activeWordIndex: number;
+  lineY: number;
+  textX: number;
+  textAnchor: "start" | "middle" | "end";
+  fontSize: number;
+  activeFontSize: number;
+  design: CaptionDesignSettingsV1;
+}): string {
+  const activeLineIndex = input.line.findIndex(
+    (word) => word.index === input.activeWordIndex,
+  );
+  if (activeLineIndex < 0 || input.design.highlighting.backgroundOpacity <= 0) {
+    return "";
+  }
+
+  const wordWidths = input.line.map((word) => estimateCaptionSvgWordWidth(
+    word.text,
+    word.index === input.activeWordIndex ? input.activeFontSize : input.fontSize,
+    input.design.typography.letterSpacingPx,
+  ));
+  const gapWidth = captionSvgWordGapWidth(input.fontSize, input.design);
+  const lineWidth = estimateCaptionSvgOverlayWordLineWidth(
+    input.line,
+    input.activeWordIndex,
+    input.fontSize,
+    input.activeFontSize,
+    input.design,
+  );
+  const lineLeft =
+    input.textAnchor === "start"
+      ? input.textX
+      : input.textAnchor === "end"
+        ? input.textX - lineWidth
+        : input.textX - lineWidth / 2;
+  const precedingWidth =
+    wordWidths.slice(0, activeLineIndex).reduce((total, width) => total + width, 0)
+    + activeLineIndex * gapWidth;
+  const activeWordWidth = wordWidths[activeLineIndex] ?? input.activeFontSize;
+  const paddingX = Math.max(5, Math.round(input.fontSize * 0.14));
+  const paddingY = Math.max(3, Math.round(input.fontSize * 0.08));
+  const rectX = Number((lineLeft + precedingWidth - paddingX).toFixed(2));
+  const rectY = Number((input.lineY - paddingY).toFixed(2));
+  const rectWidth = Number((activeWordWidth + paddingX * 2).toFixed(2));
+  const rectHeight = Number((input.activeFontSize * 1.08 + paddingY * 2).toFixed(2));
+  const radius = Math.max(4, Math.round(Math.min(rectHeight, input.fontSize) * 0.24));
+
+  return `<rect data-caption-active-word="true" x="${rectX}" y="${rectY}" width="${rectWidth}" height="${rectHeight}" rx="${radius}" fill="${input.design.colors.highlightBackgroundColor}" fill-opacity="${input.design.highlighting.backgroundOpacity}" />`;
 }
 
 function buildCaptionOverlaySvg(
   cue: CaptionCueOverlay,
   appearance: CaptionAppearanceSettings = DEFAULT_CAPTION_APPEARANCE_SETTINGS,
   presetId?: CaptionStylePresetId,
+  captionDesign?: CaptionDesignSettingsV1,
 ): string {
-  const width = 960;
-  const preset = resolveCaptionStylePreset(presetId);
-  const visual = preset.visual;
-  const fontSize = captionOverlayFontSize(appearance);
-  const maxLineLength = captionOverlayLineLength(appearance);
-  const displayText = formatCaptionOverlayText(cue.text, appearance, preset.id);
-  const wordLines = cue.activeWordIndex === undefined ? [] : wrapCaptionWords(displayText, maxLineLength);
-  const lines = wordLines.length > 0 ? [] : wrapCaptionText(displayText, maxLineLength);
-  const lineHeight = Math.round(fontSize * 1.22);
+  const design = captionDesign ?? normalizeCaptionDesignSettings(undefined, {
+    presetId,
+    legacyAppearance: appearance,
+  });
+  const font = resolveCaptionFontFamily(design.typography.fontFamilyId);
+  const width = Math.round(1080 * resolveCaptionSafeWidthPercent(design.layout.safeWidth) / 100);
+  const fontSize = captionOverlayFontSize(appearance, design);
+  const maxLineLength = captionOverlayLineLength(appearance, design);
+  const displayText = formatCaptionOverlayText(cue.text, appearance, design.presetId, design);
+  const wordLines = cue.activeWordIndex === undefined
+    ? []
+    : wrapCaptionWords(displayText, maxLineLength, design.layout.maxLines);
+  const lines = wordLines.length > 0
+    ? []
+    : wrapCaptionText(displayText, maxLineLength, design.layout.maxLines);
+  const lineHeight = Math.round(fontSize * design.typography.lineHeight);
   const lineCount = Math.max(1, wordLines.length || lines.length);
   const totalTextHeight = Math.max(lineHeight, lineCount * lineHeight);
-  const height = Math.max(190, totalTextHeight + 62);
-  const firstY = Math.round((height - totalTextHeight) / 2) + 8;
-  const activeFontSize = Math.round(fontSize * 1.04);
-  const fontFamily = visual.fontFamily === "serif"
-    ? "Georgia, Times New Roman, serif"
-    : "Arial, Helvetica, sans-serif";
+  const height = Math.max(72, totalTextHeight + design.background.paddingY * 2 + 14);
+  const firstY = Math.round((height - totalTextHeight) / 2) + 6;
+  const activeScale = design.highlighting.reducedMotion ? 1 : design.highlighting.scale;
+  const activeFontSize = Math.round(fontSize * activeScale);
+  const activeFontWeight = Math.min(
+    900,
+    design.typography.fontWeight + design.highlighting.fontWeightBoost,
+  );
+  const textAnchor =
+    design.typography.alignment === "left"
+      ? "start"
+      : design.typography.alignment === "right"
+        ? "end"
+        : "middle";
+  const renderedLineWidths = wordLines.length > 0
+    ? wordLines.map((line) => estimateCaptionSvgOverlayWordLineWidth(
+        line,
+        undefined,
+        fontSize,
+        activeFontSize,
+        design,
+      ))
+    : lines.map((line) => estimateCaptionSvgLineWidth(line, fontSize, design));
+  const contentWidth = Math.max(fontSize, ...renderedLineWidths);
+  const panelWidth = Number(Math.min(
+    width,
+    Math.ceil(contentWidth + design.background.paddingX * 2),
+  ).toFixed(2));
+  const panelX = Number((
+    design.layout.horizontalPosition === "left"
+      ? 0
+      : design.layout.horizontalPosition === "right"
+        ? width - panelWidth
+        : (width - panelWidth) / 2
+  ).toFixed(2));
+  const textX =
+    design.typography.alignment === "left"
+      ? panelX + design.background.paddingX
+      : design.typography.alignment === "right"
+        ? panelX + panelWidth - design.background.paddingX
+        : panelX + panelWidth / 2;
+  const borderRadius =
+    design.background.treatment === "solid"
+      ? 0
+      : design.background.borderRadiusPx;
+  const showBackground =
+    design.background.treatment !== "none"
+    && design.background.opacity > 0;
+  const showShadow =
+    design.readability.shadowOpacity > 0
+    && (
+      design.readability.shadowBlurPx > 0
+      || design.readability.shadowOffsetX !== 0
+      || design.readability.shadowOffsetY !== 0
+    );
+  const fontFamily = escapeSvgText(`${font.renderFamily}, ${font.glyphSafeFallback}`);
+  const sharedTextAttributes = [
+    `x="${textX}"`,
+    `font-family="${fontFamily}"`,
+    `font-size="${fontSize}"`,
+    `font-weight="${design.typography.fontWeight}"`,
+    `font-style="${design.typography.italic ? "italic" : "normal"}"`,
+    `fill="${design.colors.textColor}"`,
+    `text-anchor="${textAnchor}"`,
+    'dominant-baseline="hanging"',
+    'paint-order="stroke fill"',
+    `stroke="${design.readability.outlineColor}"`,
+    `stroke-width="${design.readability.outlineWidthPx}"`,
+    'stroke-linejoin="round"',
+    'xml:space="preserve"',
+    `letter-spacing="${design.typography.letterSpacingPx}px"`,
+    `word-spacing="${design.typography.wordSpacingPx}px"`,
+  ].join(" ");
+  const shadowFilter = showShadow
+    ? `<defs><filter id="caption-shadow" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="${design.readability.shadowOffsetX}" dy="${design.readability.shadowOffsetY}" stdDeviation="${Number((design.readability.shadowBlurPx / 2).toFixed(2))}" flood-color="${design.readability.shadowColor}" flood-opacity="${design.readability.shadowOpacity}" /></filter></defs>`
+    : "";
+  const groupFilter = showShadow ? ' filter="url(#caption-shadow)"' : "";
+  const backgroundRect = showBackground
+    ? `<rect data-caption-panel="true" x="${panelX}" y="0" width="${panelWidth}" height="${height}" rx="${borderRadius}" fill="${design.background.color}" fill-opacity="${design.background.opacity}" />`
+    : "";
+  const borderRect =
+    showBackground
+    && design.background.borderWidthPx > 0
+    && design.background.borderOpacity > 0
+      ? `<rect data-caption-panel-border="true" x="${panelX + design.background.borderWidthPx / 2}" y="${design.background.borderWidthPx / 2}" width="${panelWidth - design.background.borderWidthPx}" height="${height - design.background.borderWidthPx}" rx="${Math.max(0, borderRadius - design.background.borderWidthPx / 2)}" fill="none" stroke="${design.background.borderColor}" stroke-opacity="${design.background.borderOpacity}" stroke-width="${design.background.borderWidthPx}" />`
+      : "";
+  const activeWordIndex = cue.activeWordIndex;
+  const activeWordRects = activeWordIndex === undefined
+    ? ""
+    : wordLines.map((line, lineIndex) => buildActiveCaptionWordRect({
+        line,
+        activeWordIndex,
+        lineY: firstY + lineIndex * lineHeight,
+        textX,
+        textAnchor,
+        fontSize,
+        activeFontSize,
+        design,
+      })).filter(Boolean).join("\n      ");
+  const textElements = wordLines.length > 0
+    ? wordLines.map((line, lineIndex) => (
+        `<text ${sharedTextAttributes} y="${firstY + lineIndex * lineHeight}">${line.map((word, wordIndex) => {
+          const isActive = word.index === cue.activeWordIndex;
+          const prefix = wordIndex === 0 ? "" : "&#160;";
+          return `<tspan fill="${isActive ? design.colors.activeTextColor : design.colors.textColor}" font-size="${isActive ? activeFontSize : fontSize}" font-weight="${isActive ? activeFontWeight : design.typography.fontWeight}">${prefix}${escapeSvgText(word.text)}</tspan>`;
+        }).join("")}</text>`
+      )).join("\n      ")
+    : lines.map((line, index) => (
+        `<text ${sharedTextAttributes} y="${firstY + index * lineHeight}">${escapeSvgText(line)}</text>`
+      )).join("\n      ");
 
   return `
     <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-      <rect x="0" y="0" width="${width}" height="${height}" rx="${visual.borderRadius}" fill="${visual.backgroundColor}" fill-opacity="${visual.backgroundOpacity}" />
-      ${visual.borderWidth > 0 && visual.borderOpacity > 0
-        ? `<rect x="${visual.borderWidth / 2}" y="${visual.borderWidth / 2}" width="${width - visual.borderWidth}" height="${height - visual.borderWidth}" rx="${Math.max(0, visual.borderRadius - visual.borderWidth / 2)}" fill="none" stroke="${visual.borderColor}" stroke-opacity="${visual.borderOpacity}" stroke-width="${visual.borderWidth}" />`
-        : ""}
-      ${wordLines.length > 0
-        ? wordLines.map((line, lineIndex) => (
-            `<text x="${width / 2}" y="${firstY + lineIndex * lineHeight}" font-family="${fontFamily}" font-size="${fontSize}" font-weight="${visual.fontWeight}" fill="${visual.textColor}" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="${visual.textStrokeColor}" stroke-width="${visual.textStrokeWidth}" stroke-linejoin="round" xml:space="preserve" word-spacing="0.08em">${line.map((word, wordIndex) => {
-              const isActive = word.index === cue.activeWordIndex;
-              const prefix = wordIndex === 0 ? "" : "&#160;";
-              return `<tspan fill="${isActive ? visual.activeTextColor : visual.textColor}" font-size="${isActive ? activeFontSize : fontSize}">${prefix}${escapeSvgText(word.text)}</tspan>`;
-            }).join("")}</text>`
-          )).join("\n      ")
-        : lines.map((line, index) => (
-            `<text x="${width / 2}" y="${firstY + index * lineHeight}" font-family="${fontFamily}" font-size="${fontSize}" font-weight="${visual.fontWeight}" fill="${visual.textColor}" text-anchor="middle" dominant-baseline="hanging" paint-order="stroke fill" stroke="${visual.textStrokeColor}" stroke-width="${visual.textStrokeWidth}" stroke-linejoin="round" xml:space="preserve" word-spacing="0.08em">${escapeSvgText(line)}</text>`
-          )).join("\n      ")}
+      ${shadowFilter}
+      <g${groupFilter}>
+      ${backgroundRect}
+      ${borderRect}
+      ${activeWordRects}
+      ${textElements}
+      </g>
     </svg>
   `;
 }
@@ -801,6 +1107,24 @@ function expandCaptionCueWordHighlightOverlays(cues: CaptionCueOverlay[]): Capti
         activeWordIndex: wordIndex,
       };
     });
+  });
+}
+
+function expandCaptionCueSingleWordOverlays(cues: CaptionCueOverlay[]): CaptionCueOverlay[] {
+  return expandCaptionCueWordHighlightOverlays(cues).flatMap((overlay) => {
+    const words = splitCaptionOverlayWords(overlay.text);
+    const wordIndex = overlay.activeWordIndex;
+    const word = wordIndex === undefined ? null : words[wordIndex];
+    if (!word) {
+      return [];
+    }
+
+    return [{
+      ...overlay,
+      text: word,
+      activeWordIndex: undefined,
+      wordTimings: undefined,
+    }];
   });
 }
 
@@ -859,12 +1183,18 @@ function buildCaptionBurnMetadata(input: {
   captionSafeArea?: CaptionSafeArea;
   captionPosition?: CaptionPosition;
   captionAppearance?: CaptionAppearanceSettings;
+  captionDesign?: CaptionDesignSettingsV1;
   captionData?: unknown;
 }): Pick<Prisma.ClipCandidateUpdateInput, "captionBurnStatus" | "captionedVideoPath" | "captionBurnedAt" | "captionBurnError" | "subtitlesBurned" | "captionData"> {
   const currentCaptionData =
     input.captionData && typeof input.captionData === "object" && !Array.isArray(input.captionData)
       ? (input.captionData as Record<string, unknown>)
       : {};
+  const fallbackPresetId = resolveCaptionStylePreset(input.captionStylePresetId).id;
+  const captionDesign = input.captionDesign ?? extractCaptionDesignSettings(
+    input.captionData,
+    fallbackPresetId,
+  );
 
   return {
     captionBurnStatus: "COMPLETED",
@@ -874,10 +1204,11 @@ function buildCaptionBurnMetadata(input: {
     subtitlesBurned: true,
     captionData: {
       ...currentCaptionData,
-      captionStylePresetId: resolveCaptionStylePreset(input.captionStylePresetId).id,
+      captionStylePresetId: captionDesign.presetId,
       captionSafeArea: input.captionSafeArea ?? resolveCaptionSafeArea(input.captionData),
-      captionPosition: input.captionPosition ?? resolveCaptionPosition(input.captionData),
+      captionPosition: captionDesign.layout.verticalPosition,
       captionAppearance: input.captionAppearance ?? resolveCaptionAppearance(input.captionData),
+      captionDesign,
       captionRendererVersion: CAPTION_RENDERER_VERSION,
       captionBurnedAt: input.burnedAt.toISOString(),
     },
@@ -949,9 +1280,16 @@ async function runFfmpegCaptionBurn(input: {
   captionSafeArea?: CaptionSafeArea;
   captionPosition?: CaptionPosition;
   appearance?: CaptionAppearanceSettings;
+  captionDesign?: CaptionDesignSettingsV1;
 }): Promise<void> {
   const escapedSubtitlePath = escapeForFfmpegSubtitlesPath(input.subtitlePath);
-  const forceStyle = buildCaptionForceStyle(input.captionStylePresetId, input.captionSafeArea, input.captionPosition, input.appearance);
+  const forceStyle = buildCaptionForceStyle(
+    input.captionStylePresetId,
+    input.captionSafeArea,
+    input.captionPosition,
+    input.appearance,
+    input.captionDesign,
+  );
   const command = commandFor(input.ffmpegPath);
 
   await appendPipelineLog(input.sermonId, "Caption burn started.");
@@ -1031,13 +1369,23 @@ async function createCaptionOverlayImages(input: {
   outputPath: string;
   appearance?: CaptionAppearanceSettings;
   captionStylePresetId?: CaptionStylePresetId;
+  captionDesign?: CaptionDesignSettingsV1;
 }): Promise<string[]> {
   const imagePaths: string[] = [];
   const sharp = await getSharp();
 
   for (const cue of input.cues) {
     const imagePath = input.outputPath.replace(/\.mp4$/i, `.cue-${String(cue.index).padStart(2, "0")}.png`);
-    await sharp(Buffer.from(buildCaptionOverlaySvg(cue, input.appearance, input.captionStylePresetId))).png().toFile(imagePath);
+    await sharp(
+      Buffer.from(
+        buildCaptionOverlaySvg(
+          cue,
+          input.appearance,
+          input.captionStylePresetId,
+          input.captionDesign,
+        ),
+      ),
+    ).png().toFile(imagePath);
     imagePaths.push(imagePath);
   }
 
@@ -1048,14 +1396,16 @@ function captionOverlayYExpression(
   captionPosition: CaptionPosition | undefined,
   appearance?: CaptionAppearanceSettings,
   safeArea: CaptionSafeArea = "STANDARD",
+  captionDesign?: CaptionDesignSettingsV1,
 ): string {
-  const offset = appearance?.verticalOffset ?? 0;
+  const resolvedPosition = captionDesign?.layout.verticalPosition ?? captionPosition;
+  const offset = captionDesign?.layout.verticalOffset ?? appearance?.verticalOffset ?? 0;
   const safeAreaMargin = safeArea === "RAISED" ? 220 : safeArea === "LOWER_MINIMAL" ? 96 : 132;
-  if (captionPosition === "top") {
+  if (resolvedPosition === "top") {
     return String(Math.max(24, safeAreaMargin - offset));
   }
 
-  if (captionPosition === "middle") {
+  if (resolvedPosition === "middle") {
     if (offset === 0) {
       return "(H-h)/2";
     }
@@ -1071,17 +1421,38 @@ function captionOverlayYExpression(
   return `H-h-${lowerMargin}`;
 }
 
+function captionOverlayXExpression(captionDesign?: CaptionDesignSettingsV1): string {
+  if (!captionDesign) {
+    return "(W-w)/2";
+  }
+
+  const offset = captionDesign.layout.horizontalOffset;
+  if (captionDesign.layout.horizontalPosition === "left") {
+    return `max(24\\,min(W-w-24\\,W*0.05${offset >= 0 ? "+" : ""}${offset}))`;
+  }
+  if (captionDesign.layout.horizontalPosition === "right") {
+    return `max(24\\,min(W-w-24\\,W-w-W*0.05${offset >= 0 ? "+" : ""}${offset}))`;
+  }
+  if (offset === 0) {
+    return "(W-w)/2";
+  }
+
+  return `max(24\\,min(W-w-24\\,(W-w)/2${offset >= 0 ? "+" : ""}${offset}))`;
+}
+
 function buildCaptionOverlayFilterGraph(
   cues: CaptionCueOverlay[],
   overlayY: string,
   animateWordPop = false,
+  reducedMotion = false,
+  overlayX = "(W-w)/2",
 ): string {
   let previous = "[0:v]";
   const filterParts: string[] = [];
 
   cues.forEach((cue, index) => {
     let overlayInput = `[${index + 1}:v]`;
-    if (animateWordPop) {
+    if (animateWordPop && !reducedMotion) {
       const durationSeconds = Math.max(0.05, cue.endSeconds - cue.startSeconds);
       const animationSeconds = Math.min(0.16, Math.max(0.05, durationSeconds / 2));
       const popInput = `[caption-pop-${index}]`;
@@ -1094,12 +1465,28 @@ function buildCaptionOverlayFilterGraph(
 
     const output = index === cues.length - 1 ? "[v]" : `[captioned${index}]`;
     filterParts.push(
-      `${previous}${overlayInput}overlay=(W-w)/2:${overlayY}:enable='between(t,${cue.startSeconds.toFixed(3)},${cue.endSeconds.toFixed(3)})':eof_action=pass${output}`,
+      `${previous}${overlayInput}overlay=${overlayX}:${overlayY}:enable='between(t,${cue.startSeconds.toFixed(3)},${cue.endSeconds.toFixed(3)})':eof_action=pass${output}`,
     );
     previous = output;
   });
 
   return filterParts.join(";");
+}
+
+function buildCaptionOverlayImageInputArgs(
+  imagePaths: string[],
+  animateWordPop = false,
+  reducedMotion = false,
+): string[] {
+  const inputFramerate = animateWordPop && !reducedMotion ? "30" : "1";
+  return imagePaths.flatMap((imagePath) => [
+    "-loop",
+    "1",
+    "-framerate",
+    inputFramerate,
+    "-i",
+    imagePath,
+  ]);
 }
 
 async function runFfmpegCaptionOverlayFallback(input: {
@@ -1114,6 +1501,7 @@ async function runFfmpegCaptionOverlayFallback(input: {
   captionStylePresetId?: CaptionStylePresetId;
   captionSafeArea?: CaptionSafeArea;
   animateWordPop?: boolean;
+  captionDesign?: CaptionDesignSettingsV1;
 }): Promise<void> {
   if (input.cues.length === 0) {
     throw new Error("Caption overlay fallback could not find any caption cues.");
@@ -1124,17 +1512,36 @@ async function runFfmpegCaptionOverlayFallback(input: {
     outputPath: input.outputPath,
     appearance: input.appearance,
     captionStylePresetId: input.captionStylePresetId,
+    captionDesign: input.captionDesign,
   });
 
   const command = commandFor(input.ffmpegPath);
-  const overlayY = captionOverlayYExpression(input.captionPosition, input.appearance, input.captionSafeArea);
-  const filterGraph = buildCaptionOverlayFilterGraph(input.cues, overlayY, input.animateWordPop);
+  const overlayY = captionOverlayYExpression(
+    input.captionPosition,
+    input.appearance,
+    input.captionSafeArea,
+    input.captionDesign,
+  );
+  const overlayX = captionOverlayXExpression(input.captionDesign);
+  const filterGraph = buildCaptionOverlayFilterGraph(
+    input.cues,
+    overlayY,
+    input.animateWordPop,
+    input.captionDesign?.highlighting.reducedMotion,
+    overlayX,
+  );
 
   const buildArgs = (videoEncoder: string): string[] => {
-    const args = ["-y", "-i", input.renderedPath];
-    for (const imagePath of imagePaths) {
-      args.push("-loop", "1", "-i", imagePath);
-    }
+    const args = [
+      "-y",
+      "-i",
+      input.renderedPath,
+      ...buildCaptionOverlayImageInputArgs(
+        imagePaths,
+        input.animateWordPop,
+        input.captionDesign?.highlighting.reducedMotion,
+      ),
+    ];
 
     args.push(
       "-filter_complex",
@@ -1279,7 +1686,8 @@ async function burnCaptionsForClipCore(
       clip.captionData,
       options?.captionStylePresetId ?? (brandingSettings.defaultCaptionStyleName as CaptionStylePresetId),
     );
-    const captionPosition = resolveCaptionPosition(renderCaptionData);
+    const captionDesign = resolveCaptionDesign(renderCaptionData, captionStylePresetId);
+    const captionPosition = captionDesign.layout.verticalPosition;
     const captionAppearance = resolveCaptionAppearance(renderCaptionData);
     await updateClipCandidateForActiveEditPlan({
       guard: editPlanGuard,
@@ -1291,6 +1699,7 @@ async function burnCaptionsForClipCore(
           captionSafeArea: resolveCaptionSafeArea(clip.captionData),
           captionPosition,
           captionAppearance,
+          captionDesign,
           captionData: clip.captionData,
         }),
         captionBurnFreshness: "UP_TO_DATE",
@@ -1337,18 +1746,34 @@ async function burnCaptionsForClipCore(
     options?.captionStylePresetId ?? (brandingSettings.defaultCaptionStyleName as CaptionStylePresetId),
   );
   const captionSafeArea = resolveCaptionSafeArea(clip.captionData);
-  const captionPosition = resolveCaptionPosition(renderCaptionData);
+  const captionDesign = resolveCaptionDesign(renderCaptionData, captionStylePresetId);
+  const resolvedCaptionStylePresetId = captionDesign.presetId;
+  const captionPosition = captionDesign.layout.verticalPosition;
   const captionAppearance = resolveCaptionAppearance(renderCaptionData);
   const captionRevealMode = extractCaptionRevealMode(clip.captionData);
-  const layoutCaptionCues = splitCaptionCueOverlaysForLayout(renderCaptionCues, captionAppearance);
+  const layoutCaptionCues = splitCaptionCueOverlaysForLayout(
+    renderCaptionCues,
+    captionAppearance,
+    captionDesign,
+  );
   const styledLayoutCaptionCues = layoutCaptionCues.map((cue) => ({
     ...cue,
-    text: formatCaptionOverlayText(cue.text, captionAppearance, captionStylePresetId),
+    text: formatCaptionOverlayText(
+      cue.text,
+      captionAppearance,
+      resolvedCaptionStylePresetId,
+      captionDesign,
+    ),
     ...(cue.wordTimings
       ? {
           wordTimings: cue.wordTimings.map((timing) => ({
             ...timing,
-            text: formatCaptionOverlayText(timing.text, captionAppearance, captionStylePresetId),
+            text: formatCaptionOverlayText(
+              timing.text,
+              captionAppearance,
+              resolvedCaptionStylePresetId,
+              captionDesign,
+            ),
           })),
         }
       : {}),
@@ -1383,10 +1808,38 @@ async function burnCaptionsForClipCore(
   const wordHighlightCues = shouldUseWordHighlightOverlay(clip.captionData)
     ? expandCaptionCueWordHighlightOverlays(styledLayoutCaptionCues)
     : [];
-  const requiresPrecisePlacementOverlay = captionPosition === "middle"
-    && captionAppearance.verticalOffset !== 0;
-  const useSingleWordPopOverlay = captionRevealMode === "single-word"
-    && styledLayoutCaptionCues.length <= MAX_WORD_HIGHLIGHT_OVERLAY_CUES;
+  const singleWordCues = captionRevealMode === "single-word"
+    ? expandCaptionCueSingleWordOverlays(styledLayoutCaptionCues)
+    : [];
+  const requiresCaptionDesignOverlay = requiresCaptionImageOverlayForDesign(
+    clip.captionData,
+    captionDesign,
+  );
+  const requiresStaticCaptionOverlay =
+    requiresCaptionDesignOverlay
+    || (
+      captionPosition === "middle"
+      && captionDesign.layout.verticalOffset !== 0
+    );
+  const useStaticCaptionOverlay =
+    captionRevealMode !== "single-word"
+    && shouldUseStaticCaptionImageOverlay(
+      requiresStaticCaptionOverlay,
+      styledLayoutCaptionCues.length,
+    );
+  const singleWordOverlayLimit = captionDesign.highlighting.reducedMotion
+    ? MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES
+    : MAX_WORD_HIGHLIGHT_OVERLAY_CUES;
+  const useSingleWordPopOverlay =
+    singleWordCues.length > 0
+    && singleWordCues.length <= singleWordOverlayLimit;
+  const skippedOversizedWordHighlightOverlay =
+    wordHighlightCues.length > MAX_WORD_HIGHLIGHT_OVERLAY_CUES;
+
+  if (skippedOversizedWordHighlightOverlay) {
+    await appendJobLog(jobId, `Caption burn skipped active-word image overlays because ${wordHighlightCues.length} overlays exceeds the ${MAX_WORD_HIGHLIGHT_OVERLAY_CUES} local limit.`);
+    await appendPipelineLog(clip.sermonId, "Caption burn omitted active-word animation because its overlay graph is too large.");
+  }
 
   if (wordHighlightCues.length > 0 && wordHighlightCues.length <= MAX_WORD_HIGHLIGHT_OVERLAY_CUES) {
     usedWordHighlightOverlay = true;
@@ -1401,15 +1854,18 @@ async function burnCaptionsForClipCore(
       cues: wordHighlightCues,
       captionPosition,
       appearance: captionAppearance,
-      captionStylePresetId,
+      captionStylePresetId: resolvedCaptionStylePresetId,
       captionSafeArea,
+      captionDesign,
     });
-  } else if (requiresPrecisePlacementOverlay || useSingleWordPopOverlay) {
+  } else if (useStaticCaptionOverlay || useSingleWordPopOverlay) {
     await appendJobLog(
       jobId,
       useSingleWordPopOverlay
-        ? "Caption burn using animated one-word image overlays."
-        : "Caption burn using image overlays for precise middle-position offset.",
+        ? captionDesign.highlighting.reducedMotion
+          ? "Caption burn using reduced-motion one-word image overlays."
+          : "Caption burn using animated one-word image overlays."
+        : "Caption burn using image overlays for design controls that require exact SVG rendering.",
     );
     await runFfmpegCaptionOverlayFallback({
       sermonId: clip.sermonId,
@@ -1417,17 +1873,40 @@ async function burnCaptionsForClipCore(
       outputPath: tempCaptionedVideoPath,
       ffmpegPath: options?.ffmpegPath,
       jobId,
-      cues: styledLayoutCaptionCues,
+      cues: useSingleWordPopOverlay ? singleWordCues : styledLayoutCaptionCues,
       captionPosition,
       appearance: captionAppearance,
-      captionStylePresetId,
+      captionStylePresetId: resolvedCaptionStylePresetId,
       captionSafeArea,
       animateWordPop: useSingleWordPopOverlay,
+      captionDesign,
     });
   } else {
-    if (wordHighlightCues.length > MAX_WORD_HIGHLIGHT_OVERLAY_CUES) {
-      await appendJobLog(jobId, `Caption burn skipped active-word image overlays because ${wordHighlightCues.length} overlays exceeds the ${MAX_WORD_HIGHLIGHT_OVERLAY_CUES} local limit.`);
-      await appendPipelineLog(clip.sermonId, "Caption burn using subtitle filter because active-word overlay graph is too large.");
+    if (
+      requiresStaticCaptionOverlay
+      && styledLayoutCaptionCues.length > MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES
+    ) {
+      await appendJobLog(
+        jobId,
+        `Caption design has ${styledLayoutCaptionCues.length} cues, above the ${MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES} exact-design overlay limit. Using the efficient ASS renderer to keep this unusually long export reliable.`,
+      );
+      await appendPipelineLog(
+        clip.sermonId,
+        "Caption burn using bounded ASS fallback because the exact-design overlay graph is too large.",
+      );
+    }
+    if (
+      captionRevealMode === "single-word"
+      && singleWordCues.length > singleWordOverlayLimit
+    ) {
+      await appendJobLog(
+        jobId,
+        `Caption burn skipped one-word image animation because ${singleWordCues.length} word overlays exceeds the ${singleWordOverlayLimit} local limit.`,
+      );
+      await appendPipelineLog(
+        clip.sermonId,
+        "Caption burn using bounded ASS fallback because the one-word overlay graph is too large.",
+      );
     }
     try {
       await runFfmpegCaptionBurn({
@@ -1437,10 +1916,11 @@ async function burnCaptionsForClipCore(
         outputPath: tempCaptionedVideoPath,
         ffmpegPath: options?.ffmpegPath,
         jobId,
-        captionStylePresetId,
+        captionStylePresetId: resolvedCaptionStylePresetId,
         captionSafeArea,
         captionPosition,
         appearance: captionAppearance,
+        captionDesign,
       });
     } catch (error) {
       if (!shouldUseCaptionOverlayFallback(error)) {
@@ -1459,8 +1939,9 @@ async function burnCaptionsForClipCore(
         cues: styledLayoutCaptionCues,
         captionPosition,
         appearance: captionAppearance,
-        captionStylePresetId,
+        captionStylePresetId: resolvedCaptionStylePresetId,
         captionSafeArea,
+        captionDesign,
       });
     }
   }
@@ -1491,10 +1972,11 @@ async function burnCaptionsForClipCore(
         ...buildCaptionBurnMetadata({
           outputPath: captionedVideoPath,
           burnedAt,
-          captionStylePresetId,
+          captionStylePresetId: resolvedCaptionStylePresetId,
           captionSafeArea,
           captionPosition,
           captionAppearance,
+          captionDesign,
           captionData: clip.captionData,
         }),
         captionBurnFreshness: "UP_TO_DATE",
@@ -1511,7 +1993,7 @@ async function burnCaptionsForClipCore(
       sizeBytes: outputStat.size,
       metadata: {
         reusedExistingFile: false,
-        captionStylePresetId,
+        captionStylePresetId: resolvedCaptionStylePresetId,
         captionPosition,
         wordHighlightOverlay: usedWordHighlightOverlay,
       },
@@ -1648,6 +2130,8 @@ export const __captionBurnTestUtils = {
   buildCaptionForceStyle,
   buildVideoEncoderArgs,
   resolveCaptionPosition,
+  requiresCaptionImageOverlayForDesign,
+  shouldUseStaticCaptionImageOverlay,
   resolveClipCaptionStylePresetId,
   shouldApplyCaptionsToClip,
   shouldUseWordHighlightOverlay,
@@ -1657,13 +2141,17 @@ export const __captionBurnTestUtils = {
   shiftCaptionCueOverlays,
   remapCaptionCueOverlaysForSpeechCleanup,
   expandCaptionCueWordHighlightOverlays,
+  expandCaptionCueSingleWordOverlays,
   buildSrtFromCaptionCueOverlays,
   formatCaptionOverlayText,
   buildCaptionOverlaySvg,
   buildCaptionOverlayFilterGraph,
+  buildCaptionOverlayImageInputArgs,
   splitCaptionCueOverlaysForLayout,
+  captionOverlayXExpression,
   captionOverlayYExpression,
   shouldUseCaptionOverlayFallback,
   MAX_WORD_HIGHLIGHT_OVERLAY_CUES,
+  MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES,
   CAPTION_RENDERER_VERSION,
 };

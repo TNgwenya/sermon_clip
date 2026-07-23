@@ -68,14 +68,13 @@ import {
   type ClipAssetKind,
 } from "@/server/regeneration/dependencies";
 import {
-  buildEditableCaptionCuesFromTranscriptSegments,
   buildTimedCaptionCuesFromTranscriptSegments,
   buildTimedCaptionCuesFromTranscriptWords,
   buildSrtFromEditableCues,
-  mergeCaptionCueTextOverrides,
   type EditableCaptionCue,
   parseCaptionSourceWords,
   parseHashtagEditorInput,
+  resolveClipStudioCaptionCuesForSave,
   validateCaptionCuesFromTranscript,
   validateEditableCaptionCues,
   validateClipStudioTiming,
@@ -139,9 +138,17 @@ import {
   formatSecondsForTimestampInput,
   parseSermonTimestampInput,
 } from "@/lib/sermonSegment";
-import { isCaptionStylePresetId, type CaptionStylePresetId } from "@/lib/captionStylePresets";
 import {
+  isCaptionStylePresetId,
+  type CaptionDesignSettingsV1,
+  type CaptionStylePresetId,
+} from "@/lib/captionStylePresets";
+import {
+  extractCaptionDesignSettings,
+  extractCaptionStyleOverride,
+  extractCaptionStyleSource,
   normalizeBrollLayerConfig,
+  normalizeCaptionDesignSettings,
   normalizeHookOverlayForClipDuration,
   normalizeSpeechCleanupIntensity,
   normalizeCaptionAppearanceSettings,
@@ -152,6 +159,7 @@ import {
   type CaptionAppearanceSettings,
   type CaptionPosition,
   type CaptionRevealMode,
+  type CaptionStyleSource,
   type SpeechCleanupIntensity,
 } from "@/lib/clipStudio";
 import { buildClipStudioPrepareAssetPlan } from "@/lib/clipStudioPrepare";
@@ -656,8 +664,10 @@ export type UpdateClipStudioEditsInput = {
   captionCues: EditableCaptionCue[];
   applyCaptionsToClip: boolean;
   captionStylePresetId: string;
+  captionStyleSource?: CaptionStyleSource;
   captionPosition: string;
   captionAppearance: CaptionAppearanceSettings;
+  captionDesign?: CaptionDesignSettingsV1;
   captionRevealMode?: CaptionRevealMode;
   captionSyncOffsetSeconds?: number;
   hook: string;
@@ -723,8 +733,10 @@ export type PrepareClipStudioForPostingInput = {
     captionCues: EditableCaptionCue[];
     applyCaptionsToClip: boolean;
     captionStylePresetId: string;
+    captionStyleSource?: CaptionStyleSource;
     captionPosition: string;
     captionAppearance: CaptionAppearanceSettings;
+    captionDesign?: CaptionDesignSettingsV1;
     captionRevealMode?: CaptionRevealMode;
     captionSyncOffsetSeconds?: number;
     hookOverlay: UpdateClipStudioEditsInput["hookOverlay"];
@@ -4744,6 +4756,8 @@ export async function updateClipStudioEditsAction(
         };
   const previousSpeechCleanupEdits = normalizeSpeechCleanupEdits(captionDataRecord["speechCleanupEdits"], timing.durationSeconds);
   const previousCaptionAppearance = normalizeCaptionAppearanceSettings(captionDataRecord["captionAppearance"]);
+  const previousCaptionDesign = extractCaptionDesignSettings(captionDataRecord);
+  const previousCaptionStyleSource = extractCaptionStyleSource(captionDataRecord);
   const previousCaptionRevealMode = extractCaptionRevealMode(captionDataRecord);
   const previousCaptionSyncOffsetSeconds = normalizeCaptionSyncOffsetSeconds(captionDataRecord["captionSyncOffsetSeconds"]);
   const previousBrollLayer = normalizeBrollLayerConfig(captionDataRecord["brollLayer"], timing.durationSeconds);
@@ -4811,27 +4825,25 @@ export async function updateClipStudioEditsAction(
             words: selectedTranscriptWords,
             maxWordsPerCue: input.captionRevealMode === "single-word" ? 1 : 5,
             maxCueDurationSeconds: input.captionRevealMode === "single-word" ? 1.4 : 2.4,
+            groupingStrategy: input.captionRevealMode === "single-word" ? "timed" : "semantic",
           })
-        : input.captionRevealMode === "single-word"
-          ? buildTimedCaptionCuesFromTranscriptSegments({
-              startTimeSeconds: timing.startSeconds,
-              endTimeSeconds: timing.endSeconds,
-              segments: selectedTranscriptSegments,
-            })
-          : buildEditableCaptionCuesFromTranscriptSegments({
-              startTimeSeconds: timing.startSeconds,
-              endTimeSeconds: timing.endSeconds,
-              segments: selectedTranscriptSegments,
-            })
+        : buildTimedCaptionCuesFromTranscriptSegments({
+            startTimeSeconds: timing.startSeconds,
+            endTimeSeconds: timing.endSeconds,
+            segments: selectedTranscriptSegments,
+            maxWordsPerCue: input.captionRevealMode === "single-word" ? 1 : 5,
+            maxCueDurationSeconds: input.captionRevealMode === "single-word" ? 1.4 : 2.4,
+            groupingStrategy: input.captionRevealMode === "single-word" ? "timed" : "semantic",
+          })
       : [];
-  const draftCaptionCues = boundariesChanged && transcriptCaptionCues.length > 0
-    ? mergeCaptionCueTextOverrides({
-        baseCues: transcriptCaptionCues,
-        textOverrideCues: input.captionCues,
-      })
-    : input.captionCues.length > 0
-      ? input.captionCues
-      : transcriptCaptionCues;
+  // The cues visible in Studio are the save source of truth, including manual
+  // timing, wording, splits, and merges. Rebuilding them here after a boundary
+  // edit made Save silently differ from the preview. When the client has no
+  // cues, transcript-derived timing remains the safe fallback.
+  const draftCaptionCues = resolveClipStudioCaptionCuesForSave({
+    submittedCues: input.captionCues,
+    transcriptCues: transcriptCaptionCues,
+  });
   const captionCueValidation = validateEditableCaptionCues(draftCaptionCues, timing.durationSeconds);
   const normalizedCaptionCues = captionCueValidation.cues;
   const transcriptGroundingValidation = validateCaptionCuesFromTranscript(normalizedCaptionCues, selectedTranscriptText);
@@ -4863,9 +4875,50 @@ export async function updateClipStudioEditsAction(
   const title = contentValues.title;
   const mainCaption = contentValues.socialCaption;
 
-  const normalizedCaptionStylePresetId = normalizeClipStudioCaptionStylePresetId(input.captionStylePresetId);
-  const normalizedCaptionPosition = normalizeClipStudioCaptionPosition(input.captionPosition);
-  const normalizedCaptionAppearance = normalizeCaptionAppearanceSettings(input.captionAppearance);
+  const requestedCaptionStylePresetId = normalizeClipStudioCaptionStylePresetId(input.captionStylePresetId);
+  const normalizedCaptionStyleSource: CaptionStyleSource =
+    input.captionStyleSource === "brand-kit" || input.captionStyleSource === "clip"
+      ? input.captionStyleSource
+      : requestedCaptionStylePresetId
+        ? "clip"
+        : "brand-kit";
+  const existingCaptionStylePresetId =
+    typeof captionDataRecord["captionStylePresetId"] === "string"
+      ? normalizeClipStudioCaptionStylePresetId(captionDataRecord["captionStylePresetId"])
+      : null;
+  const requestedCaptionPosition = normalizeClipStudioCaptionPosition(input.captionPosition);
+  const requestedCaptionAppearance = normalizeCaptionAppearanceSettings(input.captionAppearance);
+  const normalizedCaptionDesign = normalizeCaptionDesignSettings(
+    input.captionDesign
+      ? {
+          ...input.captionDesign,
+          ...(requestedCaptionStylePresetId
+            ? { presetId: requestedCaptionStylePresetId }
+            : {}),
+        }
+      : undefined,
+    {
+      presetId: requestedCaptionStylePresetId ?? existingCaptionStylePresetId,
+      legacyAppearance: requestedCaptionAppearance,
+      legacyPosition: requestedCaptionPosition,
+    },
+  );
+  const normalizedCaptionStylePresetId = normalizedCaptionDesign.presetId;
+  const normalizedCaptionPosition = normalizedCaptionDesign.layout.verticalPosition;
+  const normalizedCaptionAppearance: CaptionAppearanceSettings = {
+    fontScale:
+      normalizedCaptionDesign.typography.fontSizePx <= 32
+        ? "compact"
+        : normalizedCaptionDesign.typography.fontSizePx >= 41
+          ? "large"
+          : "regular",
+    maxLines: normalizedCaptionDesign.layout.maxLines,
+    uppercase: normalizedCaptionDesign.typography.textCase === "uppercase",
+    verticalOffset: Math.max(
+      -48,
+      Math.min(48, Math.round(normalizedCaptionDesign.layout.verticalOffset)),
+    ),
+  };
   const normalizedCaptionRevealMode = normalizeCaptionRevealMode(input.captionRevealMode);
   const normalizedCaptionSyncOffsetSeconds = normalizeCaptionSyncOffsetSeconds(input.captionSyncOffsetSeconds);
   const validatedClipDurationSeconds = timing.durationSeconds;
@@ -4942,9 +4995,11 @@ export async function updateClipStudioEditsAction(
   const onVideoCaptionChanged =
     captionCuesChanged ||
     captionDataRecord["applyCaptionsToClip"] !== input.applyCaptionsToClip ||
+    previousCaptionStyleSource !== normalizedCaptionStyleSource ||
     captionDataRecord["captionStylePresetId"] !== normalizedCaptionStylePresetId ||
     captionDataRecord["captionPosition"] !== normalizedCaptionPosition ||
     JSON.stringify(previousCaptionAppearance) !== JSON.stringify(normalizedCaptionAppearance) ||
+    JSON.stringify(previousCaptionDesign) !== JSON.stringify(normalizedCaptionDesign) ||
     previousCaptionRevealMode !== normalizedCaptionRevealMode ||
     previousCaptionSyncOffsetSeconds !== normalizedCaptionSyncOffsetSeconds;
   const hashtagChanged = previousHashtags.join("|") !== hashtags.join("|");
@@ -5003,9 +5058,11 @@ export async function updateClipStudioEditsAction(
         shortCaption: shortCaption || null,
         platformCaption: platformCaption || null,
         applyCaptionsToClip: input.applyCaptionsToClip,
+        captionStyleSource: normalizedCaptionStyleSource,
         captionStylePresetId: normalizedCaptionStylePresetId,
         captionPosition: normalizedCaptionPosition,
         captionAppearance: normalizedCaptionAppearance,
+        captionDesign: normalizedCaptionDesign,
         captionRevealMode: normalizedCaptionRevealMode,
         captionSyncOffsetSeconds: normalizedCaptionSyncOffsetSeconds,
         wordHighlightEnabled: normalizedCaptionRevealMode === "active-word",
@@ -5499,14 +5556,11 @@ function resolveSavedClipCaptionPreferences(
     typeof captionDataRecord["applyCaptionsToClip"] === "boolean"
       ? captionDataRecord["applyCaptionsToClip"]
       : true;
-  const captionStylePresetId =
-    typeof captionDataRecord["captionStylePresetId"] === "string"
-      ? normalizeClipStudioCaptionStylePresetId(captionDataRecord["captionStylePresetId"])
-      : null;
+  const captionStylePresetId = extractCaptionStyleOverride(captionData);
 
   return {
     applyCaptionsToClip,
-    captionStylePresetId: captionStylePresetId ?? fallbackCaptionStylePresetId,
+    captionStylePresetId: captionStylePresetId || fallbackCaptionStylePresetId,
   };
 }
 
@@ -6135,8 +6189,10 @@ export async function saveClipStudioDraftAction(
       captionCues: input.editPreview.captionCues,
       applyCaptionsToClip: input.editPreview.applyCaptionsToClip,
       captionStylePresetId: input.editPreview.captionStylePresetId,
+      captionStyleSource: input.editPreview.captionStyleSource,
       captionPosition: input.editPreview.captionPosition,
       captionAppearance: input.editPreview.captionAppearance,
+      captionDesign: input.editPreview.captionDesign,
       captionRevealMode: input.editPreview.captionRevealMode,
       captionSyncOffsetSeconds: input.editPreview.captionSyncOffsetSeconds,
       hook: input.editPreview.editorialHook,

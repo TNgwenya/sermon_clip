@@ -13,9 +13,11 @@ import type {
   CaptionAppearanceSettings,
   CaptionPosition,
   CaptionRevealMode,
+  CaptionStyleSource,
   HookOverlayConfig,
   SpeechCleanupSettings,
 } from "@/lib/clipStudio";
+import type { CaptionDesignSettingsV1 } from "@/lib/captionStylePresets";
 import type { ExportSettings } from "@/lib/clipExportSettings";
 import type { CaptionCueWordTiming, EditableCaptionCue } from "@/lib/clipStudioEditing";
 import type { SpeechCleanupAudioSilenceEvent } from "@/lib/clipStudioPreviewTimeline";
@@ -37,8 +39,10 @@ export type ClipStudioEditPreview = {
   captionCues: EditableCaptionCue[];
   applyCaptionsToClip: boolean;
   captionStylePresetId: string;
+  captionStyleSource: CaptionStyleSource;
   captionPosition: CaptionPosition;
   captionAppearance: CaptionAppearanceSettings;
+  captionDesign: CaptionDesignSettingsV1;
   captionRevealMode: CaptionRevealMode;
   captionSyncOffsetSeconds: number;
   hookOverlay: HookOverlayConfig;
@@ -188,6 +192,7 @@ function sameEditPreview(a: ClipStudioEditPreview, b: ClipStudioEditPreview): bo
     }) &&
     a.applyCaptionsToClip === b.applyCaptionsToClip &&
     a.captionStylePresetId === b.captionStylePresetId &&
+    a.captionStyleSource === b.captionStyleSource &&
     a.captionPosition === b.captionPosition &&
     a.captionRevealMode === b.captionRevealMode &&
     a.captionSyncOffsetSeconds === b.captionSyncOffsetSeconds &&
@@ -195,6 +200,7 @@ function sameEditPreview(a: ClipStudioEditPreview, b: ClipStudioEditPreview): bo
     a.captionAppearance.maxLines === b.captionAppearance.maxLines &&
     a.captionAppearance.uppercase === b.captionAppearance.uppercase &&
     a.captionAppearance.verticalOffset === b.captionAppearance.verticalOffset &&
+    JSON.stringify(a.captionDesign) === JSON.stringify(b.captionDesign) &&
     a.hookOverlay.enabled === b.hookOverlay.enabled &&
     a.hookOverlay.text === b.hookOverlay.text &&
     a.hookOverlay.position === b.hookOverlay.position &&

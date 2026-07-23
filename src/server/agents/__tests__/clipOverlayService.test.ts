@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { normalizeCaptionDesignSettings } from "@/lib/clipStudio";
 import {
   __clipOverlayTestUtils,
   validateOverlayEligibility,
@@ -427,7 +428,7 @@ describe("buildHookOverlayFilter", () => {
 
     expect(filter).toContain("x='((w-text_w)/2)-if");
     expect(filter).toContain("*120");
-    expect(filter).toContain("shadowx=1:shadowy=1");
+    expect(filter).toContain("shadowx=0:shadowy=5");
   });
 
   it("animates pop hooks with a vertical settle expression", () => {
@@ -472,6 +473,152 @@ describe("buildHookOverlayFilter", () => {
     expect(buildHookOverlaySvg(spec!)).toContain('fill="#1C1408"');
     expect(buildHookOverlaySvg(spec!)).toContain('fill="#FFFBEB"');
     expect(buildHookOverlayPosition(spec!)).toContain("*120");
+  });
+
+  it("uses the current Brand Kit preset for linked hook artwork", () => {
+    const spec = extractHookOverlaySpec({
+      captionStyleSource: "brand-kit",
+      captionStylePresetId: "clean-lower",
+      captionDesign: normalizeCaptionDesignSettings(undefined, { presetId: "clean-lower" }),
+      hookOverlay: {
+        enabled: true,
+        text: "Hope is rising",
+        position: "top",
+        startSeconds: 0,
+        durationSeconds: 6,
+        animation: "fade",
+        size: "medium",
+        bold: true,
+      },
+    }, "golden-hour");
+
+    expect(spec?.captionStylePresetId).toBe("golden-hour");
+    expect(buildHookOverlaySvg(spec!)).toContain('fill="#1C1408"');
+  });
+
+  it("uses the same editable design tokens for hook SVGs and placement", () => {
+    const spec = extractHookOverlaySpec({
+      captionStylePresetId: "clean-lower",
+      captionDesign: {
+        version: 1,
+        presetId: "clean-lower",
+        typography: {
+          fontFamilyId: "elegant-serif",
+          fontSizePx: 46,
+          fontWeight: 700,
+          italic: true,
+          textCase: "uppercase",
+          letterSpacingPx: 2,
+          lineHeight: 1.35,
+          wordSpacingPx: 5,
+          alignment: "right",
+        },
+        colors: {
+          textColor: "#123456",
+          activeTextColor: "#ABCDEF",
+          highlightBackgroundColor: "#010203",
+        },
+        background: {
+          treatment: "rounded",
+          color: "#112233",
+          opacity: 0.82,
+          borderColor: "#445566",
+          borderOpacity: 0.65,
+          borderWidthPx: 4,
+          borderRadiusPx: 30,
+          paddingX: 42,
+          paddingY: 20,
+        },
+        readability: {
+          outlineColor: "#FEDCBA",
+          outlineWidthPx: 3,
+          shadowColor: "#0A0B0C",
+          shadowOpacity: 0.55,
+          shadowBlurPx: 16,
+          shadowOffsetX: 2,
+          shadowOffsetY: 6,
+        },
+        highlighting: {
+          intensity: "balanced",
+          scale: 1.04,
+          backgroundOpacity: 0.08,
+          fontWeightBoost: 0,
+          reducedMotion: false,
+        },
+        layout: {
+          verticalPosition: "top",
+          horizontalPosition: "right",
+          horizontalOffset: -28,
+          verticalOffset: 0,
+          safeWidth: "wide",
+          maxLines: 2,
+        },
+      },
+      hookOverlay: {
+        enabled: true,
+        text: "Hope is rising",
+        position: "top",
+        startSeconds: 0,
+        durationSeconds: 6,
+        animation: "none",
+        size: "medium",
+        bold: true,
+      },
+    });
+
+    expect(spec).toMatchObject({
+      captionStylePresetId: "clean-lower",
+      width: 972,
+    });
+    const svg = buildHookOverlaySvg(spec!);
+    expect(svg).toContain("HOPE IS RISING");
+    expect(svg).toContain('font-family="DejaVu Serif, DejaVu Serif"');
+    expect(svg).toContain('font-style="italic"');
+    expect(svg).toContain('fill="#123456"');
+    expect(svg).toContain('fill="#112233"');
+    expect(svg).toContain('stroke="#445566"');
+    expect(svg).toContain('stroke="#FEDCBA"');
+    expect(svg).toContain('text-anchor="end"');
+    expect(buildHookOverlayPosition(spec!)).toBe("x=W-w-24-28:y=112");
+  });
+
+  it("removes hook motion and fades when reduced motion is enabled", () => {
+    const captionDesign = normalizeCaptionDesignSettings({
+      version: 1,
+      presetId: "kinetic-pop",
+      highlighting: {
+        reducedMotion: true,
+      },
+    });
+    const captionData = {
+      captionStylePresetId: "kinetic-pop",
+      captionDesign,
+      hookOverlay: {
+        enabled: true,
+        text: "Keep moving",
+        position: "top",
+        startSeconds: 1,
+        durationSeconds: 5,
+        animation: "pan-in",
+        size: "medium",
+        bold: true,
+      },
+    };
+    const spec = extractHookOverlaySpec(captionData);
+    const drawtextFilter = buildHookOverlayFilter(captionData);
+    const complexFilter = __clipOverlayTestUtils.buildOverlayFilterComplex({
+      hasBrandingOverlay: false,
+      brollOverlaySpecs: [],
+      brollOverlayInputStartIndex: null,
+      hookOverlaySpec: spec,
+      hookOverlayInputIndex: 1,
+    });
+
+    expect(drawtextFilter).not.toContain("*120");
+    expect(drawtextFilter).not.toContain("alpha=");
+    expect(buildHookOverlayPosition(spec!)).not.toContain("*120");
+    expect(complexFilter).not.toContain("fade=t=in");
+    expect(complexFilter).toContain("format=rgba");
   });
 });
 

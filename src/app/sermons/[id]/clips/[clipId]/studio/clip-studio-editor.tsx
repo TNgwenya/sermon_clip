@@ -1,13 +1,15 @@
 "use client";
 
-import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { SectionCard, StatusBadge } from "@/components/ui";
 import { formatSecondsForPastorView, formatSecondsForTimestampInput } from "@/lib/sermonSegment";
 import {
-  buildEditableCaptionCuesFromTranscriptSegments,
   buildTimedCaptionCuesFromTranscriptSegments,
   buildTimedCaptionCuesFromTranscriptWords,
+  mergeAdjacentEditableCaptionCues,
+  splitEditableCaptionCue,
+  updateEditableCaptionCueTiming,
   type CaptionSourceWord,
   type EditableCaptionCue,
   hashtagsToEditorInput,
@@ -29,7 +31,14 @@ import {
   CLIP_STUDIO_LAYER_COMMAND_EVENT,
   type ClipStudioLayerCommandDetail,
 } from "@/lib/clipStudioLayerEvents";
-import { CAPTION_STYLE_PRESETS, resolveCaptionStylePreset } from "@/lib/captionStylePresets";
+import {
+  assessCaptionDesignContrast,
+  CAPTION_FONT_LIBRARY,
+  CAPTION_STYLE_PRESETS,
+  resolveCaptionHighlightDefaults,
+  resolveCaptionStylePreset,
+  type CaptionDesignSettingsV1,
+} from "@/lib/captionStylePresets";
 import {
   SPEECH_CLEANUP_INTENSITIES,
   SPEECH_CLEANUP_INTENSITY_LABELS,
@@ -45,6 +54,7 @@ import {
   type HookOverlayConfig,
   inferBrollCardTone,
   labelForBrollTone,
+  normalizeCaptionDesignSettings,
   normalizeCaptionSyncOffsetSeconds,
   normalizeHookOverlayForClipDuration,
   resolveNextBrollCardStart,
@@ -60,6 +70,7 @@ import {
   type SpeechCleanupEdits,
 } from "@/lib/speechCleanupPlan";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
+import styles from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-editor.module.css";
 
 type ClipStudioEditorProps = {
   initialStartTimeSeconds: number;
@@ -75,9 +86,12 @@ type ClipStudioEditorProps = {
   initialCaptionStylePresetId: string;
   initialCaptionPosition: CaptionPosition;
   initialCaptionAppearance: CaptionAppearanceSettings;
+  initialCaptionDesign: CaptionDesignSettingsV1;
   initialCaptionRevealMode: CaptionRevealMode;
   initialCaptionSyncOffsetSeconds: number;
   brandCaptionStylePresetId: string;
+  brandPrimaryColor?: string | null;
+  brandSecondaryColor?: string | null;
   suggestedHook: string;
   suggestedCaption: string;
   titleOptions: string[];
@@ -114,8 +128,29 @@ type DeferredAudioSilenceReview = {
   analyzed: boolean;
 };
 
+type EditorWorkspace = "captions" | "copy" | "layers" | "audio" | "review";
+
 const QUICK_CLIP_LENGTH_SECONDS = [30, 45, 60, 90];
 const EMPTY_AUDIO_SILENCE_EVENTS: SpeechCleanupAudioSilenceEvent[] = [];
+const CURATED_CAPTION_STYLE_PRESET_IDS = new Set([
+  "clean-lower",
+  "bold-sermon",
+  "creator-highlight",
+  "minimal-church",
+  "scripture-focus",
+  "youth-social",
+]);
+const EDITOR_WORKSPACES: Array<{
+  id: EditorWorkspace;
+  label: string;
+  description: string;
+}> = [
+  { id: "captions", label: "Captions", description: "Style, words and timing" },
+  { id: "copy", label: "Post copy", description: "Caption and hashtags" },
+  { id: "layers", label: "Hook & cards", description: "Opening and emphasis" },
+  { id: "audio", label: "Audio", description: "Pacing cleanup" },
+  { id: "review", label: "Final check", description: "Readiness before export" },
+];
 const BROLL_TONE_OPTIONS: Array<{ value: BrollCardTone; label: string }> = [
   { value: "quote", label: "Quote" },
   { value: "scripture", label: "Scripture" },
@@ -168,9 +203,11 @@ type StudioDraftSnapshot = {
   captionStylePresetId: string;
   captionPosition: CaptionPosition;
   captionAppearance: CaptionAppearanceSettings;
+  captionDesign: CaptionDesignSettingsV1;
   captionRevealMode: CaptionRevealMode;
   captionSyncOffsetSeconds: number;
   captionCueTextEdits: Record<string, string>;
+  captionCueOverrides: EditableCaptionCue[] | null;
   hookOverlay: HookOverlayConfig;
   brollLayer: BrollLayerConfig;
   speechCleanup: SpeechCleanupSettings;
@@ -287,6 +324,75 @@ function countWords(value: string): number {
   return value.trim().split(/\s+/).filter(Boolean).length;
 }
 
+function CaptionCueTimingInput({
+  label,
+  ariaLabel,
+  value,
+  disabled,
+  onCommit,
+}: {
+  label: string;
+  ariaLabel: string;
+  value: number;
+  disabled: boolean;
+  onCommit: (value: number) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const skipNextBlurCommitRef = useRef(false);
+  const [draftValue, setDraftValue] = useState(String(value));
+
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) {
+      setDraftValue(String(value));
+    }
+  }, [value]);
+
+  function commitDraft() {
+    if (skipNextBlurCommitRef.current) {
+      skipNextBlurCommitRef.current = false;
+      return;
+    }
+
+    const parsedValue = Number(draftValue);
+    if (!draftValue.trim() || !Number.isFinite(parsedValue)) {
+      setDraftValue(String(value));
+      return;
+    }
+
+    onCommit(parsedValue);
+  }
+
+  return (
+    <label className="stack-sm">
+      {label}
+      <input
+        ref={inputRef}
+        type="number"
+        min={0}
+        step={0.1}
+        value={draftValue}
+        onChange={(event) => {
+          skipNextBlurCommitRef.current = false;
+          setDraftValue(event.target.value);
+        }}
+        onBlur={commitDraft}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            skipNextBlurCommitRef.current = false;
+            event.currentTarget.blur();
+          } else if (event.key === "Escape") {
+            skipNextBlurCommitRef.current = true;
+            setDraftValue(String(value));
+            event.currentTarget.blur();
+          }
+        }}
+        disabled={disabled}
+        aria-label={ariaLabel}
+      />
+    </label>
+  );
+}
+
 function trimBrollText(value: string, maxLength = 180): string {
   return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
@@ -373,9 +479,12 @@ export function ClipStudioEditor({
   initialCaptionStylePresetId,
   initialCaptionPosition,
   initialCaptionAppearance,
+  initialCaptionDesign,
   initialCaptionRevealMode,
   initialCaptionSyncOffsetSeconds,
   brandCaptionStylePresetId,
+  brandPrimaryColor = null,
+  brandSecondaryColor = null,
   suggestedHook,
   suggestedCaption,
   titleOptions,
@@ -411,6 +520,7 @@ export function ClipStudioEditor({
   const audioReviewSectionRef = useRef<HTMLDetailsElement | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusSuccess, setStatusSuccess] = useState(true);
+  const [activeWorkspace, setActiveWorkspace] = useState<EditorWorkspace>("captions");
   const [draftHistory, setDraftHistory] = useState<StudioDraftHistory>({ past: [], future: [] });
   const [audioSilenceReview, setAudioSilenceReview] = useState<DeferredAudioSilenceReview>(() => ({
     status: initialAudioSilenceAnalyzed
@@ -436,14 +546,17 @@ export function ClipStudioEditor({
   const [hashtags, setHashtags] = useState(() => hashtagsToEditorInput(initialHashtags));
   const [applyCaptionsToClip, setApplyCaptionsToClip] = useState(initialApplyCaptionsToClip);
   const [captionStylePresetId, setCaptionStylePresetId] = useState(initialCaptionStylePresetId);
+  const [showAllCaptionStyles, setShowAllCaptionStyles] = useState(false);
   const [captionPosition, setCaptionPosition] = useState<CaptionPosition>(initialCaptionPosition);
   const [captionAppearance, setCaptionAppearance] = useState<CaptionAppearanceSettings>(initialCaptionAppearance);
+  const [captionDesign, setCaptionDesign] = useState<CaptionDesignSettingsV1>(initialCaptionDesign);
   const [captionRevealMode, setCaptionRevealMode] = useState<CaptionRevealMode>(initialCaptionRevealMode);
   const [captionSyncOffsetSeconds, setCaptionSyncOffsetSeconds] = useState(initialCaptionSyncOffsetSeconds);
   const [captionResyncNonce, setCaptionResyncNonce] = useState(0);
   const [captionCueTextEdits, setCaptionCueTextEdits] = useState<Record<string, string>>(
     () => buildCaptionCueTextEditSeed(initialCaptionCues),
   );
+  const [captionCueOverrides, setCaptionCueOverrides] = useState<EditableCaptionCue[] | null>(null);
   const [hookOverlay, setHookOverlay] = useState<HookOverlayConfig>(initialHookOverlay);
   const [brollLayer, setBrollLayer] = useState<BrollLayerConfig>(initialBrollLayer);
   const [speechCleanup, setSpeechCleanup] = useState<SpeechCleanupSettings>(initialSpeechCleanup);
@@ -461,6 +574,22 @@ export function ClipStudioEditor({
   const [focusedSegmentId, setFocusedSegmentId] = useState(initialFirstSegmentId);
   const resolvedCaptionStyleId = captionStylePresetId || brandCaptionStylePresetId;
   const resolvedCaptionStyle = useMemo(() => resolveCaptionStylePreset(resolvedCaptionStyleId), [resolvedCaptionStyleId]);
+  const captionContrast = useMemo(
+    () => assessCaptionDesignContrast(captionDesign),
+    [captionDesign],
+  );
+  const visibleCaptionStylePresets = useMemo(() => {
+    if (showAllCaptionStyles) {
+      return CAPTION_STYLE_PRESETS;
+    }
+
+    const curated = CAPTION_STYLE_PRESETS.filter((preset) => CURATED_CAPTION_STYLE_PRESET_IDS.has(preset.id));
+    if (curated.some((preset) => preset.id === resolvedCaptionStyle.id)) {
+      return curated;
+    }
+
+    return [...curated, resolvedCaptionStyle];
+  }, [resolvedCaptionStyle, showAllCaptionStyles]);
 
   useEffect(() => {
     if (!audioSilenceReviewUrl || initialAudioSilenceAnalyzed) {
@@ -573,28 +702,29 @@ export function ClipStudioEditor({
         return initialCaptionCues;
       }
 
+      const groupingStrategy = captionRevealMode === "single-word" ? "timed" : "semantic";
+      const maxWordsPerCue = captionRevealMode === "single-word" ? 1 : 5;
+      const maxCueDurationSeconds = captionRevealMode === "single-word" ? 1.4 : 2.4;
       const timedWordCues = transcriptWords.length > 0
         ? buildTimedCaptionCuesFromTranscriptWords({
             startTimeSeconds: timingPreview.startSeconds,
             endTimeSeconds: timingPreview.endSeconds,
             words: transcriptWords,
-            maxWordsPerCue: captionRevealMode === "single-word" ? 1 : 5,
-            maxCueDurationSeconds: captionRevealMode === "single-word" ? 1.4 : 2.4,
+            maxWordsPerCue,
+            maxCueDurationSeconds,
+            groupingStrategy,
           })
         : [];
       const transcriptCues = timedWordCues.length > 0
         ? timedWordCues
-        : captionRevealMode === "single-word"
-          ? buildTimedCaptionCuesFromTranscriptSegments({
-              startTimeSeconds: timingPreview.startSeconds,
-              endTimeSeconds: timingPreview.endSeconds,
-              segments: transcriptSegments,
-            })
-          : buildEditableCaptionCuesFromTranscriptSegments({
-        startTimeSeconds: timingPreview.startSeconds,
-        endTimeSeconds: timingPreview.endSeconds,
-        segments: transcriptSegments,
-            });
+        : buildTimedCaptionCuesFromTranscriptSegments({
+            startTimeSeconds: timingPreview.startSeconds,
+            endTimeSeconds: timingPreview.endSeconds,
+            segments: transcriptSegments,
+            maxWordsPerCue,
+            maxCueDurationSeconds,
+            groupingStrategy,
+          });
 
       if (transcriptCues.length > 0) {
         return transcriptCues;
@@ -616,12 +746,12 @@ export function ClipStudioEditor({
   ]);
   const captionCues = useMemo(
     () =>
-      generatedCaptionCues.map((cue, index) => ({
+      (captionCueOverrides ?? generatedCaptionCues).map((cue, index) => ({
         ...cue,
         index: index + 1,
         text: captionCueTextEdits[getCaptionCueKey(cue)] ?? cue.text,
       })),
-    [captionCueTextEdits, generatedCaptionCues],
+    [captionCueOverrides, captionCueTextEdits, generatedCaptionCues],
   );
   const onVideoCaptionText = captionCues.map((cue) => cue.text.trim()).filter(Boolean).join(" ");
   const captionLineLabel = captionRevealMode === "single-word"
@@ -854,9 +984,11 @@ export function ClipStudioEditor({
       captionStylePresetId,
       captionPosition,
       captionAppearance,
+      captionDesign,
       captionRevealMode,
       captionSyncOffsetSeconds,
       captionCueTextEdits,
+      captionCueOverrides,
       hookOverlay,
       brollLayer,
       speechCleanup,
@@ -869,8 +1001,10 @@ export function ClipStudioEditor({
       applyCaptionsToClip,
       brollLayer,
       captionAppearance,
+      captionDesign,
       captionRevealMode,
       captionSyncOffsetSeconds,
+      captionCueOverrides,
       captionCueTextEdits,
       captionPosition,
       captionStylePresetId,
@@ -914,8 +1048,10 @@ export function ClipStudioEditor({
       captionCues,
       applyCaptionsToClip,
       captionStylePresetId: resolvedCaptionStyle.id,
+      captionStyleSource: captionStylePresetId ? "clip" as const : "brand-kit" as const,
       captionPosition,
       captionAppearance,
+      captionDesign,
       captionRevealMode,
       captionSyncOffsetSeconds,
       hookOverlay,
@@ -939,9 +1075,11 @@ export function ClipStudioEditor({
       onVideoCaptionText,
       applyCaptionsToClip,
       captionAppearance,
+      captionDesign,
       captionRevealMode,
       captionSyncOffsetSeconds,
       captionPosition,
+      captionStylePresetId,
       platformCaption,
       resolvedCaptionStyle.id,
       shortCaption,
@@ -963,30 +1101,34 @@ export function ClipStudioEditor({
   }, [editPreview, updateEditPreview]);
 
   useEffect(() => {
-    const nextSnapshot = cloneStudioDraftSnapshot(currentDraftSnapshot);
-    const nextSnapshotKey = getStudioDraftSnapshotKey(nextSnapshot);
     const previousSnapshot = lastHistorySnapshotRef.current;
 
     if (!previousSnapshot) {
-      lastHistorySnapshotRef.current = nextSnapshot;
-      return;
+      lastHistorySnapshotRef.current = cloneStudioDraftSnapshot(currentDraftSnapshot);
+      return undefined;
     }
 
     if (historyRestorePendingRef.current) {
       historyRestorePendingRef.current = false;
+      lastHistorySnapshotRef.current = cloneStudioDraftSnapshot(currentDraftSnapshot);
+      return undefined;
+    }
+
+    const historyTimer = window.setTimeout(() => {
+      const nextSnapshot = cloneStudioDraftSnapshot(currentDraftSnapshot);
+      const nextSnapshotKey = getStudioDraftSnapshotKey(nextSnapshot);
+      if (getStudioDraftSnapshotKey(previousSnapshot) === nextSnapshotKey) {
+        return;
+      }
+
+      setDraftHistory((current) => ({
+        past: [...current.past, cloneStudioDraftSnapshot(previousSnapshot)].slice(-60),
+        future: [],
+      }));
       lastHistorySnapshotRef.current = nextSnapshot;
-      return;
-    }
+    }, 240);
 
-    if (getStudioDraftSnapshotKey(previousSnapshot) === nextSnapshotKey) {
-      return;
-    }
-
-    setDraftHistory((current) => ({
-      past: [...current.past, cloneStudioDraftSnapshot(previousSnapshot)].slice(-60),
-      future: [],
-    }));
-    lastHistorySnapshotRef.current = nextSnapshot;
+    return () => window.clearTimeout(historyTimer);
   }, [currentDraftSnapshot]);
 
   useEffect(() => {
@@ -1046,9 +1188,11 @@ export function ClipStudioEditor({
     setCaptionStylePresetId(nextSnapshot.captionStylePresetId);
     setCaptionPosition(nextSnapshot.captionPosition);
     setCaptionAppearance(nextSnapshot.captionAppearance);
+    setCaptionDesign(nextSnapshot.captionDesign);
     setCaptionRevealMode(nextSnapshot.captionRevealMode);
     setCaptionSyncOffsetSeconds(nextSnapshot.captionSyncOffsetSeconds);
     setCaptionCueTextEdits(nextSnapshot.captionCueTextEdits);
+    setCaptionCueOverrides(nextSnapshot.captionCueOverrides);
     setHookOverlay(nextSnapshot.hookOverlay);
     setBrollLayer(nextSnapshot.brollLayer);
     setSpeechCleanup(nextSnapshot.speechCleanup);
@@ -1316,12 +1460,102 @@ export function ClipStudioEditor({
     }));
   }
 
+  function applyCaptionCueEdit(
+    result: ReturnType<typeof updateEditableCaptionCueTiming>,
+    successMessage: string,
+  ) {
+    if (result.error) {
+      setStatusSuccess(false);
+      setStatusMessage(result.error);
+      return;
+    }
+
+    if (!result.changed) {
+      return;
+    }
+
+    setCaptionCueOverrides(result.cues);
+    setCaptionCueTextEdits(buildCaptionCueTextEditSeed(result.cues));
+    setStatusSuccess(true);
+    setStatusMessage(result.wasClamped ? `${successMessage} Kept inside the available caption space.` : successMessage);
+  }
+
+  function updateCaptionCueTime(
+    cueIndex: number,
+    field: "startSeconds" | "endSeconds",
+    value: number,
+  ) {
+    const clipDurationSeconds = timingPreview.durationSeconds;
+    if (clipDurationSeconds === null) {
+      setStatusSuccess(false);
+      setStatusMessage("Choose valid clip timing before adjusting an individual caption.");
+      return;
+    }
+
+    applyCaptionCueEdit(
+      updateEditableCaptionCueTiming({
+        cues: captionCues,
+        cueIndex,
+        [field]: value,
+        clipDurationSeconds,
+      }),
+      `Caption ${cueIndex + 1} timing updated.`,
+    );
+  }
+
+  function splitCaptionCue(cueIndex: number) {
+    const clipDurationSeconds = timingPreview.durationSeconds;
+    if (clipDurationSeconds === null) {
+      setStatusSuccess(false);
+      setStatusMessage("Choose valid clip timing before splitting a caption.");
+      return;
+    }
+
+    applyCaptionCueEdit(
+      splitEditableCaptionCue({
+        cues: captionCues,
+        cueIndex,
+        clipDurationSeconds,
+      }),
+      `Caption ${cueIndex + 1} split at a natural word boundary.`,
+    );
+  }
+
+  function mergeCaptionCueWithNext(cueIndex: number) {
+    const clipDurationSeconds = timingPreview.durationSeconds;
+    if (clipDurationSeconds === null) {
+      setStatusSuccess(false);
+      setStatusMessage("Choose valid clip timing before merging captions.");
+      return;
+    }
+
+    applyCaptionCueEdit(
+      mergeAdjacentEditableCaptionCues({
+        cues: captionCues,
+        cueIndex,
+        clipDurationSeconds,
+      }),
+      `Captions ${cueIndex + 1} and ${cueIndex + 2} merged.`,
+    );
+  }
+
   function changeCaptionRevealMode(nextMode: CaptionRevealMode) {
     if (nextMode === captionRevealMode) {
       return;
     }
 
+    if (
+      captionCues.length > 0
+      && !window.confirm(
+        "Changing how words appear rebuilds caption lines from the speech transcript and replaces manual wording, timing, splits, and merges. Continue?",
+      )
+    ) {
+      return;
+    }
+
     setCaptionRevealMode(nextMode);
+    setCaptionCueOverrides(null);
+    setCaptionCueTextEdits({});
     setCaptionResyncNonce((current) => current + 1);
     setStatusSuccess(true);
     setStatusMessage(
@@ -1334,7 +1568,17 @@ export function ClipStudioEditor({
   }
 
   function resyncCaptionsFromSpeech() {
+    if (
+      captionCues.length > 0
+      && !window.confirm(
+        "Re-syncing rebuilds caption lines from the speech transcript and replaces manual wording, timing, splits, and merges. Continue?",
+      )
+    ) {
+      return;
+    }
+
     setCaptionCueTextEdits({});
+    setCaptionCueOverrides(null);
     setCaptionSyncOffsetSeconds(0);
     setCaptionResyncNonce((current) => current + 1);
     setStatusSuccess(true);
@@ -1345,8 +1589,124 @@ export function ClipStudioEditor({
     setCaptionSyncOffsetSeconds(normalizeCaptionSyncOffsetSeconds(nextSeconds));
   }
 
+  const updateCaptionDesign = useCallback((
+    nextDesign: CaptionDesignSettingsV1,
+    options?: { preserveBrandKitLink?: boolean },
+  ) => {
+    const normalizedDesign = normalizeCaptionDesignSettings(nextDesign, {
+      presetId: nextDesign.presetId,
+      legacyAppearance: captionAppearance,
+      legacyPosition: captionPosition,
+    });
+    const legacyFontScale: CaptionFontScale = normalizedDesign.typography.fontSizePx <= 33
+      ? "compact"
+      : normalizedDesign.typography.fontSizePx >= 41
+        ? "large"
+        : "regular";
+
+    setCaptionDesign(normalizedDesign);
+    if (!options?.preserveBrandKitLink && captionStylePresetId === "") {
+      setCaptionStylePresetId(normalizedDesign.presetId);
+    }
+    setCaptionPosition(normalizedDesign.layout.verticalPosition);
+    setCaptionAppearance({
+      fontScale: legacyFontScale,
+      maxLines: normalizedDesign.layout.maxLines,
+      uppercase: normalizedDesign.typography.textCase === "uppercase",
+      verticalOffset: Math.max(-48, Math.min(48, normalizedDesign.layout.verticalOffset)),
+    });
+  }, [captionAppearance, captionPosition, captionStylePresetId]);
+
+  function updateCaptionTypography(patch: Partial<CaptionDesignSettingsV1["typography"]>) {
+    updateCaptionDesign({
+      ...captionDesign,
+      typography: { ...captionDesign.typography, ...patch },
+    });
+  }
+
+  function updateCaptionColors(patch: Partial<CaptionDesignSettingsV1["colors"]>) {
+    updateCaptionDesign({
+      ...captionDesign,
+      colors: { ...captionDesign.colors, ...patch },
+    });
+  }
+
+  function updateCaptionBackground(patch: Partial<CaptionDesignSettingsV1["background"]>) {
+    updateCaptionDesign({
+      ...captionDesign,
+      background: { ...captionDesign.background, ...patch },
+    });
+  }
+
+  function updateCaptionReadability(patch: Partial<CaptionDesignSettingsV1["readability"]>) {
+    updateCaptionDesign({
+      ...captionDesign,
+      readability: { ...captionDesign.readability, ...patch },
+    });
+  }
+
+  function updateCaptionHighlighting(patch: Partial<CaptionDesignSettingsV1["highlighting"]>) {
+    updateCaptionDesign({
+      ...captionDesign,
+      highlighting: { ...captionDesign.highlighting, ...patch },
+    });
+  }
+
+  function updateCaptionLayout(patch: Partial<CaptionDesignSettingsV1["layout"]>) {
+    updateCaptionDesign({
+      ...captionDesign,
+      layout: { ...captionDesign.layout, ...patch },
+    });
+  }
+
+  function applyChurchCaptionColors() {
+    const primaryColor = brandPrimaryColor ?? brandSecondaryColor;
+    const secondaryColor = brandSecondaryColor ?? brandPrimaryColor;
+    if (!primaryColor || !secondaryColor) {
+      return;
+    }
+
+    updateCaptionDesign(normalizeCaptionDesignSettings({
+      ...captionDesign,
+      colors: {
+        ...captionDesign.colors,
+        activeTextColor: primaryColor,
+        highlightBackgroundColor: secondaryColor,
+      },
+      background: {
+        ...captionDesign.background,
+        borderColor: primaryColor,
+      },
+    }, { presetId: captionDesign.presetId }));
+    setStatusSuccess(true);
+    setStatusMessage("Church colours applied to caption highlights and border.");
+  }
+
+  function applyCaptionStylePreset(nextPresetId: string) {
+    const nextPreset = resolveCaptionStylePreset(nextPresetId || brandCaptionStylePresetId);
+    setCaptionStylePresetId(nextPresetId);
+    updateCaptionDesign(nextPreset.design, {
+      preserveBrandKitLink: nextPresetId === "",
+    });
+    setStatusSuccess(true);
+    setStatusMessage(`${nextPreset.name} applied. Customize it below or keep the recommended design.`);
+  }
+
   function resetCaptionCueText(cue: EditableCaptionCue) {
     const cueKey = getCaptionCueKey(cue);
+    const cueIndex = captionCues.findIndex((item) => getCaptionCueKey(item) === cueKey);
+    const generatedCue = generatedCaptionCues.find(
+      (item) => getCaptionCueKey(item) === cueKey,
+    );
+    if (!generatedCue) {
+      return;
+    }
+
+    if (captionCueOverrides && cueIndex >= 0) {
+      setCaptionCueOverrides((current) => current?.map((item, index) => (
+        index === cueIndex ? { ...item, text: generatedCue.text } : item
+      )) ?? null);
+    }
     setCaptionCueTextEdits((current) => {
       const next = { ...current };
       delete next[cueKey];
@@ -1356,8 +1716,10 @@ export function ClipStudioEditor({
 
   function isCaptionCueTextEdited(cue: EditableCaptionCue): boolean {
     const editedText = captionCueTextEdits[getCaptionCueKey(cue)];
-    const sourceCue = generatedCaptionCues.find((item) => getCaptionCueKey(item) === getCaptionCueKey(cue));
-    return editedText !== undefined && editedText !== sourceCue?.text;
+    const sourceCue = generatedCaptionCues.find(
+      (item) => getCaptionCueKey(item) === getCaptionCueKey(cue),
+    );
+    return sourceCue !== undefined && editedText !== undefined && editedText !== sourceCue.text;
   }
 
   function findCaptionCueForTranscriptSegment(segment: TranscriptSegmentOption): EditableCaptionCue | null {
@@ -1945,11 +2307,15 @@ export function ClipStudioEditor({
       }
 
       if (detail.overlay === "caption") {
-        setCaptionPosition(detail.position);
-        setCaptionAppearance((current) => ({
-          ...current,
-          verticalOffset: Math.max(-48, Math.min(48, Math.round(detail.verticalOffset))),
-        }));
+        updateCaptionDesign({
+          ...captionDesign,
+          layout: {
+            ...captionDesign.layout,
+            verticalPosition: detail.position,
+            horizontalOffset: Math.round(detail.horizontalOffset),
+            verticalOffset: Math.round(detail.verticalOffset),
+          },
+        });
         return;
       }
 
@@ -1971,7 +2337,7 @@ export function ClipStudioEditor({
 
     window.addEventListener(CLIP_STUDIO_OVERLAY_POSITION_EVENT, handleOverlayPosition);
     return () => window.removeEventListener(CLIP_STUDIO_OVERLAY_POSITION_EVENT, handleOverlayPosition);
-  }, []);
+  }, [captionDesign, updateCaptionDesign]);
 
   const speechCleanupRemovedSeconds = speechCleanupPreviewPlan.removedRanges.reduce((total, range) => total + range.removedSeconds, 0);
   const speechCleanupMarkedCount = speechCleanupPreviewPlan.removedRanges.length;
@@ -2563,6 +2929,22 @@ export function ClipStudioEditor({
       </SectionCard>
       </div>
 
+      <nav className={styles.workspaceNav} aria-label="Caption Studio tasks">
+        {EDITOR_WORKSPACES.map((workspace) => (
+          <button
+            key={workspace.id}
+            type="button"
+            className={activeWorkspace === workspace.id ? styles.workspaceActive : undefined}
+            aria-pressed={activeWorkspace === workspace.id}
+            onClick={() => setActiveWorkspace(workspace.id)}
+          >
+            <strong>{workspace.label}</strong>
+            <span>{workspace.description}</span>
+          </button>
+        ))}
+      </nav>
+
+      <div hidden={activeWorkspace !== "review"}>
       <SectionCard title="Final check" className="clip-studio-creator-review">
         <div className="clip-studio-creator-review-hero">
           <div className="clip-studio-review-checklist-summary" aria-label="Preparation checklist summary">
@@ -2616,7 +2998,9 @@ export function ClipStudioEditor({
           ))}
         </div>
       </SectionCard>
+      </div>
 
+      <div hidden={activeWorkspace !== "audio"}>
       <details ref={audioReviewSectionRef} className="clip-studio-editor-disclosure">
         <summary>
           <span>Audio cleanup</span>
@@ -2685,7 +3069,9 @@ export function ClipStudioEditor({
         </div>
       </SectionCard>
       </details>
+      </div>
 
+      <div hidden={activeWorkspace !== "copy"}>
       <SectionCard
         title="Social post copy"
         description="Prepare the words that travel with the video on social platforms. These fields do not change the timed words shown inside the clip."
@@ -2815,10 +3201,31 @@ export function ClipStudioEditor({
           {fieldErrors?.hashtags ? <span className="error-text small">{fieldErrors.hashtags}</span> : null}
         </div>
       </SectionCard>
+      </div>
 
-      <SectionCard title="On-video captions & hook">
+      <div hidden={activeWorkspace !== "captions" && activeWorkspace !== "layers"}>
+      <SectionCard title={activeWorkspace === "captions" ? "On-video captions" : "Hook & emphasis cards"}>
         <div className="stack-md clip-studio-caption-form">
-          <label className="clip-studio-toggle-row">
+          <div hidden={activeWorkspace !== "captions"} className={`stack-md ${styles.captionWorkflow}`}>
+          <ol className={styles.captionJourney} aria-label="Caption design steps">
+            <li>
+              <span>1</span>
+              <strong>Style</strong>
+            </li>
+            <li>
+              <span>2</span>
+              <strong>Fine-tune</strong>
+            </li>
+            <li>
+              <span>3</span>
+              <strong>Words</strong>
+            </li>
+            <li>
+              <span>4</span>
+              <strong>Preview</strong>
+            </li>
+          </ol>
+          <label className={`clip-studio-toggle-row ${styles.captionToggle}`}>
             <input
               type="checkbox"
               aria-label="Captions"
@@ -2949,28 +3356,20 @@ export function ClipStudioEditor({
                   return (
                     <div className="clip-studio-caption-cue" key={`${cue.index}-${index}`}>
                       <div className="clip-studio-caption-cue-times">
-                        <label className="stack-sm">
-                          Start
-                          <input
-                            type="number"
-                            min={0}
-                            step={0.1}
-                            value={cue.startSeconds}
-                            readOnly
-                            disabled={isPending || !applyCaptionsToClip}
-                          />
-                        </label>
-                        <label className="stack-sm">
-                          End
-                          <input
-                            type="number"
-                            min={0}
-                            step={0.1}
-                            value={cue.endSeconds}
-                            readOnly
-                            disabled={isPending || !applyCaptionsToClip}
-                          />
-                        </label>
+                        <CaptionCueTimingInput
+                          label="Start"
+                          ariaLabel={`Caption ${index + 1} start time`}
+                          value={cue.startSeconds}
+                          onCommit={(value) => updateCaptionCueTime(index, "startSeconds", value)}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                        <CaptionCueTimingInput
+                          label="End"
+                          ariaLabel={`Caption ${index + 1} end time`}
+                          value={cue.endSeconds}
+                          onCommit={(value) => updateCaptionCueTime(index, "endSeconds", value)}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
                       </div>
                       <label className="stack-sm clip-studio-caption-cue-text">
                         Transcript line {index + 1}
@@ -2992,6 +3391,24 @@ export function ClipStudioEditor({
                           Reset line
                         </button>
                       ) : null}
+                      <div className={styles.cueActions}>
+                        <button
+                          type="button"
+                          className="button tertiary"
+                          onClick={() => splitCaptionCue(index)}
+                          disabled={isPending || !applyCaptionsToClip || countWords(cue.text) < 2}
+                        >
+                          Split line
+                        </button>
+                        <button
+                          type="button"
+                          className="button tertiary"
+                          onClick={() => mergeCaptionCueWithNext(index)}
+                          disabled={isPending || !applyCaptionsToClip || index === captionCues.length - 1}
+                        >
+                          Merge next
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -3003,8 +3420,8 @@ export function ClipStudioEditor({
             </div>
           </details>
 
-          <section className="clip-studio-caption-style-panel" aria-labelledby="clip-caption-style-heading">
-            <div className="section-heading-row compact">
+          <section className={`clip-studio-caption-style-panel ${styles.stylePanel}`} aria-labelledby="clip-caption-style-heading">
+            <div className={`section-heading-row compact ${styles.styleHeading}`}>
               <div>
                 <p className="kicker">Caption personality</p>
                 <h3 id="clip-caption-style-heading">Style for this clip</h3>
@@ -3012,7 +3429,55 @@ export function ClipStudioEditor({
               <StatusBadge tone="accent">{resolvedCaptionStyle.name}</StatusBadge>
             </div>
 
-            <div className="clip-studio-selected-style">
+            <section className={styles.presetChooser} aria-labelledby="caption-preset-heading">
+              <div className={styles.presetChooserHeading}>
+                <div>
+                  <p className="kicker">Start with a strong design</p>
+                  <h4 id="caption-preset-heading">Choose a style</h4>
+                </div>
+                <span className="muted small">
+                  {showAllCaptionStyles ? `${CAPTION_STYLE_PRESETS.length} styles` : "Recommended"}
+                </span>
+              </div>
+              <div className="clip-studio-caption-style-grid">
+                <button
+                  type="button"
+                  aria-pressed={captionStylePresetId === ""}
+                  className={captionStylePresetId === "" ? "clip-studio-caption-style-option is-active" : "clip-studio-caption-style-option"}
+                  onClick={() => applyCaptionStylePreset("")}
+                  disabled={isPending}
+                >
+                  <strong>Brand Kit default</strong>
+                  <span>{resolveCaptionStylePreset(brandCaptionStylePresetId).name}</span>
+                  <span>{resolveCaptionStylePreset(brandCaptionStylePresetId).bestFor}</span>
+                </button>
+                {visibleCaptionStylePresets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    aria-pressed={captionStylePresetId === preset.id}
+                    className={captionStylePresetId === preset.id ? "clip-studio-caption-style-option is-active" : "clip-studio-caption-style-option"}
+                    onClick={() => applyCaptionStylePreset(preset.id)}
+                    disabled={isPending}
+                  >
+                    <span className={`clip-studio-caption-style-preview ${preset.className}`}>{preset.sampleText}</span>
+                    <strong>{preset.name}</strong>
+                    <span>{preset.motion}</span>
+                    <span>{preset.bestFor}</span>
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="button tertiary"
+                onClick={() => setShowAllCaptionStyles((current) => !current)}
+                disabled={isPending}
+              >
+                {showAllCaptionStyles ? "Show recommended styles" : `Explore all ${CAPTION_STYLE_PRESETS.length} styles`}
+              </button>
+            </section>
+
+            <div className={`clip-studio-selected-style ${styles.selectedStyle}`}>
               <span className={`clip-studio-caption-style-preview ${resolvedCaptionStyle.className}`}>
                 {resolvedCaptionStyle.sampleText}
               </span>
@@ -3027,12 +3492,32 @@ export function ClipStudioEditor({
               </div>
             </div>
 
-            <label className="stack-sm">
+            <div
+              className={`${styles.readabilityCheck} ${captionContrast.passes ? styles.readabilityGood : styles.readabilityWarning}`}
+              role={captionContrast.passes ? undefined : "alert"}
+            >
+              <StatusBadge tone={captionContrast.passes ? "success" : "warning"}>
+                Readability {captionContrast.minimumRatio.toFixed(2)}:1
+              </StatusBadge>
+              <span>
+                {captionContrast.passes
+                  ? `Meets the ${captionContrast.requiredRatio}:1 contrast target.`
+                  : captionContrast.warning}
+              </span>
+            </div>
+
+            <label className={`stack-sm ${styles.positionControl}`}>
               Caption position
               <select
                 aria-label="Caption position"
                 value={captionPosition}
-                onChange={(event) => setCaptionPosition(event.target.value as CaptionPosition)}
+                onChange={(event) => {
+                  const verticalPosition = event.target.value as CaptionPosition;
+                  updateCaptionDesign({
+                    ...captionDesign,
+                    layout: { ...captionDesign.layout, verticalPosition },
+                  });
+                }}
                 disabled={isPending || !applyCaptionsToClip}
               >
                 <option value="lower">Lower</option>
@@ -3041,18 +3526,22 @@ export function ClipStudioEditor({
               </select>
             </label>
 
-            <div className="clip-studio-caption-appearance-grid" aria-label="Caption appearance controls">
+            <div className={`clip-studio-caption-appearance-grid ${styles.quickAppearance}`} aria-label="Caption appearance controls">
               <label className="stack-sm">
                 Text size
                 <select
                   aria-label="Caption text size"
                   value={captionAppearance.fontScale}
-                  onChange={(event) =>
-                    setCaptionAppearance((current) => ({
-                      ...current,
-                      fontScale: event.target.value as CaptionFontScale,
-                    }))
-                  }
+                  onChange={(event) => {
+                    const fontScale = event.target.value as CaptionFontScale;
+                    updateCaptionDesign({
+                      ...captionDesign,
+                      typography: {
+                        ...captionDesign.typography,
+                        fontSizePx: fontScale === "compact" ? 32 : fontScale === "large" ? 42 : 36,
+                      },
+                    });
+                  }}
                   disabled={isPending || !applyCaptionsToClip}
                 >
                   <option value="compact">Compact</option>
@@ -3066,12 +3555,13 @@ export function ClipStudioEditor({
                 <select
                   aria-label="Caption max lines"
                   value={captionAppearance.maxLines}
-                  onChange={(event) =>
-                    setCaptionAppearance((current) => ({
-                      ...current,
-                      maxLines: Number(event.target.value) as CaptionMaxLines,
-                    }))
-                  }
+                  onChange={(event) => {
+                    const maxLines = Number(event.target.value) as CaptionMaxLines;
+                    updateCaptionDesign({
+                      ...captionDesign,
+                      layout: { ...captionDesign.layout, maxLines },
+                    });
+                  }}
                   disabled={isPending || !applyCaptionsToClip}
                 >
                   <option value={2}>2</option>
@@ -3089,12 +3579,13 @@ export function ClipStudioEditor({
                   max={48}
                   step={4}
                   value={captionAppearance.verticalOffset}
-                  onChange={(event) =>
-                    setCaptionAppearance((current) => ({
-                      ...current,
+                  onChange={(event) => updateCaptionDesign({
+                    ...captionDesign,
+                    layout: {
+                      ...captionDesign.layout,
                       verticalOffset: Number(event.target.value),
-                    }))
-                  }
+                    },
+                  })}
                   disabled={isPending || !applyCaptionsToClip}
                 />
                 <span className="muted small">{captionAppearance.verticalOffset}px</span>
@@ -3105,12 +3596,13 @@ export function ClipStudioEditor({
                   type="checkbox"
                   aria-label="Uppercase caption text"
                   checked={captionAppearance.uppercase}
-                  onChange={(event) =>
-                    setCaptionAppearance((current) => ({
-                      ...current,
-                      uppercase: event.target.checked,
-                    }))
-                  }
+                  onChange={(event) => updateCaptionDesign({
+                    ...captionDesign,
+                    typography: {
+                      ...captionDesign.typography,
+                      textCase: event.target.checked ? "uppercase" : "sentence",
+                    },
+                  })}
                   disabled={isPending || !applyCaptionsToClip}
                 />
                 <span>
@@ -3119,42 +3611,528 @@ export function ClipStudioEditor({
               </label>
             </div>
 
-            <details className="clip-studio-editor-disclosure compact" open>
+            <details className={`${styles.customizePanel} clip-studio-editor-disclosure`}>
               <summary>
-                <span>Change caption style</span>
-                <span className="muted small">Show all style previews</span>
+                <span>
+                  <strong>Customize</strong>
+                  <small>Typography, colour, motion, layout and timing</small>
+                </span>
+                <span className="muted small">Optional</span>
               </summary>
-              <div className="clip-studio-caption-style-grid">
-                <button
-                  type="button"
-                  aria-pressed={captionStylePresetId === ""}
-                  className={captionStylePresetId === "" ? "clip-studio-caption-style-option is-active" : "clip-studio-caption-style-option"}
-                  onClick={() => setCaptionStylePresetId("")}
-                  disabled={isPending}
-                >
-                  <strong>Brand Kit default</strong>
-                  <span>{resolveCaptionStylePreset(brandCaptionStylePresetId).name}</span>
-                  <span>{resolveCaptionStylePreset(brandCaptionStylePresetId).bestFor}</span>
-                </button>
-                {CAPTION_STYLE_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    aria-pressed={captionStylePresetId === preset.id}
-                    className={captionStylePresetId === preset.id ? "clip-studio-caption-style-option is-active" : "clip-studio-caption-style-option"}
-                    onClick={() => setCaptionStylePresetId(preset.id)}
-                    disabled={isPending}
-                  >
-                    <span className={`clip-studio-caption-style-preview ${preset.className}`}>{preset.sampleText}</span>
-                    <strong>{preset.name}</strong>
-                    <span>{preset.motion}</span>
-                    <span>{preset.bestFor}</span>
-                  </button>
-                ))}
+              <div className={styles.customizeSections}>
+                <details>
+                  <summary>
+                    <span>
+                      <strong>Look</strong>
+                      <small>Type, colours, background and readability</small>
+                    </span>
+                  </summary>
+                  <div className={styles.customizeBody}>
+                    {brandPrimaryColor || brandSecondaryColor ? (
+                      <button
+                        type="button"
+                        className="button secondary"
+                        onClick={applyChurchCaptionColors}
+                        disabled={isPending || !applyCaptionsToClip}
+                      >
+                        Use church colours
+                      </button>
+                    ) : null}
+
+                    <div className={styles.controlGrid}>
+                      <label className="stack-sm">
+                        Font family
+                        <select
+                          value={captionDesign.typography.fontFamilyId}
+                          onChange={(event) => updateCaptionTypography({
+                            fontFamilyId: event.target.value as CaptionDesignSettingsV1["typography"]["fontFamilyId"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        >
+                          {CAPTION_FONT_LIBRARY.map((font) => (
+                            <option key={font.id} value={font.id}>{font.label} · {font.category}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="stack-sm">
+                        Font weight
+                        <select
+                          value={captionDesign.typography.fontWeight}
+                          onChange={(event) => updateCaptionTypography({ fontWeight: Number(event.target.value) })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        >
+                          <option value={400}>Regular</option>
+                          <option value={500}>Medium</option>
+                          <option value={600}>Semi-bold</option>
+                          <option value={700}>Bold</option>
+                          <option value={800}>Extra bold</option>
+                          <option value={900}>Black</option>
+                        </select>
+                      </label>
+                      <label className="stack-sm">
+                        Text case
+                        <select
+                          value={captionDesign.typography.textCase}
+                          onChange={(event) => updateCaptionTypography({
+                            textCase: event.target.value as CaptionDesignSettingsV1["typography"]["textCase"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        >
+                          <option value="sentence">Sentence case</option>
+                          <option value="uppercase">UPPERCASE</option>
+                          <option value="lowercase">lowercase</option>
+                        </select>
+                      </label>
+                      <label className="stack-sm">
+                        Text alignment
+                        <select
+                          value={captionDesign.typography.alignment}
+                          onChange={(event) => updateCaptionTypography({
+                            alignment: event.target.value as CaptionDesignSettingsV1["typography"]["alignment"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        >
+                          <option value="left">Left</option>
+                          <option value="center">Centre</option>
+                          <option value="right">Right</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <label className="stack-sm">
+                      Precise text size
+                      <input
+                        type="range"
+                        min={24}
+                        max={64}
+                        step={1}
+                        value={captionDesign.typography.fontSizePx}
+                        onChange={(event) => updateCaptionTypography({ fontSizePx: Number(event.target.value) })}
+                        disabled={isPending || !applyCaptionsToClip}
+                      />
+                      <span className="muted small">{captionDesign.typography.fontSizePx}px</span>
+                    </label>
+
+                    <div className={styles.controlGrid}>
+                      <label className="stack-sm">
+                        Letter spacing
+                        <input
+                          type="range"
+                          min={-2}
+                          max={8}
+                          step={0.1}
+                          value={captionDesign.typography.letterSpacingPx}
+                          onChange={(event) => updateCaptionTypography({ letterSpacingPx: Number(event.target.value) })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                        <span className="muted small">{captionDesign.typography.letterSpacingPx}px</span>
+                      </label>
+                      <label className="stack-sm">
+                        Line spacing
+                        <input
+                          type="range"
+                          min={0.9}
+                          max={1.6}
+                          step={0.05}
+                          value={captionDesign.typography.lineHeight}
+                          onChange={(event) => updateCaptionTypography({ lineHeight: Number(event.target.value) })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                        <span className="muted small">{captionDesign.typography.lineHeight.toFixed(2)}</span>
+                      </label>
+                      <label className="clip-studio-toggle-row compact">
+                        <input
+                          type="checkbox"
+                          checked={captionDesign.typography.italic}
+                          onChange={(event) => updateCaptionTypography({ italic: event.target.checked })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                        <span><strong>Italic</strong></span>
+                      </label>
+                    </div>
+
+                    <div className={styles.colorGrid}>
+                      <label className="stack-sm">
+                        Text colour
+                        <input
+                          type="color"
+                          value={captionDesign.colors.textColor}
+                          onChange={(event) => updateCaptionColors({
+                            textColor: event.target.value as CaptionDesignSettingsV1["colors"]["textColor"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                      </label>
+                      <label className="stack-sm">
+                        Active word
+                        <input
+                          type="color"
+                          value={captionDesign.colors.activeTextColor}
+                          onChange={(event) => updateCaptionColors({
+                            activeTextColor: event.target.value as CaptionDesignSettingsV1["colors"]["activeTextColor"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                      </label>
+                      <label className="stack-sm">
+                        Highlight box
+                        <input
+                          type="color"
+                          value={captionDesign.colors.highlightBackgroundColor}
+                          onChange={(event) => updateCaptionColors({
+                            highlightBackgroundColor: event.target.value as CaptionDesignSettingsV1["colors"]["highlightBackgroundColor"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                      </label>
+                      <label className="stack-sm">
+                        Background
+                        <input
+                          type="color"
+                          value={captionDesign.background.color}
+                          onChange={(event) => updateCaptionBackground({
+                            color: event.target.value as CaptionDesignSettingsV1["background"]["color"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip || captionDesign.background.treatment === "none"}
+                        />
+                      </label>
+                    </div>
+
+                    <div className={styles.controlGrid}>
+                      <label className="stack-sm">
+                        Background treatment
+                        <select
+                          value={captionDesign.background.treatment}
+                          onChange={(event) => updateCaptionBackground({
+                            treatment: event.target.value as CaptionDesignSettingsV1["background"]["treatment"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        >
+                          <option value="none">No background</option>
+                          <option value="solid">Solid</option>
+                          <option value="rounded">Rounded panel</option>
+                          <option value="soft-panel">Soft panel</option>
+                        </select>
+                      </label>
+                      <label className="stack-sm">
+                        Background opacity
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          value={captionDesign.background.opacity}
+                          onChange={(event) => updateCaptionBackground({ opacity: Number(event.target.value) })}
+                          disabled={isPending || !applyCaptionsToClip || captionDesign.background.treatment === "none"}
+                        />
+                        <span className="muted small">{Math.round(captionDesign.background.opacity * 100)}%</span>
+                      </label>
+                      <label className="stack-sm">
+                        Corner radius
+                        <input
+                          type="range"
+                          min={0}
+                          max={80}
+                          step={2}
+                          value={captionDesign.background.borderRadiusPx}
+                          onChange={(event) => updateCaptionBackground({ borderRadiusPx: Number(event.target.value) })}
+                          disabled={isPending || !applyCaptionsToClip || captionDesign.background.treatment === "none"}
+                        />
+                        <span className="muted small">{captionDesign.background.borderRadiusPx}px</span>
+                      </label>
+                    </div>
+
+                    <div className={styles.controlGrid}>
+                      <label className="stack-sm">
+                        Horizontal padding
+                        <input
+                          type="range"
+                          min={8}
+                          max={80}
+                          step={2}
+                          value={captionDesign.background.paddingX}
+                          onChange={(event) => updateCaptionBackground({ paddingX: Number(event.target.value) })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                        <span className="muted small">{captionDesign.background.paddingX}px</span>
+                      </label>
+                      <label className="stack-sm">
+                        Vertical padding
+                        <input
+                          type="range"
+                          min={6}
+                          max={60}
+                          step={2}
+                          value={captionDesign.background.paddingY}
+                          onChange={(event) => updateCaptionBackground({ paddingY: Number(event.target.value) })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                        <span className="muted small">{captionDesign.background.paddingY}px</span>
+                      </label>
+                    </div>
+
+                    <div className={styles.colorGrid}>
+                      <label className="stack-sm">
+                        Outline colour
+                        <input
+                          type="color"
+                          value={captionDesign.readability.outlineColor}
+                          onChange={(event) => updateCaptionReadability({
+                            outlineColor: event.target.value as CaptionDesignSettingsV1["readability"]["outlineColor"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                      </label>
+                      <label className="stack-sm">
+                        Shadow colour
+                        <input
+                          type="color"
+                          value={captionDesign.readability.shadowColor}
+                          onChange={(event) => updateCaptionReadability({
+                            shadowColor: event.target.value as CaptionDesignSettingsV1["readability"]["shadowColor"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                      </label>
+                    </div>
+
+                    <div className={styles.controlGrid}>
+                      <label className="stack-sm">
+                        Outline
+                        <input
+                          type="range"
+                          min={0}
+                          max={12}
+                          step={0.5}
+                          value={captionDesign.readability.outlineWidthPx}
+                          onChange={(event) => updateCaptionReadability({ outlineWidthPx: Number(event.target.value) })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                        <span className="muted small">{captionDesign.readability.outlineWidthPx}px</span>
+                      </label>
+                      <label className="stack-sm">
+                        Shadow strength
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          value={captionDesign.readability.shadowOpacity}
+                          onChange={(event) => updateCaptionReadability({ shadowOpacity: Number(event.target.value) })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                        <span className="muted small">{Math.round(captionDesign.readability.shadowOpacity * 100)}%</span>
+                      </label>
+                      <label className="stack-sm">
+                        Shadow blur
+                        <input
+                          type="range"
+                          min={0}
+                          max={40}
+                          step={1}
+                          value={captionDesign.readability.shadowBlurPx}
+                          onChange={(event) => updateCaptionReadability({ shadowBlurPx: Number(event.target.value) })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                        <span className="muted small">{captionDesign.readability.shadowBlurPx}px</span>
+                      </label>
+                    </div>
+                  </div>
+                </details>
+
+                <details>
+                  <summary>
+                    <span>
+                      <strong>Motion</strong>
+                      <small>Word emphasis without distracting from the message</small>
+                    </span>
+                  </summary>
+                  <div className={styles.customizeBody}>
+                    <label className="stack-sm">
+                      Highlight intensity
+                      <select
+                        value={captionDesign.highlighting.intensity}
+                        onChange={(event) => {
+                          const intensity = event.target.value as CaptionDesignSettingsV1["highlighting"]["intensity"];
+                          updateCaptionHighlighting({
+                            intensity,
+                            ...resolveCaptionHighlightDefaults(intensity),
+                          });
+                        }}
+                        disabled={isPending || !applyCaptionsToClip}
+                      >
+                        <option value="subtle">Subtle</option>
+                        <option value="balanced">Balanced</option>
+                        <option value="energetic">Energetic</option>
+                        <option value="maximum">Maximum impact</option>
+                      </select>
+                    </label>
+                    <label className="clip-studio-toggle-row">
+                      <input
+                        type="checkbox"
+                        checked={captionDesign.highlighting.reducedMotion}
+                        onChange={(event) => updateCaptionHighlighting({ reducedMotion: event.target.checked })}
+                        disabled={isPending || !applyCaptionsToClip}
+                      />
+                      <span>
+                        <strong>Reduced motion</strong>
+                        <small>Keep colour and weight emphasis without scale or movement.</small>
+                      </span>
+                    </label>
+                  </div>
+                </details>
+
+                <details>
+                  <summary>
+                    <span>
+                      <strong>Layout</strong>
+                      <small>Position and platform-safe width</small>
+                    </span>
+                  </summary>
+                  <div className={styles.customizeBody}>
+                    <div className={styles.controlGrid}>
+                      <label className="stack-sm">
+                        Vertical position
+                        <select
+                          value={captionDesign.layout.verticalPosition}
+                          onChange={(event) => updateCaptionLayout({
+                            verticalPosition: event.target.value as CaptionDesignSettingsV1["layout"]["verticalPosition"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        >
+                          <option value="top">Top</option>
+                          <option value="middle">Centre</option>
+                          <option value="lower">Bottom</option>
+                        </select>
+                      </label>
+                      <label className="stack-sm">
+                        Horizontal position
+                        <select
+                          value={captionDesign.layout.horizontalPosition}
+                          onChange={(event) => updateCaptionLayout({
+                            horizontalPosition: event.target.value as CaptionDesignSettingsV1["layout"]["horizontalPosition"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        >
+                          <option value="left">Left</option>
+                          <option value="center">Centre</option>
+                          <option value="right">Right</option>
+                        </select>
+                      </label>
+                      <label className="stack-sm">
+                        Safe width
+                        <select
+                          value={captionDesign.layout.safeWidth}
+                          onChange={(event) => updateCaptionLayout({
+                            safeWidth: event.target.value as CaptionDesignSettingsV1["layout"]["safeWidth"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        >
+                          <option value="narrow">Narrow</option>
+                          <option value="standard">Standard</option>
+                          <option value="wide">Wide</option>
+                        </select>
+                      </label>
+                      <label className="stack-sm">
+                        Maximum lines
+                        <select
+                          value={captionDesign.layout.maxLines}
+                          onChange={(event) => updateCaptionLayout({
+                            maxLines: Number(event.target.value) as CaptionDesignSettingsV1["layout"]["maxLines"],
+                          })}
+                          disabled={isPending || !applyCaptionsToClip}
+                        >
+                          <option value={2}>2 lines</option>
+                          <option value={3}>3 lines</option>
+                          <option value={4}>4 lines</option>
+                        </select>
+                      </label>
+                    </div>
+                    <label className="stack-sm">
+                      Horizontal offset
+                      <input
+                        type="range"
+                        min={-160}
+                        max={160}
+                        step={4}
+                        value={captionDesign.layout.horizontalOffset}
+                        onChange={(event) => updateCaptionLayout({ horizontalOffset: Number(event.target.value) })}
+                        disabled={isPending || !applyCaptionsToClip}
+                      />
+                      <span className="muted small">{captionDesign.layout.horizontalOffset}px</span>
+                    </label>
+                    <label className="stack-sm">
+                      Vertical offset
+                      <input
+                        type="range"
+                        min={-160}
+                        max={160}
+                        step={4}
+                        value={captionDesign.layout.verticalOffset}
+                        onChange={(event) => updateCaptionLayout({ verticalOffset: Number(event.target.value) })}
+                        disabled={isPending || !applyCaptionsToClip}
+                      />
+                      <span className="muted small">{captionDesign.layout.verticalOffset}px</span>
+                    </label>
+                  </div>
+                </details>
+
+                <details>
+                  <summary>
+                    <span>
+                      <strong>Words & timing</strong>
+                      <small>Reveal style, sync and individual caption lines</small>
+                    </span>
+                  </summary>
+                  <div className={styles.customizeBody}>
+                    <label className="stack-sm">
+                      Words on screen
+                      <select
+                        value={captionRevealMode}
+                        onChange={(event) => changeCaptionRevealMode(event.target.value as CaptionRevealMode)}
+                        disabled={isPending || !applyCaptionsToClip}
+                      >
+                        <option value="phrase">Phrase</option>
+                        <option value="active-word">Active word</option>
+                        <option value="single-word">One-word pop</option>
+                      </select>
+                    </label>
+                    <label className="stack-sm">
+                      Global sync
+                      <input
+                        type="range"
+                        min={-2}
+                        max={2}
+                        step={0.05}
+                        value={captionSyncOffsetSeconds}
+                        onChange={(event) => setCaptionSyncOffset(Number(event.target.value))}
+                        disabled={isPending || !applyCaptionsToClip}
+                      />
+                      <span className="muted small">
+                        {captionSyncOffsetSeconds === 0
+                          ? "On time"
+                          : `${captionSyncOffsetSeconds > 0 ? "+" : ""}${captionSyncOffsetSeconds.toFixed(2)}s`}
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      className="button secondary"
+                      onClick={resyncCaptionsFromSpeech}
+                      disabled={isPending || !applyCaptionsToClip || transcriptSegments.length === 0}
+                    >
+                      Re-sync from speech
+                    </button>
+                    <p className="muted small">
+                      Open Caption lines below to correct wording, edit individual start and end times, split a line, or merge it with the next line.
+                    </p>
+                  </div>
+                </details>
               </div>
             </details>
           </section>
+          </div>
 
+          <div hidden={activeWorkspace !== "layers"} className="stack-md">
           <section className="clip-studio-hook-panel" aria-labelledby="clip-hook-heading">
             <div className="section-heading-row compact">
               <div>
@@ -3444,9 +4422,12 @@ export function ClipStudioEditor({
               </div>
             )}
           </section>
+          </div>
         </div>
       </SectionCard>
+      </div>
 
+      <div hidden={activeWorkspace !== "captions"}>
       <details className="clip-studio-guidance-details">
         <summary>
           <span>Caption guidance</span>
@@ -3484,6 +4465,7 @@ export function ClipStudioEditor({
           ) : null}
         </div>
       </details>
+      </div>
 
       <div className="clip-studio-save-strip">
         <div>

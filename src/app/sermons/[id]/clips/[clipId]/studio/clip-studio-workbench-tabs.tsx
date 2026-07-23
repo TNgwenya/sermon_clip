@@ -42,7 +42,7 @@ export function ClipStudioWorkbenchTabs({
 
   const tabs: StudioTab[] = useMemo(
     () => [
-      { id: "edit", label: "Edit", eyebrow: "Trim, captions and post copy", content: edit },
+      { id: "edit", label: "Captions", eyebrow: "Style, words and timing", content: edit },
       { id: "format", label: "Frame", eyebrow: "Format and crop", content: format },
       { id: "branding", label: "Brand", eyebrow: "Church identity", content: branding },
       { id: "post", label: "Export", eyebrow: "Prepared media and handoff", content: post },
@@ -55,7 +55,7 @@ export function ClipStudioWorkbenchTabs({
   const mobileTasks: Array<{ id: MobileStudioTaskId; label: string }> = [
     { id: "preview", label: "Preview" },
     { id: "transcript", label: "Transcript" },
-    { id: "edit", label: "Edit" },
+    { id: "edit", label: "Captions" },
     { id: "format", label: "Frame" },
     { id: "branding", label: "Brand" },
     { id: "post", label: "Export" },
