@@ -13,10 +13,12 @@ import {
 
 const originalNextPublicAppUrl = process.env.NEXT_PUBLIC_APP_URL;
 const originalMetaOAuthExtraScopes = process.env.META_OAUTH_EXTRA_SCOPES;
+const originalMetaInstagramOAuthEnabled = process.env.META_INSTAGRAM_OAUTH_ENABLED;
 
 afterEach(() => {
   process.env.NEXT_PUBLIC_APP_URL = originalNextPublicAppUrl;
   process.env.META_OAUTH_EXTRA_SCOPES = originalMetaOAuthExtraScopes;
+  process.env.META_INSTAGRAM_OAUTH_ENABLED = originalMetaInstagramOAuthEnabled;
 });
 
 describe("social analytics connector OAuth helpers", () => {
@@ -63,6 +65,7 @@ describe("social analytics connector OAuth helpers", () => {
 
   it("allows Meta OAuth advanced scopes to be opted in by environment", () => {
     process.env.META_OAUTH_EXTRA_SCOPES = "pages_read_engagement, instagram_basic, instagram_manage_insights";
+    process.env.META_INSTAGRAM_OAUTH_ENABLED = "true";
 
     const metaUrl = new URL(buildMetaOAuthUrl({
       appId: "meta-app",
@@ -73,6 +76,21 @@ describe("social analytics connector OAuth helpers", () => {
     expect(metaUrl.searchParams.get("scope")).toContain("pages_manage_posts");
     expect(metaUrl.searchParams.get("scope")).toContain("instagram_basic");
     expect(metaUrl.searchParams.get("scope")).toContain("instagram_manage_insights");
+  });
+
+  it("does not request Instagram scopes until the Instagram OAuth product is enabled", () => {
+    process.env.META_OAUTH_EXTRA_SCOPES = "pages_read_engagement,instagram_basic,instagram_content_publish";
+    process.env.META_INSTAGRAM_OAUTH_ENABLED = "false";
+
+    const metaUrl = new URL(buildMetaOAuthUrl({
+      appId: "meta-app",
+      redirectUri: "https://church.example/api/oauth/meta/callback",
+      state: "state",
+    }));
+
+    expect(metaUrl.searchParams.get("scope")).toContain("pages_read_engagement");
+    expect(metaUrl.searchParams.get("scope")).not.toContain("instagram_basic");
+    expect(metaUrl.searchParams.get("scope")).not.toContain("instagram_content_publish");
   });
 
   it("normalizes OAuth callback failures into safe setup reasons", () => {

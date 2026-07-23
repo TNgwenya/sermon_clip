@@ -188,10 +188,11 @@ export function getMetaOAuthScopes(): string[] {
     "pages_show_list",
     "pages_manage_posts",
   ];
+  const instagramOAuthEnabled = process.env.META_INSTAGRAM_OAUTH_ENABLED?.trim().toLowerCase() === "true";
   const extraScopes = (process.env.META_OAUTH_EXTRA_SCOPES ?? "")
     .split(",")
     .map((scope) => scope.trim())
-    .filter(Boolean);
+    .filter((scope) => Boolean(scope) && (instagramOAuthEnabled || !scope.startsWith("instagram_")));
 
   return Array.from(new Set([...baseScopes, ...extraScopes]));
 }
