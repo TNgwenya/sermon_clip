@@ -614,6 +614,17 @@ export function ContentAssetDesignStudio({
     : scriptureApprovalBlocked
       ? "Confirm that the verse wording, reference, and displayed translation match before approving."
       : undefined;
+  const saveDraftBlockReason = isReadOnly
+    ? !lifecycleEditable
+      ? "This artwork is locked. Approve and prepare the content before editing, or create a new asset from Content Ideas."
+      : "The source publishing idea must be approved before this artwork can be saved."
+    : hasInvalidCopy
+      ? isCarousel
+        ? "Add a heading and quote copy to every slide before saving."
+        : "Add an artwork heading and quote copy before saving."
+      : !hasUnsavedChanges
+        ? "Make an edit above to enable Save draft."
+        : undefined;
   const studioStyle = {
     "--studio-primary": branding.primaryColor,
     "--studio-secondary": branding.secondaryColor,
@@ -1270,7 +1281,14 @@ export function ContentAssetDesignStudio({
         ) : null}
 
         <div className={styles.saveActions}>
-          <button type="button" className="button secondary" onClick={() => save(false)} disabled={isPending || isReadOnly || hasInvalidCopy || !hasUnsavedChanges}>
+          <button
+            type="button"
+            className="button secondary"
+            onClick={() => save(false)}
+            disabled={isPending || isReadOnly || hasInvalidCopy || !hasUnsavedChanges}
+            title={saveDraftBlockReason}
+            aria-describedby={saveDraftBlockReason ? "save-draft-help" : undefined}
+          >
             {isPending ? "Saving…" : "Save draft"}
           </button>
           <button
@@ -1284,6 +1302,7 @@ export function ContentAssetDesignStudio({
             {isPending ? "Approving artwork…" : "Approve & render final artwork"}
           </button>
         </div>
+        {saveDraftBlockReason ? <p id="save-draft-help" className="muted small" role="status">{saveDraftBlockReason}</p> : null}
         <p className={styles.renderNote}>Approval locks this exact design into a new downloadable PNG and JPEG revision.</p>
       </aside>
     </section>
