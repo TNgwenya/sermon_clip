@@ -314,11 +314,9 @@ export function ScheduleDraftModal({
     setPreflight(null);
     setSelectedSocialAccountIdsByPlatform((current) => {
       const currentIds = resolvedSocialAccountIdsByPlatform[platform] ?? [];
-      const nextIds = automationMode === "AUTOMATIC"
-        ? currentIds.includes(accountId) ? [] : [accountId]
-        : currentIds.includes(accountId)
-          ? currentIds.filter((item) => item !== accountId)
-          : [...currentIds, accountId];
+      const nextIds = currentIds.includes(accountId)
+        ? currentIds.filter((item) => item !== accountId)
+        : [...currentIds, accountId];
 
       return {
         ...current,

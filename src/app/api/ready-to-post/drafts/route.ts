@@ -65,17 +65,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "Choose a future time for automatic posting." }, { status: 400 });
   }
 
-  if (automationMode === "AUTOMATIC") {
-    const multiAccountPlatform = platforms.find((platform) => (
-      (socialAccountIdsByPlatform[platform]?.length ?? 0) > 1
-    ));
-    if (multiAccountPlatform) {
-      return NextResponse.json({
-        error: `Choose one ${multiAccountPlatform} account per automatic draft. Create another draft for a second account.`,
-      }, { status: 400 });
-    }
-  }
-
   const readyClips = await prisma.clipCandidate.findMany({
     where: {
       id: { in: clipIds },
