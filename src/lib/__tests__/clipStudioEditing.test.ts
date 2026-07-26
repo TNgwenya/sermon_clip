@@ -12,6 +12,7 @@ import {
   mergeCaptionCueTextOverrides,
   parseCaptionSourceWords,
   parseHashtagEditorInput,
+  repairGeneratedCaptionCueTimelineForSave,
   resolveClipStudioCaptionCuesForSave,
   resolveClipStudioInitialCaptionCues,
   splitEditableCaptionCue,
@@ -288,6 +289,40 @@ describe("validateEditableCaptionCues", () => {
 
     expect(result.isValid).toBe(false);
     expect(result.errors).toContain("Caption 2 overlaps the previous caption.");
+  });
+
+  it("repairs overlapping provider-timed captions without accepting manual overlaps", () => {
+    const generated = repairGeneratedCaptionCueTimelineForSave([
+      {
+        index: 1,
+        startSeconds: 0,
+        endSeconds: 1.1,
+        text: "First",
+        wordTimings: [{ text: "First", startSeconds: 0, endSeconds: 1.1 }],
+      },
+      {
+        index: 2,
+        startSeconds: 1,
+        endSeconds: 2,
+        text: "second",
+        wordTimings: [{ text: "second", startSeconds: 1, endSeconds: 2 }],
+      },
+    ], 2);
+    const manual = repairGeneratedCaptionCueTimelineForSave([
+      { index: 1, startSeconds: 0, endSeconds: 1.1, text: "First" },
+      { index: 2, startSeconds: 1, endSeconds: 2, text: "second" },
+    ], 2);
+
+    expect(generated.repaired).toBe(true);
+    expect(validateEditableCaptionCues(generated.cues, 2).isValid).toBe(true);
+    expect(generated.cues[0]?.endSeconds).toBe(generated.cues[1]?.startSeconds);
+    expect(manual).toEqual({
+      cues: [
+        { index: 1, startSeconds: 0, endSeconds: 1.1, text: "First" },
+        { index: 2, startSeconds: 1, endSeconds: 2, text: "second" },
+      ],
+      repaired: false,
+    });
   });
 
   it("rejects editable captions with very low clip coverage", () => {
@@ -736,6 +771,24 @@ describe("buildTimedCaptionCuesFromTranscriptWords", () => {
         ],
       },
     ]);
+  });
+
+  it("normalizes overlapping provider words into a saveable caption timeline", () => {
+    const words = Array.from({ length: 24 }, (_, index) => ({
+      text: `word${index + 1}`,
+      startTimeSeconds: index === 23 ? 22.95 : index,
+      endTimeSeconds: index + 1,
+    }));
+    const cues = buildTimedCaptionCuesFromTranscriptWords({
+      startTimeSeconds: 0,
+      endTimeSeconds: 24,
+      words,
+      maxWordsPerCue: 1,
+    });
+
+    expect(cues).toHaveLength(24);
+    expect(cues[22]?.endSeconds).toBe(cues[23]?.startSeconds);
+    expect(validateEditableCaptionCues(cues, 24).isValid).toBe(true);
   });
 
   it("uses semantic grouping without splitting a Bible reference", () => {

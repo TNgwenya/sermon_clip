@@ -930,12 +930,18 @@ function buildTimedCaptionCuesFromWords({
     ? Math.max(0.25, maxCueDurationSeconds)
     : DEFAULT_TIMED_CAPTION_MAX_CUE_SECONDS;
   if (groupingStrategy === "semantic" && normalizedMaxWordsPerCue > 1) {
-    return buildSemanticTimedCaptionCues({
+    const semanticCues = buildSemanticTimedCaptionCues({
       timedWords,
       clipDurationSeconds,
       maxWordsPerCue: normalizedMaxWordsPerCue,
       maxCueDurationSeconds: normalizedMaxCueDurationSeconds,
     });
+    const normalizedTimeline = clampEditableCaptionCueTimeline({
+      cues: semanticCues,
+      clipDurationSeconds,
+      minimumCueDurationSeconds: 0.05,
+    });
+    return normalizedTimeline.isValid ? normalizedTimeline.cues : semanticCues;
   }
 
   const cues: EditableCaptionCue[] = [];
@@ -988,7 +994,12 @@ function buildTimedCaptionCuesFromWords({
 
   flushCurrentCue();
 
-  return cues;
+  const normalizedTimeline = clampEditableCaptionCueTimeline({
+    cues,
+    clipDurationSeconds,
+    minimumCueDurationSeconds: 0.05,
+  });
+  return normalizedTimeline.isValid ? normalizedTimeline.cues : cues;
 }
 
 export function buildTimedCaptionCuesFromTranscriptWords({
@@ -1706,6 +1717,39 @@ export function validateEditableCaptionCues(
     warnings,
     coverageRatio,
     maxGapSeconds,
+  };
+}
+
+export function repairGeneratedCaptionCueTimelineForSave(
+  cues: EditableCaptionCue[],
+  clipDurationSeconds: number,
+): { cues: EditableCaptionCue[]; repaired: boolean } {
+  const validation = validateEditableCaptionCues(cues, clipDurationSeconds);
+  const hasGeneratedWordTimings = cues.some(
+    (cue) => Array.isArray(cue.wordTimings) && cue.wordTimings.length > 0,
+  );
+  const hasOverlapError = validation.errors.some((error) => error.includes("overlaps the previous caption"));
+  if (!hasGeneratedWordTimings || !hasOverlapError) {
+    return { cues, repaired: false };
+  }
+
+  const normalized = clampEditableCaptionCueTimeline({
+    cues,
+    clipDurationSeconds,
+    minimumCueDurationSeconds: 0.05,
+  });
+  if (!normalized.isValid) {
+    return { cues, repaired: false };
+  }
+
+  const repairedValidation = validateEditableCaptionCues(normalized.cues, clipDurationSeconds);
+  if (repairedValidation.errors.some((error) => error.includes("overlaps the previous caption"))) {
+    return { cues, repaired: false };
+  }
+
+  return {
+    cues: normalized.cues,
+    repaired: normalized.wasClamped,
   };
 }
 

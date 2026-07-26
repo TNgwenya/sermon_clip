@@ -74,6 +74,7 @@ import {
   type EditableCaptionCue,
   parseCaptionSourceWords,
   parseHashtagEditorInput,
+  repairGeneratedCaptionCueTimelineForSave,
   resolveClipStudioCaptionCuesForSave,
   validateCaptionCuesFromTranscript,
   validateEditableCaptionCues,
@@ -4844,12 +4845,22 @@ export async function updateClipStudioEditsAction(
     submittedCues: input.captionCues,
     transcriptCues: transcriptCaptionCues,
   });
-  const captionCueValidation = validateEditableCaptionCues(draftCaptionCues, timing.durationSeconds);
+  const repairedCaptionTimeline = repairGeneratedCaptionCueTimelineForSave(
+    draftCaptionCues,
+    timing.durationSeconds,
+  );
+  const captionCueValidation = validateEditableCaptionCues(
+    repairedCaptionTimeline.cues,
+    timing.durationSeconds,
+  );
   const normalizedCaptionCues = captionCueValidation.cues;
   const transcriptGroundingValidation = validateCaptionCuesFromTranscript(normalizedCaptionCues, selectedTranscriptText);
   const combinedWarnings = [
     ...timing.warnings,
     ...captionCueValidation.warnings,
+    ...(repairedCaptionTimeline.repaired
+      ? ["Overlapping generated caption timing was fitted into a clean timeline."]
+      : []),
     ...(input.applyCaptionsToClip && !transcriptGroundingValidation.isValid
       ? ["Caption words were manually edited from the transcript source."]
       : []),
