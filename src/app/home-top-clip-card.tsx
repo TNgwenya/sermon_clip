@@ -19,6 +19,7 @@ type HomeTopClipCardProps = {
   platformLabel: string | null;
   hookLine: string | null;
   canPreviewVideo: boolean;
+  previewSrc: string;
   priority?: boolean;
 };
 
@@ -46,6 +47,7 @@ export function HomeTopClipCard({
   platformLabel,
   hookLine,
   canPreviewVideo,
+  previewSrc,
   priority = false,
 }: HomeTopClipCardProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -118,7 +120,7 @@ export function HomeTopClipCard({
           <video
             ref={videoRef}
             className="dashboard-clip-preview"
-            src={`/api/clips/${clipId}/preview?variant=best`}
+            src={previewSrc}
             muted
             playsInline
             preload="none"

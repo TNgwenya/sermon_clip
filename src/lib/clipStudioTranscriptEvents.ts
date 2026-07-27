@@ -7,6 +7,7 @@ export type ClipStudioTranscriptCommand =
   | "set-end-seconds"
   | "snap-to-sentence"
   | "reset-ai"
+  | "open-caption-editor"
   | "update-text"
   | "reset-text";
 

@@ -24,7 +24,6 @@ import {
 } from "@/server/agents/clipBoundaryRefinement";
 import {
   checkFfmpegInstalled,
-  getMediaDimensions,
   getMediaDurationSeconds,
 } from "@/server/media/ffmpeg";
 import {
@@ -32,11 +31,13 @@ import {
   resolveAudioBitrate,
   resolvePreferredVideoEncoder as resolveSharedPreferredVideoEncoder,
 } from "@/server/media/videoEncoding";
-import { resolveSmartCropCenter, resolveSmartCropTimeline } from "@/server/agents/videoSubjectTrackingService";
 import {
   buildVerticalFramingFilter,
+  getSmartCropFilterRiskReason,
+  isFfmpegCropFilterFailure,
   resolveFramingPreset,
   type FramingPreset,
+  type FramingTreatment,
 } from "@/lib/clipFraming";
 import { normalizeManualCropKeyframes } from "@/lib/manualCrop";
 import {
@@ -66,6 +67,11 @@ import {
   discardPromotedMediaIfUnchanged,
   type PromotedMediaIdentity,
 } from "@/server/agents/mediaPromotionGuard";
+import {
+  ensureResolvedFramingPlanForActiveRevision,
+  persistResolvedFramingRuntimeFallback,
+} from "@/server/agents/resolvedFramingPlanService";
+import { resolvedFramingPlanToSmartCropOptions } from "@/lib/resolvedFramingPlan";
 
 type RenderOptions = {
   ffmpegPath?: string;
@@ -202,6 +208,7 @@ type RenderSmartCrop = {
     centerY?: number;
     zoom?: number;
   }>;
+  treatment?: FramingTreatment | null;
 };
 
 function resolveManualRenderSmartCrop(value: unknown): Pick<
@@ -593,8 +600,89 @@ function mapInternalSilenceEvents(input: {
   });
 }
 
+function remapSmartCropTimelineForRender(input: {
+  smartCrop: RenderSmartCrop | null;
+  originalStartTimeSeconds: number;
+  effectiveStartTimeSeconds: number;
+  effectiveEndTimeSeconds: number;
+  internalSilenceCleanup?: InternalSilenceCleanup | null;
+}): RenderSmartCrop | null {
+  if (!input.smartCrop?.subjectCenters?.length) {
+    return input.smartCrop;
+  }
+
+  const cuts = (input.internalSilenceCleanup?.applied
+    ? input.internalSilenceCleanup.cuts
+    : [])
+    .slice()
+    .sort((left, right) => left.startTimeSeconds - right.startTimeSeconds);
+  const ordered = input.smartCrop.subjectCenters
+    .slice()
+    .sort((left, right) => left.timeSeconds - right.timeSeconds);
+  const seed = ordered
+    .filter(
+      (point) =>
+        input.originalStartTimeSeconds + point.timeSeconds
+        <= input.effectiveStartTimeSeconds,
+    )
+    .at(-1) ?? ordered[0];
+  const remapped = [
+    {
+      ...seed,
+      timeSeconds: 0,
+    },
+    ...ordered.flatMap((point) => {
+      const absoluteTime = input.originalStartTimeSeconds + point.timeSeconds;
+      if (
+        absoluteTime <= input.effectiveStartTimeSeconds
+        || absoluteTime > input.effectiveEndTimeSeconds
+      ) {
+        return [];
+      }
+      if (
+        cuts.some(
+          (cut) =>
+            absoluteTime >= cut.startTimeSeconds
+            && absoluteTime <= cut.endTimeSeconds,
+        )
+      ) {
+        return [];
+      }
+
+      const removedBeforePoint = cuts.reduce((total, cut) => {
+        if (cut.startTimeSeconds >= absoluteTime) {
+          return total;
+        }
+        return total + Math.max(
+          0,
+          Math.min(absoluteTime, cut.endTimeSeconds)
+            - Math.max(input.effectiveStartTimeSeconds, cut.startTimeSeconds),
+        );
+      }, 0);
+      return [{
+        ...point,
+        timeSeconds: roundSeconds(
+          absoluteTime - input.effectiveStartTimeSeconds - removedBeforePoint,
+        ),
+      }];
+    }),
+  ].filter(
+    (point, index, points) =>
+      index === 0 || point.timeSeconds > points[index - 1].timeSeconds,
+  );
+  const first = remapped[0];
+
+  return {
+    ...input.smartCrop,
+    subjectCenterX: first?.centerX ?? input.smartCrop.subjectCenterX,
+    subjectCenterY: first?.centerY ?? input.smartCrop.subjectCenterY,
+    subjectCenters: remapped,
+  };
+}
+
 function buildRenderFilter(input: {
   framingPreset: FramingPreset;
+  framingTreatment?: FramingTreatment | null;
   startTimeSeconds: number;
   smartCrop?: RenderSmartCrop | null;
   internalSilenceCleanup?: InternalSilenceCleanup | null;
@@ -602,7 +690,10 @@ function buildRenderFilter(input: {
   const cuts = input.internalSilenceCleanup?.applied ? input.internalSilenceCleanup.cuts : [];
   if (cuts.length === 0) {
     return {
-      filterComplex: buildVerticalFramingFilter(input.framingPreset, input.smartCrop ?? undefined),
+      filterComplex: buildVerticalFramingFilter(input.framingPreset, {
+        ...(input.smartCrop ?? {}),
+        treatment: input.framingTreatment ?? input.smartCrop?.treatment,
+      }),
       videoMap: "[v]",
       audioMap: "0:a?",
     };
@@ -619,12 +710,13 @@ function buildRenderFilter(input: {
   return {
     filterComplex: [
       `[0:v]select=not(${exclusion})[silence_v]`,
-      "[silence_v]setpts=PTS-STARTPTS[trimmed_v]",
+      "[silence_v]setpts=N/FRAME_RATE/TB[trimmed_v]",
       `[0:a]aselect=not(${exclusion})[silence_a]`,
-      "[silence_a]asetpts=PTS-STARTPTS[a]",
+      "[silence_a]asetpts=N/SR/TB[a]",
       buildVerticalFramingFilter(input.framingPreset, {
         ...(input.smartCrop ?? {}),
         inputLabel: "trimmed_v",
+        treatment: input.framingTreatment ?? input.smartCrop?.treatment,
       }),
     ].join(";"),
     videoMap: "[v]",
@@ -696,12 +788,14 @@ async function runFfmpegRender(input: {
   ffmpegPath?: string;
   jobId: string;
   framingPreset: FramingPreset;
+  framingTreatment?: FramingTreatment | null;
   smartCrop?: RenderSmartCrop | null;
   internalSilenceCleanup?: InternalSilenceCleanup | null;
 }): Promise<void> {
   const command = commandFor(input.ffmpegPath);
   const renderFilter = buildRenderFilter({
     framingPreset: input.framingPreset,
+    framingTreatment: input.framingTreatment,
     startTimeSeconds: input.startTimeSeconds,
     smartCrop: input.smartCrop ?? null,
     internalSilenceCleanup: input.internalSilenceCleanup ?? null,
@@ -972,7 +1066,16 @@ export async function renderApprovedClip(
       // Ignore stale partial file deletion errors.
     }
 
-    const framingPreset = resolveFramingPreset(clip.exportLayoutStrategy);
+    let resolvedFramingRecord = await ensureResolvedFramingPlanForActiveRevision({
+      guard: editPlanGuard,
+      sourceVideoPath,
+      ffmpegPath: options?.ffmpegPath,
+      applicationMode: "APPLY_AT_BASE_RENDER",
+    });
+    let framingPreset = resolveFramingPreset(resolvedFramingRecord.plan.effective.layout);
+    let framingTreatment = resolvedFramingRecord.plan.effective.treatment;
+    let smartCrop: RenderSmartCrop | null =
+      resolvedFramingPlanToSmartCropOptions(resolvedFramingRecord.plan);
     const speechCleanup = resolveRenderSpeechCleanupSettings(clip.captionData);
     let effectiveBoundaries = boundaries;
     let internalSilenceCleanup: InternalSilenceCleanup | null = null;
@@ -1043,34 +1146,36 @@ export async function renderApprovedClip(
       }
     }
 
-    const manualSmartCrop = resolveManualRenderSmartCrop(clip.manualCropKeyframes);
-    const smartCrop =
-      framingPreset === "SMART_CROP"
-        ? await Promise.all([
-            getMediaDimensions(sourceVideoPath, options?.ffmpegPath).catch(() => null),
-            manualSmartCrop ? Promise.resolve(null) : resolveSmartCropCenter(clip.id),
-            manualSmartCrop ? Promise.resolve([]) : resolveSmartCropTimeline(clip.id, effectiveBoundaries),
-          ]).then(([dimensions, center, timeline]) => (
-            dimensions && manualSmartCrop
-              ? {
-                  sourceWidth: dimensions.width,
-                  sourceHeight: dimensions.height,
-                  ...manualSmartCrop,
-                }
-              : dimensions && center
-              ? {
-                  sourceWidth: dimensions.width,
-                  sourceHeight: dimensions.height,
-                  subjectCenterX: center.centerX,
-                  subjectCenters: timeline.map((point) => ({
-                    timeSeconds: point.timeSeconds,
-                    centerX: point.centerX,
-                  })),
-                }
-              : null
-          ))
-        : null;
-    await runFfmpegRender({
+    smartCrop = remapSmartCropTimelineForRender({
+      smartCrop,
+      originalStartTimeSeconds: boundaries.startTimeSeconds,
+      effectiveStartTimeSeconds: effectiveBoundaries.startTimeSeconds,
+      effectiveEndTimeSeconds: effectiveBoundaries.endTimeSeconds,
+      internalSilenceCleanup,
+    });
+    const plannedFilter = buildRenderFilter({
+      framingPreset,
+      framingTreatment,
+      startTimeSeconds: effectiveBoundaries.startTimeSeconds,
+      smartCrop,
+      internalSilenceCleanup,
+    }).filterComplex;
+    const filterRiskReason = framingPreset === "SMART_CROP"
+      ? getSmartCropFilterRiskReason(plannedFilter)
+      : null;
+    if (filterRiskReason) {
+      resolvedFramingRecord = await persistResolvedFramingRuntimeFallback({
+        guard: editPlanGuard,
+        plan: resolvedFramingRecord.plan,
+        fallbackCode: "FFMPEG_FILTER_RISK",
+        fallbackReason: `Tracked framing was simplified to a safe full-frame treatment because ${filterRiskReason}.`,
+      });
+      framingPreset = resolvedFramingRecord.plan.effective.layout;
+      framingTreatment = resolvedFramingRecord.plan.effective.treatment;
+      smartCrop = null;
+    }
+
+    const executeRender = () => runFfmpegRender({
       sermonId: clip.sermonId,
       sourceVideoPath,
       outputPath: tempOutputPath,
@@ -1079,9 +1184,31 @@ export async function renderApprovedClip(
       ffmpegPath: options?.ffmpegPath,
       jobId: job.id,
       framingPreset,
+      framingTreatment,
       smartCrop,
       internalSilenceCleanup,
     });
+    try {
+      await executeRender();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown FFmpeg render error.";
+      if (framingPreset !== "SMART_CROP" || !isFfmpegCropFilterFailure(message)) {
+        throw error;
+      }
+
+      await unlink(tempOutputPath).catch(() => undefined);
+      resolvedFramingRecord = await persistResolvedFramingRuntimeFallback({
+        guard: editPlanGuard,
+        plan: resolvedFramingRecord.plan,
+        fallbackCode: "FFMPEG_CROP_FAILURE",
+        fallbackReason: "Tracked framing failed inside FFmpeg, so a safe full-frame treatment was rendered instead.",
+      });
+      framingPreset = resolvedFramingRecord.plan.effective.layout;
+      framingTreatment = resolvedFramingRecord.plan.effective.treatment;
+      smartCrop = null;
+      await appendJobLog(job.id, `Tracked framing fallback used after FFmpeg crop failure: ${message}`);
+      await executeRender();
+    }
 
     await assertClipEditPlanStillActive(editPlanGuard);
     await rename(tempOutputPath, outputPath);
@@ -1129,6 +1256,9 @@ export async function renderApprovedClip(
         reusedExistingFile: false,
         speechCleanupApplied: Boolean(speechCleanupPlan?.enabled),
         framingPreset,
+        framingTreatment,
+        resolvedFramingPlanHash: resolvedFramingRecord.planHash,
+        resolvedFramingPlanStatus: resolvedFramingRecord.status,
       },
       editPlan: {
         editPlanId: editPlanGuard.editPlanId,
@@ -1271,6 +1401,7 @@ export const __clipRenderTestUtils = {
   getBatchRenderDecision,
   mapInternalSilenceEvents,
   parseSilenceDetectEvents,
+  remapSmartCropTimelineForRender,
   resolveDetectedEdgeSilence,
   resolveSermonDurationFallback,
   resolveRenderSpeechCleanupSettings,

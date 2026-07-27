@@ -19,6 +19,17 @@ function automationPost(overrides: Partial<AutomationPost> = {}): AutomationPost
       durationSeconds: 45,
       hashtags: ["#faith"],
       localFileCandidates: ["/exports/cached-old.mp4"],
+      compositionIdentity: {
+        schemaVersion: 1,
+        clipId: "clip-1",
+        editPlanId: "plan-1",
+        artifactId: "artifact-1",
+        planHash: "plan-hash-1",
+        filePath: "/exports/cached-old.mp4",
+        sizeBytes: 1_024,
+        snapshotSha256: null,
+        snapshotSizeBytes: null,
+      },
       sermon: {
         title: "Faithfulness",
         churchName: "Grace Church",
@@ -40,6 +51,11 @@ describe("posting worker claim payload", () => {
       clips: [{
         ...cached.clips[0],
         localFileCandidates: ["/exports/fresh-final.mp4"],
+        compositionIdentity: {
+          ...cached.clips[0].compositionIdentity!,
+          artifactId: "artifact-2",
+          filePath: "/exports/fresh-final.mp4",
+        },
       }],
     });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
@@ -68,5 +84,96 @@ describe("posting worker claim payload", () => {
     })));
 
     await expect(__postingWorkerTestUtils.claimPost(cached)).resolves.toBeNull();
+  });
+
+  it("rejects a clip claim payload without an immutable composition identity", async () => {
+    const cached = automationPost();
+    const unsafeClaim = automationPost({
+      clips: [{
+        ...cached.clips[0],
+        compositionIdentity: undefined,
+      }],
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      scheduledPost: unsafeClaim,
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })));
+
+    await expect(__postingWorkerTestUtils.claimPost(cached)).resolves.toBeNull();
+  });
+
+  it("keeps approved content-asset posts compatible without a clip composition", async () => {
+    const contentPost = automationPost({
+      clips: [],
+      contentAssets: [{
+        id: "asset-1",
+        title: "Sunday quote",
+        assetType: "QUOTE_GRAPHIC",
+        status: "SCHEDULED",
+        caption: "A faithful word",
+        bodyContent: null,
+        callToAction: null,
+        hashtags: ["#faith"],
+        files: [],
+      }],
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      scheduledPost: contentPost,
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })));
+
+    await expect(__postingWorkerTestUtils.claimPost(contentPost)).resolves.toEqual(contentPost);
+  });
+
+  it("revalidates the observed local path and size before external publishing", async () => {
+    const post = automationPost();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ valid: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(__postingWorkerTestUtils.revalidateClaimedPostComposition(post, {
+      clipId: "clip-1",
+      sha256: "a".repeat(64),
+      sizeBytes: 1_024,
+    })).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/scheduled-posts/post-1/validate-composition"),
+      expect.objectContaining({
+        method: "POST",
+        body: expect.any(String),
+      }),
+    );
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.compositionIdentities).toEqual([{
+      ...post.clips[0]?.compositionIdentity,
+      snapshotSha256: "a".repeat(64),
+      snapshotSizeBytes: 1_024,
+    }]);
+  });
+
+  it("fails closed when the server releases a changed composition", async () => {
+    const post = automationPost();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "The claimed clip composition is no longer current.",
+      released: true,
+    }), {
+      status: 409,
+      headers: { "content-type": "application/json" },
+    })));
+
+    await expect(__postingWorkerTestUtils.revalidateClaimedPostComposition(post, {
+      clipId: "clip-1",
+      sha256: "b".repeat(64),
+      sizeBytes: 2_048,
+    })).rejects.toMatchObject({
+      name: "StaleClaimedCompositionError",
+    });
   });
 });

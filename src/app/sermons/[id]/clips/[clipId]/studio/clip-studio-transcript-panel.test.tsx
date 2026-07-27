@@ -70,22 +70,30 @@ const panelProps = {
   momentType: "teaching",
   momentTitle: "Grace for today",
   smartClipCategory: "encouragement",
+  transcriptReviewRequired: false,
+  transcriptReviewHref: "/sermons/sermon-1/review#clip-clip-1",
 };
 
 describe("Clip Studio transcript and timing controls", () => {
-  it("explains the spoken transcript and starts with follow playback enabled", () => {
+  it("makes playable transcript rows and selected-line actions explicit", () => {
     const markup = renderToStaticMarkup(<ClipStudioTranscriptPanel {...panelProps} />);
 
     expect(markup).toContain("Spoken transcript");
     expect(markup).toContain("Choose what stays");
-    expect(markup).toContain("Highlighted lines stay in the clip");
-    expect(markup).toContain("Highlighted: in clip");
+    expect(markup).toContain("Every row is a playable spoken line");
+    expect(markup).toContain("In clip: highlighted green");
     expect(markup).toContain("Follow playback");
-    expect(markup).toContain("This transcript controls which spoken audio stays in the clip");
-    expect(markup).toContain("use Captions in the Edit panel");
+    expect(markup).toContain("Start and end change which spoken audio stays");
+    expect(markup).toContain("Wording corrections change captions only");
     expect(markup).toContain('type="checkbox" checked=""');
-    expect(markup).toContain("Start clip here");
-    expect(markup).toContain("End clip here");
+    expect(markup).toContain("Preview selected line");
+    expect(markup).toContain("Set start to 0:10");
+    expect(markup).toContain("Set end to 0:12");
+    expect(markup).toContain("Edit words shown on video");
+    expect(markup).toContain("Review spoken transcript");
+    expect(markup).toContain('href="/sermons/sermon-1/review#clip-clip-1"');
+    expect(markup).toMatch(/aria-pressed="true"[^>]*data-transcript-segment-id="line-1"/);
+    expect(markup).toContain("Select &amp; play");
   });
 
   it("seeks and requests playback when a spoken transcript line is previewed", () => {
@@ -128,11 +136,46 @@ describe("Clip Studio transcript and timing controls", () => {
     expect(markup).toContain('data-clip-status="outside"');
     expect(markup).toContain("Outside clip");
     expect(markup).toMatch(/aria-current="true"[^>]*data-transcript-segment-id="line-2"/);
-    expect(markup).not.toContain("aria-pressed");
+    expect(markup).toMatch(/aria-pressed="true"[^>]*data-transcript-segment-id="line-2"/);
 
     previewState.previewClock.currentSeconds = 0;
     previewState.previewClock.sourceCurrentSeconds = 0;
     previewState.previewClock.isPlaying = false;
+  });
+
+  it("explains caption and transcript-review requirements without changing audio semantics", () => {
+    previewState.editPreview.applyCaptionsToClip = false;
+
+    const markup = renderToStaticMarkup(
+      <ClipStudioTranscriptPanel
+        {...panelProps}
+        transcriptReviewRequired
+      />,
+    );
+
+    expect(markup).toContain("Captions are off");
+    expect(markup).toContain("Turn on captions and edit words");
+    expect(markup).toContain("Spoken transcript review required before final video");
+    expect(markup).toContain("Preparing is locked until a reviewer confirms the spoken wording");
+    expect(markup).toContain("Caption edits here do not complete that review");
+    expect(markup).toContain("Review and confirm wording");
+
+    previewState.editPreview.applyCaptionsToClip = true;
+  });
+
+  it("locks caption wording edits for a spoken line outside the clip and explains the requirement", () => {
+    const markup = renderToStaticMarkup(
+      <ClipStudioTranscriptPanel
+        {...panelProps}
+        transcriptSegments={[
+          { id: "outside", startTimeSeconds: 41, endTimeSeconds: 43, text: "After the clip" },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("This line is outside the clip");
+    expect(markup).toContain("Requirement: include this spoken line in the clip first");
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*aria-describedby="clip-studio-wording-requirement"/);
   });
 
   it("renders numeric In and Out fields with accessible 0.1-second nudges", () => {

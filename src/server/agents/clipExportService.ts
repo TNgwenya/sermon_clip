@@ -26,7 +26,7 @@ import {
   getSourceVideoPath,
 } from "@/server/agents/storage";
 import { buildClipExportBaseName, buildSermonExportDirectoryName } from "@/lib/exportNaming";
-import { checkFfmpegInstalled, getMediaDimensions } from "@/server/media/ffmpeg";
+import { checkFfmpegInstalled } from "@/server/media/ffmpeg";
 import {
   SOFTWARE_VIDEO_ENCODER,
   buildVideoEncoderArgs as buildSharedVideoEncoderArgs,
@@ -38,18 +38,15 @@ import {
   buildVerticalFramingFilter,
   getSmartCropFilterRiskReason,
   isFfmpegCropFilterFailure,
+  type FramingTreatment,
 } from "@/lib/clipFraming";
-import { normalizeManualCropKeyframes } from "@/lib/manualCrop";
 import {
   markInProgressClipStudioExportsFailed,
   markLatestClipStudioExportCompleted,
-  resolveExportSettings,
 } from "@/lib/clipExportSettings";
-import { resolveIntelligentFramingDecision } from "@/lib/clipFramingIntelligence";
 import { type ClipBrandingConfig, type WatermarkPosition } from "@/lib/clipBranding";
 import { getBrandingOverlayDimensions, renderBrandingOverlayPng } from "@/server/agents/brandingOverlay";
 import { ensureClipThumbnail } from "@/server/agents/clipThumbnailService";
-import { resolveSmartCropCenter, resolveSmartCropTimeline } from "@/server/agents/videoSubjectTrackingService";
 import {
   assertClipEditPlanStillActive,
   isStaleClipCompositionError,
@@ -63,10 +60,22 @@ import {
 import { validateTranscriptSafetyForPublishing } from "@/server/agents/localLanguageTranscriptSafety";
 import { extractSpeechCleanupCutPlan } from "@/lib/speechCleanupPlan";
 import {
+  extractBrollLayerConfig,
+  extractHookOverlayConfig,
+} from "@/lib/clipStudio";
+import { resolveBrandingConfig } from "@/lib/clipBranding";
+import {
   capturePromotedMediaIdentity,
   discardPromotedMediaIfUnchanged,
   type PromotedMediaIdentity,
 } from "@/server/agents/mediaPromotionGuard";
+import {
+  ensureResolvedFramingPlanForActiveRevision,
+} from "@/server/agents/resolvedFramingPlanService";
+import {
+  resolveResolvedFramingPlanConsumption,
+  type ResolvedFramingSourceRole,
+} from "@/lib/resolvedFramingPlan";
 
 export type ExportPreset = "VERTICAL_9_16" | "HORIZONTAL_16_9" | "SQUARE_1_1";
 export type ExportLayoutStrategy =
@@ -173,6 +182,7 @@ type ExportSmartCrop = {
     rejected?: boolean;
     frozen?: boolean;
   }>;
+  treatment?: FramingTreatment | null;
 };
 
 const EXPORT_SPECS: Record<ExportPreset, ExportSpec> = {
@@ -220,16 +230,41 @@ async function fileHasBytes(filePath: string): Promise<boolean> {
   }
 }
 
+function artifactMatchesResolvedFramingPlan(
+  metadata: unknown,
+  resolvedFramingPlanHash: string,
+): boolean {
+  return Boolean(
+    metadata
+    && typeof metadata === "object"
+    && !Array.isArray(metadata)
+    && (metadata as Record<string, unknown>)["resolvedFramingPlanHash"]
+      === resolvedFramingPlanHash,
+  );
+}
+
 function buildVideoFilter(
   spec: ExportSpec,
   layout: ExportLayoutStrategy,
   smartCrop?: ExportSmartCrop | null,
+  treatment?: FramingTreatment | null,
 ): string {
   if (spec.format === "VERTICAL_9_16") {
-    return buildVerticalFramingFilter(layout, smartCrop ?? undefined);
+    return buildVerticalFramingFilter(layout, {
+      ...(smartCrop ?? {}),
+      treatment: treatment ?? smartCrop?.treatment,
+    });
   }
 
   if (layout === "FIT_BLURRED_BACKGROUND") {
+    if (treatment === "WORSHIP_WIDE" || treatment === "FULL_STAGE") {
+      const insetRatio = treatment === "WORSHIP_WIDE" ? 0.963 : 0.85;
+      const insetWidth = Math.round(spec.width * insetRatio);
+      const insetHeight = Math.round(spec.height * insetRatio);
+      const backgroundColor = treatment === "WORSHIP_WIDE" ? "0x111318" : "0x08090b";
+      return `[0:v]scale=${insetWidth}:${insetHeight}:force_original_aspect_ratio=decrease,pad=${spec.width}:${spec.height}:(ow-iw)/2:(oh-ih)/2:color=${backgroundColor},format=yuv420p[v]`;
+    }
+
     return [
       `[0:v]scale=${spec.width}:${spec.height}:force_original_aspect_ratio=increase,boxblur=20:1[bg]`,
       `[0:v]scale=${spec.width}:${spec.height}:force_original_aspect_ratio=decrease[fg]`,
@@ -616,6 +651,7 @@ function resolveRenderBoundaries(clip: Pick<ClipForExport, "startTimeSeconds" | 
 function resolvePreparedExportSourceSelection(
   clip: Pick<
     ClipForExport,
+    | "captionData"
     | "renderStatus"
     | "renderFreshness"
     | "renderedFilePath"
@@ -627,6 +663,24 @@ function resolvePreparedExportSourceSelection(
     | "overlayVideoPath"
   >,
 ): ExportSourceSelection {
+  const hookOverlay = extractHookOverlayConfig(clip.captionData, null);
+  const brollLayer = extractBrollLayerConfig(clip.captionData);
+  const branding = resolveBrandingConfig(clip.captionData);
+  const requiresPreparedOverlay = Boolean(
+    (hookOverlay.enabled && hookOverlay.text.trim())
+    || (brollLayer.enabled && brollLayer.cards.length > 0)
+    || (
+      branding.enabled
+      && branding.preset !== "NO_BRANDING"
+      && (
+        branding.watermarkEnabled
+        || branding.lowerThirdEnabled
+        || branding.introEnabled
+        || branding.outroEnabled
+      )
+    ),
+  );
+
   if (clip.overlayStatus === "COMPLETED" || clip.overlayVideoPath) {
     if (clip.overlayStatus !== "COMPLETED" || clip.overlayFreshness !== "UP_TO_DATE" || !clip.overlayVideoPath) {
       throw new Error("The prepared overlay is stale or incomplete. Rebuild branding before exporting this clip.");
@@ -638,6 +692,12 @@ function resolvePreparedExportSourceSelection(
     };
   }
 
+  if (requiresPreparedOverlay) {
+    throw new Error(
+      "This clip has approved hook, B-roll, or branding layers, but its prepared overlay is missing. Rebuild branding before exporting.",
+    );
+  }
+
   if (clip.captionBurnStatus === "COMPLETED" || clip.captionedVideoPath) {
     if (clip.captionBurnStatus !== "COMPLETED" || clip.captionBurnFreshness !== "UP_TO_DATE" || !clip.captionedVideoPath) {
       throw new Error("The prepared captioned video is stale or incomplete. Rebuild burned captions before exporting this clip.");
@@ -647,6 +707,13 @@ function resolvePreparedExportSourceSelection(
       kind: "PREPARED_CAPTIONED",
       reason: "Prepared captioned output preserves approved burned-in captions.",
     };
+  }
+
+  const captionData = clip.captionData && typeof clip.captionData === "object" && !Array.isArray(clip.captionData)
+    ? clip.captionData as Record<string, unknown>
+    : {};
+  if (captionData["applyCaptionsToClip"] !== false) {
+    throw new Error("Captions are enabled, but the captioned video is stale or incomplete. Rebuild burned captions before exporting this clip.");
   }
 
   if (clip.renderStatus !== "COMPLETED" || clip.renderFreshness !== "UP_TO_DATE" || !clip.renderedFilePath) {
@@ -663,6 +730,7 @@ function resolvePreparedExportSourceSelection(
 export function resolvePreparedExportSource(
   clip: Pick<
     ClipForExport,
+    | "captionData"
     | "renderStatus"
     | "renderFreshness"
     | "renderedFilePath"
@@ -787,6 +855,15 @@ export async function exportClipWithPreset(
   const exportSource = await resolveBestExportSource(clip);
   const sourcePath = exportSource.sourcePath;
   const sourceExists = sourcePath ? await fileHasBytes(sourcePath) : false;
+  const originalSourcePath = await resolveOriginalSermonSourcePath(clip);
+  let resolvedFramingRecord = sourcePath
+    ? await ensureResolvedFramingPlanForActiveRevision({
+        guard: editPlanGuard,
+        sourceVideoPath: originalSourcePath ?? sourcePath,
+        ffmpegPath: options?.ffmpegPath,
+        applicationMode: "APPLY_TO_ORIGINAL_EXPORT",
+      })
+    : null;
   const outputPath = resolveExportOutputPath({
     sermonId: clip.sermonId,
     clipId: clip.id,
@@ -802,8 +879,37 @@ export async function exportClipWithPreset(
   });
   await mkdir(/* turbopackIgnore: true */ path.dirname(outputPath), { recursive: true });
   const outputExists = await fileHasBytes(outputPath);
+  const reusableArtifact = resolvedFramingRecord
+    ? await prisma.clipArtifact.findFirst({
+        where: {
+          clipCandidateId: clip.id,
+          editPlanId: editPlanGuard.editPlanId,
+          planHash: editPlanGuard.planHash,
+          kind: "EXPORT",
+          status: "READY",
+          freshness: "UP_TO_DATE",
+          format,
+          filePath: outputPath,
+        },
+        orderBy: { createdAt: "desc" },
+        select: { metadataJson: true },
+      })
+    : null;
+  const framingIdentityMatches = Boolean(
+    resolvedFramingRecord
+    && artifactMatchesResolvedFramingPlan(
+      reusableArtifact?.metadataJson,
+      resolvedFramingRecord.planHash,
+    ),
+  );
 
-  if (outputExists && clip.exportFreshness === "UP_TO_DATE" && !options?.allowReexport && !options?.force) {
+  if (
+    outputExists
+    && clip.exportFreshness === "UP_TO_DATE"
+    && framingIdentityMatches
+    && !options?.allowReexport
+    && !options?.force
+  ) {
     const outputStats = await stat(outputPath).catch(() => null);
     await updateClipCandidateForActiveEditPlan({
       guard: editPlanGuard,
@@ -842,6 +948,8 @@ export async function exportClipWithPreset(
         reusedExistingFile: true,
         layoutStrategy,
         sourceKind: exportSource.kind,
+        resolvedFramingPlanHash: resolvedFramingRecord?.planHash ?? null,
+        resolvedFramingPlanStatus: resolvedFramingRecord?.status ?? null,
       },
       editPlan: {
         editPlanId: editPlanGuard.editPlanId,
@@ -947,145 +1055,47 @@ export async function exportClipWithPreset(
       },
     });
 
-    const exportSettings = resolveExportSettings({
-      exportFormat: format,
-      exportLayoutStrategy: layoutStrategy,
-      captionData: clip.captionData,
+    resolvedFramingRecord ??= await ensureResolvedFramingPlanForActiveRevision({
+      guard: editPlanGuard,
+      sourceVideoPath: originalSourcePath ?? exportSourcePath,
+      ffmpegPath: options?.ffmpegPath,
+      applicationMode: "APPLY_TO_ORIGINAL_EXPORT",
     });
-    const manualCropKeyframes = normalizeManualCropKeyframes(clip.manualCropKeyframes);
-    const firstManualCropKeyframe = manualCropKeyframes[0];
-    const boundaries = {
-      startTimeSeconds: clip.adjustedStartTimeSeconds ?? clip.startTimeSeconds,
-      endTimeSeconds: clip.adjustedEndTimeSeconds ?? clip.endTimeSeconds,
-    };
-    const smartCrop: ExportSmartCrop | null =
-      layoutStrategy === "SMART_CROP"
-        ? await Promise.all([
-            getMediaDimensions(exportSourcePath, options?.ffmpegPath).catch(() => null),
-            firstManualCropKeyframe ? Promise.resolve(null) : resolveSmartCropCenter(clip.id),
-            manualCropKeyframes.length > 0 ? Promise.resolve([]) : resolveSmartCropTimeline(clip.id, boundaries),
-          ]).then(([dimensions, center, timeline]) => (
-            dimensions && (firstManualCropKeyframe || center)
-              ? {
-                  sourceWidth: dimensions.width,
-                  sourceHeight: dimensions.height,
-                  subjectCenterX: firstManualCropKeyframe?.centerX ?? center?.centerX ?? 0.5,
-                  ...(firstManualCropKeyframe
-                    ? {
-                        subjectCenterY: firstManualCropKeyframe.centerY ?? 0.5,
-                        zoom: firstManualCropKeyframe.zoom ?? 1,
-                      }
-                    : { zoom: 1 }),
-                  subjectCenters: manualCropKeyframes.length > 0
-                    ? manualCropKeyframes.map((point) => ({
-                        timeSeconds: point.timeSeconds,
-                        centerX: point.centerX,
-                        ...(point.centerY !== undefined ? { centerY: point.centerY } : {}),
-                        ...(point.zoom !== undefined ? { zoom: point.zoom } : {}),
-                        confidence: 1,
-                        stabilized: false,
-                        rejected: false,
-                        frozen: false,
-                      }))
-                    : timeline.map((point) => ({
-                        timeSeconds: point.timeSeconds,
-                        centerX: point.centerX,
-                        confidence: point.confidence,
-                        stabilized: point.stabilized,
-                        rejected: point.rejected,
-                        frozen: point.frozen,
-                      })),
-                }
-              : null
-          ))
-        : null;
-    const framingDecision = resolveIntelligentFramingDecision({
-      requestedLayout: layoutStrategy,
-      requestedPersonality: exportSettings.framingPersonality,
-      smartCropPoints: smartCrop?.subjectCenters,
-      hasManualCrop: manualCropKeyframes.length > 0,
-      moment: {
-        title: clip.title,
-        hook: clip.hook,
-        transcriptText: clip.transcriptText,
-        category: clip.smartClipCategory,
-        ministryValue: clip.ministryValue,
-        emotionalImpactScore: clip.emotionalImpactScore,
-        hookStrengthScore: clip.hookStrengthScore,
-        shareabilityScore: clip.shareabilityScore,
-        durationSeconds: boundaries.endTimeSeconds - boundaries.startTimeSeconds,
-      },
+    const sourceRole: ResolvedFramingSourceRole = exportSource.kind === "ORIGINAL_SERMON"
+      ? "ORIGINAL_SOURCE"
+      : "PREPARED_DERIVATIVE";
+    const framingConsumption = resolveResolvedFramingPlanConsumption({
+      plan: resolvedFramingRecord.plan,
+      sourceRole,
+      outputWidth: spec.width,
+      outputHeight: spec.height,
     });
-    const smartCropSafety = framingDecision.safety;
-    let effectiveLayoutStrategy: ExportLayoutStrategy = framingDecision.effectiveLayout;
-    let effectiveSmartCrop = effectiveLayoutStrategy === "SMART_CROP" ? smartCrop : null;
-    if (effectiveSmartCrop) {
-      effectiveSmartCrop = {
-        ...effectiveSmartCrop,
-        zoom: firstManualCropKeyframe?.zoom ?? (firstManualCropKeyframe ? 1 : framingDecision.zoom),
-      };
-    }
-
-    if (firstManualCropKeyframe && layoutStrategy === "SMART_CROP" && smartCrop) {
-      effectiveLayoutStrategy = "SMART_CROP";
-      effectiveSmartCrop = {
-        ...smartCrop,
-        subjectCenterY: firstManualCropKeyframe.centerY ?? 0.5,
-        zoom: firstManualCropKeyframe.zoom ?? 1,
-      };
-    }
-
-    const protectsPreparedVisualLayers = shouldUseSafePreparedVisualFit({
-      format,
-      sourceKind: exportSource.kind,
-    });
-    if (protectsPreparedVisualLayers) {
-      effectiveLayoutStrategy = "FIT_BLURRED_BACKGROUND";
-      effectiveSmartCrop = null;
-      await appendPipelineLog(
-        clip.sermonId,
-        `Export preserved the full prepared caption and artwork frame for ${clip.id} in ${format}; safe fit prevents vertical artwork from being cropped.`,
-      );
-    }
-
-    if (framingDecision.fallbackApplied) {
-      await appendPipelineLog(
-        clip.sermonId,
-        `Smart framing export chose ${framingDecision.effectiveLayout} for clip ${clip.id}: ${framingDecision.reasonCodes.join(", ")} (average confidence ${smartCropSafety.averageConfidence.toFixed(2)}, unstable ratio ${smartCropSafety.unstableRatio.toFixed(2)}).`,
-      );
-    } else {
-      await appendPipelineLog(
-        clip.sermonId,
-        `Smart framing export selected for clip ${clip.id}: ${framingDecision.pastorSummary}`,
-      );
-    }
-
-    const preservePreparedManualFraming = shouldPreservePreparedManualFraming({
-      format,
-      sourceKind: exportSource.kind,
-      hasManualCrop: manualCropKeyframes.length > 0,
-    });
-    let filter = preservePreparedManualFraming
-      ? buildVideoFilter(spec, "CENTER_CROP", null)
-      : buildVideoFilter(spec, effectiveLayoutStrategy, effectiveSmartCrop);
-    if (effectiveLayoutStrategy === "SMART_CROP" && !preservePreparedManualFraming) {
+    const effectiveLayoutStrategy: ExportLayoutStrategy = framingConsumption.layout;
+    const framingTreatment = framingConsumption.treatment;
+    const effectiveSmartCrop: ExportSmartCrop | null = framingConsumption.smartCrop;
+    const filter = buildVideoFilter(
+      spec,
+      effectiveLayoutStrategy,
+      effectiveSmartCrop,
+      framingTreatment,
+    );
+    if (effectiveLayoutStrategy === "SMART_CROP") {
       const filterRiskReason = getSmartCropFilterRiskReason(filter);
       if (filterRiskReason) {
-        effectiveLayoutStrategy = "FIT_BLURRED_BACKGROUND";
-        effectiveSmartCrop = null;
-        filter = buildVideoFilter(spec, effectiveLayoutStrategy, effectiveSmartCrop);
-        await appendPipelineLog(
-          clip.sermonId,
-          `Smart crop export fell back to full-stage framing for clip ${clip.id}: ${filterRiskReason}.`,
+        throw new Error(
+          `The active framing plan cannot be exported safely (${filterRiskReason}). Rebuild the base video so one canonical fallback can be resolved before export.`,
         );
       }
     }
+    await appendPipelineLog(
+      clip.sermonId,
+      `Canonical framing plan ${resolvedFramingRecord.planHash} selected ${framingTreatment} for clip ${clip.id}. ${framingConsumption.reason}`,
+    );
     const tempPath = getTempPath(outputPath, editPlanGuard.editPlanId);
     const overlayDimensions = getBrandingOverlayDimensions(format);
     const brandingOverlayPath = tempPath.replace(/\.mp4$/i, ".branding.png");
     let fullFilter = filter;
     let overlayEnabled = false;
-    let smartCropRuntimeFallbackReason: string | null = null;
 
     if (options?.brandingOverlay) {
       overlayEnabled = await renderBrandingOverlayPng(
@@ -1146,32 +1156,13 @@ export async function exportClipWithPreset(
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown clip export error.";
-      if (effectiveLayoutStrategy !== "SMART_CROP" || !isFfmpegCropFilterFailure(message)) {
-        throw error;
+      if (effectiveLayoutStrategy === "SMART_CROP" && isFfmpegCropFilterFailure(message)) {
+        throw new Error(
+          `The canonical tracked framing failed during export. Rebuild the base video to resolve one shared fallback before exporting. Original error: ${message}`,
+          { cause: error },
+        );
       }
-
-      await unlink(tempPath).catch(() => undefined);
-      smartCropRuntimeFallbackReason = "Smart crop failed inside FFmpeg export, so the app retried with safe full-stage framing.";
-      effectiveLayoutStrategy = "FIT_BLURRED_BACKGROUND";
-      effectiveSmartCrop = null;
-      filter = buildVideoFilter(spec, effectiveLayoutStrategy, effectiveSmartCrop);
-      fullFilter = overlayEnabled ? appendBrandingOverlayFilter(filter) : filter;
-      await appendPipelineLog(clip.sermonId, `${smartCropRuntimeFallbackReason} Clip ${clip.id}.`);
-      await appendJobLog(job.id, `${smartCropRuntimeFallbackReason} Original error: ${message}`);
-
-      const fallbackVideoEncoder = isHardwareVideoEncoder(preferredVideoEncoder) ? FALLBACK_VIDEO_ENCODER : preferredVideoEncoder;
-      await runFfmpeg({
-        sourcePath: exportSourcePath,
-        outputPath: tempPath,
-        ffmpegPath: options?.ffmpegPath,
-        filter: fullFilter,
-        brandingOverlayPath: overlayEnabled ? brandingOverlayPath : undefined,
-        sermonId: clip.sermonId,
-        jobId: job.id,
-        videoEncoder: fallbackVideoEncoder,
-        trim: exportSource.trim,
-      });
-      completedVideoEncoder = fallbackVideoEncoder;
+      throw error;
     }
 
     await assertClipEditPlanStillActive(editPlanGuard);
@@ -1193,7 +1184,7 @@ export async function exportClipWithPreset(
       data: {
         ...buildExportMetadata({
           format,
-          layout: effectiveLayoutStrategy,
+          layout: layoutStrategy,
           outputPath,
         }),
         captionData: {
@@ -1205,20 +1196,22 @@ export async function exportClipWithPreset(
             captionBurnStatus: clip.captionBurnStatus,
           }),
           framingDecision: {
-            requestedPersonality: framingDecision.requestedPersonality,
-            resolvedPersonality: framingDecision.resolvedPersonality,
-            shotStyle: framingDecision.shotStyle,
-            effectiveLayout: framingDecision.effectiveLayout,
-            zoom: framingDecision.zoom,
-            motionSmoothing: framingDecision.motionSmoothing,
-            captionSafeArea: framingDecision.captionSafeArea,
-            visualQualityScore: framingDecision.visualQualityScore,
-            speakerVisiblePercentage: framingDecision.speakerVisiblePercentage,
-            frameQualityLabel: framingDecision.frameQualityLabel,
-            manualCropRecommended: framingDecision.manualCropRecommended,
-            reasonCodes: framingDecision.reasonCodes,
-            summary: framingDecision.pastorSummary,
-            frameQualitySummary: framingDecision.frameQualitySummary,
+            requestedPersonality: resolvedFramingRecord.plan.requested.personality,
+            resolvedPersonality: resolvedFramingRecord.plan.effective.resolvedPersonality,
+            shotStyle: resolvedFramingRecord.plan.effective.shotStyle,
+            effectiveLayout: resolvedFramingRecord.plan.effective.layout,
+            treatment: resolvedFramingRecord.plan.effective.treatment,
+            zoom: resolvedFramingRecord.plan.effective.zoom,
+            motionSmoothing: resolvedFramingRecord.plan.effective.motionSmoothing,
+            captionSafeArea: resolvedFramingRecord.plan.effective.captionSafeArea,
+            visualQualityScore: resolvedFramingRecord.plan.quality.visualQualityScore,
+            speakerVisiblePercentage: resolvedFramingRecord.plan.quality.speakerVisiblePercentage,
+            frameQualityLabel: resolvedFramingRecord.plan.quality.frameQualityLabel,
+            manualCropRecommended: resolvedFramingRecord.plan.quality.manualCropRecommended,
+            reasonCodes: resolvedFramingRecord.plan.resolution.reasonCodes,
+            summary: resolvedFramingRecord.plan.resolution.summary,
+            frameQualitySummary: resolvedFramingRecord.plan.quality.frameQualitySummary,
+            resolvedFramingPlanHash: resolvedFramingRecord.planHash,
             updatedAt: new Date().toISOString(),
           },
           exportSource: {
@@ -1236,14 +1229,12 @@ export async function exportClipWithPreset(
             updatedAt: new Date().toISOString(),
           },
         },
-        visualQualityScore: framingDecision.visualQualityScore,
-        visualReadinessScore: framingDecision.visualQualityScore,
-        speakerVisiblePercentage: framingDecision.speakerVisiblePercentage,
-        averageTrackingConfidence: framingDecision.averageTrackingConfidence,
-        cropStabilityScore: framingDecision.cropStabilityScore,
-        ...(smartCropRuntimeFallbackReason
-          ? { assetInvalidationReason: smartCropRuntimeFallbackReason }
-          : { assetInvalidationReason: null }),
+        visualQualityScore: resolvedFramingRecord.plan.quality.visualQualityScore,
+        visualReadinessScore: resolvedFramingRecord.plan.quality.visualQualityScore,
+        speakerVisiblePercentage: resolvedFramingRecord.plan.quality.speakerVisiblePercentage,
+        averageTrackingConfidence: resolvedFramingRecord.plan.quality.averageTrackingConfidence,
+        cropStabilityScore: resolvedFramingRecord.plan.quality.cropStabilityScore,
+        assetInvalidationReason: null,
         exportFreshness: "UP_TO_DATE",
         exportAssetVersion: { increment: 1 },
       },
@@ -1271,7 +1262,10 @@ export async function exportClipWithPreset(
         reusedExistingFile: false,
         requestedLayoutStrategy: layoutStrategy,
         effectiveLayoutStrategy,
-        framingDecision: framingDecision.reasonCodes,
+        framingTreatment,
+        framingDecision: resolvedFramingRecord.plan.resolution.reasonCodes,
+        resolvedFramingPlanHash: resolvedFramingRecord.planHash,
+        resolvedFramingPlanStatus: resolvedFramingRecord.status,
         brandingOverlayApplied: overlayEnabled,
         sourceKind: exportSource.kind,
         sourceReason: exportSource.reason,
@@ -1367,6 +1361,7 @@ export async function exportVerticalClip(
 }
 
 export const __clipExportTestUtils = {
+  artifactMatchesResolvedFramingPlan,
   buildVideoEncoderArgs,
   buildVideoFilter,
   validateExportEligibility,

@@ -169,8 +169,10 @@ import {
 } from "@/lib/clipStudioPrepare";
 import {
   canChooseClipForProduction,
+  resolveClipStudioChangeScope,
   resolveClipStudioAssetInvalidation,
   resolveClipStudioBoundaryReviewUpdate,
+  resolveClipStudioCompositionReset,
   resolveClipStudioContentValues,
   shouldRecordExplicitTranscriptReview,
 } from "@/lib/clipContentPersistence";
@@ -179,7 +181,14 @@ import {
   serializeSpeechCleanupEdits,
   type SpeechCleanupEdits,
 } from "@/lib/speechCleanupPlan";
-import { upsertActiveClipEditPlanForClip } from "@/server/agents/clipEditPlanService";
+import {
+  assertClipCompositionNotActivelyPublishing,
+  ClipCompositionPublishingConflictError,
+} from "@/lib/scheduledPosts";
+import {
+  supersedeActiveClipEditPlansForStudioSave,
+  upsertActiveClipEditPlanForClip,
+} from "@/server/agents/clipEditPlanService";
 import {
   removeTranscriptSafetyBlocker,
   TRANSCRIPT_SAFETY_REVIEW_BLOCKER,
@@ -1000,31 +1009,9 @@ async function renderApprovedClipWithFallback(input: {
   sermonId: string;
   exportLayoutStrategy: "CENTER_CROP" | "LEFT_FOCUS" | "RIGHT_FOCUS" | "FIT_BLURRED_BACKGROUND" | "SMART_CROP" | null;
 }): Promise<void> {
-  try {
-    await renderApprovedClip(input.clipId, { force: true, allowRerender: true });
-    return;
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : "Unknown render error.";
-    const canFallback = input.exportLayoutStrategy === "SMART_CROP";
-
-    if (!canFallback) {
-      throw error;
-    }
-
-    await appendPipelineLog(
-      input.sermonId,
-      `Smart crop render failed for clip ${input.clipId}; retrying with full-stage framing. Reason: ${reason}`,
-    );
-    await prisma.clipCandidate.update({
-      where: { id: input.clipId },
-      data: {
-        exportLayoutStrategy: "FIT_BLURRED_BACKGROUND",
-        renderStatus: "NOT_RENDERED",
-        renderError: null,
-      },
-    });
-    await renderApprovedClip(input.clipId, { force: true, allowRerender: true });
-  }
+  // The render service owns canonical framing fallback and records it on the
+  // active edit plan without overwriting the user's requested Studio choice.
+  await renderApprovedClip(input.clipId, { force: true, allowRerender: true });
 }
 
 async function renderClipOverlayBestEffort(clipId: string, sermonId: string): Promise<boolean> {
@@ -1038,9 +1025,9 @@ async function renderClipOverlayBestEffort(clipId: string, sermonId: string): Pr
     const reason = error instanceof Error ? error.message : "Unknown overlay render error.";
     await appendPipelineLog(
       sermonId,
-      `Branding overlay skipped for clip ${clipId}; exporting prepared captioned video instead. Reason: ${reason}`,
+      `Branding overlay failed closed for clip ${clipId}; dependent export was not started. Reason: ${reason}`,
     );
-    return false;
+    throw error;
   }
 }
 
@@ -1054,39 +1041,14 @@ async function exportVerticalClipWithFallback(input: {
       : never
     : never;
 }): Promise<void> {
-  try {
-    await exportVerticalClip(input.clipId, {
-      allowReexport: true,
-      force: true,
-      layoutStrategy: input.layoutStrategy,
-      brandingOverlay: input.brandingOverlay,
-    });
-    return;
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : "Unknown export error.";
-    if (input.layoutStrategy !== "SMART_CROP") {
-      throw error;
-    }
-
-    await appendPipelineLog(
-      input.sermonId,
-      `Smart crop export failed for clip ${input.clipId}; retrying with full-stage framing. Reason: ${reason}`,
-    );
-    await prisma.clipCandidate.update({
-      where: { id: input.clipId },
-      data: {
-        exportLayoutStrategy: "FIT_BLURRED_BACKGROUND",
-        exportStatus: "NOT_EXPORTED",
-        exportError: null,
-      },
-    });
-    await exportVerticalClip(input.clipId, {
-      allowReexport: true,
-      force: true,
-      layoutStrategy: "FIT_BLURRED_BACKGROUND",
-      brandingOverlay: input.brandingOverlay,
-    });
-  }
+  // The export service consumes the same immutable plan as preview/render and
+  // owns any honest runtime fallback without changing the requested setting.
+  await exportVerticalClip(input.clipId, {
+    allowReexport: true,
+    force: true,
+    layoutStrategy: input.layoutStrategy,
+    brandingOverlay: input.brandingOverlay,
+  });
 }
 
 async function getClipSermonId(clipId: string): Promise<string | null> {
@@ -3957,6 +3919,7 @@ export async function runClipBatchReviewAction(input: {
       sermonId: true,
       status: true,
       transcriptSafetyStatus: true,
+      exportLayoutStrategy: true,
     },
   });
 
@@ -4000,20 +3963,19 @@ export async function runClipBatchReviewAction(input: {
             }
           } else if (input.action === "export") {
             if (queuedRemoteAssets.length === 0) {
-              await prisma.clipCandidate.update({
-                where: { id: clipId },
-                data: { exportLayoutStrategy: "SMART_CROP" },
-              });
-              await refreshVideoSubjectTrackingBestEffort(clipId, sermonId);
+              const selectedLayoutStrategy = clip.exportLayoutStrategy ?? "SMART_CROP";
+              if (selectedLayoutStrategy === "SMART_CROP") {
+                await refreshVideoSubjectTrackingBestEffort(clipId, sermonId);
+              }
               await renderApprovedClipWithFallback({
                 clipId,
                 sermonId,
-                exportLayoutStrategy: "SMART_CROP",
+                exportLayoutStrategy: selectedLayoutStrategy,
               });
               await exportVerticalClipWithFallback({
                 clipId,
                 sermonId,
-                layoutStrategy: "SMART_CROP",
+                layoutStrategy: selectedLayoutStrategy,
                 brandingOverlay: null,
               });
             }
@@ -4190,14 +4152,9 @@ export async function prepareApprovedClipsAction(input: {
           const addChurchBranding = plan.addChurchBranding || prepareVideo || addCaptionsToVideo;
           const createDownload = plan.createDownload || prepareVideo || addCaptionsToVideo || addChurchBranding;
 
-          if (needsSmartCropRerender) {
-            await prisma.clipCandidate.update({
-              where: { id: clip.id },
-              data: { exportLayoutStrategy: "SMART_CROP" },
-            });
+          if (resolvedLayoutStrategy === "SMART_CROP") {
+            await refreshVideoSubjectTrackingBestEffort(clip.id, sermonId);
           }
-
-          await refreshVideoSubjectTrackingBestEffort(clip.id, sermonId);
 
           if (prepareVideo) {
             await renderApprovedClipWithFallback({
@@ -4684,6 +4641,14 @@ export async function updateClipStudioEditsAction(
     };
   }
 
+  const publishingConflict = await resolveActivePublishingCompositionConflict(clip.id);
+  if (publishingConflict) {
+    return {
+      success: false,
+      message: publishingConflict,
+    };
+  }
+
   const durationSegment = await prisma.transcriptSegment.findFirst({
     where: { sermonId: clip.sermonId },
     orderBy: { endTimeSeconds: "desc" },
@@ -5023,21 +4988,32 @@ export async function updateClipStudioEditsAction(
   const speechCleanupChanged =
     JSON.stringify(previousSpeechCleanup) !== JSON.stringify(normalizedSpeechCleanup) ||
     JSON.stringify(previousSpeechCleanupEdits) !== JSON.stringify(normalizedSpeechCleanupEdits);
-  const studioEditsChanged =
-    boundariesChanged ||
-    socialCopyChanged ||
-    hashtagChanged ||
-    editorialHookChanged ||
-    onVideoCaptionChanged ||
-    visualHookChanged ||
-    brollLayerChanged ||
-    speechCleanupChanged;
+  const {
+    mediaCompositionChanged,
+    postGuidanceChanged,
+  } = resolveClipStudioChangeScope({
+    boundariesChanged,
+    speechCleanupChanged,
+    onVideoCaptionChanged,
+    visualHookChanged,
+    brollLayerChanged,
+    socialCopyChanged,
+    hashtagChanged,
+    editorialHookChanged,
+  });
   const assetInvalidation = resolveClipStudioAssetInvalidation({
     boundariesChanged,
     speechCleanupChanged,
     onVideoCaptionChanged,
     visualOverlayChanged: visualHookChanged || brollLayerChanged,
   });
+  const compositionReset = resolveClipStudioCompositionReset({
+    invalidation: assetInvalidation,
+    captionsEnabled: input.applyCaptionsToClip,
+  });
+  if (mediaCompositionChanged) {
+    await supersedeActiveClipEditPlansForStudioSave(clip.id);
+  }
 
   await prisma.clipCandidate.update({
     where: { id: clip.id },
@@ -5106,6 +5082,7 @@ export async function updateClipStudioEditsAction(
           optionalHashtags: hashtags,
         },
       },
+      ...compositionReset,
       isManuallyEdited: true,
       ...((boundariesChanged || socialCopyChanged || hashtagChanged || editorialHookChanged || captionCuesChanged)
         ? { qualityReviewedAt: null }
@@ -5127,7 +5104,7 @@ export async function updateClipStudioEditsAction(
             postReadyBlockers: removeTranscriptSafetyBlocker(clip.postReadyBlockers),
           }
         : {}),
-      ...(clip.status === "EXPORTED" && studioEditsChanged ? { status: "APPROVED" as const } : {}),
+      ...(clip.status === "EXPORTED" && mediaCompositionChanged ? { status: "APPROVED" as const } : {}),
     },
   });
 
@@ -5168,8 +5145,6 @@ export async function updateClipStudioEditsAction(
       clipId: clip.id,
       sermonId: clip.sermonId,
       captionsEnabled: input.applyCaptionsToClip,
-      captionBurnStatus: clip.captionBurnStatus,
-      exportStatus: clip.exportStatus,
       reason: "On-video caption settings changed from Clip Studio. Burned captions and exports require regeneration.",
     });
     await appendPipelineLog(
@@ -5186,7 +5161,7 @@ export async function updateClipStudioEditsAction(
       clip.sermonId,
       `Regeneration invalidation completed for clip ${clip.id}: overlay/export freshness updated.`,
     );
-  } else if (socialCopyChanged || hashtagChanged || editorialHookChanged) {
+  } else if (postGuidanceChanged) {
     await appendPipelineLog(
       clip.sermonId,
       `Post copy updated for clip ${clip.id}; prepared video assets remain current and content guidance should be rechecked.`,
@@ -5273,6 +5248,14 @@ export async function updateClipExportSettingsAction(
     return { success: false, message: "Clip candidate was not found." };
   }
 
+  const publishingConflict = await resolveActivePublishingCompositionConflict(clip.id);
+  if (publishingConflict) {
+    return {
+      success: false,
+      message: publishingConflict,
+    };
+  }
+
   const platformPreset = input.platformPreset as PlatformPreset;
   const mappedFormatFromPreset = mapPlatformPresetToFormat(platformPreset);
   const primaryFormat = isValidExportFormat(input.primaryFormat)
@@ -5312,6 +5295,17 @@ export async function updateClipExportSettingsAction(
 
   const captionDataRecord =
     clip.captionData && typeof clip.captionData === "object" ? (clip.captionData as Record<string, unknown>) : {};
+  const formatCompositionReset = resolveClipStudioCompositionReset({
+    invalidation: framingChanged
+      ? "BOUNDARIES"
+      : outputSelectionChanged
+        ? "EXPORT_SETTINGS"
+        : "NONE",
+    captionsEnabled: captionDataRecord["applyCaptionsToClip"] !== false,
+  });
+  if (exportSettingsChanged) {
+    await supersedeActiveClipEditPlansForStudioSave(clip.id);
+  }
 
   await prisma.clipCandidate.update({
     where: { id: clip.id },
@@ -5335,6 +5329,7 @@ export async function updateClipExportSettingsAction(
           updatedAt: new Date().toISOString(),
         },
       },
+      ...formatCompositionReset,
       ...(clip.status === "EXPORTED" && exportSettingsChanged ? { status: "APPROVED" as const } : {}),
     },
   });
@@ -5450,6 +5445,14 @@ export async function updateClipBrandingAction(input: {
     return { success: false, message: "Clip candidate was not found." };
   }
 
+  const publishingConflict = await resolveActivePublishingCompositionConflict(clip.id);
+  if (publishingConflict) {
+    return {
+      success: false,
+      message: publishingConflict,
+    };
+  }
+
   const captionDataRecord = toCaptionDataRecord(clip.captionData);
   const previousConfig = resolveBrandingConfig(clip.captionData);
   const preset = input.preset as BrandingPreset;
@@ -5477,6 +5480,13 @@ export async function updateClipBrandingAction(input: {
     themeColor,
   };
   const brandingChanged = JSON.stringify(previousConfig) !== JSON.stringify(nextConfig);
+  const brandingCompositionReset = resolveClipStudioCompositionReset({
+    invalidation: brandingChanged ? "VISUAL_OVERLAYS" : "NONE",
+    captionsEnabled: captionDataRecord["applyCaptionsToClip"] !== false,
+  });
+  if (brandingChanged) {
+    await supersedeActiveClipEditPlansForStudioSave(clip.id);
+  }
 
   await prisma.clipCandidate.update({
     where: { id: clip.id },
@@ -5488,6 +5498,7 @@ export async function updateClipBrandingAction(input: {
           updatedAt: new Date().toISOString(),
         },
       },
+      ...brandingCompositionReset,
       ...(clip.status === "EXPORTED" && brandingChanged ? { status: "APPROVED" as const } : {}),
     },
   });
@@ -5558,6 +5569,18 @@ function toCaptionDataRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+async function resolveActivePublishingCompositionConflict(clipId: string): Promise<string | null> {
+  try {
+    await assertClipCompositionNotActivelyPublishing(clipId);
+    return null;
+  } catch (error) {
+    if (error instanceof ClipCompositionPublishingConflictError) {
+      return error.message;
+    }
+    throw error;
+  }
+}
+
 function resolveSavedClipCaptionPreferences(
   captionData: unknown,
   fallbackCaptionStylePresetId: CaptionStylePresetId,
@@ -5597,31 +5620,30 @@ async function markManualCaptionEditPreparedForRebuild(input: {
   clipId: string;
   sermonId: string;
   captionsEnabled: boolean;
-  captionBurnStatus: "NOT_BURNED" | "BURNING" | "COMPLETED" | "FAILED" | null;
-  exportStatus: "NOT_EXPORTED" | "QUEUED" | "EXPORTING" | "COMPLETED" | "FAILED" | null;
   reason: string;
 }): Promise<void> {
   await prisma.clipCandidate.update({
     where: { id: input.clipId },
     data: {
       captionFreshness: "UP_TO_DATE",
-      captionBurnFreshness: input.captionsEnabled
-        ? input.captionBurnStatus === "COMPLETED"
-          ? "NEEDS_REGENERATION"
-          : "UP_TO_DATE"
-        : "UP_TO_DATE",
+      captionBurnStatus: "NOT_BURNED",
+      captionedVideoPath: null,
+      captionBurnedAt: null,
+      captionBurnError: null,
+      subtitlesBurned: false,
+      captionBurnFreshness: input.captionsEnabled ? "NEEDS_REGENERATION" : "UP_TO_DATE",
+      overlayStatus: "NOT_RENDERED",
+      overlayVideoPath: null,
+      overlayRenderedAt: null,
+      overlayRenderError: null,
       overlayFreshness: "NEEDS_REGENERATION",
-      exportFreshness: input.exportStatus === "COMPLETED" ? "NEEDS_REGENERATION" : "UP_TO_DATE",
+      exportStatus: "NOT_EXPORTED",
+      exportedFilePath: null,
+      exportPath: null,
+      exportedAt: null,
+      exportError: null,
+      exportFreshness: "NEEDS_REGENERATION",
       assetInvalidationReason: input.reason,
-      ...(!input.captionsEnabled
-        ? {
-            captionBurnStatus: "NOT_BURNED" as const,
-            captionedVideoPath: null,
-            captionBurnedAt: null,
-            captionBurnError: null,
-            subtitlesBurned: false,
-          }
-        : {}),
     },
   });
 

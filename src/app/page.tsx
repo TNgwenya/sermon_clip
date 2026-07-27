@@ -8,7 +8,12 @@ import {
   StatCard,
 } from "@/components/ui";
 import { HomeTopClipCard } from "@/app/home-top-clip-card";
-import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
+import {
+  isFreshRemotePreview,
+  listBestPreviewCandidates,
+  resolveFreshRemotePreviewUrl,
+  resolvePreviewPlaybackUrl,
+} from "@/lib/clipPreview";
 import { prisma } from "@/lib/prisma";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
 import { getOperationalMetrics } from "@/server/workflow/operationsDiagnostics";
@@ -502,6 +507,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
                   platformLabel={platformLabelText(clip.bestPlatform)}
                   hookLine={hookLine}
                   canPreviewVideo={previewableTopClipIds.has(clip.id)}
+                  previewSrc={resolvePreviewPlaybackUrl({
+                    remotePreviewUrl: resolveFreshRemotePreviewUrl(clip),
+                    fallbackUrl: `/api/clips/${clip.id}/preview?variant=best`,
+                  })}
                   priority={index === 0}
                 />
               );

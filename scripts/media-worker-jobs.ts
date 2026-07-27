@@ -121,7 +121,6 @@ type OverlayExportDependencies = {
       layoutStrategy: ExportLayoutStrategy;
     },
   ) => Promise<unknown>;
-  prepareFitBlurredFallback: (clipId: string) => Promise<unknown>;
 };
 
 function errorMessage(error: unknown): string {
@@ -352,24 +351,11 @@ export async function runOverlayAndExportBatch(
 
       if (needsExport) {
         const layoutStrategy = clip.exportLayoutStrategy ?? "SMART_CROP";
-        try {
-          await dependencies.exportClip(clip.id, {
-            allowReexport: true,
-            force: true,
-            layoutStrategy,
-          });
-        } catch (error) {
-          if (layoutStrategy !== "SMART_CROP") {
-            throw error;
-          }
-
-          await dependencies.prepareFitBlurredFallback(clip.id);
-          await dependencies.exportClip(clip.id, {
-            allowReexport: true,
-            force: true,
-            layoutStrategy: "FIT_BLURRED_BACKGROUND",
-          });
-        }
+        await dependencies.exportClip(clip.id, {
+          allowReexport: true,
+          force: true,
+          layoutStrategy,
+        });
         exportsCompleted += 1;
       }
     } catch (error) {

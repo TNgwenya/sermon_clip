@@ -48,13 +48,35 @@ export const viewport: Viewport = {
   themeColor: "#0b0d0b",
 };
 
+function remoteMediaOrigin(): string | null {
+  const configured = process.env.R2_PUBLIC_BASE_URL?.trim();
+  if (!configured) {
+    return null;
+  }
+
+  try {
+    const url = new URL(configured);
+    return url.protocol === "https:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const mediaOrigin = remoteMediaOrigin();
+
   return (
     <html lang="en" data-scroll-behavior="smooth">
+      {mediaOrigin ? (
+        <head>
+          <link rel="preconnect" href={mediaOrigin} />
+          <link rel="dns-prefetch" href={mediaOrigin} />
+        </head>
+      ) : null}
       <body className="premium-app">
         <a className="skip-link" href="#workspace-content">Skip to main content</a>
         <div className="app-shell">

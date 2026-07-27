@@ -21,6 +21,7 @@ type SermonDetailPreviewCardProps = {
   };
   localMediaAvailable: boolean;
   canPreviewVideo: boolean;
+  previewSrc: string;
 };
 
 const HOVER_PREVIEW_SECONDS = 5;
@@ -55,6 +56,7 @@ export function SermonDetailPreviewCard({
   clip,
   localMediaAvailable,
   canPreviewVideo,
+  previewSrc,
 }: SermonDetailPreviewCardProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hoverPreviewRef = useRef(false);
@@ -127,9 +129,9 @@ export function SermonDetailPreviewCard({
             muted
             controls
             playsInline
-            preload="metadata"
+            preload="none"
             poster={`/api/clips/${clip.id}/thumbnail`}
-            src={`/api/clips/${clip.id}/preview?variant=best`}
+            src={previewSrc}
             onTimeUpdate={onTimeUpdate}
             onPointerDown={() => {
               hoverPreviewRef.current = false;

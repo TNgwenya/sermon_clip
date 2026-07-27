@@ -21,17 +21,20 @@ describe("compact clip preview encoding", () => {
 
     expect(valueAfter(args, "-i")).toBe("/media/rendered/master.mp4");
     expect(args.at(-1)).toBe("/media/rendered/proxy.partial.mp4");
-    expect(valueAfter(args, "-vf")).toContain("min(540,iw)");
-    expect(valueAfter(args, "-vf")).toContain("min(960,ih)");
-    expect(valueAfter(args, "-vf")).toContain("fps=30");
+    expect(valueAfter(args, "-vf")).toContain("min(432,iw)");
+    expect(valueAfter(args, "-vf")).toContain("min(768,ih)");
+    expect(valueAfter(args, "-vf")).toContain("fps=24");
     expect(valueAfter(args, "-vf")).toContain("format=yuv420p");
     expect(valueAfter(args, "-c:v")).toBe("libx264");
+    expect(valueAfter(args, "-preset")).toBe("veryfast");
+    expect(valueAfter(args, "-crf")).toBe("28");
     expect(valueAfter(args, "-pix_fmt")).toBe("yuv420p");
-    expect(valueAfter(args, "-maxrate")).toBe("1800k");
-    expect(valueAfter(args, "-g")).toBe("60");
-    expect(valueAfter(args, "-keyint_min")).toBe("60");
+    expect(valueAfter(args, "-maxrate")).toBe("1200k");
+    expect(valueAfter(args, "-bufsize")).toBe("2400k");
+    expect(valueAfter(args, "-g")).toBe("48");
+    expect(valueAfter(args, "-keyint_min")).toBe("48");
     expect(valueAfter(args, "-c:a")).toBe("aac");
-    expect(valueAfter(args, "-b:a")).toBe("96k");
+    expect(valueAfter(args, "-b:a")).toBe("64k");
     expect(valueAfter(args, "-movflags")).toBe("+faststart");
 
     const generatedOutputPath = __clipPreviewProxyServiceTestUtils.buildCompactClipPreviewOutputPath(

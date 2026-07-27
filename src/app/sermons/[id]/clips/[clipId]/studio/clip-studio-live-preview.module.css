@@ -6,6 +6,115 @@
   justify-content: flex-end;
 }
 
+.canonicalPlanApplied {
+  isolation: isolate;
+}
+
+.previewForeground {
+  transition:
+    object-position 120ms linear,
+    transform 120ms linear,
+    width 180ms ease,
+    height 180ms ease;
+}
+
+.trackedTreatment .previewForeground {
+  object-fit: cover !important;
+  object-position: var(--clip-plan-x, 50%) var(--clip-plan-y, 50%) !important;
+  transform: scale(var(--clip-plan-zoom, 1));
+  transform-origin: var(--clip-plan-x, 50%) var(--clip-plan-y, 50%);
+}
+
+.trackedTreatment::after {
+  content: "Tracked frame" !important;
+}
+
+.worshipWideTreatment {
+  background: #111318 !important;
+}
+
+.worshipWideTreatment .previewForeground {
+  width: 96.296% !important;
+  height: 95.833% !important;
+  border-radius: 0 !important;
+  object-fit: contain !important;
+}
+
+.fullStageTreatment {
+  background: #08090b !important;
+}
+
+.fullStageTreatment .previewForeground {
+  width: 85% !important;
+  height: 85% !important;
+  border-radius: 0 !important;
+  object-fit: contain !important;
+}
+
+.blurredBackgroundTreatment {
+  background: #05070b !important;
+}
+
+.blurredBackgroundTreatment .previewForeground {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: inherit !important;
+  object-fit: contain !important;
+}
+
+.previewBackdropVideo {
+  z-index: 0 !important;
+  opacity: 0.62 !important;
+  filter: blur(22px) saturate(1.12) brightness(0.72) !important;
+  pointer-events: none;
+}
+
+.centerCropTreatment .previewForeground {
+  object-fit: cover !important;
+  object-position: 50% 50% !important;
+  transform: none !important;
+}
+
+.passthroughTreatment .previewForeground {
+  object-fit: contain !important;
+  object-position: 50% 50% !important;
+  transform: none !important;
+}
+
+.unresolvedFraming {
+  background:
+    linear-gradient(180deg, rgba(148, 163, 184, 0.08), transparent 42%),
+    #080b12 !important;
+}
+
+.unresolvedFraming .previewForeground {
+  object-fit: contain !important;
+  object-position: 50% 50% !important;
+  transform: none !important;
+}
+
+.framingPlanChip {
+  border-color: rgba(148, 163, 184, 0.34) !important;
+}
+
+.framingPlanChip[data-framing-state="ready"] {
+  border-color: rgba(117, 217, 184, 0.48) !important;
+  color: #bbf7d0 !important;
+}
+
+.framingPlanChip[data-framing-state="fallback"],
+.framingPlanChip[data-framing-state="pending"],
+.framingPlanChip[data-framing-state="stale"] {
+  border-color: rgba(251, 191, 36, 0.46) !important;
+  color: #fde68a !important;
+}
+
+.framingPlanMessage[data-framing-state="fallback"],
+.framingPlanMessage[data-framing-state="pending"],
+.framingPlanMessage[data-framing-state="stale"] {
+  color: #fde68a !important;
+}
+
 .safeZoneOverlay {
   position: absolute;
   z-index: 20;
@@ -118,6 +227,12 @@
 
 :global(.clip-studio-live-caption).designedCaption.reducedMotion .designWord.designWordActive {
   transform: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .previewForeground {
+    transition: none;
+  }
 }
 
 @media (max-width: 560px) {

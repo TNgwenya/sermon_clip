@@ -366,8 +366,52 @@ describe("clip render service validation", () => {
     expect(filter.audioMap).toBe("[a]");
     expect(filter.filterComplex).toContain("[0:v]select=not(between(t\\,10.17\\,11.82))");
     expect(filter.filterComplex).toContain("[0:a]aselect=not(between(t\\,10.17\\,11.82))");
-    expect(filter.filterComplex).toContain("[silence_v]setpts=PTS-STARTPTS[trimmed_v]");
+    expect(filter.filterComplex).toContain("[silence_v]setpts=N/FRAME_RATE/TB[trimmed_v]");
+    expect(filter.filterComplex).toContain("[silence_a]asetpts=N/SR/TB[a]");
     expect(filter.filterComplex).toContain("[trimmed_v]setpts=PTS-STARTPTS,scale=1080:1920");
+  });
+
+  it("remaps canonical tracking after leading trim and collapsed internal silence", () => {
+    const remapped = __clipRenderTestUtils.remapSmartCropTimelineForRender({
+      smartCrop: {
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        subjectCenterX: 0.2,
+        subjectCenters: [
+          { timeSeconds: 0, centerX: 0.2, centerY: 0.42 },
+          { timeSeconds: 4, centerX: 0.3, centerY: 0.44 },
+          { timeSeconds: 8, centerX: 0.5, centerY: 0.48 },
+          { timeSeconds: 12, centerX: 0.7, centerY: 0.5 },
+        ],
+      },
+      originalStartTimeSeconds: 100,
+      effectiveStartTimeSeconds: 102,
+      effectiveEndTimeSeconds: 114,
+      internalSilenceCleanup: {
+        applied: true,
+        originalStartTimeSeconds: 102,
+        originalEndTimeSeconds: 114,
+        renderedDurationSeconds: 10,
+        totalTrimSeconds: 2,
+        detectedInternalSilenceCount: 1,
+        longestInternalSilenceSeconds: 2,
+        cuts: [{
+          startTimeSeconds: 106,
+          endTimeSeconds: 108,
+          trimSeconds: 2,
+          originalSilenceStartSeconds: 106,
+          originalSilenceEndSeconds: 108,
+          originalSilenceDurationSeconds: 2,
+        }],
+      },
+    });
+
+    expect(remapped?.subjectCenters).toEqual([
+      expect.objectContaining({ timeSeconds: 0, centerX: 0.2 }),
+      expect.objectContaining({ timeSeconds: 2, centerX: 0.3 }),
+      expect.objectContaining({ timeSeconds: 8, centerX: 0.7 }),
+    ]);
+    expect(remapped?.subjectCenterX).toBe(0.2);
   });
 
   it("resolves persisted manual crop axes and zoom for the first render", () => {

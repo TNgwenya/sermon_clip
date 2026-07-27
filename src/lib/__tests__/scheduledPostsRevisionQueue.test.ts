@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   scheduledPostFindMany: vi.fn(),
+  scheduledPostFindFirst: vi.fn(),
   scheduledPostFindUnique: vi.fn(),
   scheduledPostUpdateMany: vi.fn(),
   clipCandidateFindMany: vi.fn(),
@@ -11,6 +12,7 @@ vi.mock("@/lib/prisma", () => ({
   prisma: {
     scheduledPost: {
       findMany: mocks.scheduledPostFindMany,
+      findFirst: mocks.scheduledPostFindFirst,
       findUnique: mocks.scheduledPostFindUnique,
       updateMany: mocks.scheduledPostUpdateMany,
     },
@@ -23,7 +25,12 @@ vi.mock("@/lib/contentAssets", () => ({
   reconcileScheduledPostContentAssetLifecycle: vi.fn(),
 }));
 
-import { claimScheduledPost, listUpcomingAutomationPosts } from "@/lib/scheduledPosts";
+import {
+  assertClipCompositionNotActivelyPublishing,
+  claimScheduledPost,
+  listUpcomingAutomationPosts,
+  revalidateClaimedScheduledPostComposition,
+} from "@/lib/scheduledPosts";
 
 function queuedPost() {
   return {
@@ -52,6 +59,7 @@ function queuedPost() {
     mediaObjectKey: null,
     mediaPublicUrl: null,
     mediaUploadedAt: null,
+    compositionReceiptJson: null,
     idempotencyKey: "post-1-key",
     createdAt: new Date("2099-07-22T08:00:00.000Z"),
     socialAccount: null,
@@ -94,6 +102,17 @@ function readyClip(overrides: Record<string, unknown> = {}) {
     exportPath: "/exports/older-scalar.mp4",
     captionData: null,
     transcriptSafetyStatus: "TRUSTED",
+    editPlans: [{
+      id: "plan-1",
+      planHash: "plan-hash-1",
+    }],
+    artifacts: [{
+      id: "artifact-1",
+      editPlanId: "plan-1",
+      planHash: "plan-hash-1",
+      filePath: "/exports/fresh-final.mp4",
+      sizeBytes: 12_345_678,
+    }],
     sermon: {
       id: "sermon-1",
       title: "Faithfulness",
@@ -108,6 +127,7 @@ describe("scheduled content revision queue", () => {
     vi.clearAllMocks();
     mocks.scheduledPostUpdateMany.mockResolvedValue({ count: 0 });
     mocks.scheduledPostFindMany.mockResolvedValue([queuedPost()]);
+    mocks.scheduledPostFindFirst.mockResolvedValue(null);
     mocks.scheduledPostFindUnique.mockResolvedValue(null);
     mocks.clipCandidateFindMany.mockResolvedValue([]);
   });
@@ -129,6 +149,27 @@ describe("scheduled content revision queue", () => {
         },
       }),
     }));
+  });
+
+  it("blocks Studio composition saves while a matching clip post is actively claimed", async () => {
+    mocks.scheduledPostFindFirst.mockResolvedValue({ id: "post-1" });
+
+    await expect(assertClipCompositionNotActivelyPublishing(" clip-1 "))
+      .rejects.toMatchObject({ name: "ClipCompositionPublishingConflictError" });
+
+    expect(mocks.scheduledPostFindFirst).toHaveBeenCalledWith({
+      where: {
+        status: "POSTING",
+        workerStatus: { in: ["CLAIMED", "POSTING"] },
+        claimedAt: { not: null },
+        clipIdsJson: { array_contains: ["clip-1"] },
+      },
+      select: { id: true },
+    });
+  });
+
+  it("allows Studio composition saves when no matching post is active", async () => {
+    await expect(assertClipCompositionNotActivelyPublishing("clip-1")).resolves.toBeUndefined();
   });
 
   it("publishes the scheduled revision copy instead of mutable root copy", async () => {
@@ -162,6 +203,17 @@ describe("scheduled content revision queue", () => {
 
     expect(posts).toHaveLength(1);
     expect(posts[0]?.clips[0]?.localFileCandidates).toEqual(["/exports/fresh-final.mp4"]);
+    expect(posts[0]?.clips[0]?.compositionIdentity).toEqual({
+      schemaVersion: 1,
+      clipId: "clip-1",
+      editPlanId: "plan-1",
+      artifactId: "artifact-1",
+      planHash: "plan-hash-1",
+      filePath: "/exports/fresh-final.mp4",
+      sizeBytes: 12_345_678,
+      snapshotSha256: null,
+      snapshotSizeBytes: null,
+    });
   });
 
   it.each([
@@ -170,6 +222,32 @@ describe("scheduled content revision queue", () => {
     ["not a completed export", [readyClip({ exportStatus: "EXPORTING" })]],
     ["not the canonical vertical export", [readyClip({ exportFormat: "HORIZONTAL_16_9" })]],
     ["review blocked", [readyClip({ transcriptSafetyStatus: "REVIEW_REQUIRED" })]],
+    ["missing an active edit plan", [readyClip({ editPlans: [] })]],
+    ["bound to multiple active edit plans", [readyClip({
+      editPlans: [
+        { id: "plan-1", planHash: "plan-hash-1" },
+        { id: "plan-2", planHash: "plan-hash-2" },
+      ],
+    })]],
+    ["missing a ready export artifact", [readyClip({ artifacts: [] })]],
+    ["bound to an artifact from another plan", [readyClip({
+      artifacts: [{
+        id: "artifact-1",
+        editPlanId: "plan-old",
+        planHash: "plan-hash-old",
+        filePath: "/exports/fresh-final.mp4",
+        sizeBytes: 12_345_678,
+      }],
+    })]],
+    ["bound to an artifact at another path", [readyClip({
+      artifacts: [{
+        id: "artifact-1",
+        editPlanId: "plan-1",
+        planHash: "plan-hash-1",
+        filePath: "/exports/old-final.mp4",
+        sizeBytes: 12_345_678,
+      }],
+    })]],
   ])("withholds a clip post when its final media is %s", async (_label, clips) => {
     mocks.scheduledPostFindMany.mockResolvedValue([{
       ...queuedPost(),
@@ -203,12 +281,28 @@ describe("scheduled content revision queue", () => {
     });
 
     expect(claimed?.clips[0]?.localFileCandidates).toEqual(["/exports/fresh-final.mp4"]);
+    expect(claimed?.clips[0]?.compositionIdentity.artifactId).toBe("artifact-1");
     expect(mocks.scheduledPostUpdateMany).toHaveBeenNthCalledWith(1, expect.objectContaining({
       data: expect.objectContaining({
         mediaObjectKey: null,
         mediaPublicUrl: null,
         mediaUploadedAt: null,
       }),
+    }));
+    expect(mocks.scheduledPostUpdateMany).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      data: {
+        compositionReceiptJson: [{
+          schemaVersion: 1,
+          clipId: "clip-1",
+          editPlanId: "plan-1",
+          artifactId: "artifact-1",
+          planHash: "plan-hash-1",
+          filePath: "/exports/fresh-final.mp4",
+          sizeBytes: 12_345_678,
+          snapshotSha256: null,
+          snapshotSizeBytes: null,
+        }],
+      },
     }));
   });
 
@@ -238,6 +332,109 @@ describe("scheduled content revision queue", () => {
         workerStatus: "IDLE",
         claimedAt: null,
         workerId: null,
+      }),
+    }));
+  });
+
+  it("revalidates the bound artifact immediately before publishing", async () => {
+    const identity = {
+      schemaVersion: 1 as const,
+      clipId: "clip-1",
+      editPlanId: "plan-1",
+      artifactId: "artifact-1",
+      planHash: "plan-hash-1",
+      filePath: "/exports/fresh-final.mp4",
+      sizeBytes: 12_345_678,
+      snapshotSha256: null,
+      snapshotSizeBytes: null,
+    };
+    const snapshotIdentity = {
+      ...identity,
+      snapshotSha256: "a".repeat(64),
+      snapshotSizeBytes: 12_345_678,
+    };
+    mocks.scheduledPostFindUnique.mockResolvedValue({
+      ...queuedPost(),
+      clipIdsJson: ["clip-1"],
+      status: "POSTING",
+      workerStatus: "CLAIMED",
+      claimedAt: new Date("2099-07-23T08:00:00.000Z"),
+      workerId: "worker-1",
+      compositionReceiptJson: [identity],
+    });
+    mocks.clipCandidateFindMany.mockResolvedValue([readyClip()]);
+    mocks.scheduledPostUpdateMany.mockResolvedValue({ count: 1 });
+
+    await expect(revalidateClaimedScheduledPostComposition({
+      id: "post-1",
+      workerId: "worker-1",
+      compositionIdentities: [snapshotIdentity],
+      now: new Date("2099-07-23T08:01:00.000Z"),
+    })).resolves.toEqual({ valid: true });
+
+    expect(mocks.scheduledPostUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        workerStatus: "POSTING",
+        claimedAt: new Date("2099-07-23T08:01:00.000Z"),
+        compositionReceiptJson: [snapshotIdentity],
+      }),
+    }));
+  });
+
+  it("releases the claim when the active export artifact changed", async () => {
+    const claimedIdentity = {
+      schemaVersion: 1 as const,
+      clipId: "clip-1",
+      editPlanId: "plan-1",
+      artifactId: "artifact-1",
+      planHash: "plan-hash-1",
+      filePath: "/exports/fresh-final.mp4",
+      sizeBytes: 12_345_678,
+      snapshotSha256: null,
+      snapshotSizeBytes: null,
+    };
+    const snapshotIdentity = {
+      ...claimedIdentity,
+      snapshotSha256: "b".repeat(64),
+      snapshotSizeBytes: 12_345_678,
+    };
+    mocks.scheduledPostFindUnique.mockResolvedValue({
+      ...queuedPost(),
+      clipIdsJson: ["clip-1"],
+      status: "POSTING",
+      workerStatus: "CLAIMED",
+      claimedAt: new Date("2099-07-23T08:00:00.000Z"),
+      workerId: "worker-1",
+      compositionReceiptJson: [claimedIdentity],
+    });
+    mocks.clipCandidateFindMany.mockResolvedValue([readyClip({
+      artifacts: [{
+        id: "artifact-2",
+        editPlanId: "plan-1",
+        planHash: "plan-hash-1",
+        filePath: "/exports/fresh-final.mp4",
+        sizeBytes: 12_345_678,
+      }],
+    })]);
+    mocks.scheduledPostUpdateMany.mockResolvedValue({ count: 1 });
+
+    await expect(revalidateClaimedScheduledPostComposition({
+      id: "post-1",
+      workerId: "worker-1",
+      compositionIdentities: [snapshotIdentity],
+    })).resolves.toEqual(expect.objectContaining({
+      valid: false,
+      released: true,
+    }));
+
+    expect(mocks.scheduledPostUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: "PLANNED",
+        workerStatus: "IDLE",
+        claimedAt: null,
+        workerId: null,
+        mediaObjectKey: null,
+        compositionReceiptJson: expect.anything(),
       }),
     }));
   });

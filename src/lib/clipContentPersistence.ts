@@ -27,7 +27,146 @@ export type ClipStudioAssetInvalidation =
   | "SPEECH_CLEANUP"
   | "ON_VIDEO_CAPTIONS"
   | "VISUAL_OVERLAYS"
+  | "EXPORT_SETTINGS"
   | "NONE";
+
+export function resolveClipStudioChangeScope(input: {
+  boundariesChanged: boolean;
+  speechCleanupChanged: boolean;
+  onVideoCaptionChanged: boolean;
+  visualHookChanged: boolean;
+  brollLayerChanged: boolean;
+  socialCopyChanged: boolean;
+  hashtagChanged: boolean;
+  editorialHookChanged: boolean;
+}): {
+  mediaCompositionChanged: boolean;
+  postGuidanceChanged: boolean;
+  studioEditsChanged: boolean;
+} {
+  const mediaCompositionChanged =
+    input.boundariesChanged
+    || input.speechCleanupChanged
+    || input.onVideoCaptionChanged
+    || input.visualHookChanged
+    || input.brollLayerChanged;
+  const postGuidanceChanged =
+    input.socialCopyChanged
+    || input.hashtagChanged
+    || input.editorialHookChanged;
+
+  return {
+    mediaCompositionChanged,
+    postGuidanceChanged,
+    studioEditsChanged: mediaCompositionChanged || postGuidanceChanged,
+  };
+}
+
+type ClipStudioCompositionReset = {
+  renderStatus?: "NOT_RENDERED";
+  renderedFilePath?: null;
+  renderedAt?: null;
+  renderError?: null;
+  renderedDurationSeconds?: null;
+  renderedSizeBytes?: null;
+  renderFreshness?: "NEEDS_REGENERATION";
+  captionBurnStatus?: "NOT_BURNED";
+  captionedVideoPath?: null;
+  captionBurnedAt?: null;
+  captionBurnError?: null;
+  subtitlesBurned?: false;
+  captionBurnFreshness?: "NEEDS_REGENERATION" | "UP_TO_DATE";
+  overlayStatus?: "NOT_RENDERED";
+  overlayVideoPath?: null;
+  overlayRenderedAt?: null;
+  overlayRenderError?: null;
+  overlayFreshness?: "NEEDS_REGENERATION";
+  exportStatus?: "NOT_EXPORTED";
+  exportedFilePath?: null;
+  exportPath?: null;
+  exportedAt?: null;
+  exportError?: null;
+  exportFreshness?: "NEEDS_REGENERATION";
+};
+
+const downstreamCaptionCompositionReset = {
+  captionBurnStatus: "NOT_BURNED",
+  captionedVideoPath: null,
+  captionBurnedAt: null,
+  captionBurnError: null,
+  subtitlesBurned: false,
+  overlayStatus: "NOT_RENDERED",
+  overlayVideoPath: null,
+  overlayRenderedAt: null,
+  overlayRenderError: null,
+  overlayFreshness: "NEEDS_REGENERATION",
+  exportStatus: "NOT_EXPORTED",
+  exportedFilePath: null,
+  exportPath: null,
+  exportedAt: null,
+  exportError: null,
+  exportFreshness: "NEEDS_REGENERATION",
+} as const;
+
+/**
+ * Applies the invalidation in the same write as the user's Studio edit.
+ * This fail-closed update prevents a worker or publisher from observing new
+ * settings alongside an older composition that still appears ready.
+ */
+export function resolveClipStudioCompositionReset(input: {
+  invalidation: ClipStudioAssetInvalidation;
+  captionsEnabled: boolean;
+}): ClipStudioCompositionReset {
+  if (input.invalidation === "BOUNDARIES" || input.invalidation === "SPEECH_CLEANUP") {
+    return {
+      renderStatus: "NOT_RENDERED",
+      renderedFilePath: null,
+      renderedAt: null,
+      renderError: null,
+      renderedDurationSeconds: null,
+      renderedSizeBytes: null,
+      renderFreshness: "NEEDS_REGENERATION",
+      ...downstreamCaptionCompositionReset,
+      captionBurnFreshness: input.captionsEnabled ? "NEEDS_REGENERATION" : "UP_TO_DATE",
+    };
+  }
+
+  if (input.invalidation === "ON_VIDEO_CAPTIONS") {
+    return {
+      ...downstreamCaptionCompositionReset,
+      captionBurnFreshness: input.captionsEnabled ? "NEEDS_REGENERATION" : "UP_TO_DATE",
+    };
+  }
+
+  if (input.invalidation === "VISUAL_OVERLAYS") {
+    return {
+      overlayStatus: "NOT_RENDERED",
+      overlayVideoPath: null,
+      overlayRenderedAt: null,
+      overlayRenderError: null,
+      overlayFreshness: "NEEDS_REGENERATION",
+      exportStatus: "NOT_EXPORTED",
+      exportedFilePath: null,
+      exportPath: null,
+      exportedAt: null,
+      exportError: null,
+      exportFreshness: "NEEDS_REGENERATION",
+    };
+  }
+
+  if (input.invalidation === "EXPORT_SETTINGS") {
+    return {
+      exportStatus: "NOT_EXPORTED",
+      exportedFilePath: null,
+      exportPath: null,
+      exportedAt: null,
+      exportError: null,
+      exportFreshness: "NEEDS_REGENERATION",
+    };
+  }
+
+  return {};
+}
 
 export function resolveClipStudioAssetInvalidation(input: {
   boundariesChanged: boolean;

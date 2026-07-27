@@ -35,7 +35,7 @@ export type VideoTrackingResult = {
   source: VideoSubjectTrackingSource;
 };
 
-type PersonDetection = {
+export type PersonDetection = {
   timeSeconds: number;
   x: number;
   y: number;
@@ -52,6 +52,19 @@ type SmartCropTimelinePoint = {
   stabilized?: boolean;
   rejected?: boolean;
   frozen?: boolean;
+  sceneId: string;
+  sceneCut?: boolean;
+};
+
+export type SmartCropTrackingSnapshot = {
+  source: VideoSubjectTrackingSource;
+  selectedKind: VideoSubjectTrackKind;
+  sourceWidth: number | null;
+  sourceHeight: number | null;
+  sampleCount: number;
+  centerX: number;
+  centerY: number;
+  timeline: SmartCropTimelinePoint[];
 };
 
 type CocoSsdModel = {
@@ -83,6 +96,7 @@ function clamp01(value: number): number {
 }
 
 const INITIAL_MODEL_SAMPLE_INTERVAL_SECONDS = 1.5;
+export const DEFAULT_MAX_ON_DEMAND_TRACKING_SAMPLES = 48;
 // Eight outputs keeps FFmpeg's peak memory practical on a 1 GiB free-tier EC2
 // even when the persistent Node worker and subject-detection model are resident.
 const FRAME_EXTRACTION_BATCH_SIZE = 8;
@@ -154,8 +168,50 @@ function freezeDetectionAtTime(previousDetection: PersonDetection, timeSeconds: 
   };
 }
 
+export function findTemporalDetectionContext(
+  detections: PersonDetection[],
+  timeSeconds: number,
+): PersonDetection | null {
+  const ordered = detections
+    .filter((detection) => detection.timeSeconds !== timeSeconds)
+    .sort((left, right) => left.timeSeconds - right.timeSeconds);
+  const preceding = ordered.filter((detection) => detection.timeSeconds < timeSeconds).at(-1);
+  if (preceding) {
+    return preceding;
+  }
+
+  return ordered
+    .slice()
+    .sort(
+      (left, right) =>
+        Math.abs(left.timeSeconds - timeSeconds) - Math.abs(right.timeSeconds - timeSeconds),
+    )[0] ?? null;
+}
+
 function uniqueSortedTimes(values: number[]): number[] {
   return Array.from(new Set(values.map((value) => Number(value.toFixed(2))))).sort((left, right) => left - right);
+}
+
+export function boundTrackingSampleTimes(
+  values: number[],
+  maximumSamples: number,
+): number[] {
+  const ordered = uniqueSortedTimes(values);
+  const limit = Math.max(1, Math.floor(maximumSamples));
+  if (ordered.length <= limit) {
+    return ordered;
+  }
+  if (limit === 1) {
+    return [ordered[Math.floor((ordered.length - 1) / 2)]];
+  }
+
+  const selected = new Set<number>([ordered[0], ordered[ordered.length - 1]]);
+  const step = (ordered.length - 1) / (limit - 1);
+  for (let index = 1; index < limit - 1; index += 1) {
+    selected.add(ordered[Math.round(index * step)]);
+  }
+
+  return [...selected].sort((left, right) => left - right).slice(0, limit);
 }
 
 function centerMotionBetween(left: Pick<VideoSubjectBox, "x" | "width">, right: Pick<VideoSubjectBox, "x" | "width">): number {
@@ -517,6 +573,7 @@ export function stabilizeSmartCropTimeline(input: {
   const points: SmartCropTimelinePoint[] = [];
   const maxStep = input.source === "HEURISTIC_CENTER" ? 0.06 : 0.12;
   const deadZone = input.source === "HEURISTIC_CENTER" ? 0.03 : 0.045;
+  let sceneNumber = 1;
 
   for (const [index, box] of sortedBoxes.entries()) {
     const rawCenterX = clamp01(box.x + box.width / 2);
@@ -524,7 +581,43 @@ export function stabilizeSmartCropTimeline(input: {
     const previous = points.at(-1);
     const nextBox = sortedBoxes[index + 1];
     const nextCenterX = nextBox ? clamp01(nextBox.x + nextBox.width / 2) : null;
+    const nextCenterY = nextBox ? clamp01(nextBox.y + nextBox.height / 2) : null;
     const timeSeconds = Number((box.timeSeconds - input.boundaries.startTimeSeconds).toFixed(2));
+    const previousBox = sortedBoxes[index - 1];
+    const previousRawCenterX = previousBox ? clamp01(previousBox.x + previousBox.width / 2) : null;
+    const previousRawCenterY = previousBox ? clamp01(previousBox.y + previousBox.height / 2) : null;
+    const previousArea = previousBox ? Math.max(0.0001, previousBox.width * previousBox.height) : null;
+    const currentArea = Math.max(0.0001, box.width * box.height);
+    const areaRatio = previousArea ? currentArea / previousArea : 1;
+    const abruptX = previousRawCenterX === null ? false : Math.abs(rawCenterX - previousRawCenterX) >= 0.24;
+    const abruptY = previousRawCenterY === null ? false : Math.abs(rawCenterY - previousRawCenterY) >= 0.17;
+    const abruptScale = areaRatio <= 0.58 || areaRatio >= 1.72;
+    const persistsAtNewComposition = nextCenterX !== null
+      && nextCenterY !== null
+      && Math.abs(nextCenterX - rawCenterX) <= 0.14
+      && Math.abs(nextCenterY - rawCenterY) <= 0.14;
+    const sceneCut = input.source === "MODEL"
+      && Boolean(previous)
+      && persistsAtNewComposition
+      && (
+        [abruptX, abruptY, abruptScale].filter(Boolean).length >= 2
+        || (abruptX && previousRawCenterX !== null && Math.abs(rawCenterX - previousRawCenterX) >= 0.36)
+      );
+
+    if (sceneCut) {
+      sceneNumber += 1;
+      points.push({
+        timeSeconds,
+        centerX: rawCenterX,
+        centerY: rawCenterY,
+        confidence: box.confidence,
+        sceneId: `scene-${sceneNumber}`,
+        sceneCut: true,
+      });
+      continue;
+    }
+
+    const sceneId = `scene-${sceneNumber}`;
 
     if (
       previous &&
@@ -539,6 +632,7 @@ export function stabilizeSmartCropTimeline(input: {
         confidence: box.confidence,
         rejected: true,
         frozen: true,
+        sceneId,
       });
       continue;
     }
@@ -550,6 +644,7 @@ export function stabilizeSmartCropTimeline(input: {
         centerY: previous.centerY,
         confidence: box.confidence,
         frozen: true,
+        sceneId,
       });
       continue;
     }
@@ -562,6 +657,7 @@ export function stabilizeSmartCropTimeline(input: {
         confidence: box.confidence,
         rejected: true,
         stabilized: true,
+        sceneId,
       });
       continue;
     }
@@ -573,6 +669,7 @@ export function stabilizeSmartCropTimeline(input: {
         centerY: previous.centerY,
         confidence: box.confidence,
         stabilized: true,
+        sceneId,
       });
       continue;
     }
@@ -584,6 +681,7 @@ export function stabilizeSmartCropTimeline(input: {
         centerY: rawCenterY,
         confidence: box.confidence,
         stabilized: true,
+        sceneId,
       });
       continue;
     }
@@ -593,6 +691,7 @@ export function stabilizeSmartCropTimeline(input: {
       centerX: rawCenterX,
       centerY: rawCenterY,
       confidence: box.confidence,
+      sceneId,
     });
   }
 
@@ -664,20 +763,33 @@ async function inferModelTracks(input: {
   startTimeSeconds: number;
   endTimeSeconds: number;
   ffmpegPath?: string;
+  maxSamples?: number;
 }): Promise<Array<{
   kind: VideoSubjectTrackKind;
   label: string;
   confidenceScore: number;
   boxes: VideoSubjectBox[];
 }>> {
-  const sampleTimes = buildModelSampleTimes(input.startTimeSeconds, input.endTimeSeconds);
+  const maxSamples = Math.max(
+    8,
+    Math.min(96, Math.floor(input.maxSamples ?? DEFAULT_MAX_ON_DEMAND_TRACKING_SAMPLES)),
+  );
+  const initialSampleBudget = Math.max(6, Math.floor(maxSamples * 0.67));
+  const sampleTimes = boundTrackingSampleTimes(
+    buildModelSampleTimes(input.startTimeSeconds, input.endTimeSeconds),
+    initialSampleBudget,
+  );
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "sermon-clip-tracking-"));
 
   try {
     const detections: PersonDetection[] = [];
     let previousDetection: PersonDetection | null = null;
 
-    async function sampleAtTimes(times: number[], frameNamePrefix: string): Promise<void> {
+    async function sampleAtTimes(
+      times: number[],
+      frameNamePrefix: string,
+      useTemporalContext = false,
+    ): Promise<void> {
       const requests = times.map((timeSeconds, index) => ({
         timeSeconds,
         outputPath: path.join(tempDir, `${frameNamePrefix}-${index}.jpg`),
@@ -695,18 +807,26 @@ async function inferModelTracks(input: {
           continue;
         }
 
-        const selected = selectPastorDetection(await detectPeopleInFrame(framePath, timeSeconds), previousDetection);
+        const temporalContext = useTemporalContext
+          ? findTemporalDetectionContext(detections, timeSeconds)
+          : previousDetection;
+        const selected = selectPastorDetection(
+          await detectPeopleInFrame(framePath, timeSeconds),
+          temporalContext,
+        );
         if (selected) {
           detections.push(selected);
-          previousDetection = selected;
-        } else if (previousDetection) {
-          detections.push(freezeDetectionAtTime(previousDetection, timeSeconds));
+          if (!useTemporalContext) {
+            previousDetection = selected;
+          }
+        } else if (temporalContext) {
+          detections.push(freezeDetectionAtTime(temporalContext, timeSeconds));
         }
       }
     }
 
     await sampleAtTimes(sampleTimes, "frame");
-    const adaptiveSampleTimes = buildAdaptiveModelSampleTimes({
+    const adaptiveCandidates = buildAdaptiveModelSampleTimes({
       startTimeSeconds: input.startTimeSeconds,
       endTimeSeconds: input.endTimeSeconds,
       boxes: detections.map((detection) => ({
@@ -718,9 +838,13 @@ async function inferModelTracks(input: {
         confidence: detection.confidence,
       })),
     }).filter((timeSeconds) => !sampleTimes.includes(timeSeconds));
+    const remainingSampleBudget = Math.max(0, maxSamples - sampleTimes.length);
+    const adaptiveSampleTimes = remainingSampleBudget > 0
+      ? boundTrackingSampleTimes(adaptiveCandidates, remainingSampleBudget)
+      : [];
 
     if (adaptiveSampleTimes.length > 0) {
-      await sampleAtTimes(adaptiveSampleTimes, "adaptive-frame");
+      await sampleAtTimes(adaptiveSampleTimes, "adaptive-frame", true);
     }
 
     return inferModelTracksFromDetections({
@@ -735,6 +859,7 @@ export const __videoSubjectTrackingTestUtils = {
   buildFrameExtractionBatchArgs,
   frameExtractionBatchSize: FRAME_EXTRACTION_BATCH_SIZE,
   selectFallbackFrameRequests,
+  defaultMaxOnDemandTrackingSamples: DEFAULT_MAX_ON_DEMAND_TRACKING_SAMPLES,
 };
 
 function makeBoxes(input: {
@@ -858,7 +983,11 @@ export function inferHeuristicTracks(input: {
 
 export async function refreshVideoSubjectTracking(
   clipId: string,
-  options?: { ffmpegPath?: string },
+  options?: {
+    ffmpegPath?: string;
+    force?: boolean;
+    maxSamples?: number;
+  },
 ): Promise<VideoTrackingResult> {
   const videoSubjectTrack = getVideoSubjectTrackDelegate();
   const clip = await prisma.clipCandidate.findUnique({
@@ -889,11 +1018,33 @@ export async function refreshVideoSubjectTracking(
   const dimensions = await getMediaDimensions(sourceVideoPath, options?.ffmpegPath).catch(() => null);
   const startTimeSeconds = clip.adjustedStartTimeSeconds ?? clip.startTimeSeconds;
   const endTimeSeconds = clip.adjustedEndTimeSeconds ?? clip.endTimeSeconds;
+  if (!options?.force) {
+    const existingTracks = await videoSubjectTrack.findMany({
+      where: {
+        clipCandidateId: clip.id,
+        source: "MODEL",
+      },
+    });
+    const reusableTracks = existingTracks.filter((track) => (
+      Number(track.sampleCount) > 0
+      && Math.abs(Number(track.startTimeSeconds) - startTimeSeconds) < 0.05
+      && Math.abs(Number(track.endTimeSeconds) - endTimeSeconds) < 0.05
+    ));
+    if (reusableTracks.length > 0) {
+      return {
+        clipId: clip.id,
+        trackCount: reusableTracks.length,
+        source: "MODEL",
+      };
+    }
+  }
+
   const modelTracks = await inferModelTracks({
     sourceVideoPath,
     startTimeSeconds,
     endTimeSeconds,
     ffmpegPath: options?.ffmpegPath,
+    maxSamples: options?.maxSamples,
   }).catch(() => []);
   const source: VideoSubjectTrackingSource = modelTracks.length > 0 ? "MODEL" : "HEURISTIC_CENTER";
   const tracks = modelTracks.length > 0 ? modelTracks : inferHeuristicTracks({
@@ -1017,4 +1168,70 @@ export async function resolveSmartCropTimeline(
     hasFace: relatedTracks.some((item) => item.kind === "FACE"),
     hasSpeakerArea: relatedTracks.some((item) => item.kind === "SPEAKER_AREA"),
   });
+}
+
+function trackingKindPriority(kind: unknown): number {
+  if (kind === "SPEAKER_AREA") return 3;
+  if (kind === "BODY") return 2;
+  if (kind === "FACE") return 1;
+  return 0;
+}
+
+export function selectPreferredTrackingRecord<
+  TRecord extends Record<string, unknown>,
+>(tracks: TRecord[]): TRecord | null {
+  return tracks
+    .filter((track) => trackingKindPriority(track.kind) > 0)
+    .sort((left, right) => {
+      const sourceDifference =
+        (right.source === "MODEL" ? 1 : 0) - (left.source === "MODEL" ? 1 : 0);
+      if (sourceDifference !== 0) {
+        return sourceDifference;
+      }
+      const kindDifference =
+        trackingKindPriority(right.kind) - trackingKindPriority(left.kind);
+      return kindDifference !== 0
+        ? kindDifference
+        : Number(right.confidenceScore) - Number(left.confidenceScore);
+    })[0] ?? null;
+}
+
+export async function resolveSmartCropTrackingSnapshot(
+  clipId: string,
+  boundaries: { startTimeSeconds: number; endTimeSeconds: number },
+): Promise<SmartCropTrackingSnapshot | null> {
+  const videoSubjectTrack = getVideoSubjectTrackDelegate();
+  if (!videoSubjectTrack) {
+    return null;
+  }
+
+  const tracks = await videoSubjectTrack.findMany({
+    where: { clipCandidateId: clipId },
+  });
+  const selected = selectPreferredTrackingRecord(tracks);
+  if (!selected) {
+    return null;
+  }
+
+  const boxes = boxesFromJson(selected.boxesJson);
+  const center = averageCenter(boxes);
+  const source = selected.source as VideoSubjectTrackingSource;
+  return {
+    source,
+    selectedKind: selected.kind as VideoSubjectTrackKind,
+    sourceWidth: typeof selected.frameWidth === "number" ? selected.frameWidth : null,
+    sourceHeight: typeof selected.frameHeight === "number" ? selected.frameHeight : null,
+    sampleCount: Number(selected.sampleCount),
+    centerX: center.centerX,
+    centerY: center.centerY,
+    timeline: stabilizeSmartCropTimeline({
+      boxes,
+      boundaries,
+      source,
+      sampleCount: Number(selected.sampleCount),
+      hasBody: tracks.some((track) => track.kind === "BODY"),
+      hasFace: tracks.some((track) => track.kind === "FACE"),
+      hasSpeakerArea: tracks.some((track) => track.kind === "SPEAKER_AREA"),
+    }),
+  };
 }

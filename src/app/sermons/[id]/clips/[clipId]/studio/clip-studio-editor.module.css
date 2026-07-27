@@ -244,6 +244,159 @@
   gap: 0.45rem;
 }
 
+.brollSuggestions {
+  display: grid;
+  gap: 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: 0.85rem;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 52%),
+    color-mix(in srgb, var(--surface-raised, var(--surface)) 86%, transparent);
+  padding: 0.75rem;
+}
+
+.brollSuggestionHeading,
+.brollSuggestionMeta,
+.brollSuggestionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.brollSuggestionHeading {
+  justify-content: space-between;
+}
+
+.brollSuggestionHeading h4 {
+  margin: 0.12rem 0 0;
+}
+
+.brollSuggestionList {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.brollSuggestion {
+  display: grid;
+  gap: 0.62rem;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 0.72rem;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  padding: 0.7rem;
+}
+
+.brollSuggestion blockquote {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 760;
+  line-height: 1.4;
+}
+
+.brollSuggestionMeta {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.brollSuggestionMeta span {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-raised, var(--surface)) 76%, transparent);
+  padding: 0.2rem 0.42rem;
+}
+
+.brollSuggestionMeta .brollSuggestionType {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--text);
+  font-weight: 850;
+}
+
+.brollSuggestionEditor {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.brollSuggestionEditor textarea {
+  min-height: 5rem;
+}
+
+.brollSuggestionTiming {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.brollSuggestionPreview {
+  display: grid;
+  min-height: 8rem;
+  place-content: center;
+  gap: 0.48rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: 0.72rem;
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--accent) 18%, transparent), transparent 58%),
+    #0b0c10;
+  color: #fff;
+  padding: 1rem;
+  text-align: center;
+}
+
+.brollSuggestionPreview span {
+  color: color-mix(in srgb, var(--accent) 78%, white);
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.brollSuggestionPreview strong {
+  max-width: 32rem;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.brollSuggestionPreview small {
+  color: #aeb4c2;
+  font-size: 0.66rem;
+}
+
+.brollSuggestionPreviewScripture {
+  background:
+    linear-gradient(135deg, rgba(250, 204, 21, 0.16), transparent 48%),
+    #0b0c10;
+}
+
+.brollSuggestionPreviewTakeaway {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 20%, transparent), transparent 52%),
+    #0b0c10;
+}
+
+.brollSuggestionEvidence {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.brollSuggestionEvidence summary {
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.brollSuggestionEvidence p {
+  margin: 0.42rem 0 0;
+  line-height: 1.4;
+}
+
+.brollSuggestionActions {
+  justify-content: flex-end;
+}
+
+.brollSuggestionActions .button {
+  min-height: 2.1rem;
+  padding: 0.32rem 0.58rem;
+}
+
 .captionWorkflow > :global(.clip-studio-caption-timing-panel) {
   order: 3;
 }
@@ -261,5 +414,13 @@
   .controlGrid,
   .colorGrid {
     grid-template-columns: 1fr;
+  }
+
+  .brollSuggestionTiming {
+    grid-template-columns: 1fr;
+  }
+
+  .brollSuggestionActions .button {
+    flex: 1 1 8rem;
   }
 }

@@ -202,6 +202,25 @@ describe("buildVerticalFramingFilter — export framing applied correctly", () =
     expect(filter).toContain("(W-w)/2");
   });
 
+  it("renders Worship Wide, Full Stage, and Blurred Background as distinct treatments", () => {
+    const worshipWide = buildVerticalFramingFilter("FIT_BLURRED_BACKGROUND", {
+      treatment: "WORSHIP_WIDE",
+    });
+    const fullStage = buildVerticalFramingFilter("FIT_BLURRED_BACKGROUND", {
+      treatment: "FULL_STAGE",
+    });
+    const blurred = buildVerticalFramingFilter("FIT_BLURRED_BACKGROUND", {
+      treatment: "BLURRED_BACKGROUND",
+    });
+
+    expect(new Set([worshipWide, fullStage, blurred]).size).toBe(3);
+    expect(worshipWide).toContain("scale=1040:1840");
+    expect(worshipWide).toContain("color=0x111318");
+    expect(fullStage).toContain("scale=918:1632");
+    expect(fullStage).toContain("color=0x08090b");
+    expect(blurred).toContain("boxblur=20:1");
+  });
+
   it("SMART_CROP falls back to the CENTER_CROP filter when tracking data is missing", () => {
     const smartFilter = buildVerticalFramingFilter("SMART_CROP");
     const centerFilter = buildVerticalFramingFilter("CENTER_CROP");
@@ -271,6 +290,24 @@ describe("buildVerticalFramingFilter — export framing applied correctly", () =
     expect(filter).toContain("if(lte(t\\,0)");
     expect(filter).toContain("pow(min(max((t-0)/4\\,0)\\,1)\\,2)");
     expect(filter).toContain("crop=1080:1920:");
+  });
+
+  it("SMART_CROP consumes the canonical moving-speaker X/Y timeline", () => {
+    const filter = buildVerticalFramingFilter("SMART_CROP", {
+      sourceWidth: 1920,
+      sourceHeight: 1080,
+      subjectCenterX: 0.3,
+      subjectCenterY: 0.46,
+      zoom: 1.2,
+      subjectCenters: [
+        { timeSeconds: 0, centerX: 0.3, centerY: 0.46 },
+        { timeSeconds: 6, centerX: 0.7, centerY: 0.54 },
+      ],
+    });
+
+    expect((filter.match(/if\(lte/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(filter).toContain("crop=1080:1920:");
+    expect(getSmartCropFilterRiskReason(filter)).toBeNull();
   });
 
   it("SMART_CROP clamps the dynamic crop expression inside legal bounds", () => {

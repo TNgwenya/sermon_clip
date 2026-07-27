@@ -6,6 +6,7 @@ import {
   isFreshRemotePreview,
   listBestPreviewCandidates,
   resolveFreshRemotePreviewUrl,
+  resolvePreviewPlaybackUrl,
   resolveClipPreviewRecovery,
   resolveBestPreviewCandidate,
 } from "@/lib/clipPreview";
@@ -124,6 +125,23 @@ describe("clip preview helpers", () => {
     expect(buildRetryablePreviewUrl("https://cdn.example.com/clip.mp4?v=2", 3)).toBe(
       "https://cdn.example.com/clip.mp4?v=2&retry=3",
     );
+  });
+
+  it("plays a direct HTTPS remote preview without the API redirect waterfall", () => {
+    expect(resolvePreviewPlaybackUrl({
+      remotePreviewUrl: "  https://media.example.com/clip.mp4?v=compact-v1  ",
+      fallbackUrl: "/api/clips/clip-1/preview?variant=best",
+    })).toBe("https://media.example.com/clip.mp4?v=compact-v1");
+
+    expect(resolvePreviewPlaybackUrl({
+      remotePreviewUrl: null,
+      fallbackUrl: "/api/clips/clip-1/preview?variant=best",
+    })).toBe("/api/clips/clip-1/preview?variant=best");
+
+    expect(resolvePreviewPlaybackUrl({
+      remotePreviewUrl: "javascript:alert(1)",
+      fallbackUrl: "/api/clips/clip-1/preview?variant=best",
+    })).toBe("/api/clips/clip-1/preview?variant=best");
   });
 
   it("offers a real recovery action for a missing or failed suggested preview", () => {

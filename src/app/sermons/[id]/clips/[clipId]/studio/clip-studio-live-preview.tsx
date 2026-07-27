@@ -20,6 +20,10 @@ import {
 } from "@/lib/captionStylePresets";
 import { PLATFORM_PRESET_LABELS, resolveFramingDisplayLabel } from "@/lib/clipExportSettings";
 import { buildRetryablePreviewUrl } from "@/lib/clipPreview";
+import type {
+  ResolvedFramingPlanDocument,
+  ResolvedFramingTimelinePoint,
+} from "@/lib/resolvedFramingPlan";
 import {
   buildSpeechCleanupPreviewPlan,
   mapSourceSecondsToCleanedPreviewSeconds,
@@ -56,6 +60,7 @@ type ClipStudioLivePreviewProps = {
   timingLabel: string;
   riskLabel: string;
   riskClassName: string;
+  resolvedFramingPlan: ResolvedFramingPlanDocument | null;
   unavailableDescription?: string;
 };
 
@@ -99,6 +104,15 @@ type ManualCropPreviewFrame = {
   zoom: number;
 };
 
+export type ClipStudioFramingPreviewResolution = {
+  state: "MANUAL" | "READY" | "FALLBACK" | "PASSTHROUGH" | "PENDING" | "STALE";
+  statusLabel: string;
+  canConsumePlan: boolean;
+  layout: ResolvedFramingPlanDocument["effective"]["layout"] | null;
+  treatment: ResolvedFramingPlanDocument["effective"]["treatment"] | null;
+  message: string;
+};
+
 const PLATFORM_SAFE_ZONE_INSETS = {
   INSTAGRAM_REELS: { top: 10, right: 8, bottom: 19, left: 8 },
   TIKTOK: { top: 10, right: 22, bottom: 24, left: 8 },
@@ -112,30 +126,194 @@ export function resolveClipStudioPreviewSource({
   hasPreview,
   previewSrc,
   sourcePreviewSrc,
+  preferSourcePreview,
   unavailableSourcePreviewSrc,
+  unavailablePreparedPreviewSrc,
 }: {
   hasPreview: boolean;
   previewSrc: string | null;
   sourcePreviewSrc: string | null;
+  preferSourcePreview: boolean;
   unavailableSourcePreviewSrc: string | null;
+  unavailablePreparedPreviewSrc: string | null;
 }): {
   activePreviewSrc: string | null;
   canPreview: boolean;
   hasSourcePreview: boolean;
 } {
-  const hasSourcePreview = Boolean(
+  const sourceIsAvailable = Boolean(
     sourcePreviewSrc && sourcePreviewSrc !== unavailableSourcePreviewSrc,
+  );
+  const preparedPreviewIsAvailable = Boolean(
+    hasPreview &&
+    previewSrc &&
+    previewSrc !== unavailablePreparedPreviewSrc,
+  );
+  const useSourcePreview = sourceIsAvailable && (
+    preferSourcePreview || !preparedPreviewIsAvailable
   );
 
   return {
-    activePreviewSrc: hasSourcePreview ? sourcePreviewSrc : previewSrc,
-    canPreview: hasPreview || hasSourcePreview,
-    hasSourcePreview,
+    activePreviewSrc: useSourcePreview
+      ? sourcePreviewSrc
+      : preparedPreviewIsAvailable
+        ? previewSrc
+        : null,
+    canPreview: preparedPreviewIsAvailable || sourceIsAvailable,
+    hasSourcePreview: useSourcePreview,
   };
+}
+
+export function clipStudioPreviewNeedsSourceMedia(input: {
+  initialStartSeconds: number | null;
+  initialEndSeconds: number | null;
+  currentStartSeconds: number | null;
+  currentEndSeconds: number | null;
+  seekTimeDomain?: "cleaned" | "source" | null;
+}): boolean {
+  if (input.seekTimeDomain === "source") {
+    return true;
+  }
+
+  const boundaryChanged = (
+    initial: number | null,
+    current: number | null,
+  ): boolean => {
+    if (initial === null || current === null) {
+      return initial !== current;
+    }
+
+    return Math.abs(initial - current) > 0.01;
+  };
+
+  return (
+    boundaryChanged(input.initialStartSeconds, input.currentStartSeconds) ||
+    boundaryChanged(input.initialEndSeconds, input.currentEndSeconds)
+  );
 }
 
 function interpolateNumber(start: number, end: number, progress: number): number {
   return start + (end - start) * progress;
+}
+
+function smoothStep(progress: number): number {
+  const clamped = Math.max(0, Math.min(1, progress));
+  return clamped * clamped * (3 - 2 * clamped);
+}
+
+export function resolveCanonicalFramingPreviewFrame(
+  timeline: ResolvedFramingTimelinePoint[],
+  seconds: number,
+): ManualCropPreviewFrame | null {
+  if (timeline.length === 0) {
+    return null;
+  }
+
+  const first = timeline[0];
+  const last = timeline.at(-1);
+  if (!first || !last) {
+    return null;
+  }
+
+  if (seconds <= first.timeSeconds || timeline.length === 1) {
+    return {
+      centerX: first.centerX,
+      centerY: first.centerY,
+      zoom: first.zoom,
+    };
+  }
+
+  if (seconds >= last.timeSeconds) {
+    return {
+      centerX: last.centerX,
+      centerY: last.centerY,
+      zoom: last.zoom,
+    };
+  }
+
+  const nextIndex = timeline.findIndex((point) => point.timeSeconds >= seconds);
+  const next = timeline[nextIndex];
+  const previous = timeline[Math.max(0, nextIndex - 1)];
+  if (!previous || !next) {
+    return null;
+  }
+
+  const spanSeconds = Math.max(0.001, next.timeSeconds - previous.timeSeconds);
+  const progress = smoothStep((seconds - previous.timeSeconds) / spanSeconds);
+  return {
+    centerX: interpolateNumber(previous.centerX, next.centerX, progress),
+    centerY: interpolateNumber(previous.centerY, next.centerY, progress),
+    zoom: interpolateNumber(previous.zoom, next.zoom, progress),
+  };
+}
+
+export function resolveClipStudioFramingPreview(input: {
+  plan: ResolvedFramingPlanDocument | null;
+  framingMode: string;
+  framingPersonality: string;
+  hasManualCrop: boolean;
+}): ClipStudioFramingPreviewResolution {
+  if (input.hasManualCrop) {
+    return {
+      state: "MANUAL",
+      statusLabel: "Manual framing",
+      canConsumePlan: false,
+      layout: null,
+      treatment: null,
+      message: "Manual crop points override automatic framing and remain authoritative in this preview.",
+    };
+  }
+
+  if (!input.plan) {
+    return {
+      state: "PENDING",
+      statusLabel: "Framing pending",
+      canConsumePlan: false,
+      layout: null,
+      treatment: null,
+      message: input.framingMode === "SMART_CROP"
+        ? "Speaker tracking has not produced a framing plan yet. Studio will not simulate movement until a canonical plan is ready."
+        : "Prepare the video to resolve a canonical framing plan for this selection.",
+    };
+  }
+
+  if (
+    input.plan.requested.layout !== input.framingMode
+    || input.plan.requested.personality !== input.framingPersonality
+  ) {
+    return {
+      state: "STALE",
+      statusLabel: "Framing stale",
+      canConsumePlan: false,
+      layout: null,
+      treatment: null,
+      message: "The saved framing plan belongs to different Studio settings. Prepare the video to resolve the current choice.",
+    };
+  }
+
+  if (
+    input.plan.effective.layout === "SMART_CROP"
+    && input.plan.tracking.timeline.length === 0
+  ) {
+    return {
+      state: "PENDING",
+      statusLabel: "Tracking unavailable",
+      canConsumePlan: false,
+      layout: null,
+      treatment: null,
+      message: "The canonical plan does not contain a usable tracking timeline, so Studio is not simulating speaker movement.",
+    };
+  }
+
+  const state = input.plan.resolution.status;
+  return {
+    state,
+    statusLabel: `Framing ${state}`,
+    canConsumePlan: true,
+    layout: input.plan.effective.layout,
+    treatment: input.plan.effective.treatment,
+    message: input.plan.resolution.summary,
+  };
 }
 
 function resolveManualCropPreviewFrame(
@@ -212,6 +390,7 @@ export function ClipStudioLivePreview({
   timingLabel,
   riskLabel,
   riskClassName,
+  resolvedFramingPlan,
   unavailableDescription,
 }: ClipStudioLivePreviewProps) {
   const {
@@ -229,6 +408,7 @@ export function ClipStudioLivePreview({
   } = useClipStudioPreview();
   const frameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const backdropVideoRef = useRef<HTMLVideoElement | null>(null);
   const [overlayDragState, setOverlayDragState] = useState<OverlayDragState | null>(null);
   const [previewSeconds, setPreviewSeconds] = useState(0);
   const [sourcePreviewSeconds, setSourcePreviewSeconds] = useState(0);
@@ -236,12 +416,43 @@ export function ClipStudioLivePreview({
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const [previewErrorState, setPreviewErrorState] = useState<{ src: string; message: string } | null>(null);
   const [unavailableSourcePreviewSrc, setUnavailableSourcePreviewSrc] = useState<string | null>(null);
+  const [unavailablePreparedPreviewSrc, setUnavailablePreparedPreviewSrc] = useState<string | null>(null);
   const [previewReadySrc, setPreviewReadySrc] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
   const [playbackNotice, setPlaybackNotice] = useState<string | null>(null);
   const [showSafeZoneGuide, setShowSafeZoneGuide] = useState(false);
   const [previewFrameSize, setPreviewFrameSize] = useState({ width: 0, height: 0 });
   const [playbackState, setPlaybackState] = useState<"loading" | "ready" | "waiting" | "stalled" | "playing" | "paused" | "error">("loading");
+  const syncBackdropVideo = useCallback((forceTime = false) => {
+    const foreground = videoRef.current;
+    const backdrop = backdropVideoRef.current;
+    if (!foreground || !backdrop) {
+      return;
+    }
+
+    const driftSeconds = Math.abs(backdrop.currentTime - foreground.currentTime);
+    if (forceTime || driftSeconds > 0.12) {
+      try {
+        backdrop.currentTime = foreground.currentTime;
+      } catch {
+        // Metadata may still be loading; the next foreground event retries.
+      }
+    }
+    backdrop.playbackRate = foreground.playbackRate;
+
+    if (foreground.paused || foreground.ended) {
+      backdrop.pause();
+      return;
+    }
+
+    void backdrop.play().catch(() => {
+      // The foreground remains authoritative if a browser delays muted playback.
+    });
+  }, []);
+  const [initialDraftWindow] = useState(() => ({
+    startSeconds: editPreview.startSeconds,
+    endSeconds: editPreview.endSeconds,
+  }));
   const brandingEnabled = brandingConfig.enabled && brandingConfig.preset !== "NO_BRANDING";
   const captionsRequireSafeBrandingPlacement = shouldBrandingLowerThirdYieldToCaptions({
     applyCaptionsToClip: editPreview.applyCaptionsToClip,
@@ -270,9 +481,6 @@ export function ClipStudioLivePreview({
       || editPreview.brollLayer.enabled
       || brandingEnabled
     );
-  const previewFramingMode = protectsPreparedVisualLayers
-    ? "FIT_BLURRED_BACKGROUND"
-    : exportSettings.framingMode;
   const safeZoneInsets = PLATFORM_SAFE_ZONE_INSETS[exportSettings.platformPreset];
   const safeZoneStyle = {
     "--safe-zone-top": `${safeZoneInsets.top}%`,
@@ -280,6 +488,13 @@ export function ClipStudioLivePreview({
     "--safe-zone-bottom": `${safeZoneInsets.bottom}%`,
     "--safe-zone-left": `${safeZoneInsets.left}%`,
   } as CSSProperties;
+  const sourcePrecisionRequired = clipStudioPreviewNeedsSourceMedia({
+    initialStartSeconds: initialDraftWindow.startSeconds,
+    initialEndSeconds: initialDraftWindow.endSeconds,
+    currentStartSeconds: editPreview.startSeconds,
+    currentEndSeconds: editPreview.endSeconds,
+    seekTimeDomain: seekRequest?.timeDomain,
+  });
   const {
     activePreviewSrc,
     canPreview,
@@ -288,7 +503,9 @@ export function ClipStudioLivePreview({
     hasPreview,
     previewSrc,
     sourcePreviewSrc,
+    preferSourcePreview: sourcePrecisionRequired,
     unavailableSourcePreviewSrc,
+    unavailablePreparedPreviewSrc,
   });
   const previewError = previewErrorState?.src === activePreviewSrc ? previewErrorState.message : "";
   const playbackSrc = useMemo(() => {
@@ -532,6 +749,80 @@ export function ClipStudioLivePreview({
     [exportSettings.manualCropKeyframes, sourcePreviewSeconds],
   );
   const hasManualCropPreview = Boolean(manualCropPreview);
+  const framingPreview = useMemo(
+    () => resolveClipStudioFramingPreview({
+      plan: resolvedFramingPlan,
+      framingMode: exportSettings.framingMode,
+      framingPersonality: exportSettings.framingPersonality,
+      hasManualCrop: hasManualCropPreview,
+    }),
+    [
+      exportSettings.framingMode,
+      exportSettings.framingPersonality,
+      hasManualCropPreview,
+      resolvedFramingPlan,
+    ],
+  );
+  const canonicalCropPreview = useMemo(
+    () => (
+      framingPreview.canConsumePlan
+      && framingPreview.layout === "SMART_CROP"
+      && resolvedFramingPlan
+        ? resolveCanonicalFramingPreviewFrame(
+            resolvedFramingPlan.tracking.timeline,
+            sourcePreviewSeconds,
+          )
+        : null
+    ),
+    [framingPreview.canConsumePlan, framingPreview.layout, resolvedFramingPlan, sourcePreviewSeconds],
+  );
+  const canonicalPlanAppliesToPreview = Boolean(
+    framingPreview.canConsumePlan
+    && !hasManualCropPreview
+    && !protectsPreparedVisualLayers
+    && hasSourcePreview
+    && exportSettings.primaryFormat === "VERTICAL_9_16"
+  );
+  const preparedPreviewAlreadyFramed = Boolean(
+    framingPreview.canConsumePlan
+    && !hasManualCropPreview
+    && !hasSourcePreview
+    && exportSettings.primaryFormat === "VERTICAL_9_16",
+  );
+  const previewFramingMode = hasManualCropPreview
+    ? exportSettings.framingMode
+    : protectsPreparedVisualLayers
+      ? "FIT_BLURRED_BACKGROUND"
+      : preparedPreviewAlreadyFramed
+        ? "FIT_BLURRED_BACKGROUND"
+        : canonicalPlanAppliesToPreview && framingPreview.layout
+          ? framingPreview.layout
+          : "FIT_BLURRED_BACKGROUND";
+  const activeCanonicalCropPreview = canonicalPlanAppliesToPreview
+    ? canonicalCropPreview
+    : null;
+  const appliedTreatment = canonicalPlanAppliesToPreview
+    ? framingPreview.treatment
+    : null;
+  const treatmentClassName =
+    appliedTreatment === "WORSHIP_WIDE"
+      ? styles.worshipWideTreatment
+      : appliedTreatment === "FULL_STAGE"
+        ? styles.fullStageTreatment
+        : appliedTreatment === "BLURRED_BACKGROUND"
+          ? styles.blurredBackgroundTreatment
+          : appliedTreatment === "CENTER_CROP"
+            ? styles.centerCropTreatment
+            : appliedTreatment === "PASSTHROUGH"
+              ? styles.passthroughTreatment
+              : preparedPreviewAlreadyFramed
+                ? styles.passthroughTreatment
+                : appliedTreatment
+                  ? styles.trackedTreatment
+                  : !hasManualCropPreview && !protectsPreparedVisualLayers
+                    ? styles.unresolvedFraming
+                    : "";
+  const showTrueBlurBackdrop = appliedTreatment === "BLURRED_BACKGROUND";
   const activeCaptionWordIndex = useMemo(() => {
     if (editPreview.captionRevealMode !== "active-word") {
       return -1;
@@ -549,9 +840,19 @@ export function ClipStudioLivePreview({
           "--clip-manual-zoom": manualCropPreview.zoom.toFixed(3),
         }
       : {}),
+    ...(activeCanonicalCropPreview
+      ? {
+          "--clip-plan-x": `${(activeCanonicalCropPreview.centerX * 100).toFixed(2)}%`,
+          "--clip-plan-y": `${(activeCanonicalCropPreview.centerY * 100).toFixed(2)}%`,
+          "--clip-plan-zoom": activeCanonicalCropPreview.zoom.toFixed(3),
+        }
+      : {}),
   } as CSSProperties;
   const backgroundStyleClass = `background-${brandingConfig.backgroundStyle.toLowerCase().replace(/_/g, "-")}`;
   const framingDisplayLabel = resolveFramingDisplayLabel(exportSettings);
+  const framingPreviewMessage = preparedPreviewAlreadyFramed
+    ? `Framing ${framingPreview.state} is already applied to this prepared preview, so Studio is not cropping it a second time. ${framingPreview.message}`
+    : framingPreview.message;
 
   useEffect(() => {
     const frame = frameRef.current;
@@ -909,29 +1210,34 @@ export function ClipStudioLivePreview({
             ref={frameRef}
             className={`clip-studio-live-frame ${formatClassName[exportSettings.primaryFormat]} ${frameClassName[previewFramingMode]} ${
               brandingEnabled ? "branding-on" : "branding-off"
-            } ${hasManualCropPreview ? "has-manual-crop" : ""} ${overlayDragState ? "is-dragging-overlay" : ""} ${backgroundStyleClass}`}
+            } ${hasManualCropPreview ? "has-manual-crop" : ""} ${canonicalPlanAppliesToPreview ? styles.canonicalPlanApplied : ""} ${treatmentClassName} ${overlayDragState ? "is-dragging-overlay" : ""} ${backgroundStyleClass}`}
             style={previewStyle}
           >
             {canPreview && playbackSrc ? (
               <>
-                {exportSettings.backgroundMode === "BLURRED" ? (
-                  <div
-                    className="clip-studio-live-backdrop"
+                {showTrueBlurBackdrop ? (
+                  <video
+                    ref={backdropVideoRef}
+                    className={`clip-studio-live-backdrop ${styles.previewBackdropVideo}`}
+                    preload="metadata"
+                    playsInline
+                    muted
+                    tabIndex={-1}
+                    src={playbackSrc}
                     aria-hidden="true"
-                    style={{
-                      background: `radial-gradient(circle at 50% 32%, ${colorWithOpacity(brandingConfig.themeColor ?? "#75d9b8", 0.72)} 0%, #172033 42%, #05070b 100%)`,
-                    }}
+                    onLoadedMetadata={() => syncBackdropVideo(true)}
                   />
                 ) : null}
                 <video
                   ref={videoRef}
-                  className="review-video clip-studio-video"
+                  className={`review-video clip-studio-video ${styles.previewForeground}`}
                   preload="auto"
                   playsInline
                   src={playbackSrc}
                   onLoadedMetadata={() => {
                     setPreviewErrorState(null);
                     updatePreviewSeconds();
+                    syncBackdropVideo(true);
                   }}
                   onLoadedData={() => {
                     setPreviewErrorState(null);
@@ -943,13 +1249,33 @@ export function ClipStudioLivePreview({
                     setPlaybackNotice(null);
                   }}
                   onError={() => {
-                    if (hasSourcePreview && sourcePreviewSrc && previewSrc) {
+                    if (
+                      activePreviewSrc === sourcePreviewSrc &&
+                      sourcePreviewSrc &&
+                      previewSrc &&
+                      previewSrc !== unavailablePreparedPreviewSrc
+                    ) {
                       setUnavailableSourcePreviewSrc(sourcePreviewSrc);
                       setPreviewErrorState(null);
                       setPreviewReadySrc(null);
                       setIsPreviewPlaying(false);
                       setPlaybackState("loading");
                       setPlaybackNotice("The sermon source is unavailable, so Studio is loading the prepared clip instead.");
+                      return;
+                    }
+
+                    if (
+                      activePreviewSrc === previewSrc &&
+                      previewSrc &&
+                      sourcePreviewSrc &&
+                      sourcePreviewSrc !== unavailableSourcePreviewSrc
+                    ) {
+                      setUnavailablePreparedPreviewSrc(previewSrc);
+                      setPreviewErrorState(null);
+                      setPreviewReadySrc(null);
+                      setIsPreviewPlaying(false);
+                      setPlaybackState("loading");
+                      setPlaybackNotice("The prepared preview is unavailable, so Studio is loading the sermon source instead.");
                       return;
                     }
 
@@ -976,24 +1302,32 @@ export function ClipStudioLivePreview({
                   onTimeUpdate={() => {
                     clampVideoToDraftWindow();
                     updatePreviewSeconds();
+                    syncBackdropVideo();
                   }}
-                  onSeeking={updatePreviewSeconds}
+                  onSeeking={() => {
+                    updatePreviewSeconds();
+                    syncBackdropVideo(true);
+                  }}
                   onSeeked={() => {
                     clampVideoToDraftWindow();
                     updatePreviewSeconds();
+                    syncBackdropVideo(true);
                   }}
                   onPlay={() => {
                     clampVideoToDraftWindow();
                     updatePreviewSeconds();
+                    syncBackdropVideo(true);
                   }}
                   onPause={() => {
                     setPlaybackState("paused");
                     updatePreviewSeconds();
+                    syncBackdropVideo(true);
                   }}
                   onEnded={() => {
                     setPlaybackState("ready");
                     clampVideoToDraftWindow();
                     updatePreviewSeconds();
+                    syncBackdropVideo(true);
                   }}
                 />
                 {previewError ? (
@@ -1005,6 +1339,8 @@ export function ClipStudioLivePreview({
                       className="button secondary"
                       onClick={() => {
                         setPreviewErrorState(null);
+                        setUnavailableSourcePreviewSrc(null);
+                        setUnavailablePreparedPreviewSrc(null);
                         setPreviewReadySrc(null);
                         setPlaybackState("loading");
                         setPlaybackNotice(null);
@@ -1202,21 +1538,28 @@ export function ClipStudioLivePreview({
               {exportSettings.manualCropKeyframes.length > 1 ? (
                 <span>{exportSettings.manualCropKeyframes.length}-point frame motion</span>
               ) : null}
+              <span
+                className={styles.framingPlanChip}
+                data-framing-state={framingPreview.state.toLowerCase()}
+              >
+                {framingPreview.statusLabel}
+              </span>
               <span>{framingDisplayLabel}</span>
             </div>
-            {exportSettings.manualCropKeyframes.length > 1 ? (
-              <p className="clip-studio-preview-truth-note">
-                Crop motion follows the saved framing points as this preview plays.
-              </p>
-            ) : protectsPreparedVisualLayers ? (
+            {protectsPreparedVisualLayers && !hasManualCropPreview ? (
               <p className="clip-studio-preview-truth-note">
                 Full-frame fit protects captions and artwork from being cropped in this format.
               </p>
-            ) : exportSettings.framingMode === "SMART_CROP" ? (
-              <p className="clip-studio-preview-truth-note">
-                Automatic speaker movement is applied to the prepared video; this preview shows the chosen frame style.
+            ) : (
+              <p
+                className={`clip-studio-preview-truth-note ${styles.framingPlanMessage}`}
+                data-framing-state={framingPreview.state.toLowerCase()}
+                role="status"
+                aria-live="polite"
+              >
+                {framingPreviewMessage}
               </p>
-            ) : null}
+            )}
             {brandingEnabled && (brandingConfig.introEnabled || brandingConfig.outroEnabled) ? (
               <p className="clip-studio-preview-truth-note">
                 Timed brand cards use the same opening and closing windows in preview and preparation.

@@ -21,8 +21,11 @@ vi.mock("@/lib/prisma", () => ({
 import {
   __regenerationTestUtils,
   invalidateAfterBrandingChange,
+  invalidateAfterBoundaryOrCropChange,
   invalidateAfterCaptionCompleted,
   invalidateAfterCaptionTextChange,
+  invalidateAfterExportSettingChange,
+  invalidateAfterOverlaySettingChange,
   regenerationGraph,
 } from "../dependencies";
 
@@ -67,6 +70,106 @@ describe("regeneration dependency tracking", () => {
         captionBurnFreshness: "OUTDATED",
         overlayFreshness: "OUTDATED",
         exportFreshness: "OUTDATED",
+        captionBurnStatus: "NOT_BURNED",
+        overlayStatus: "NOT_RENDERED",
+        exportStatus: "NOT_EXPORTED",
+        captionedVideoPath: null,
+        overlayVideoPath: null,
+        exportedFilePath: null,
+      }),
+    });
+  });
+
+  it("resets every in-progress dependent stage when boundaries supersede the composition", async () => {
+    prismaMocks.findUnique.mockResolvedValueOnce({
+      id: "clip-1",
+      sermonId: "sermon-1",
+      renderStatus: "RENDERING",
+      captionStatus: "GENERATED",
+      captionBurnStatus: "BURNING",
+      overlayStatus: "RENDERING",
+      exportStatus: "EXPORTING",
+      renderFreshness: "UP_TO_DATE",
+      captionFreshness: "UP_TO_DATE",
+      captionBurnFreshness: "UP_TO_DATE",
+      overlayFreshness: "UP_TO_DATE",
+      exportFreshness: "UP_TO_DATE",
+    });
+
+    await invalidateAfterBoundaryOrCropChange("clip-1", "boundaries changed");
+
+    expect(prismaMocks.update).toHaveBeenCalledWith({
+      where: { id: "clip-1" },
+      data: expect.objectContaining({
+        renderStatus: "NOT_RENDERED",
+        captionBurnStatus: "NOT_BURNED",
+        overlayStatus: "NOT_RENDERED",
+        exportStatus: "NOT_EXPORTED",
+        renderedFilePath: null,
+        captionedVideoPath: null,
+        overlayVideoPath: null,
+        exportedFilePath: null,
+        renderFreshness: "NEEDS_REGENERATION",
+        captionBurnFreshness: "NEEDS_REGENERATION",
+        overlayFreshness: "NEEDS_REGENERATION",
+        exportFreshness: "NEEDS_REGENERATION",
+      }),
+    });
+  });
+
+  it("resets an active overlay and export when visual settings change", async () => {
+    prismaMocks.findUnique.mockResolvedValueOnce({
+      id: "clip-1",
+      sermonId: "sermon-1",
+      renderStatus: "COMPLETED",
+      captionStatus: "GENERATED",
+      captionBurnStatus: "COMPLETED",
+      overlayStatus: "RENDERING",
+      exportStatus: "EXPORTING",
+      renderFreshness: "UP_TO_DATE",
+      captionFreshness: "UP_TO_DATE",
+      captionBurnFreshness: "UP_TO_DATE",
+      overlayFreshness: "UP_TO_DATE",
+      exportFreshness: "UP_TO_DATE",
+    });
+
+    await invalidateAfterOverlaySettingChange("clip-1", "overlay changed");
+
+    expect(prismaMocks.update).toHaveBeenCalledWith({
+      where: { id: "clip-1" },
+      data: expect.objectContaining({
+        overlayStatus: "NOT_RENDERED",
+        exportStatus: "NOT_EXPORTED",
+        overlayFreshness: "NEEDS_REGENERATION",
+        exportFreshness: "NEEDS_REGENERATION",
+      }),
+    });
+  });
+
+  it("resets an active export when output settings change", async () => {
+    prismaMocks.findUnique.mockResolvedValueOnce({
+      id: "clip-1",
+      sermonId: "sermon-1",
+      renderStatus: "COMPLETED",
+      captionStatus: "GENERATED",
+      captionBurnStatus: "COMPLETED",
+      overlayStatus: "COMPLETED",
+      exportStatus: "EXPORTING",
+      renderFreshness: "UP_TO_DATE",
+      captionFreshness: "UP_TO_DATE",
+      captionBurnFreshness: "UP_TO_DATE",
+      overlayFreshness: "UP_TO_DATE",
+      exportFreshness: "UP_TO_DATE",
+    });
+
+    await invalidateAfterExportSettingChange("clip-1", "formats changed");
+
+    expect(prismaMocks.update).toHaveBeenCalledWith({
+      where: { id: "clip-1" },
+      data: expect.objectContaining({
+        exportStatus: "NOT_EXPORTED",
+        exportedFilePath: null,
+        exportFreshness: "NEEDS_REGENERATION",
       }),
     });
   });
@@ -89,11 +192,15 @@ describe("regeneration dependency tracking", () => {
 
     expect(prismaMocks.updateMany).toHaveBeenCalledWith({
       where: { status: { in: ["APPROVED", "EXPORTED"] } },
-      data: {
+      data: expect.objectContaining({
+        overlayStatus: "NOT_RENDERED",
+        exportStatus: "NOT_EXPORTED",
+        overlayVideoPath: null,
+        exportedFilePath: null,
         overlayFreshness: "OUTDATED",
         exportFreshness: "OUTDATED",
         assetInvalidationReason: "branding changed",
-      },
+      }),
     });
   });
 
@@ -123,12 +230,15 @@ describe("regeneration dependency tracking", () => {
 
     expect(prismaMocks.updateMany).toHaveBeenLastCalledWith({
       where: { id: { in: ["linked"] } },
-      data: {
+      data: expect.objectContaining({
+        captionBurnStatus: "NOT_BURNED",
+        overlayStatus: "NOT_RENDERED",
+        exportStatus: "NOT_EXPORTED",
         captionBurnFreshness: "OUTDATED",
         overlayFreshness: "OUTDATED",
         exportFreshness: "OUTDATED",
         assetInvalidationReason: "caption style changed",
-      },
+      }),
     });
   });
 

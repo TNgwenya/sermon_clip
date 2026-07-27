@@ -253,6 +253,12 @@ enum ClipEditPlanStatus {
   SUPERSEDED
 }
 
+enum ResolvedFramingPlanStatus {
+  READY
+  FALLBACK
+  PASSTHROUGH
+}
+
 enum ClipArtifactKind {
   RENDERED_SOURCE
   CAPTIONED
@@ -893,27 +899,31 @@ model WorkerHeartbeat {
 }
 
 model ClipEditPlan {
-  id                     String             @id @default(cuid())
-  clipCandidateId        String
-  sermonId               String
-  version                Int                @default(1)
-  status                 ClipEditPlanStatus @default(ACTIVE)
-  planHash               String
-  sourceStartTimeSeconds Float
-  sourceEndTimeSeconds   Float
-  cleanedDurationSeconds Float?
-  planJson               Json
-  cleanupPlanJson        Json?
-  captionCueHash         String?
-  cropPlanHash           String?
-  exportSettingsHash     String?
-  createdBy              String             @default("system")
-  createdReason          String?
-  createdAt              DateTime           @default(now())
-  updatedAt              DateTime           @updatedAt
-  sermon                 Sermon             @relation(fields: [sermonId], references: [id], onDelete: Cascade)
-  clipCandidate          ClipCandidate      @relation(fields: [clipCandidateId], references: [id], onDelete: Cascade)
-  artifacts              ClipArtifact[]
+  id                      String                     @id @default(cuid())
+  clipCandidateId         String
+  sermonId                String
+  version                 Int                        @default(1)
+  status                  ClipEditPlanStatus         @default(ACTIVE)
+  planHash                String
+  sourceStartTimeSeconds  Float
+  sourceEndTimeSeconds    Float
+  cleanedDurationSeconds  Float?
+  planJson                Json
+  cleanupPlanJson         Json?
+  captionCueHash          String?
+  cropPlanHash            String?
+  exportSettingsHash      String?
+  resolvedFramingPlan     Json?
+  resolvedFramingPlanHash String?
+  framingPlanStatus       ResolvedFramingPlanStatus?
+  framingPlanResolvedAt   DateTime?
+  createdBy               String                     @default("system")
+  createdReason           String?
+  createdAt               DateTime                   @default(now())
+  updatedAt               DateTime                   @updatedAt
+  sermon                  Sermon                     @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  clipCandidate           ClipCandidate              @relation(fields: [clipCandidateId], references: [id], onDelete: Cascade)
+  artifacts               ClipArtifact[]
 
   @@unique([clipCandidateId, version])
   @@index([clipCandidateId, status])
@@ -1423,40 +1433,41 @@ model PostingDraft {
 }
 
 model ScheduledPost {
-  id                 String                      @id @default(cuid())
-  postingDraftId     String?
-  socialAccountId    String?
-  clipIdsJson        Json
-  platform           PostingPlatform
-  postingSlot        String
-  title              String?
-  caption            String?
-  note               String?
-  status             ScheduledPostStatus         @default(READY_FOR_MEDIA_TEAM)
-  automationMode     PostingAutomationMode       @default(MANUAL)
-  scheduledFor       DateTime?
-  timezone           String?
-  workerStatus       ScheduledPostWorkerStatus   @default(IDLE)
-  attemptCount       Int                         @default(0)
-  claimedAt          DateTime?
-  workerId           String?
-  lastAttemptAt      DateTime?
-  externalPostId     String?
-  publishedUrl       String?
-  publishError       String?
-  finalPrivacyStatus String?
-  mediaObjectKey     String?
-  mediaPublicUrl     String?
-  mediaUploadedAt    DateTime?
-  idempotencyKey     String                      @unique
-  createdAt          DateTime                    @default(now())
-  updatedAt          DateTime                    @updatedAt
-  postingDraft       PostingDraft?               @relation(fields: [postingDraftId], references: [id], onDelete: SetNull)
-  socialAccount      SocialAccount?              @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
-  predictions        PostPerformancePrediction[]
-  ministryOutcomes   MinistryOutcome[]
-  guardrailReviews   GrowthGuardrailReview[]
-  contentAssetLinks  ScheduledPostContentAsset[]
+  id                     String                      @id @default(cuid())
+  postingDraftId         String?
+  socialAccountId        String?
+  clipIdsJson            Json
+  platform               PostingPlatform
+  postingSlot            String
+  title                  String?
+  caption                String?
+  note                   String?
+  status                 ScheduledPostStatus         @default(READY_FOR_MEDIA_TEAM)
+  automationMode         PostingAutomationMode       @default(MANUAL)
+  scheduledFor           DateTime?
+  timezone               String?
+  workerStatus           ScheduledPostWorkerStatus   @default(IDLE)
+  attemptCount           Int                         @default(0)
+  claimedAt              DateTime?
+  workerId               String?
+  lastAttemptAt          DateTime?
+  externalPostId         String?
+  publishedUrl           String?
+  publishError           String?
+  finalPrivacyStatus     String?
+  mediaObjectKey         String?
+  mediaPublicUrl         String?
+  mediaUploadedAt        DateTime?
+  compositionReceiptJson Json?
+  idempotencyKey         String                      @unique
+  createdAt              DateTime                    @default(now())
+  updatedAt              DateTime                    @updatedAt
+  postingDraft           PostingDraft?               @relation(fields: [postingDraftId], references: [id], onDelete: SetNull)
+  socialAccount          SocialAccount?              @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+  predictions            PostPerformancePrediction[]
+  ministryOutcomes       MinistryOutcome[]
+  guardrailReviews       GrowthGuardrailReview[]
+  contentAssetLinks      ScheduledPostContentAsset[]
 
   @@index([postingDraftId])
   @@index([socialAccountId])

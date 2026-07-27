@@ -84,6 +84,7 @@ import {
   type PromotedMediaIdentity,
 } from "@/server/agents/mediaPromotionGuard";
 import { markInProgressClipStudioExportsFailed } from "@/lib/clipExportSettings";
+import { getResolvedFramingPlanForGuard } from "@/server/agents/resolvedFramingPlanService";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1091,6 +1092,12 @@ export async function renderClipOverlay(
 
   const clip = await loadClipForOverlay(clipId);
   await assertClipEditPlanStillActive(editPlanGuard);
+  const resolvedFramingRecord = await getResolvedFramingPlanForGuard(editPlanGuard);
+  if (!resolvedFramingRecord) {
+    throw new Error(
+      "The active clip revision has no resolved framing plan. Rebuild the base video before applying overlays.",
+    );
+  }
   await ensureSermonFolders(clip.sermonId);
 
   const overlaySource = resolveOverlaySourceSelection(clip);
@@ -1361,6 +1368,9 @@ export async function renderClipOverlay(
         hookOverlayApplied: Boolean(hookOverlaySpec),
         brollOverlayCount: brollOverlaySpecs.length,
         brandingApplied: overlayEnabled || timedBrandingLayers.length > 0,
+        resolvedFramingPlanHash: resolvedFramingRecord.planHash,
+        resolvedFramingPlanStatus: resolvedFramingRecord.status,
+        framingTreatment: resolvedFramingRecord.plan.effective.treatment,
         logoApplied: Boolean(
           brandingConfig.enabled
           && logoAvailable

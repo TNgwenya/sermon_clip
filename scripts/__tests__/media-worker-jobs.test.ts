@@ -290,27 +290,23 @@ function overlayClip(
 }
 
 describe("media worker overlay/export orchestration", () => {
-  it("uses the fit-blurred fallback and succeeds only after the fallback export completes", async () => {
+  it("does not overwrite the selected framing or retry outside the canonical export fallback", async () => {
     const renderOverlay = vi.fn(async () => undefined);
-    const prepareFitBlurredFallback = vi.fn(async () => undefined);
     const exportClip = vi.fn(async (
-      _clipId: string,
+      clipId: string,
       options: { layoutStrategy: string },
     ) => {
-      if (options.layoutStrategy === "SMART_CROP") {
-        throw new Error("Face tracking unavailable");
-      }
+      void clipId;
+      void options;
+      throw new Error("Face tracking unavailable");
     });
 
     await expect(runOverlayAndExportBatch([overlayClip("clip-a")], {
       renderOverlay,
       exportClip,
-      prepareFitBlurredFallback,
-    })).resolves.toBe("Overlay/export completed: 1 overlay(s), 1 export(s); skipped 0 because required captions were not ready.");
-    expect(prepareFitBlurredFallback).toHaveBeenCalledWith("clip-a");
+    })).rejects.toThrow("Face tracking unavailable");
     expect(exportClip.mock.calls.map(([, options]) => options.layoutStrategy)).toEqual([
       "SMART_CROP",
-      "FIT_BLURRED_BACKGROUND",
     ]);
   });
 
@@ -321,7 +317,6 @@ describe("media worker overlay/export orchestration", () => {
       }
     });
     const exportClip = vi.fn(async () => undefined);
-    const prepareFitBlurredFallback = vi.fn(async () => undefined);
 
     await expect(runOverlayAndExportBatch([
       overlayClip("clip-a"),
@@ -329,7 +324,6 @@ describe("media worker overlay/export orchestration", () => {
     ], {
       renderOverlay,
       exportClip,
-      prepareFitBlurredFallback,
     })).rejects.toThrow(
       "Overlay/export failed for 1 of 2 attempted clip(s) after completing 1 overlay(s) and 1 export(s); skipped 0 because required captions were not ready. Failures: clip-a: Overlay renderer failed",
     );
@@ -343,7 +337,6 @@ describe("media worker overlay/export orchestration", () => {
   it("does not run branding or export after a required caption burn failed", async () => {
     const renderOverlay = vi.fn(async () => undefined);
     const exportClip = vi.fn(async () => undefined);
-    const prepareFitBlurredFallback = vi.fn(async () => undefined);
 
     await expect(runOverlayAndExportBatch([
       overlayClip("clip-a", {
@@ -357,7 +350,6 @@ describe("media worker overlay/export orchestration", () => {
     ], {
       renderOverlay,
       exportClip,
-      prepareFitBlurredFallback,
     })).resolves.toBe(
       "Overlay/export completed: 1 overlay(s), 1 export(s); skipped 1 because required captions were not ready.",
     );

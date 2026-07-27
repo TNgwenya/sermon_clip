@@ -165,50 +165,22 @@ async function renderReviewPreviewWithFallback(sermonId: string, clip: ReviewAss
   renderedFilePath: string;
   fileSizeBytes: number | null;
 }> {
-  try {
-    const result = await renderApprovedClip(clip.id, {
-      force,
-      allowRerender: Boolean(force),
-    });
-    const renderedClip = await prisma.clipCandidate.findUnique({
-      where: { id: clip.id },
-      select: { renderedSizeBytes: true },
-    });
-    return {
-      renderedFilePath: result.renderedFilePath,
-      fileSizeBytes: renderedClip?.renderedSizeBytes ?? null,
-    };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : "Unknown preview render error.";
-    if (clip.exportLayoutStrategy !== "SMART_CROP") {
-      throw error;
-    }
-
-    await appendPipelineLog(
-      sermonId,
-      `Smart crop preview render failed for clip ${clip.id}; retrying with full-stage framing. Reason: ${reason}`,
-    );
-    await prisma.clipCandidate.update({
-      where: { id: clip.id },
-      data: {
-        exportLayoutStrategy: "FIT_BLURRED_BACKGROUND",
-        renderStatus: "NOT_RENDERED",
-        renderError: null,
-      },
-    });
-    const result = await renderApprovedClip(clip.id, {
-      force: true,
-      allowRerender: true,
-    });
-    const renderedClip = await prisma.clipCandidate.findUnique({
-      where: { id: clip.id },
-      select: { renderedSizeBytes: true },
-    });
-    return {
-      renderedFilePath: result.renderedFilePath,
-      fileSizeBytes: renderedClip?.renderedSizeBytes ?? null,
-    };
-  }
+  const result = await renderApprovedClip(clip.id, {
+    force,
+    allowRerender: Boolean(force),
+  });
+  const renderedClip = await prisma.clipCandidate.findUnique({
+    where: { id: clip.id },
+    select: { renderedSizeBytes: true },
+  });
+  await appendPipelineLog(
+    sermonId,
+    `Review preview uses the active revision's canonical framing plan for clip ${clip.id}.`,
+  );
+  return {
+    renderedFilePath: result.renderedFilePath,
+    fileSizeBytes: renderedClip?.renderedSizeBytes ?? null,
+  };
 }
 
 async function uploadRemotePreviewBestEffort(input: {

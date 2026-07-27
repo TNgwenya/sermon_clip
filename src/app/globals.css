@@ -15677,3 +15677,141 @@ textarea::placeholder {
     width: 100%;
   }
 }
+
+/* Transcript rows are controls, not passive transcript copy. */
+.clip-studio-transcript-rail {
+  align-content: start;
+  grid-template-rows: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.clip-studio-transcript-list {
+  flex: 0 0 auto;
+  max-height: 22rem;
+  min-height: 12rem;
+}
+
+.clip-studio-transcript-line {
+  grid-template-columns: 3.7rem minmax(0, 1fr) auto;
+  min-height: 3.4rem;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    transform 140ms ease;
+}
+
+.clip-studio-transcript-line:hover {
+  transform: translateY(-1px);
+}
+
+.clip-studio-transcript-line[aria-pressed="true"] {
+  border-color: rgba(248, 250, 252, 0.82);
+  box-shadow:
+    0 0 0 2px rgba(117, 217, 184, 0.3),
+    0 12px 24px rgba(0, 0, 0, 0.18);
+}
+
+.clip-studio-transcript-line-action {
+  align-self: center;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  color: #cbd5e1;
+  font-size: 0.66rem;
+  font-weight: 800;
+  grid-column: 3;
+  grid-row: 1;
+  padding: 0.2rem 0.38rem;
+  white-space: nowrap;
+}
+
+.clip-studio-transcript-line[aria-pressed="true"] .clip-studio-transcript-line-action {
+  border-color: rgba(117, 217, 184, 0.42);
+  background: rgba(117, 217, 184, 0.14);
+  color: #d9fff2;
+}
+
+.clip-studio-transcript-active-heading,
+.clip-studio-transcript-review-required {
+  align-items: start;
+  display: flex;
+  gap: 0.65rem;
+  justify-content: space-between;
+}
+
+.clip-studio-transcript-active-heading h3 {
+  font-size: 1rem;
+  margin-top: 0.12rem;
+}
+
+.clip-studio-transcript-correction {
+  display: grid;
+  gap: 0.48rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  padding-top: 0.58rem;
+}
+
+.clip-studio-transcript-correction-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 0.38rem;
+}
+
+.clip-studio-transcript-correction-actions .button {
+  min-height: 2.2rem;
+  padding-inline: 0.48rem;
+  text-align: center;
+  white-space: normal;
+}
+
+.clip-studio-transcript-review-required {
+  border: 1px solid rgba(251, 191, 36, 0.34);
+  border-radius: 8px;
+  background: rgba(180, 83, 9, 0.12);
+  color: #fde68a;
+  padding: 0.58rem;
+}
+
+.clip-studio-transcript-review-required p {
+  color: #fef3c7;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  margin-top: 0.2rem;
+}
+
+.clip-studio-transcript-review-required .button {
+  flex: 0 0 auto;
+  min-height: 2.2rem;
+  padding-inline: 0.55rem;
+  text-align: center;
+  white-space: normal;
+}
+
+@media (max-width: 760px) {
+  .clip-studio-transcript-rail {
+    overflow: visible;
+  }
+
+  .clip-studio-transcript-list {
+    max-height: none;
+  }
+
+  .clip-studio-transcript-line {
+    grid-template-columns: 3.4rem minmax(0, 1fr);
+  }
+
+  .clip-studio-transcript-line-action {
+    grid-column: 2;
+    grid-row: auto;
+    justify-self: start;
+  }
+
+  .clip-studio-transcript-correction-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .clip-studio-transcript-review-required {
+    display: grid;
+  }
+}

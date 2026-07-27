@@ -101,6 +101,43 @@ function readBoolean(record: Record<string, unknown>, key: string, fallback: boo
   return typeof record[key] === "boolean" ? Boolean(record[key]) : fallback;
 }
 
+/**
+ * Edit plans guard generated media, so post-distribution copy must not be part
+ * of their identity. Normalizing persisted plans also keeps existing ACTIVE
+ * plans compatible after this separation: the first post-copy-only save must
+ * not invalidate an already approved export merely because an older planJson
+ * still contains title, hook, caption, or hashtags.
+ */
+function normalizeMediaPlanDocument(value: unknown): Prisma.InputJsonValue | null {
+  const document = asRecord(value);
+  const clip = asRecord(document["clip"]);
+  if (
+    typeof document["schemaVersion"] !== "number"
+    || !document["boundaries"]
+    || !document["speechCleanup"]
+    || !document["captions"]
+    || !document["overlays"]
+    || !document["framing"]
+    || !document["export"]
+  ) {
+    return null;
+  }
+
+  return toJsonValue({
+    ...document,
+    clip: {
+      id: clip["id"],
+      sermonId: clip["sermonId"],
+      transcriptText: clip["transcriptText"],
+    },
+  });
+}
+
+function mediaPlanHashFromPlanJson(value: unknown): string | null {
+  const document = normalizeMediaPlanDocument(value);
+  return document ? hashStableJson(document) : null;
+}
+
 function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot {
   const captionData = asRecord(clip.captionData);
   const sourceStartTimeSeconds = clip.adjustedStartTimeSeconds ?? clip.startTimeSeconds;
@@ -123,10 +160,6 @@ function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot 
     clip: {
       id: clip.id,
       sermonId: clip.sermonId,
-      title: clip.title,
-      hook: clip.hook,
-      caption: clip.caption,
-      hashtags: clip.hashtags,
       transcriptText: clip.transcriptText,
     },
     boundaries: {
@@ -296,6 +329,28 @@ export async function tryUpdateClipCandidateForActiveEditPlan(input: {
   return result.count === 1;
 }
 
+/**
+ * Invalidates the worker guard before a Studio composition write begins.
+ * If the later save or new-plan creation fails, having no ACTIVE plan is a
+ * deliberate fail-closed state: media workers and publishing cannot promote
+ * an artifact from the superseded composition.
+ */
+export async function supersedeActiveClipEditPlansForStudioSave(
+  clipCandidateId: string,
+): Promise<number> {
+  const result = await prisma.clipEditPlan.updateMany({
+    where: {
+      clipCandidateId,
+      status: "ACTIVE",
+    },
+    data: {
+      status: "SUPERSEDED",
+    },
+  });
+
+  return result.count;
+}
+
 export async function upsertActiveClipEditPlanForClip(input: {
   clipCandidateId: string;
   createdBy?: string;
@@ -313,7 +368,13 @@ export async function upsertActiveClipEditPlanForClip(input: {
   const snapshot = buildClipEditPlanSnapshot(clip);
   const latest = await getActiveClipEditPlan(clip.id);
 
-  if (latest?.planHash === snapshot.planHash) {
+  if (
+    latest
+    && (
+      latest.planHash === snapshot.planHash
+      || mediaPlanHashFromPlanJson(latest.planJson) === snapshot.planHash
+    )
+  ) {
     return {
       plan: latest,
       created: false,
@@ -435,4 +496,6 @@ export async function recordClipArtifact(input: {
 
 export const __clipEditPlanTestUtils = {
   buildClipEditPlanSnapshot,
+  mediaPlanHashFromPlanJson,
+  normalizeMediaPlanDocument,
 };

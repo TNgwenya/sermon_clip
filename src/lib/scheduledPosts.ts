@@ -1,10 +1,10 @@
-import type {
+import {
   Prisma,
-  PostingAutomationMode as PrismaPostingAutomationMode,
-  PostingPlatform as PrismaPostingPlatform,
-  ScheduledPostStatus as PrismaScheduledPostStatus,
-  ScheduledPostWorkerStatus as PrismaScheduledPostWorkerStatus,
-  SocialConnectorProvider,
+  type PostingAutomationMode as PrismaPostingAutomationMode,
+  type PostingPlatform as PrismaPostingPlatform,
+  type ScheduledPostStatus as PrismaScheduledPostStatus,
+  type ScheduledPostWorkerStatus as PrismaScheduledPostWorkerStatus,
+  type SocialConnectorProvider,
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
@@ -16,6 +16,18 @@ import {
   fromPrismaPostingPlatform,
   type PostingPlatform,
 } from "@/lib/postingDrafts";
+
+export type ClipPostingCompositionIdentity = {
+  schemaVersion: 1;
+  clipId: string;
+  editPlanId: string;
+  artifactId: string;
+  planHash: string;
+  filePath: string;
+  sizeBytes: number | null;
+  snapshotSha256: string | null;
+  snapshotSizeBytes: number | null;
+};
 
 export type ScheduledPost = {
   id: string;
@@ -47,6 +59,7 @@ export type ScheduledPost = {
   mediaObjectKey: string | null;
   mediaPublicUrl: string | null;
   mediaUploadedAt: string | null;
+  compositionReceipt?: ClipPostingCompositionIdentity[] | null;
   idempotencyKey: string;
   createdAt: string;
   contentAssets?: Array<{
@@ -87,6 +100,13 @@ export class ScheduledPostMutationConflictError extends Error {
   }
 }
 
+export class ClipCompositionPublishingConflictError extends Error {
+  constructor() {
+    super("This clip is being published right now. Wait for the platform receipt before saving a new Studio composition.");
+    this.name = "ClipCompositionPublishingConflictError";
+  }
+}
+
 const MANUAL_PUBLISHING_STATUSES: ManualPublishingStatus[] = ["POSTED", "SKIPPED"];
 const RESTORABLE_PUBLISHING_STATUSES: RestorablePublishingStatus[] = [
   "PLANNED",
@@ -106,6 +126,28 @@ const POSTING_PLATFORM_CREDENTIAL_PROVIDER: Partial<Record<PrismaPostingPlatform
   TIKTOK: "TIKTOK",
   YOUTUBE_SHORTS: "YOUTUBE",
 };
+
+export async function assertClipCompositionNotActivelyPublishing(clipId: string): Promise<void> {
+  const normalizedClipId = clipId.trim();
+  if (!normalizedClipId) {
+    throw new Error("Clip id is required before checking the publishing lock.");
+  }
+
+  const activePost = await prisma.scheduledPost.findFirst({
+    where: {
+      status: "POSTING",
+      workerStatus: { in: ["CLAIMED", "POSTING"] },
+      claimedAt: { not: null },
+      clipIdsJson: {
+        array_contains: [normalizedClipId],
+      },
+    },
+    select: { id: true },
+  });
+  if (activePost) {
+    throw new ClipCompositionPublishingConflictError();
+  }
+}
 
 function isSocialAuthFailure(message: string | null | undefined): boolean {
   const normalized = message?.toLowerCase() ?? "";
@@ -162,6 +204,78 @@ function normalizeClipIds(value: unknown): string[] {
     : [];
 }
 
+function normalizeClipPostingCompositionIdentity(value: unknown): ClipPostingCompositionIdentity | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const sizeBytes = record["sizeBytes"];
+  const snapshotSha256 = record["snapshotSha256"];
+  const snapshotSizeBytes = record["snapshotSizeBytes"];
+  if (
+    record["schemaVersion"] !== 1
+    || typeof record["clipId"] !== "string"
+    || typeof record["editPlanId"] !== "string"
+    || typeof record["artifactId"] !== "string"
+    || typeof record["planHash"] !== "string"
+    || typeof record["filePath"] !== "string"
+    || ![record["clipId"], record["editPlanId"], record["artifactId"], record["planHash"], record["filePath"]]
+      .every((item) => typeof item === "string" && item.trim().length > 0)
+    || !(
+      sizeBytes === null
+      || (
+        typeof sizeBytes === "number"
+        && Number.isSafeInteger(sizeBytes)
+        && sizeBytes > 0
+      )
+    )
+    || !(
+      snapshotSha256 === null
+      || (
+        typeof snapshotSha256 === "string"
+        && /^[a-f0-9]{64}$/.test(snapshotSha256)
+      )
+    )
+    || !(
+      snapshotSizeBytes === null
+      || (
+        typeof snapshotSizeBytes === "number"
+        && Number.isSafeInteger(snapshotSizeBytes)
+        && snapshotSizeBytes > 0
+      )
+    )
+    || ((snapshotSha256 === null) !== (snapshotSizeBytes === null))
+  ) {
+    return null;
+  }
+
+  return {
+    schemaVersion: 1,
+    clipId: record["clipId"].trim(),
+    editPlanId: record["editPlanId"].trim(),
+    artifactId: record["artifactId"].trim(),
+    planHash: record["planHash"].trim(),
+    filePath: record["filePath"].trim(),
+    sizeBytes,
+    snapshotSha256,
+    snapshotSizeBytes,
+  };
+}
+
+export function normalizeClipPostingCompositionIdentities(
+  value: unknown,
+): ClipPostingCompositionIdentity[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const identities = value.map(normalizeClipPostingCompositionIdentity);
+  return identities.every((identity): identity is ClipPostingCompositionIdentity => identity !== null)
+    ? identities
+    : null;
+}
+
 function toScheduledPost(input: {
   id: string;
   postingDraftId: string | null;
@@ -188,6 +302,7 @@ function toScheduledPost(input: {
   mediaObjectKey: string | null;
   mediaPublicUrl: string | null;
   mediaUploadedAt: Date | null;
+  compositionReceiptJson?: unknown;
   idempotencyKey: string;
   createdAt: Date;
   socialAccount: {
@@ -261,6 +376,7 @@ function toScheduledPost(input: {
     mediaObjectKey: input.mediaObjectKey,
     mediaPublicUrl: input.mediaPublicUrl,
     mediaUploadedAt: input.mediaUploadedAt?.toISOString() ?? null,
+    compositionReceipt: normalizeClipPostingCompositionIdentities(input.compositionReceiptJson),
     idempotencyKey: input.idempotencyKey,
     createdAt: input.createdAt.toISOString(),
     contentAssets: (input.contentAssetLinks ?? []).map(({ contentAsset, contentAssetRevision }) => ({
@@ -760,6 +876,7 @@ export type AutomationUpcomingPost = ScheduledPost & {
     durationSeconds: number;
     hashtags: unknown;
     localFileCandidates: string[];
+    compositionIdentity: ClipPostingCompositionIdentity;
     sermon: {
       id: string;
       title: string;
@@ -854,6 +971,34 @@ async function buildReadyAutomationPosts(
       exportedFilePath: true,
       exportPath: true,
       transcriptSafetyStatus: true,
+      editPlans: {
+        where: { status: "ACTIVE" },
+        orderBy: { version: "desc" },
+        take: 2,
+        select: {
+          id: true,
+          planHash: true,
+        },
+      },
+      artifacts: {
+        where: {
+          kind: "EXPORT",
+          status: "READY",
+          freshness: "UP_TO_DATE",
+          format: "VERTICAL_9_16",
+          editPlan: {
+            is: { status: "ACTIVE" },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          editPlanId: true,
+          planHash: true,
+          filePath: true,
+          sizeBytes: true,
+        },
+      },
       sermon: {
         select: {
           id: true,
@@ -868,15 +1013,34 @@ async function buildReadyAutomationPosts(
       return null;
     }
 
-    const outputPath = clip.exportStatus === "COMPLETED"
+    const canonicalOutputPath = clip.exportStatus === "COMPLETED"
       && clip.exportFreshness === "UP_TO_DATE"
       && clip.exportFormat === "VERTICAL_9_16"
       ? clip.exportedFilePath?.trim() || clip.exportPath?.trim() || null
       : null;
-    if (!outputPath) {
+    const activePlan = clip.editPlans.length === 1 ? clip.editPlans[0] : null;
+    const artifact = canonicalOutputPath && activePlan
+      ? clip.artifacts.find((candidate) => (
+          candidate.editPlanId === activePlan.id
+          && candidate.planHash === activePlan.planHash
+          && candidate.filePath?.trim() === canonicalOutputPath
+        )) ?? null
+      : null;
+    if (!canonicalOutputPath || !activePlan || !artifact) {
       return null;
     }
 
+    const compositionIdentity: ClipPostingCompositionIdentity = {
+      schemaVersion: 1,
+      clipId: clip.id,
+      editPlanId: activePlan.id,
+      artifactId: artifact.id,
+      planHash: activePlan.planHash,
+      filePath: canonicalOutputPath,
+      sizeBytes: artifact.sizeBytes,
+      snapshotSha256: null,
+      snapshotSizeBytes: null,
+    };
     const readyClip: AutomationUpcomingPost["clips"][number] = {
       id: clip.id,
       title: clip.title,
@@ -886,7 +1050,8 @@ async function buildReadyAutomationPosts(
       // The posting worker must receive one canonical final export. Supplying
       // overlay, caption-burn, or raw-render fallbacks can publish an older or
       // partially composed artifact after a Studio edit.
-      localFileCandidates: [outputPath],
+      localFileCandidates: [canonicalOutputPath],
+      compositionIdentity,
       sermon: clip.sermon,
     };
 
@@ -912,6 +1077,64 @@ async function buildReadyAutomationPosts(
       clips: readyClips,
     }];
   });
+}
+
+function compositionIdentitiesForPost(
+  post: AutomationUpcomingPost,
+): ClipPostingCompositionIdentity[] {
+  return post.clips.map((clip) => clip.compositionIdentity);
+}
+
+function compositionIdentitiesMatch(
+  left: ClipPostingCompositionIdentity[],
+  right: ClipPostingCompositionIdentity[],
+): boolean {
+  return left.length === right.length
+    && left.every((identity, index) => {
+      const candidate = right[index];
+      return Boolean(
+        candidate
+        && identity.schemaVersion === candidate.schemaVersion
+        && identity.clipId === candidate.clipId
+        && identity.editPlanId === candidate.editPlanId
+        && identity.artifactId === candidate.artifactId
+        && identity.planHash === candidate.planHash
+        && identity.filePath === candidate.filePath
+        && identity.sizeBytes === candidate.sizeBytes
+      );
+    });
+}
+
+function postingSnapshotsAreBound(
+  observed: ClipPostingCompositionIdentity[],
+  bound: ClipPostingCompositionIdentity[],
+): boolean {
+  return observed.length === bound.length
+    && observed.every((identity, index) => {
+      const candidate = bound[index];
+      if (
+        !candidate
+        || !identity.snapshotSha256
+        || identity.snapshotSizeBytes === null
+        || (
+          identity.sizeBytes !== null
+          && identity.sizeBytes !== identity.snapshotSizeBytes
+        )
+      ) {
+        return false;
+      }
+
+      return candidate.snapshotSha256 === null
+        ? candidate.snapshotSizeBytes === null
+        : candidate.snapshotSha256 === identity.snapshotSha256
+          && candidate.snapshotSizeBytes === identity.snapshotSizeBytes;
+    });
+}
+
+function compositionIdentityJson(
+  identities: ClipPostingCompositionIdentity[],
+): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(identities)) as Prisma.InputJsonValue;
 }
 
 export async function listUpcomingAutomationPosts(input: {
@@ -973,6 +1196,7 @@ export async function claimScheduledPost(input: {
       mediaObjectKey: null,
       mediaPublicUrl: null,
       mediaUploadedAt: null,
+      compositionReceiptJson: Prisma.DbNull,
     },
   });
 
@@ -986,7 +1210,25 @@ export async function claimScheduledPost(input: {
   });
   const readyPost = post ? (await buildReadyAutomationPosts([post]))[0] ?? null : null;
   if (readyPost) {
-    return readyPost;
+    const compositionIdentities = compositionIdentitiesForPost(readyPost);
+    const bound = await prisma.scheduledPost.updateMany({
+      where: {
+        id: input.id,
+        status: "POSTING",
+        workerStatus: "CLAIMED",
+        workerId: input.workerId,
+        claimedAt: now,
+      },
+      data: {
+        // Bind the claim before it leaves the API. Completion intentionally
+        // keeps this JSON so it becomes part of the durable publish receipt.
+        compositionReceiptJson: compositionIdentities.length > 0
+          ? compositionIdentityJson(compositionIdentities)
+          : Prisma.DbNull,
+      },
+    });
+
+    return bound.count === 1 ? readyPost : null;
   }
 
   // A clip can be edited or invalidated between the worker's queue sync and
@@ -1009,6 +1251,96 @@ export async function claimScheduledPost(input: {
   });
 
   return null;
+}
+
+export type ScheduledPostCompositionValidationResult =
+  | { valid: true }
+  | { valid: false; released: boolean; reason: string };
+
+export async function revalidateClaimedScheduledPostComposition(input: {
+  id: string;
+  workerId: string;
+  compositionIdentities: ClipPostingCompositionIdentity[];
+  now?: Date;
+}): Promise<ScheduledPostCompositionValidationResult> {
+  const post = await prisma.scheduledPost.findUnique({
+    where: { id: input.id },
+    include: automationScheduledPostInclude,
+  });
+  if (
+    !post
+    || post.status !== "POSTING"
+    || (post.workerStatus !== "CLAIMED" && post.workerStatus !== "POSTING")
+    || post.workerId !== input.workerId
+    || post.claimedAt === null
+  ) {
+    return {
+      valid: false,
+      released: false,
+      reason: "The posting claim is no longer active.",
+    };
+  }
+
+  const boundIdentities = normalizeClipPostingCompositionIdentities(post.compositionReceiptJson);
+  const readyPost = (await buildReadyAutomationPosts([post]))[0] ?? null;
+  const currentIdentities = readyPost ? compositionIdentitiesForPost(readyPost) : null;
+  const compositionIsCurrent = Boolean(
+    boundIdentities
+    && currentIdentities
+    && compositionIdentitiesMatch(input.compositionIdentities, boundIdentities)
+    && compositionIdentitiesMatch(input.compositionIdentities, currentIdentities)
+    && postingSnapshotsAreBound(input.compositionIdentities, boundIdentities)
+  );
+
+  if (compositionIsCurrent) {
+    const renewed = await prisma.scheduledPost.updateMany({
+      where: {
+        id: input.id,
+        status: "POSTING",
+        workerId: input.workerId,
+        claimedAt: { not: null },
+      },
+      data: {
+        workerStatus: "POSTING",
+        claimedAt: input.now ?? new Date(),
+        compositionReceiptJson: compositionIdentityJson(input.compositionIdentities),
+      },
+    });
+
+    return renewed.count === 1
+      ? { valid: true }
+      : {
+          valid: false,
+          released: false,
+          reason: "The posting claim changed while its composition was being verified.",
+        };
+  }
+
+  const released = await prisma.scheduledPost.updateMany({
+    where: {
+      id: input.id,
+      status: "POSTING",
+      workerId: input.workerId,
+      claimedAt: { not: null },
+    },
+    data: {
+      status: "PLANNED",
+      workerStatus: "IDLE",
+      claimedAt: null,
+      workerId: null,
+      publishError: "Publishing paused because the claimed clip composition changed. Review the latest final video before retrying.",
+      mediaObjectKey: null,
+      mediaPublicUrl: null,
+      mediaUploadedAt: null,
+      compositionReceiptJson: Prisma.DbNull,
+    },
+  });
+
+  return {
+    valid: false,
+    released: released.count === 1,
+    reason: "The claimed clip composition is no longer the current ready final export.",
+  };
 }
 
 export async function renewScheduledPostClaim(input: {

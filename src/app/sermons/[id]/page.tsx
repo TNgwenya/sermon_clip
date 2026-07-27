@@ -17,7 +17,12 @@ import { RetryFailedJobButton } from "@/app/sermons/[id]/retry-failed-job-button
 import { RepairFailedClipOperationsButton } from "@/app/sermons/[id]/repair-failed-clip-operations-button";
 import { SermonLiveRefresh } from "@/app/sermons/[id]/sermon-live-refresh";
 import { SermonDetailPreviewCard } from "@/app/sermons/[id]/sermon-detail-preview-card";
-import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
+import {
+  isFreshRemotePreview,
+  listBestPreviewCandidates,
+  resolveFreshRemotePreviewUrl,
+  resolvePreviewPlaybackUrl,
+} from "@/lib/clipPreview";
 import { summarizeSermonClipAttention } from "@/lib/sermonClipAttention";
 import { getAudioPath, getLogPath, getSourceVideoPath } from "@/server/agents/storage";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
@@ -1497,6 +1502,10 @@ export default async function SermonDetailPage({
                 clip={clip}
                 localMediaAvailable={localMediaAvailable}
                 canPreviewVideo={previewableClipIds.has(clip.id)}
+                previewSrc={resolvePreviewPlaybackUrl({
+                  remotePreviewUrl: resolveFreshRemotePreviewUrl(clip),
+                  fallbackUrl: `/api/clips/${clip.id}/preview?variant=best`,
+                })}
               />
             ))}
           </div>

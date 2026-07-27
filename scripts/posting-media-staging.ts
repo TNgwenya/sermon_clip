@@ -72,14 +72,32 @@ function cleanPathSegment(value: string): string {
 export function buildPostingMediaObjectKey(input: {
   scheduledPostId: string;
   clipId: string;
+  compositionKey?: string;
   filename?: string;
 }): string {
   const extension = path.extname(input.filename ?? "") || ".mp4";
+  const compositionSuffix = input.compositionKey?.trim()
+    ? `.${cleanPathSegment(input.compositionKey)}`
+    : "";
   return [
     "posting-temp",
     cleanPathSegment(input.scheduledPostId),
-    `${cleanPathSegment(input.clipId)}${extension}`,
+    `${cleanPathSegment(input.clipId)}${compositionSuffix}${extension}`,
   ].join("/");
+}
+
+export function buildPostingCompositionKey(input: {
+  editPlanId: string;
+  artifactId: string;
+  planHash: string;
+  snapshotSha256?: string | null;
+}): string {
+  return [
+    cleanPathSegment(input.editPlanId),
+    cleanPathSegment(input.artifactId),
+    cleanPathSegment(input.planHash),
+    ...(input.snapshotSha256 ? [cleanPathSegment(input.snapshotSha256)] : []),
+  ].join(".");
 }
 
 export function buildR2PublicUrl(objectKey: string): string {
@@ -97,11 +115,13 @@ export async function uploadPostingMediaToR2(input: {
   videoPath: string;
   videoSize: number;
   contentType?: string;
+  compositionKey?: string;
 }): Promise<StagedMedia> {
   const bucket = requiredEnv("R2_BUCKET");
   const objectKey = buildPostingMediaObjectKey({
     scheduledPostId: input.scheduledPostId,
     clipId: input.clipId,
+    compositionKey: input.compositionKey,
     filename: input.videoPath,
   });
 

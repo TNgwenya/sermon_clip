@@ -238,9 +238,36 @@ describe("clip export service", () => {
       overlayStatus: "COMPLETED",
       overlayFreshness: "UP_TO_DATE",
       overlayVideoPath: "/tmp/overlay.mp4",
+      captionData: { applyCaptionsToClip: true },
     });
 
     expect(source).toBe("/tmp/overlay.mp4");
+  });
+
+  it.each([
+    ["the default caption setting", null],
+    ["captions explicitly enabled", { applyCaptionsToClip: true }],
+  ])("rejects raw export when using %s without a current captioned source", async (_label, captionData) => {
+    await expect(__clipExportTestUtils.resolveBestExportSource({
+      renderStatus: "COMPLETED",
+      renderFreshness: "UP_TO_DATE",
+      renderedFilePath: "/tmp/rendered.mp4",
+      captionBurnStatus: "NOT_BURNED",
+      captionBurnFreshness: "NEEDS_REGENERATION",
+      captionedVideoPath: null,
+      overlayStatus: "NOT_RENDERED",
+      overlayFreshness: "NEEDS_REGENERATION",
+      overlayVideoPath: null,
+      captionData,
+      sermonId: "sermon-1",
+      sermon: null,
+      startTimeSeconds: 10,
+      endTimeSeconds: 70,
+      adjustedStartTimeSeconds: null,
+      adjustedEndTimeSeconds: null,
+    } as unknown as Parameters<typeof __clipExportTestUtils.resolveBestExportSource>[0])).rejects.toThrow(
+      "Captions are enabled",
+    );
   });
 
   it("rejects a stale raw render instead of treating it as an export source", async () => {
@@ -254,7 +281,7 @@ describe("clip export service", () => {
       overlayStatus: "NOT_RENDERED",
       overlayFreshness: "NEEDS_REGENERATION",
       overlayVideoPath: null,
-      captionData: null,
+      captionData: { applyCaptionsToClip: false },
       sermonId: "sermon-1",
       sermon: null,
       startTimeSeconds: 10,
@@ -284,6 +311,35 @@ describe("clip export service", () => {
       adjustedEndTimeSeconds: null,
     } as unknown as Parameters<typeof __clipExportTestUtils.resolveBestExportSource>[0])).rejects.toThrow(
       "prepared overlay is stale or incomplete",
+    );
+  });
+
+  it("fails closed when approved hook, B-roll, or branding layers have no prepared overlay", async () => {
+    await expect(__clipExportTestUtils.resolveBestExportSource({
+      renderedFilePath: "/tmp/rendered.mp4",
+      renderStatus: "COMPLETED",
+      renderFreshness: "UP_TO_DATE",
+      captionBurnStatus: "COMPLETED",
+      captionBurnFreshness: "UP_TO_DATE",
+      captionedVideoPath: "/tmp/captioned.mp4",
+      overlayStatus: "NOT_RENDERED",
+      overlayFreshness: "NEEDS_REGENERATION",
+      overlayVideoPath: null,
+      captionData: {
+        applyCaptionsToClip: true,
+        hookOverlay: {
+          enabled: true,
+          text: "Run your race",
+        },
+      },
+      sermonId: "sermon-1",
+      sermon: null,
+      startTimeSeconds: 10,
+      endTimeSeconds: 70,
+      adjustedStartTimeSeconds: null,
+      adjustedEndTimeSeconds: null,
+    } as unknown as Parameters<typeof __clipExportTestUtils.resolveBestExportSource>[0])).rejects.toThrow(
+      "approved hook, B-roll, or branding layers",
     );
   });
 
@@ -327,7 +383,7 @@ describe("clip export service", () => {
         hookStrengthScore: 8,
         shareabilityScore: 8,
         manualCropKeyframes: null,
-        captionData: null,
+        captionData: { applyCaptionsToClip: false },
         sermonId,
         status: "APPROVED",
         startTimeSeconds: 10,
@@ -374,7 +430,7 @@ describe("clip export service", () => {
       overlayStatus: "NOT_RENDERED",
       overlayFreshness: "NEEDS_REGENERATION",
       overlayVideoPath: null,
-      captionData: null,
+      captionData: { applyCaptionsToClip: true },
       sermonId: "sermon-1",
       sermon: { sourceVideoPath: "/tmp/source.mp4", title: "Sermon", speakerName: "Pastor", sermonDate: null },
       startTimeSeconds: 10,
@@ -406,6 +462,7 @@ describe("clip export service", () => {
         overlayFreshness: "NEEDS_REGENERATION",
         overlayVideoPath: null,
         captionData: {
+          applyCaptionsToClip: false,
           speechCleanupPlan: {
             enabled: true,
             sourceStartSeconds: 1,
@@ -610,5 +667,20 @@ describe("clip export service", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("reuses an export only when its artifact carries the exact resolved framing identity", () => {
+    expect(__clipExportTestUtils.artifactMatchesResolvedFramingPlan(
+      { resolvedFramingPlanHash: "framing-v3" },
+      "framing-v3",
+    )).toBe(true);
+    expect(__clipExportTestUtils.artifactMatchesResolvedFramingPlan(
+      { resolvedFramingPlanHash: "framing-v2" },
+      "framing-v3",
+    )).toBe(false);
+    expect(__clipExportTestUtils.artifactMatchesResolvedFramingPlan(
+      null,
+      "framing-v3",
+    )).toBe(false);
   });
 });

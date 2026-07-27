@@ -243,16 +243,6 @@ async function runOverlayAndExportJob(
       ...options,
       processingJobId,
     }),
-    prepareFitBlurredFallback: async (clipId) => {
-      await prisma.clipCandidate.update({
-        where: { id: clipId },
-        data: {
-          exportLayoutStrategy: "FIT_BLURRED_BACKGROUND",
-          exportStatus: "NOT_EXPORTED",
-          exportError: null,
-        },
-      });
-    },
   });
 }
 

@@ -10,6 +10,19 @@ import type { ClipExportLayoutStrategy } from "@prisma/client";
 
 export type FramingPreset = ClipExportLayoutStrategy;
 
+export type FramingTreatment =
+  | "AUTO_CONTEXTUAL"
+  | "SPEAKER_FOCUS"
+  | "CINEMATIC_CLOSE"
+  | "SOCIAL_PUNCHY"
+  | "WORSHIP_WIDE"
+  | "FULL_STAGE"
+  | "BLURRED_BACKGROUND"
+  | "CENTER_CROP"
+  | "LEFT_FOCUS"
+  | "RIGHT_FOCUS"
+  | "PASSTHROUGH";
+
 export type SmartCropPoint = {
   timeSeconds: number;
   centerX: number;
@@ -196,14 +209,21 @@ export function resolveEffectiveFramingPreset(input: {
 }
 
 export function getSmartCropFilterRiskReason(filter: string): string | null {
-  const dynamicBranchCount = (filter.match(/if\(lte/g) ?? []).length;
+  const cropExpression = filter.match(
+    /crop=\d+:\d+:(.*?):(.*?),(?:setsar=1,)?format=/,
+  ) ?? null;
+  const horizontalBranchCount = (cropExpression?.[1].match(/if\(lte/g) ?? []).length;
+  const verticalBranchCount = (cropExpression?.[2].match(/if\(lte/g) ?? []).length;
 
-  if (filter.length > MAX_DYNAMIC_CROP_EXPRESSION_LENGTH + 700) {
+  if (filter.length > MAX_DYNAMIC_CROP_EXPRESSION_LENGTH * 2 + 900) {
     return `filter expression is too long (${filter.length} characters)`;
   }
 
-  if (dynamicBranchCount > MAX_DYNAMIC_CROP_POINTS) {
-    return `filter expression has too many moving crop points (${dynamicBranchCount})`;
+  if (
+    horizontalBranchCount > MAX_DYNAMIC_CROP_POINTS
+    || verticalBranchCount > MAX_DYNAMIC_CROP_POINTS
+  ) {
+    return `filter expression has too many moving crop points (${Math.max(horizontalBranchCount, verticalBranchCount)})`;
   }
 
   return null;
@@ -323,6 +343,7 @@ export function buildVerticalFramingFilter(
     subjectCenterY?: number | null;
     subjectCenters?: SmartCropPoint[] | null;
     zoom?: number | null;
+    treatment?: FramingTreatment | null;
   },
 ): string {
   const inputLabel = options?.inputLabel ?? "0:v";
@@ -337,6 +358,16 @@ export function buildVerticalFramingFilter(
       return `[${inputLabel}]setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:iw-ow:0,setsar=1,format=yuv420p[v]`;
 
     case "FIT_BLURRED_BACKGROUND":
+      if (options?.treatment === "WORSHIP_WIDE") {
+        // Preserve nearly the full stage against a restrained neutral matte.
+        return `[${inputLabel}]setpts=PTS-STARTPTS,scale=1040:1840:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=0x111318,setsar=1,format=yuv420p[v]`;
+      }
+
+      if (options?.treatment === "FULL_STAGE") {
+        // Add a visibly larger all-edge safety margin for groups and stage action.
+        return `[${inputLabel}]setpts=PTS-STARTPTS,scale=918:1632:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=0x08090b,setsar=1,format=yuv420p[v]`;
+      }
+
       // Scale the source to fill 1080x1920 and blur it as background.
       // Then overlay the original scaled-to-fit video centered on top.
       return (
@@ -373,18 +404,40 @@ export function buildVerticalFramingFilter(
         const safeCropXExpression = rawCropXExpression.length > MAX_DYNAMIC_CROP_EXPRESSION_LENGTH
           ? staticCropX
           : rawCropXExpression;
-        const cropXExpression = escapeFfmpegExpression(`min(max(${safeCropXExpression},0),${maxX})`);
-        const cropY = typeof options.subjectCenterY === "number"
-          ? Math.max(
-              0,
-              Math.min(
-                maxY,
-                Math.round(Math.max(0, Math.min(1, options.subjectCenterY)) * scaledHeight - 960),
-              ),
-            )
-          : Math.max(0, Math.min(maxY, Math.round(maxY * 0.18)));
+        const cropXExpression = simplifiedCropPoints.length > 1
+          ? escapeFfmpegExpression(`min(max(${safeCropXExpression},0),${maxX})`)
+          : safeCropXExpression;
+        const defaultCenterY = typeof options.subjectCenterY === "number"
+          ? options.subjectCenterY
+          : 0.5;
+        const cropYPoints = centers.map((point) => {
+          const subjectCenterY = Math.max(0, Math.min(1, point.centerY ?? defaultCenterY));
+          return {
+            timeSeconds: Math.max(0, point.timeSeconds),
+            cropX: Math.max(0, Math.min(maxY, Math.round(subjectCenterY * scaledHeight - 960))),
+          };
+        });
+        const simplifiedCropYPoints = simplifyCropPoints(cropYPoints);
+        const rawCropYExpression = simplifiedCropYPoints.length > 1
+          ? buildDynamicCropExpression(simplifiedCropYPoints)
+          : String(simplifiedCropYPoints[0]?.cropX ?? 0);
+        const staticCropY = String(
+          Math.max(
+            0,
+            Math.min(
+              maxY,
+              Math.round(Math.max(0, Math.min(1, defaultCenterY)) * scaledHeight - 960),
+            ),
+          ),
+        );
+        const safeCropYExpression = rawCropYExpression.length > MAX_DYNAMIC_CROP_EXPRESSION_LENGTH
+          ? staticCropY
+          : rawCropYExpression;
+        const cropYExpression = simplifiedCropYPoints.length > 1
+          ? escapeFfmpegExpression(`min(max(${safeCropYExpression},0),${maxY})`)
+          : safeCropYExpression;
 
-        return `[${inputLabel}]setpts=PTS-STARTPTS,scale=${scaledWidth}:${scaledHeight},crop=1080:1920:${cropXExpression}:${cropY},setsar=1,format=yuv420p[v]`;
+        return `[${inputLabel}]setpts=PTS-STARTPTS,scale=${scaledWidth}:${scaledHeight},crop=1080:1920:${cropXExpression}:${cropYExpression},setsar=1,format=yuv420p[v]`;
       }
 
       return `[${inputLabel}]setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,format=yuv420p[v]`;

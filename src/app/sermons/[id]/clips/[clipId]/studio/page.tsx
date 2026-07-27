@@ -4,7 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { prisma } from "@/lib/prisma";
-import { StatCard, StatusBadge } from "@/components/ui";
+import { StatusBadge } from "@/components/ui";
 import { DEFAULT_CAPTION_STYLE_PRESET_ID } from "@/lib/captionStylePresets";
 import {
   extractCaptionPackage,
@@ -19,18 +19,12 @@ import {
   extractBrollLayerConfig,
   extractHookOverlayConfig,
   extractOnVideoCaptionCues,
-  extractLanguageHints,
   extractSpeechCleanupSettings,
   formatClipStatusLabel,
   clipStatusTone,
   renderStatusLabel,
-  formatMinistryScore,
-  formatSocialScore,
-  formatTranscriptExcerpt,
   buildClipTimingDisplay,
-  hasCaptionPackage,
 } from "@/lib/clipStudio";
-import { formatSecondsForPastorView } from "@/lib/sermonSegment";
 import {
   buildEditableCaptionCuesFromTranscriptSegments,
   buildTimedCaptionCuesFromTranscriptSegments,
@@ -63,9 +57,14 @@ import { resolveClipStudioPreparationState } from "@/lib/clipStudioPrepare";
 import { getBrandingSettings } from "@/server/branding/settings";
 import { resolveAvailableBrandingLogoPath } from "@/server/branding/logoStorage";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+import { getActiveResolvedFramingPlan } from "@/server/agents/resolvedFramingPlanService";
 import { resolveBestPreviewCandidate, resolveFreshRemotePreviewUrl } from "@/lib/clipPreview";
 import { extractSpeechCleanupEdits } from "@/lib/speechCleanupPlan";
 import { parseClipCoverFrameSelection } from "@/lib/clipCoverFrame";
+import {
+  getCachedClipBrollSuggestions,
+  type ClipBrollSuggestion,
+} from "@/lib/clipBrollSuggestions";
 
 type ClipStudioPageParams = {
   params: Promise<{ id: string; clipId: string }>;
@@ -184,6 +183,25 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       churchName: true,
       language: true,
       sourceVideoPath: true,
+      intelligence: {
+        select: {
+          centralTheme: true,
+          keyTakeaways: true,
+        },
+      },
+      scriptureRefs: {
+        orderBy: [
+          { isPrimary: "desc" },
+          { confidenceScore: "desc" },
+        ],
+        take: 12,
+        select: {
+          reference: true,
+          transcriptEvidence: true,
+          confidenceScore: true,
+          isManuallyAdded: true,
+        },
+      },
     },
     }),
     prisma.clipCandidate.findUnique({
@@ -194,6 +212,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       title: true,
       hook: true,
       caption: true,
+      reasonSelected: true,
       suggestedHook: true,
       suggestedCaption: true,
       hashtags: true,
@@ -289,7 +308,13 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     notFound();
   }
 
-  const [transcriptSegments, sermonDurationSegment, transcriptRecord, appBranding] = await Promise.all([
+  const [
+    transcriptSegments,
+    sermonDurationSegment,
+    transcriptRecord,
+    appBranding,
+    activeResolvedFramingPlan,
+  ] = await Promise.all([
     prisma.transcriptSegment.findMany({
       where: {
         sermonId,
@@ -316,6 +341,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       select: { wordTimings: true },
     }),
     getBrandingSettings().catch(() => null),
+    getActiveResolvedFramingPlan(clip.id),
   ]);
 
   const hashtags = Array.isArray(clip.hashtags)
@@ -351,7 +377,6 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     clip.captionData,
     clip.durationSeconds ?? Math.max(0, clip.endTimeSeconds - clip.startTimeSeconds),
   );
-  const languageHints = extractLanguageHints(clip.captionData);
   const speechCleanupSettings = extractSpeechCleanupSettings(clip.captionData);
   const speechCleanupEdits = extractSpeechCleanupEdits(clip.captionData, clip.durationSeconds ?? Math.max(0, clip.endTimeSeconds - clip.startTimeSeconds));
   const framingDecisionSummary = extractFramingDecisionSummary(clip.captionData);
@@ -396,7 +421,6 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   const audioSilenceReviewUrl = sourceVideoPreviewAvailable
     ? `/api/clips/${clip.id}/audio-silence-review?start=${clip.startTimeSeconds}&end=${clip.endTimeSeconds}`
     : null;
-  const transcriptExcerpt = formatTranscriptExcerpt(clip.transcriptText);
   const studioTranscriptSegments = transcriptSegments.length > 0
     ? transcriptSegments
     : buildFallbackTranscriptSegments({
@@ -404,6 +428,32 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
         clipEndSeconds: clip.endTimeSeconds,
         transcriptText: clip.transcriptText,
       });
+  const intelligenceKeyTakeaways = Array.isArray(sermon.intelligence?.keyTakeaways)
+    ? sermon.intelligence.keyTakeaways.filter((value): value is string => typeof value === "string")
+    : [];
+  const generatedBrollSuggestions = getCachedClipBrollSuggestions({
+    clipId: clip.id,
+    clipStartSeconds: clip.startTimeSeconds,
+    clipEndSeconds: clip.endTimeSeconds,
+    clipTranscriptText: clip.transcriptText,
+    transcriptSafetyStatus: clip.transcriptSafetyStatus,
+    transcriptSegments: studioTranscriptSegments,
+    intelligence: {
+      centralTheme: sermon.intelligence?.centralTheme,
+      keyTakeaways: intelligenceKeyTakeaways,
+      ministryMomentTranscriptExcerpt: clip.ministryMoment?.transcriptExcerpt,
+      reasonSelected: clip.reasonSelected,
+    },
+    scriptureReferences: sermon.scriptureRefs,
+  });
+  const existingBrollCardTexts = new Set(
+    brollLayer.cards.map((card) => card.text.replace(/\s+/g, " ").trim().toLocaleLowerCase()),
+  );
+  const brollSuggestions = generatedBrollSuggestions.filter(
+    (suggestion) => !existingBrollCardTexts.has(
+      suggestion.text.replace(/\s+/g, " ").trim().toLocaleLowerCase(),
+    ),
+  ) satisfies readonly ClipBrollSuggestion[];
   const transcriptWords = parseCaptionSourceWords(transcriptRecord?.wordTimings).filter(
     (word) =>
       word.endTimeSeconds >= Math.max(0, clip.startTimeSeconds - 20) &&
@@ -475,10 +525,6 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     hashtags: captionPackage.hashtags.join(" "),
     isTimingValid: true,
   };
-  const ministryScore = formatMinistryScore(clip.ministryValue);
-  const socialScore = formatSocialScore(clip.socialValue);
-  const hasMinistryScore = Boolean(clip.ministryValue?.trim());
-  const hasSocialScore = Boolean(clip.socialValue?.trim());
   const videoSubjectTracks = clip.videoSubjectTracks.map((track) => {
     let centerX = 0.5;
     let centerY = 0.5;
@@ -681,6 +727,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             momentType={clip.ministryMoment?.momentType ?? clip.clipType ?? null}
             momentTitle={clip.ministryMoment?.title ?? null}
             smartClipCategory={clip.smartClipCategory}
+            transcriptReviewRequired={transcriptReviewRequired}
+            transcriptReviewHref={`/sermons/${sermonId}/review#clip-${clip.id}`}
           />
 
           <aside className="clip-studio-preview-column stack-md">
@@ -699,6 +747,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
               timingLabel={`${timing.startLabel} - ${timing.endLabel}`}
               riskLabel={`${clip.riskLevel} risk`}
               riskClassName={`risk-${clip.riskLevel.toLowerCase()}`}
+              resolvedFramingPlan={activeResolvedFramingPlan?.plan ?? null}
             />
 
             {studioMediaIssues.length > 0 ? (
@@ -746,6 +795,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 ctaOptions={captionPackage.ctaOptions}
                 initialHookOverlay={hookOverlay}
                 initialBrollLayer={brollLayer}
+                initialBrollSuggestions={brollSuggestions}
                 initialSpeechCleanup={speechCleanupSettings}
                 initialSpeechCleanupEdits={speechCleanupEdits}
                 initialAudioSilenceEvents={[]}
@@ -870,96 +920,6 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                   <Link href={`/ready-to-post?clipId=${clip.id}`} className="button secondary">
                     Open publishing desk
                   </Link>
-                ) : null}
-              </section>
-            }
-            evidence={
-              <section className="clip-studio-details stack-md">
-                <div className="section-heading-row">
-                  <div>
-                    <p className="kicker">Clip intelligence</p>
-                    <h3>Why this clip works</h3>
-                  </div>
-                  <StatusBadge tone={clip.score >= 7 ? "success" : clip.score >= 4 ? "accent" : "warning"}>
-                    {clip.score.toFixed(1)}
-                  </StatusBadge>
-                </div>
-                <div className="stat-grid">
-                  <StatCard label="Category" value={clip.smartClipCategory ?? "Uncategorized"} tone="neutral" />
-                  {hasMinistryScore ? (
-                    <StatCard label={ministryScore.label} value={ministryScore.value} tone={ministryScore.tone} />
-                  ) : null}
-                  {hasSocialScore ? (
-                    <StatCard label={socialScore.label} value={socialScore.value} tone={socialScore.tone} />
-                  ) : null}
-                  <StatCard
-                    label="Audience"
-                    value={clip.intendedAudience || "General"}
-                    tone="accent"
-                  />
-                </div>
-                {clip.recommendationReason ? <p className="muted">{clip.recommendationReason}</p> : null}
-
-                {clip.ministryMoment ? (
-                  <div className="stack-md">
-                    <div className="stack-sm">
-                      <p className="muted small">Ministry moment</p>
-                      <p>
-                        <strong>{clip.ministryMoment.title}</strong>{" "}
-                        <StatusBadge tone="accent">{clip.ministryMoment.momentType.replace(/_/g, " ")}</StatusBadge>
-                      </p>
-                      {clip.ministryMoment.description ? <p>{clip.ministryMoment.description}</p> : null}
-                    </div>
-                    {clip.ministryMoment.whyDetected ? (
-                      <div className="stack-sm">
-                        <p className="muted small">Why this moment matters</p>
-                        <p>{clip.ministryMoment.whyDetected}</p>
-                      </div>
-                    ) : null}
-                    {clip.ministryMoment.suggestedUsage ? (
-                      <div className="stack-sm">
-                        <p className="muted small">Suggested pastoral use</p>
-                        <p>{clip.ministryMoment.suggestedUsage}</p>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {clip.suggestedHook ? (
-                  <div className="stack-sm">
-                    <p className="muted small">Suggested hook</p>
-                    <p>{clip.suggestedHook}</p>
-                  </div>
-                ) : null}
-
-                {!hasCaptionPackage(captionPackage) ? (
-                  <p className="muted">No caption package exists yet. Add captions in the Clip inspector before preparing.</p>
-                ) : null}
-
-                {languageHints ? (
-                  <dl className="data-list stack-sm">
-                    {languageHints.detectedLanguage ? (
-                      <div className="data-list-row">
-                        <dt className="muted small">Detected language</dt>
-                        <dd>{languageHints.detectedLanguage}</dd>
-                      </div>
-                    ) : null}
-                    {languageHints.uncertaintyNote ? (
-                      <div className="data-list-row">
-                        <dt className="muted small">Translation note</dt>
-                        <dd className="muted">{languageHints.uncertaintyNote}</dd>
-                      </div>
-                    ) : null}
-                  </dl>
-                ) : null}
-
-                {transcriptExcerpt ? (
-                  <div className="transcript-excerpt">
-                    <p className="muted small">
-                      {formatSecondsForPastorView(clip.startTimeSeconds)} to {formatSecondsForPastorView(clip.endTimeSeconds)}
-                    </p>
-                    <blockquote className="transcript-quote">{transcriptExcerpt}</blockquote>
-                  </div>
                 ) : null}
               </section>
             }

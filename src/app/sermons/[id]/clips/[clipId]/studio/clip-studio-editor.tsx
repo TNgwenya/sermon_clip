@@ -66,6 +66,9 @@ import {
   type SpeechCleanupAudioSilenceEvent,
 } from "@/lib/clipStudioPreviewTimeline";
 import {
+  type ClipBrollSuggestion,
+} from "@/lib/clipBrollSuggestions";
+import {
   createSpeechCleanupEditsFromPlan,
   type SpeechCleanupEdits,
 } from "@/lib/speechCleanupPlan";
@@ -99,6 +102,7 @@ type ClipStudioEditorProps = {
   ctaOptions: string[];
   initialHookOverlay: HookOverlayConfig;
   initialBrollLayer: BrollLayerConfig;
+  initialBrollSuggestions: readonly ClipBrollSuggestion[];
   initialSpeechCleanup: SpeechCleanupSettings;
   initialSpeechCleanupEdits: SpeechCleanupEdits | null;
   initialAudioSilenceEvents: SpeechCleanupAudioSilenceEvent[];
@@ -397,6 +401,10 @@ function trimBrollText(value: string, maxLength = 180): string {
   return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
+function normalizeBrollSuggestionText(value: string): string {
+  return trimBrollText(value, 140).toLocaleLowerCase();
+}
+
 function cloneStudioDraftSnapshot(snapshot: StudioDraftSnapshot): StudioDraftSnapshot {
   return JSON.parse(JSON.stringify(snapshot)) as StudioDraftSnapshot;
 }
@@ -492,6 +500,7 @@ export function ClipStudioEditor({
   ctaOptions,
   initialHookOverlay,
   initialBrollLayer,
+  initialBrollSuggestions,
   initialSpeechCleanup,
   initialSpeechCleanupEdits,
   initialAudioSilenceEvents,
@@ -559,6 +568,13 @@ export function ClipStudioEditor({
   const [captionCueOverrides, setCaptionCueOverrides] = useState<EditableCaptionCue[] | null>(null);
   const [hookOverlay, setHookOverlay] = useState<HookOverlayConfig>(initialHookOverlay);
   const [brollLayer, setBrollLayer] = useState<BrollLayerConfig>(initialBrollLayer);
+  const [brollSuggestionDrafts, setBrollSuggestionDrafts] = useState<ClipBrollSuggestion[]>(
+    () => initialBrollSuggestions.map((suggestion) => ({ ...suggestion })),
+  );
+  const [editingBrollSuggestionIds, setEditingBrollSuggestionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [previewingBrollSuggestionId, setPreviewingBrollSuggestionId] = useState<string | null>(null);
   const [speechCleanup, setSpeechCleanup] = useState<SpeechCleanupSettings>(initialSpeechCleanup);
   const [speechCleanupEdits, setSpeechCleanupEdits] = useState<SpeechCleanupEdits | null>(initialSpeechCleanupEdits);
   const initialFirstSegmentId = useMemo(
@@ -1762,6 +1778,22 @@ export function ClipStudioEditor({
         return;
       }
 
+      if (detail.command === "open-caption-editor") {
+        setActiveWorkspace("captions");
+        window.requestAnimationFrame(() => {
+          const captionLines = document.getElementById("clip-studio-caption-lines");
+          if (captionLines instanceof HTMLDetailsElement) {
+            captionLines.open = true;
+          }
+          captionLines?.scrollIntoView({
+            behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+            block: "start",
+          });
+          captionLines?.querySelector<HTMLTextAreaElement>("textarea:not(:disabled)")?.focus();
+        });
+        return;
+      }
+
       if (detail.command === "set-start-seconds") {
         applyBoundaryFromAbsoluteSeconds(Number(detail.seconds), "start");
         return;
@@ -2003,6 +2035,110 @@ export function ClipStudioEditor({
     }));
     setStatusSuccess(true);
     setStatusMessage(`Visual cutaway added at ${formatSecondsForPastorView(startSeconds)}.`);
+  }
+
+  function updateBrollSuggestion(
+    suggestionId: string,
+    updates: Partial<Pick<ClipBrollSuggestion, "text" | "startSeconds" | "durationSeconds">>,
+  ) {
+    setBrollSuggestionDrafts((current) => current.map((suggestion) => {
+      if (suggestion.id !== suggestionId) {
+        return suggestion;
+      }
+
+      const clipDurationSeconds = timingPreview.durationSeconds ?? 60;
+      const startSeconds = typeof updates.startSeconds === "number" && Number.isFinite(updates.startSeconds)
+        ? Math.max(0, Math.min(updates.startSeconds, Math.max(0, clipDurationSeconds - 1)))
+        : suggestion.startSeconds;
+      const durationSeconds = typeof updates.durationSeconds === "number" && Number.isFinite(updates.durationSeconds)
+        ? Math.max(1, Math.min(12, updates.durationSeconds, Math.max(1, clipDurationSeconds - startSeconds)))
+        : suggestion.durationSeconds;
+
+      return {
+        ...suggestion,
+        ...updates,
+        text: typeof updates.text === "string" ? trimBrollText(updates.text, 140) : suggestion.text,
+        startSeconds: Number(startSeconds.toFixed(1)),
+        durationSeconds: Number(durationSeconds.toFixed(1)),
+      };
+    }));
+  }
+
+  function previewBrollSuggestion(suggestion: ClipBrollSuggestion) {
+    if (previewingBrollSuggestionId === suggestion.id) {
+      setPreviewingBrollSuggestionId(null);
+      return;
+    }
+
+    setPreviewingBrollSuggestionId(suggestion.id);
+    seekSourcePreviewTo(suggestion.startSeconds);
+    requestPreviewPlayback();
+    document.getElementById("clip-studio-preview")?.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      block: "nearest",
+    });
+  }
+
+  function addBrollSuggestion(suggestion: ClipBrollSuggestion) {
+    if (brollLayer.cards.length >= 4 || !suggestion.text.trim()) {
+      return;
+    }
+
+    const originalSuggestion = initialBrollSuggestions.find((item) => item.id === suggestion.id);
+    const groundingWasEdited = originalSuggestion
+      ? normalizeBrollSuggestionText(originalSuggestion.text) !== normalizeBrollSuggestionText(suggestion.text)
+      : true;
+    const nextCard: BrollCardConfig = {
+      id: `broll-${suggestion.type}-${Date.now().toString(36)}`,
+      enabled: true,
+      text: trimBrollText(suggestion.text, 140),
+      label: groundingWasEdited ? "Edited highlight" : suggestion.label,
+      startSeconds: suggestion.startSeconds,
+      durationSeconds: suggestion.durationSeconds,
+      tone: groundingWasEdited ? "context" : suggestion.tone,
+      position: suggestion.position,
+    };
+    setBrollLayer((current) => ({
+      enabled: true,
+      cards: [nextCard, ...current.cards].slice(0, 4),
+    }));
+    setBrollSuggestionDrafts((current) => current.filter((item) => item.id !== suggestion.id));
+    setEditingBrollSuggestionIds((current) => {
+      const next = new Set(current);
+      next.delete(suggestion.id);
+      return next;
+    });
+    setPreviewingBrollSuggestionId((current) => current === suggestion.id ? null : current);
+    setStatusSuccess(true);
+    setStatusMessage(
+      groundingWasEdited
+        ? "Edited highlight added as user-authored context. Review it, then prepare to save it."
+        : "Suggested highlight added to this draft. Review it, then prepare to save it.",
+    );
+  }
+
+  function ignoreBrollSuggestion(suggestionId: string) {
+    setBrollSuggestionDrafts((current) => current.filter((suggestion) => suggestion.id !== suggestionId));
+    setEditingBrollSuggestionIds((current) => {
+      const next = new Set(current);
+      next.delete(suggestionId);
+      return next;
+    });
+    setPreviewingBrollSuggestionId((current) => current === suggestionId ? null : current);
+    setStatusSuccess(true);
+    setStatusMessage("Suggestion ignored. No clip changes were made.");
+  }
+
+  function toggleBrollSuggestionEdit(suggestionId: string) {
+    setEditingBrollSuggestionIds((current) => {
+      const next = new Set(current);
+      if (next.has(suggestionId)) {
+        next.delete(suggestionId);
+      } else {
+        next.add(suggestionId);
+      }
+      return next;
+    });
   }
 
   function updateBrollCard(cardId: string, updates: Partial<BrollCardConfig>) {
@@ -3324,7 +3460,7 @@ export function ClipStudioEditor({
             </div>
           </section>
 
-          <details className="clip-studio-caption-dropdown">
+          <details id="clip-studio-caption-lines" className="clip-studio-caption-dropdown">
             <summary aria-label={`Caption lines, ${captionLineLabel}, captions ${applyCaptionsToClip ? "on" : "off"}`}>
               <span className="clip-studio-caption-dropdown-copy">
                 <span className="kicker">Caption lines</span>
@@ -4290,6 +4426,148 @@ export function ClipStudioEditor({
             <p className="muted small clip-studio-broll-description">
               Add a polished scripture, quote, context, or application card at the playhead. Cards are timed cutaways—not stock footage—and remain translucent so the speaker and captions stay readable.
             </p>
+
+            {brollSuggestionDrafts.length > 0 ? (
+              <section className={styles.brollSuggestions} aria-labelledby="clip-broll-suggestions-heading">
+                <div className={styles.brollSuggestionHeading}>
+                  <div>
+                    <p className="kicker">Optional ideas</p>
+                    <h4 id="clip-broll-suggestions-heading">Transcript-grounded highlight cards</h4>
+                  </div>
+                  <StatusBadge tone="accent">
+                    {brollSuggestionDrafts.length} suggestion{brollSuggestionDrafts.length === 1 ? "" : "s"}
+                  </StatusBadge>
+                </div>
+                <p className="muted small">
+                  These are draft suggestions only. Preview, edit, add, or ignore each one—nothing is added or saved automatically.
+                </p>
+
+                <div className={styles.brollSuggestionList}>
+                  {brollSuggestionDrafts.map((suggestion) => {
+                    const isEditing = editingBrollSuggestionIds.has(suggestion.id);
+                    const isPreviewing = previewingBrollSuggestionId === suggestion.id;
+                    const typeLabel = suggestion.type === "scripture"
+                      ? "Scripture"
+                      : suggestion.type === "takeaway"
+                        ? "Takeaway"
+                        : "Key quote";
+                    const originalSuggestion = initialBrollSuggestions.find((item) => item.id === suggestion.id);
+                    const groundingWasEdited = originalSuggestion
+                      ? normalizeBrollSuggestionText(originalSuggestion.text) !== normalizeBrollSuggestionText(suggestion.text)
+                      : true;
+
+                    return (
+                      <article className={styles.brollSuggestion} key={suggestion.id}>
+                        <div className={styles.brollSuggestionMeta}>
+                          <span className={styles.brollSuggestionType}>{typeLabel}</span>
+                          <span>
+                            {groundingWasEdited ? "User-edited draft · treated as context on add" : suggestion.sourceLabel}
+                          </span>
+                          <span>
+                            {formatSecondsForPastorView(suggestion.startSeconds)} · {suggestion.durationSeconds.toFixed(1)}s
+                          </span>
+                        </div>
+
+                        {isEditing ? (
+                          <div className={styles.brollSuggestionEditor}>
+                            <label className="stack-sm">
+                              Suggested text
+                              <textarea
+                                value={suggestion.text}
+                                onChange={(event) => updateBrollSuggestion(suggestion.id, { text: event.target.value })}
+                                maxLength={140}
+                                rows={3}
+                                disabled={isPending}
+                              />
+                              <span className="muted small">{suggestion.text.length}/140</span>
+                            </label>
+                            <div className={styles.brollSuggestionTiming}>
+                              <label className="stack-sm">
+                                Starts
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={0.1}
+                                  value={suggestion.startSeconds}
+                                  onChange={(event) => updateBrollSuggestion(suggestion.id, {
+                                    startSeconds: Number(event.target.value),
+                                  })}
+                                  disabled={isPending}
+                                />
+                              </label>
+                              <label className="stack-sm">
+                                Duration
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={12}
+                                  step={0.5}
+                                  value={suggestion.durationSeconds}
+                                  onChange={(event) => updateBrollSuggestion(suggestion.id, {
+                                    durationSeconds: Number(event.target.value),
+                                  })}
+                                  disabled={isPending}
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        ) : (
+                          <blockquote>{suggestion.text}</blockquote>
+                        )}
+
+                        {isPreviewing ? (
+                          <div className={`${styles.brollSuggestionPreview} ${styles[`brollSuggestionPreview${typeLabel.replace(/\s/g, "")}`] ?? ""}`}>
+                            <span>{suggestion.label}</span>
+                            <strong>{suggestion.text}</strong>
+                            <small>Card preview at {formatSecondsForPastorView(suggestion.startSeconds)}</small>
+                          </div>
+                        ) : null}
+
+                        <details className={styles.brollSuggestionEvidence}>
+                          <summary>{groundingWasEdited ? "Original grounding" : "Why this is grounded"}</summary>
+                          <p>“{suggestion.sourceExcerpt}”</p>
+                        </details>
+
+                        <div className={styles.brollSuggestionActions}>
+                          <button
+                            type="button"
+                            className="button secondary"
+                            onClick={() => previewBrollSuggestion(suggestion)}
+                            disabled={isPending}
+                          >
+                            {isPreviewing ? "Hide preview" : "Preview"}
+                          </button>
+                          <button
+                            type="button"
+                            className="button secondary"
+                            onClick={() => toggleBrollSuggestionEdit(suggestion.id)}
+                            disabled={isPending}
+                          >
+                            {isEditing ? "Done editing" : "Edit"}
+                          </button>
+                          <button
+                            type="button"
+                            className="button primary"
+                            onClick={() => addBrollSuggestion(suggestion)}
+                            disabled={isPending || brollLayer.cards.length >= 4 || !suggestion.text.trim()}
+                          >
+                            Add to draft
+                          </button>
+                          <button
+                            type="button"
+                            className="button tertiary"
+                            onClick={() => ignoreBrollSuggestion(suggestion.id)}
+                            disabled={isPending}
+                          >
+                            Ignore
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null}
 
             <div className="clip-studio-broll-actions">
               <label className="clip-studio-toggle-row">

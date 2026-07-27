@@ -1,14 +1,24 @@
 import { stat } from "node:fs/promises";
 import os from "node:os";
 
-import type { AutomationImageMedia, AutomationPost, UploadResult } from "./posting-platforms.ts";
+import type {
+  AutomationImageMedia,
+  AutomationPost,
+  ClipPostingCompositionIdentity,
+  UploadResult,
+} from "./posting-platforms.ts";
 import {
   AmbiguousPlatformPublishError,
   postingRequiresPublicMedia,
   selectPostImageMedia,
   uploadPlatformPost,
 } from "./posting-platforms.ts";
-import { uploadPostingMediaToR2, type StagedMedia } from "./posting-media-staging.ts";
+import {
+  buildPostingCompositionKey,
+  uploadPostingMediaToR2,
+  type StagedMedia,
+} from "./posting-media-staging.ts";
+import { createPostingMediaSnapshot } from "./posting-media-snapshot.ts";
 import { createWorkerLogger, errorFields, formatBytes, formatDuration } from "./worker-log.ts";
 
 const workerId = process.env.POSTING_WORKER_ID?.trim() || `${os.hostname()}-posting-worker`;
@@ -51,6 +61,13 @@ class CompletionPersistenceError extends Error {
     super(message);
     this.name = "CompletionPersistenceError";
     this.statusCode = statusCode;
+  }
+}
+
+class StaleClaimedCompositionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StaleClaimedCompositionError";
   }
 }
 
@@ -162,12 +179,99 @@ function isClaimedAutomationPost(value: unknown, expectedPostId: string): value 
       return false;
     }
 
-    const candidates = (clip as Record<string, unknown>)["localFileCandidates"];
-    return Array.isArray(candidates)
-      && candidates.length === 1
-      && typeof candidates[0] === "string"
-      && candidates[0].trim().length > 0;
+    const clipRecord = clip as Record<string, unknown>;
+    const candidates = clipRecord["localFileCandidates"];
+    const composition = clipRecord["compositionIdentity"];
+    if (
+      !Array.isArray(candidates)
+      || candidates.length !== 1
+      || typeof candidates[0] !== "string"
+      || candidates[0].trim().length === 0
+      || !composition
+      || typeof composition !== "object"
+      || Array.isArray(composition)
+    ) {
+      return false;
+    }
+
+    const identity = composition as Record<string, unknown>;
+    const sizeBytes = identity["sizeBytes"];
+    const snapshotSha256 = identity["snapshotSha256"];
+    const snapshotSizeBytes = identity["snapshotSizeBytes"];
+    return identity["schemaVersion"] === 1
+      && identity["clipId"] === clipRecord["id"]
+      && typeof identity["editPlanId"] === "string"
+      && identity["editPlanId"].trim().length > 0
+      && typeof identity["artifactId"] === "string"
+      && identity["artifactId"].trim().length > 0
+      && typeof identity["planHash"] === "string"
+      && identity["planHash"].trim().length > 0
+      && identity["filePath"] === candidates[0]
+      && (
+        sizeBytes === null
+        || (typeof sizeBytes === "number" && Number.isSafeInteger(sizeBytes) && sizeBytes > 0)
+      )
+      && (
+        snapshotSha256 === null
+        || (typeof snapshotSha256 === "string" && /^[a-f0-9]{64}$/.test(snapshotSha256))
+      )
+      && (
+        snapshotSizeBytes === null
+        || (
+          typeof snapshotSizeBytes === "number"
+          && Number.isSafeInteger(snapshotSizeBytes)
+          && snapshotSizeBytes > 0
+        )
+      )
+      && (
+        (snapshotSha256 === null && snapshotSizeBytes === null)
+        || (snapshotSha256 !== null && snapshotSizeBytes !== null)
+      );
   });
+}
+
+function postingCompositionIdentities(
+  post: AutomationPost,
+  snapshot?: { clipId: string; sha256: string; sizeBytes: number },
+): ClipPostingCompositionIdentity[] {
+  return post.clips.map((clip) => {
+    const identity = clip.compositionIdentity;
+    if (!identity) {
+      throw new Error(`Claimed clip ${clip.id} is missing its composition identity.`);
+    }
+
+    return snapshot?.clipId === clip.id
+      ? {
+          ...identity,
+          snapshotSha256: snapshot.sha256,
+          snapshotSizeBytes: snapshot.sizeBytes,
+        }
+      : identity;
+  });
+}
+
+async function revalidateClaimedPostComposition(
+  post: AutomationPost,
+  snapshot: { clipId: string; sha256: string; sizeBytes: number },
+): Promise<void> {
+  const response = await apiFetch(`/api/automation/scheduled-posts/${post.id}/validate-composition`, {
+    method: "POST",
+    body: JSON.stringify({
+      workerId,
+      compositionIdentities: postingCompositionIdentities(post, snapshot),
+    }),
+  });
+  const data = await response.json().catch(() => null);
+  if (response.ok) {
+    return;
+  }
+  if (response.status === 409) {
+    throw new StaleClaimedCompositionError(
+      data?.error ?? "The claimed clip composition changed before publishing.",
+    );
+  }
+
+  throw new Error(data?.error ?? `Composition validation failed with ${response.status}`);
 }
 
 async function claimPost(post: AutomationPost): Promise<AutomationPost | null> {
@@ -403,18 +507,18 @@ async function publishPost(post: AutomationPost): Promise<UploadResult> {
     throw new Error("Scheduled post does not include a clip.");
   }
 
-  const video = await firstExistingFile(firstClip.localFileCandidates);
-  // Scheduled-post staging metadata is not revision-bound yet. Re-stage the
-  // exact export returned by the successful claim instead of reusing a URL
-  // that may point at an older Studio composition.
+  const sourceVideo = await firstExistingFile(firstClip.localFileCandidates);
+  // Clip video is always revalidated against its claimed plan/artifact before
+  // every external write. Composition-specific staging keys prevent a newer
+  // Studio export from replacing bytes already accepted by a publisher.
   let stagedMedia: StagedMedia | undefined;
 
   if (dryRun) {
     logger.warn("dry-run publish skipped", {
       post: post.id,
       platform: post.platform,
-      video: video.path,
-      size: formatBytes(video.size),
+      video: sourceVideo.path,
+      size: formatBytes(sourceVideo.size),
     });
     return {
       status: "SKIPPED",
@@ -425,27 +529,51 @@ async function publishPost(post: AutomationPost): Promise<UploadResult> {
     };
   }
 
+  const compositionIdentity = firstClip.compositionIdentity;
+  if (!compositionIdentity) {
+    throw new Error("The claimed clip is missing its canonical composition identity.");
+  }
+  const snapshot = await createPostingMediaSnapshot({
+    sourcePath: sourceVideo.path,
+    clipId: firstClip.id,
+    editPlanId: compositionIdentity.editPlanId,
+    artifactId: compositionIdentity.artifactId,
+    planHash: compositionIdentity.planHash,
+    expectedSizeBytes: compositionIdentity.sizeBytes,
+  });
+  const observedSnapshot = {
+    clipId: firstClip.id,
+    sha256: snapshot.sha256,
+    sizeBytes: snapshot.sizeBytes,
+  };
+
   try {
     if (postingRequiresPublicMedia(post) && !stagedMedia) {
+      await revalidateClaimedPostComposition(post, observedSnapshot);
       stagedMedia = await uploadPostingMediaToR2({
         scheduledPostId: post.id,
         clipId: firstClip.id,
-        videoPath: video.path,
-        videoSize: video.size,
+        videoPath: snapshot.filePath,
+        videoSize: snapshot.sizeBytes,
+        compositionKey: buildPostingCompositionKey({
+          ...compositionIdentity,
+          snapshotSha256: snapshot.sha256,
+        }),
       });
       logger.success("media staged for publisher", {
         post: post.id,
         platform: post.platform,
-        size: formatBytes(video.size),
+        size: formatBytes(snapshot.sizeBytes),
       });
     }
 
+    await revalidateClaimedPostComposition(post, observedSnapshot);
     const result = await uploadPlatformPost({
       ...post,
       mediaObjectKey: stagedMedia?.objectKey ?? post.mediaObjectKey,
       mediaPublicUrl: stagedMedia?.publicUrl ?? post.mediaPublicUrl,
       mediaUploadedAt: stagedMedia?.uploadedAt ?? post.mediaUploadedAt,
-    }, video.path, video.size);
+    }, snapshot.filePath, snapshot.sizeBytes);
 
     return {
       ...result,
@@ -458,6 +586,8 @@ async function publishPost(post: AutomationPost): Promise<UploadResult> {
       (error as PublishErrorWithStagedMedia).stagedMedia = stagedMedia;
     }
     throw error;
+  } finally {
+    await snapshot.remove().catch(() => undefined);
   }
 }
 
@@ -512,6 +642,17 @@ async function processDuePosts(): Promise<void> {
       try {
         result = await publishPost(post);
       } catch (error) {
+        if (error instanceof StaleClaimedCompositionError) {
+          activeLeasePostIds.delete(post.id);
+          cachedPosts = cachedPosts.filter((item) => item.id !== post.id);
+          logger.warn("publishing paused because composition changed", {
+            post: post.id,
+            platform: post.platform,
+            error: error.message,
+          });
+          continue;
+        }
+
         const publishError = error instanceof Error ? error.message : String(error);
         const stagedMedia = error instanceof Error ? (error as PublishErrorWithStagedMedia).stagedMedia : undefined;
         const ambiguousPlatformResult = error instanceof AmbiguousPlatformPublishError;
@@ -611,6 +752,8 @@ async function main(): Promise<void> {
 export const __postingWorkerTestUtils = {
   claimPost,
   isClaimedAutomationPost,
+  postingCompositionIdentities,
+  revalidateClaimedPostComposition,
 };
 
 if (!process.env.VITEST) {

@@ -4,6 +4,8 @@ import {
   canChooseClipForProduction,
   resolveClipStudioAssetInvalidation,
   resolveClipStudioBoundaryReviewUpdate,
+  resolveClipStudioChangeScope,
+  resolveClipStudioCompositionReset,
   resolveClipStudioContentValues,
   shouldRecordExplicitTranscriptReview,
 } from "@/lib/clipContentPersistence";
@@ -32,6 +34,40 @@ describe("clip content persistence", () => {
     })).toBe("NONE");
   });
 
+  it("keeps post guidance changes outside the media composition", () => {
+    expect(resolveClipStudioChangeScope({
+      boundariesChanged: false,
+      speechCleanupChanged: false,
+      onVideoCaptionChanged: false,
+      visualHookChanged: false,
+      brollLayerChanged: false,
+      socialCopyChanged: true,
+      hashtagChanged: true,
+      editorialHookChanged: true,
+    })).toEqual({
+      mediaCompositionChanged: false,
+      postGuidanceChanged: true,
+      studioEditsChanged: true,
+    });
+  });
+
+  it("classifies on-video and timing edits as media composition changes", () => {
+    expect(resolveClipStudioChangeScope({
+      boundariesChanged: false,
+      speechCleanupChanged: false,
+      onVideoCaptionChanged: true,
+      visualHookChanged: false,
+      brollLayerChanged: false,
+      socialCopyChanged: false,
+      hashtagChanged: false,
+      editorialHookChanged: false,
+    })).toEqual({
+      mediaCompositionChanged: true,
+      postGuidanceChanged: false,
+      studioEditsChanged: true,
+    });
+  });
+
   it("still invalidates the correct visual asset when subtitle cues change", () => {
     expect(resolveClipStudioAssetInvalidation({
       boundariesChanged: false,
@@ -39,6 +75,63 @@ describe("clip content persistence", () => {
       onVideoCaptionChanged: true,
       visualOverlayChanged: false,
     })).toBe("ON_VIDEO_CAPTIONS");
+  });
+
+  it("fails closed in the Studio save that changes on-video captions", () => {
+    expect(resolveClipStudioCompositionReset({
+      invalidation: "ON_VIDEO_CAPTIONS",
+      captionsEnabled: true,
+    })).toMatchObject({
+      captionBurnStatus: "NOT_BURNED",
+      captionedVideoPath: null,
+      captionBurnFreshness: "NEEDS_REGENERATION",
+      overlayStatus: "NOT_RENDERED",
+      overlayVideoPath: null,
+      exportStatus: "NOT_EXPORTED",
+      exportedFilePath: null,
+      exportFreshness: "NEEDS_REGENERATION",
+    });
+  });
+
+  it("keeps disabled captions skipped while invalidating the final composition", () => {
+    expect(resolveClipStudioCompositionReset({
+      invalidation: "ON_VIDEO_CAPTIONS",
+      captionsEnabled: false,
+    })).toMatchObject({
+      captionBurnStatus: "NOT_BURNED",
+      captionBurnFreshness: "UP_TO_DATE",
+      overlayStatus: "NOT_RENDERED",
+      exportStatus: "NOT_EXPORTED",
+      exportFreshness: "NEEDS_REGENERATION",
+    });
+  });
+
+  it("resets the base render and every dependent stage for boundary edits", () => {
+    expect(resolveClipStudioCompositionReset({
+      invalidation: "BOUNDARIES",
+      captionsEnabled: true,
+    })).toMatchObject({
+      renderStatus: "NOT_RENDERED",
+      renderedFilePath: null,
+      renderFreshness: "NEEDS_REGENERATION",
+      captionBurnStatus: "NOT_BURNED",
+      overlayStatus: "NOT_RENDERED",
+      exportStatus: "NOT_EXPORTED",
+    });
+  });
+
+  it("invalidates only the canonical export for output-selection changes", () => {
+    expect(resolveClipStudioCompositionReset({
+      invalidation: "EXPORT_SETTINGS",
+      captionsEnabled: true,
+    })).toEqual({
+      exportStatus: "NOT_EXPORTED",
+      exportedFilePath: null,
+      exportPath: null,
+      exportedAt: null,
+      exportError: null,
+      exportFreshness: "NEEDS_REGENERATION",
+    });
   });
 
   it("does not downgrade boundary quality when only copy or styling changes", () => {

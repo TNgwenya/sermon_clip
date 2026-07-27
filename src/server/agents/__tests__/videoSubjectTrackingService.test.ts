@@ -3,14 +3,18 @@ import { describe, expect, it } from "vitest";
 import {
   buildAdaptiveModelSampleTimes,
   buildModelSampleTimes,
+  boundTrackingSampleTimes,
+  findTemporalDetectionContext,
   __videoSubjectTrackingTestUtils,
   inferHeuristicTracks,
   inferModelTracksFromDetections,
   measureTrackingMotion,
+  selectPreferredTrackingRecord,
   selectPastorDetection,
   stabilizeSmartCropTimeline,
   type VideoSubjectBox,
 } from "@/server/agents/videoSubjectTrackingService";
+import { buildResolvedFramingPlanDocument } from "@/lib/resolvedFramingPlan";
 
 function box(timeSeconds: number, centerX: number, confidence = 0.9): VideoSubjectBox {
   return {
@@ -137,6 +141,30 @@ describe("video subject tracking service", () => {
     expect(samples.slice(0, 4)).toEqual([100, 101.5, 103, 104.5]);
   });
 
+  it("bounds on-demand tracking compute while preserving the beginning and end", () => {
+    const dense = buildModelSampleTimes(100, 400);
+    const bounded = boundTrackingSampleTimes(dense, 48);
+
+    expect(dense.length).toBeGreaterThan(48);
+    expect(bounded).toHaveLength(48);
+    expect(bounded[0]).toBe(100);
+    expect(bounded.at(-1)).toBe(400);
+  });
+
+  it("associates adaptive samples with the nearest preceding detection, not the end of the first pass", () => {
+    const context = findTemporalDetectionContext(
+      [
+        { timeSeconds: 0, x: 0.1, y: 0.2, width: 0.2, height: 0.6, confidence: 0.9 },
+        { timeSeconds: 6, x: 0.4, y: 0.2, width: 0.2, height: 0.6, confidence: 0.9 },
+        { timeSeconds: 12, x: 0.7, y: 0.2, width: 0.2, height: 0.6, confidence: 0.9 },
+      ],
+      3,
+    );
+
+    expect(context?.timeSeconds).toBe(0);
+    expect(context?.x).toBe(0.1);
+  });
+
   it("adapts sample density for static, moving, and low-confidence tracking", () => {
     const staticSamples = buildAdaptiveModelSampleTimes({
       startTimeSeconds: 0,
@@ -171,6 +199,20 @@ describe("video subject tracking service", () => {
     );
 
     expect(selected?.x).toBe(0.62);
+  });
+
+  it("prefers a reliable model body track over a heuristic speaker-area estimate", () => {
+    const selected = selectPreferredTrackingRecord([
+      { kind: "SPEAKER_AREA", source: "HEURISTIC_CENTER", confidenceScore: 0.92 },
+      { kind: "BODY", source: "MODEL", confidenceScore: 0.81 },
+      { kind: "FACE", source: "MODEL", confidenceScore: 0.88 },
+    ]);
+
+    expect(selected).toEqual({
+      kind: "BODY",
+      source: "MODEL",
+      confidenceScore: 0.81,
+    });
   });
 
   it("requires a clearly better detection before switching people", () => {
@@ -255,6 +297,38 @@ describe("video subject tracking service", () => {
     expect(points[1].centerX).toBe(points[0].centerX);
     expect(points[1].rejected).toBe(true);
     expect(points[1].frozen).toBe(true);
+  });
+
+  it("marks a persistent abrupt camera composition change so plan smoothing resets", () => {
+    const snapshotTimeline = stabilizeSmartCropTimeline({
+      boxes: [box(10, 0.22, 0.9), box(11.5, 0.78, 0.92), box(13, 0.76, 0.91)],
+      boundaries: { startTimeSeconds: 10, endTimeSeconds: 13 },
+      source: "MODEL",
+      sampleCount: 3,
+      hasBody: true,
+      hasFace: true,
+      hasSpeakerArea: true,
+    });
+    const plan = buildResolvedFramingPlanDocument({
+      clipCandidateId: "clip-scene-cut",
+      editPlanId: "plan-scene-cut",
+      editPlanHash: "hash-scene-cut",
+      requestedLayout: "SMART_CROP",
+      requestedPersonality: "SPEAKER_FOCUS",
+      sourceGeometry: {
+        width: 1920,
+        height: 1080,
+        role: "ORIGINAL_SOURCE",
+      },
+      trackingSource: "MODEL",
+      trackingPoints: snapshotTimeline,
+    });
+
+    expect(snapshotTimeline[1].sceneCut).toBe(true);
+    expect(snapshotTimeline[0].sceneId).toBe("scene-1");
+    expect(snapshotTimeline[1].sceneId).toBe("scene-2");
+    expect(plan.tracking.timeline[1].sceneId).toBe("scene-2");
+    expect(plan.tracking.timeline[1].centerX).toBeCloseTo(0.78, 2);
   });
 
   it("freezes low-confidence points at the previous reliable center", () => {

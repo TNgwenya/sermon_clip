@@ -5,13 +5,14 @@ import path from "node:path";
 
 export const COMPACT_CLIP_PREVIEW_VERSION = "compact-v1";
 
-const COMPACT_PREVIEW_MAX_WIDTH = 540;
-const COMPACT_PREVIEW_MAX_HEIGHT = 960;
-const COMPACT_PREVIEW_FRAMES_PER_SECOND = 30;
-const COMPACT_PREVIEW_VIDEO_MAX_RATE = "1800k";
-const COMPACT_PREVIEW_VIDEO_BUFFER_SIZE = "3600k";
-const COMPACT_PREVIEW_AUDIO_BITRATE = "96k";
-const COMPACT_PREVIEW_GOP_FRAMES = 60;
+const COMPACT_PREVIEW_MAX_WIDTH = 432;
+const COMPACT_PREVIEW_MAX_HEIGHT = 768;
+const COMPACT_PREVIEW_FRAMES_PER_SECOND = 24;
+const COMPACT_PREVIEW_VIDEO_CRF = "28";
+const COMPACT_PREVIEW_VIDEO_MAX_RATE = "1200k";
+const COMPACT_PREVIEW_VIDEO_BUFFER_SIZE = "2400k";
+const COMPACT_PREVIEW_AUDIO_BITRATE = "64k";
+const COMPACT_PREVIEW_GOP_FRAMES = 48;
 const MAX_FFMPEG_ERROR_LENGTH = 12_000;
 
 export type CompactClipPreview = {
@@ -71,7 +72,7 @@ export function buildCompactClipPreviewArgs(input: {
     "-preset",
     "veryfast",
     "-crf",
-    "26",
+    COMPACT_PREVIEW_VIDEO_CRF,
     "-maxrate",
     COMPACT_PREVIEW_VIDEO_MAX_RATE,
     "-bufsize",

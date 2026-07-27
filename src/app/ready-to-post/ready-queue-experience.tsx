@@ -19,6 +19,7 @@ import {
 } from "@/lib/readyToPost";
 import type { PostingDraft } from "@/lib/postingDrafts";
 import type { PostingPackageHistoryItem } from "@/lib/postingPackages";
+import { resolvePreviewPlaybackUrl } from "@/lib/clipPreview";
 import { listCanonicalPlatformPayloads } from "@/lib/publishingPayload";
 import type { PublishingServiceHealth } from "@/lib/publishingServiceHealth";
 import {
@@ -1573,7 +1574,10 @@ export function ReadyQueueExperience({
                   controls
                   preload="none"
                   poster={`/api/clips/${selectedClip.id}/thumbnail`}
-                  src={selectedReadyPackage.previewHref}
+                  src={resolvePreviewPlaybackUrl({
+                    remotePreviewUrl: selectedClip.remotePreviewUrl,
+                    fallbackUrl: selectedReadyPackage.previewHref,
+                  })}
                   onLoadStart={() => setVideoPreviewState(selectedClip.id, "loading")}
                   onCanPlay={() => setVideoPreviewState(selectedClip.id, "ready")}
                   onPlaying={() => setVideoPreviewState(selectedClip.id, "playing")}

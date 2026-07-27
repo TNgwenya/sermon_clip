@@ -88,6 +88,16 @@ export function resolveFreshRemotePreviewUrl(paths: Pick<
   return isFreshRemotePreview(paths) ? paths.remotePreviewUrl?.trim() ?? null : null;
 }
 
+export function resolvePreviewPlaybackUrl(input: {
+  remotePreviewUrl?: string | null;
+  fallbackUrl: string;
+}): string {
+  const remotePreviewUrl = input.remotePreviewUrl?.trim();
+  return isHttpsPreviewUrl(remotePreviewUrl)
+    ? remotePreviewUrl
+    : input.fallbackUrl;
+}
+
 export function buildRetryablePreviewUrl(previewUrl: string, retryNonce: number): string {
   if (!Number.isFinite(retryNonce) || retryNonce <= 0) {
     return previewUrl;

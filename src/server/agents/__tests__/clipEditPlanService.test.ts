@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
+  $transaction: vi.fn(),
   clipEditPlan: {
     findFirst: vi.fn(),
+    updateMany: vi.fn(),
   },
   clipCandidate: {
     findUnique: vi.fn(),
@@ -23,8 +25,10 @@ import {
   isStaleClipCompositionError,
   preferStaleClipCompositionError,
   recordClipArtifact,
+  supersedeActiveClipEditPlansForStudioSave,
   tryUpdateClipCandidateForActiveEditPlan,
   updateClipCandidateForActiveEditPlan,
+  upsertActiveClipEditPlanForClip,
 } from "../clipEditPlanService";
 
 const guard = {
@@ -92,6 +96,115 @@ describe("clip edit plan composition guards", () => {
 
     expect(afterOutput.planHash).toBe(beforeOutput.planHash);
     expect(afterOutput.planJson).not.toHaveProperty("artifactPaths");
+  });
+
+  it("keeps the media composition stable when only post-distribution copy changes", () => {
+    const beforeCopyEdit = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(snapshotInput({
+      applyCaptionsToClip: false,
+    }));
+    const afterCopyEdit = __clipEditPlanTestUtils.buildClipEditPlanSnapshot({
+      ...snapshotInput({
+        applyCaptionsToClip: false,
+      }),
+      title: "A revised social title",
+      hook: "A revised editorial opener",
+      caption: "Revised platform post copy",
+      hashtags: ["sermon", "revised"],
+    });
+
+    expect(afterCopyEdit.planHash).toBe(beforeCopyEdit.planHash);
+    expect(afterCopyEdit.planJson).toMatchObject({
+      clip: {
+        id: "clip-1",
+        sermonId: "sermon-1",
+        transcriptText: "A complete thought.",
+      },
+    });
+    expect(afterCopyEdit.planJson).not.toMatchObject({
+      clip: expect.objectContaining({
+        title: expect.anything(),
+        hook: expect.anything(),
+        caption: expect.anything(),
+        hashtags: expect.anything(),
+      }),
+    });
+  });
+
+  it("recognizes a legacy active plan as the same media composition after removing post copy", () => {
+    const current = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(snapshotInput({
+      applyCaptionsToClip: true,
+      cues: [{ index: 0, startSeconds: 0, endSeconds: 2, text: "Approved words" }],
+    }));
+    const currentDocument = current.planJson as Record<string, unknown>;
+    const currentClip = currentDocument["clip"] as Record<string, unknown>;
+    const legacyDocument = {
+      ...currentDocument,
+      clip: {
+        ...currentClip,
+        title: "Legacy title",
+        hook: "Legacy editorial opener",
+        caption: "Legacy platform copy",
+        hashtags: ["legacy"],
+      },
+    };
+
+    expect(__clipEditPlanTestUtils.mediaPlanHashFromPlanJson(legacyDocument)).toBe(current.planHash);
+  });
+
+  it("reuses a legacy active plan for a post-copy-only save without invalidating artifacts", async () => {
+    const currentInput = snapshotInput({
+      applyCaptionsToClip: true,
+      cues: [{ index: 0, startSeconds: 0, endSeconds: 2, text: "Approved words" }],
+    });
+    const current = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(currentInput);
+    const currentDocument = current.planJson as Record<string, unknown>;
+    const currentClip = currentDocument["clip"] as Record<string, unknown>;
+    const legacyPlan = {
+      id: "legacy-plan",
+      planHash: "legacy-hash-with-post-copy",
+      planJson: {
+        ...currentDocument,
+        clip: {
+          ...currentClip,
+          title: "Old social title",
+          hook: "Old editorial opener",
+          caption: "Old platform copy",
+          hashtags: ["old-copy"],
+        },
+      },
+    };
+    prismaMock.clipCandidate.findUnique.mockResolvedValue({
+      ...currentInput,
+      title: "New social title",
+      hook: "New editorial opener",
+      caption: "New platform copy",
+      hashtags: ["new-copy"],
+    });
+    prismaMock.clipEditPlan.findFirst.mockResolvedValue(legacyPlan);
+
+    await expect(upsertActiveClipEditPlanForClip({
+      clipCandidateId: "clip-1",
+      createdBy: "studio",
+      createdReason: "post_copy_saved",
+    })).resolves.toMatchObject({
+      plan: legacyPlan,
+      created: false,
+    });
+    expect(prismaMock.$transaction).not.toHaveBeenCalled();
+    expect(prismaMock.clipEditPlan.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("changes the media composition when approved on-video wording changes", () => {
+    const original = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(snapshotInput({
+      applyCaptionsToClip: true,
+      cues: [{ index: 0, startSeconds: 0, endSeconds: 2, text: "Approved words" }],
+    }));
+    const revised = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(snapshotInput({
+      applyCaptionsToClip: true,
+      cues: [{ index: 0, startSeconds: 0, endSeconds: 2, text: "Revised words" }],
+    }));
+
+    expect(revised.planHash).not.toBe(original.planHash);
   });
 
   it("supersedes the plan for reveal-mode or caption-sync-only Studio edits", () => {
@@ -261,6 +374,21 @@ describe("clip edit plan composition guards", () => {
       guard,
       data: { renderStatus: "FAILED" },
     })).resolves.toBe(false);
+  });
+
+  it("supersedes the active worker guard before a Studio composition save", async () => {
+    prismaMock.clipEditPlan.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(supersedeActiveClipEditPlansForStudioSave("clip-1")).resolves.toBe(1);
+    expect(prismaMock.clipEditPlan.updateMany).toHaveBeenCalledWith({
+      where: {
+        clipCandidateId: "clip-1",
+        status: "ACTIVE",
+      },
+      data: {
+        status: "SUPERSEDED",
+      },
+    });
   });
 
   it("attributes a ready artifact to the captured plan and rechecks that plan before creation", async () => {

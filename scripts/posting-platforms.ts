@@ -16,6 +16,18 @@ import {
 
 export type PostingPlatform = "TikTok" | "Instagram" | "YouTube Shorts" | "Facebook";
 
+export type ClipPostingCompositionIdentity = {
+  schemaVersion: 1;
+  clipId: string;
+  editPlanId: string;
+  artifactId: string;
+  planHash: string;
+  filePath: string;
+  sizeBytes: number | null;
+  snapshotSha256: string | null;
+  snapshotSizeBytes: number | null;
+};
+
 export type AutomationPost = {
   id: string;
   socialAccountId: string | null;
@@ -61,6 +73,7 @@ export type AutomationPost = {
     durationSeconds?: number;
     hashtags: unknown;
     localFileCandidates: string[];
+    compositionIdentity?: ClipPostingCompositionIdentity;
     sermon: {
       title: string;
       churchName: string;

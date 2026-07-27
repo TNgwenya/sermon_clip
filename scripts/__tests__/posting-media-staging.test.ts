@@ -27,6 +27,7 @@ vi.mock("@aws-sdk/client-s3", () => ({
 }));
 
 import {
+  buildPostingCompositionKey,
   buildPostingMediaObjectKey,
   buildR2PublicUrl,
   uploadPostingMediaToR2,
@@ -45,6 +46,22 @@ describe("posting media staging", () => {
       clipId: "clip/1",
       filename: "/tmp/export.mp4",
     })).toBe("posting-temp/post-1/clip-1.mp4");
+  });
+
+  it("builds immutable composition-specific keys for staged clip video", () => {
+    const compositionKey = buildPostingCompositionKey({
+      editPlanId: "plan/7",
+      artifactId: "artifact 9",
+      planHash: "sha:abc123",
+      snapshotSha256: "abcdef123456",
+    });
+
+    expect(buildPostingMediaObjectKey({
+      scheduledPostId: "post 1",
+      clipId: "clip/1",
+      compositionKey,
+      filename: "/tmp/export.mp4",
+    })).toBe("posting-temp/post-1/clip-1.plan-7.artifact-9.sha-abc123.abcdef123456.mp4");
   });
 
   it("builds public HTTPS URLs for R2 objects", () => {

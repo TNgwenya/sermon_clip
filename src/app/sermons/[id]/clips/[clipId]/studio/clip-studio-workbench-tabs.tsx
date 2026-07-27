@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 
-type StudioTabId = "edit" | "format" | "branding" | "post" | "evidence";
+type StudioTabId = "edit" | "format" | "branding" | "post";
 
 type MobileStudioTaskId = "preview" | "transcript" | StudioTabId;
 
@@ -24,16 +24,42 @@ type ClipStudioWorkbenchTabsProps = {
   format: ReactNode;
   branding: ReactNode;
   post: ReactNode;
-  evidence: ReactNode;
   advanced?: ReactNode;
 };
+
+function resolveStudioTabIndex({
+  key,
+  index,
+  tabCount,
+}: {
+  key: string;
+  index: number;
+  tabCount: number;
+}): number | null {
+  if (key === "ArrowRight") {
+    return (index + 1) % tabCount;
+  }
+
+  if (key === "ArrowLeft") {
+    return (index - 1 + tabCount) % tabCount;
+  }
+
+  if (key === "Home") {
+    return 0;
+  }
+
+  if (key === "End") {
+    return tabCount - 1;
+  }
+
+  return null;
+}
 
 export function ClipStudioWorkbenchTabs({
   edit,
   format,
   branding,
   post,
-  evidence,
   advanced,
 }: ClipStudioWorkbenchTabsProps) {
   const [activeTab, setActiveTab] = useState<StudioTabId>("edit");
@@ -46,9 +72,8 @@ export function ClipStudioWorkbenchTabs({
       { id: "format", label: "Frame", eyebrow: "Format and crop", content: format },
       { id: "branding", label: "Brand", eyebrow: "Church identity", content: branding },
       { id: "post", label: "Export", eyebrow: "Prepared media and handoff", content: post },
-      { id: "evidence", label: "Insights", eyebrow: "Message evidence", content: evidence },
     ],
-    [branding, edit, evidence, format, post],
+    [branding, edit, format, post],
   );
 
   const activeEyebrow = tabs.find((tab) => tab.id === activeTab)?.eyebrow ?? "Clip tools";
@@ -106,17 +131,11 @@ export function ClipStudioWorkbenchTabs({
   }
 
   function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    let nextIndex: number | null = null;
-
-    if (event.key === "ArrowRight") {
-      nextIndex = (index + 1) % tabs.length;
-    } else if (event.key === "ArrowLeft") {
-      nextIndex = (index - 1 + tabs.length) % tabs.length;
-    } else if (event.key === "Home") {
-      nextIndex = 0;
-    } else if (event.key === "End") {
-      nextIndex = tabs.length - 1;
-    }
+    const nextIndex = resolveStudioTabIndex({
+      key: event.key,
+      index,
+      tabCount: tabs.length,
+    });
 
     if (nextIndex === null) {
       return;
@@ -204,3 +223,7 @@ export function ClipStudioWorkbenchTabs({
     </section>
   );
 }
+
+export const __clipStudioWorkbenchTabsTestUtils = {
+  resolveStudioTabIndex,
+};

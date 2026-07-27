@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { StatusBadge } from "@/components/ui";
@@ -46,6 +47,8 @@ type ClipStudioTranscriptPanelProps = {
   momentType: string | null;
   momentTitle: string | null;
   smartClipCategory: string | null;
+  transcriptReviewRequired?: boolean;
+  transcriptReviewHref?: string;
 };
 
 const QUICK_CLIP_LENGTH_SECONDS = [30, 45, 60, 90];
@@ -389,6 +392,8 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
   const {
     clipEndSeconds,
     clipStartSeconds,
+    transcriptReviewHref = "#",
+    transcriptReviewRequired = false,
     transcriptSegments,
   } = props;
   const focusedLineRef = useRef<HTMLButtonElement | null>(null);
@@ -402,6 +407,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     activeClipEndSeconds,
     activeClipStartSeconds,
     durationSeconds,
+    editPreview,
     isDraftDirty,
     previewClock,
     requestPreviewPlayback,
@@ -483,6 +489,25 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     );
   }
 
+  function openCaptionWordingEditor() {
+    if (!editPreview.applyCaptionsToClip) {
+      window.dispatchEvent(
+        new CustomEvent(CLIP_STUDIO_LAYER_COMMAND_EVENT, {
+          detail: { command: "toggle-captions" satisfies ClipStudioLayerCommand },
+        }),
+      );
+    }
+    dispatchTranscriptCommand("open-caption-editor", focusedSegment ?? undefined);
+  }
+
+  const focusedClipStatus = focusedSegment
+    ? resolveTranscriptSegmentClipStatus(focusedSegment, activeClipStartSeconds, activeClipEndSeconds)
+    : null;
+  const focusedClipStatusLabel = focusedClipStatus
+    ? transcriptSegmentClipStatusLabel(focusedClipStatus)
+    : null;
+  const wordingCorrectionLocked = focusedClipStatus === "outside";
+
   return (
     <aside
       id="clip-studio-transcript"
@@ -501,14 +526,124 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
         </StatusBadge>
       </div>
 
+      {focusedSegment ? (
+        <div
+          className="clip-studio-transcript-active"
+          data-testid="clip-studio-transcript-active-line"
+          aria-live="polite"
+        >
+          <div className="clip-studio-transcript-active-heading">
+            <div>
+              <span className="kicker">Selected spoken line</span>
+              <h3>Choose an action</h3>
+            </div>
+            <span className={`status-pill ${focusedClipStatus === "outside" ? "quality-needs-editing" : "quality-good"}`}>
+              {focusedClipStatusLabel}
+            </span>
+          </div>
+          <div>
+            <strong>
+              {formatSecondsForPastorView(focusedSegment.startTimeSeconds)} - {formatSecondsForPastorView(focusedSegment.endTimeSeconds)}
+            </strong>
+            <p className="clip-studio-transcript-spoken-line">{focusedSegment.text}</p>
+            <p className="muted small">
+              Start and end change which spoken audio stays. Wording corrections change captions only; they never alter the recording.
+            </p>
+          </div>
+          <div className="clip-studio-transcript-actions" aria-label="Transcript line actions">
+            <button
+              type="button"
+              className="button primary"
+              onClick={() => previewSegment(focusedSegment)}
+            >
+              Preview selected line
+            </button>
+            <button
+              type="button"
+              className="button secondary"
+              onClick={() => dispatchTranscriptCommand("set-start", focusedSegment)}
+            >
+              Set start to {formatSecondsForPastorView(focusedSegment.startTimeSeconds)}
+            </button>
+            <button
+              type="button"
+              className="button secondary"
+              onClick={() => dispatchTranscriptCommand("set-end", focusedSegment)}
+            >
+              Set end to {formatSecondsForPastorView(focusedSegment.endTimeSeconds)}
+            </button>
+          </div>
+          <div className="clip-studio-transcript-correction" aria-label="Transcript wording and review">
+            <div>
+              <strong>Need to correct the words?</strong>
+              <p className="muted small">
+                {wordingCorrectionLocked
+                  ? "This line is outside the clip. Set a start or end boundary that includes it before editing its on-screen words."
+                  : editPreview.applyCaptionsToClip
+                    ? "Open the matching caption lines to correct spelling or wording without changing the spoken audio."
+                    : "Captions are off. Turn them on to correct the words that will appear on screen."}
+              </p>
+            </div>
+            <div className="clip-studio-transcript-correction-actions">
+              <button
+                type="button"
+                className="button secondary"
+                onClick={openCaptionWordingEditor}
+                disabled={wordingCorrectionLocked}
+                aria-describedby={wordingCorrectionLocked ? "clip-studio-wording-requirement" : undefined}
+              >
+                {editPreview.applyCaptionsToClip ? "Edit words shown on video" : "Turn on captions and edit words"}
+              </button>
+              <Link href={transcriptReviewHref} className="button tertiary">
+                Review spoken transcript
+              </Link>
+            </div>
+            {wordingCorrectionLocked ? (
+              <p id="clip-studio-wording-requirement" className="muted small">
+                Requirement: include this spoken line in the clip first.
+              </p>
+            ) : null}
+          </div>
+          {transcriptReviewRequired ? (
+            <div className="clip-studio-transcript-review-required" role="status">
+              <div>
+                <strong>Spoken transcript review required before final video</strong>
+                <p>
+                  Preparing is locked until a reviewer confirms the spoken wording. Caption edits here do not complete that review.
+                </p>
+              </div>
+              <Link href={transcriptReviewHref} className="button secondary">
+                Review and confirm wording
+              </Link>
+            </div>
+          ) : null}
+          <div className="clip-studio-transcript-actions compact" aria-label="Transcript timing actions">
+            <button
+              type="button"
+              className="button secondary"
+              onClick={() => dispatchTranscriptCommand("snap-to-sentence")}
+            >
+              Snap to Sentence
+            </button>
+            <button
+              type="button"
+              className="button secondary"
+              onClick={() => dispatchTranscriptCommand("reset-ai")}
+            >
+              Reset to AI
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <p className="muted small">
-        Highlighted lines stay in the clip. Select a line to hear it, then choose where the clip starts or ends.
+        Every row is a playable spoken line. Select one to hear it and reveal clear start, end, and wording controls.
       </p>
 
       <div className="clip-studio-ministry-tags" aria-label="Spoken transcript guide">
-        <span>Highlighted: in clip</span>
-        <span>Playing: current words</span>
-        <span>Selected: boundary controls ready</span>
+        <span>In clip: highlighted green</span>
+        <span>Playing now: highlighted yellow</span>
+        <span>Selected row: white outline</span>
       </div>
 
       <label className="muted small">
@@ -543,60 +678,6 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
         </div>
       ) : null}
 
-      {focusedSegment ? (
-        <div className="clip-studio-transcript-active" data-testid="clip-studio-transcript-active-line">
-          <div>
-            <span className="kicker">Selected line</span>
-            <strong>
-              {formatSecondsForPastorView(focusedSegment.startTimeSeconds)} - {formatSecondsForPastorView(focusedSegment.endTimeSeconds)}
-            </strong>
-            <p className="clip-studio-transcript-spoken-line">{focusedSegment.text}</p>
-            <p className="muted small">
-              This transcript controls which spoken audio stays in the clip. To change words shown on screen, use Captions in the Edit panel.
-            </p>
-          </div>
-          <div className="clip-studio-transcript-actions" aria-label="Transcript line actions">
-            <button
-              type="button"
-              className="button secondary"
-              onClick={() => dispatchTranscriptCommand("set-start", focusedSegment)}
-            >
-              Start clip here
-            </button>
-            <button
-              type="button"
-              className="button secondary"
-              onClick={() => dispatchTranscriptCommand("set-end", focusedSegment)}
-            >
-              End clip here
-            </button>
-            <button
-              type="button"
-              className="button secondary"
-              onClick={() => previewSegment(focusedSegment)}
-            >
-              Preview line
-            </button>
-          </div>
-          <div className="clip-studio-transcript-actions compact" aria-label="Transcript timing actions">
-            <button
-              type="button"
-              className="button secondary"
-              onClick={() => dispatchTranscriptCommand("snap-to-sentence")}
-            >
-              Snap to Sentence
-            </button>
-            <button
-              type="button"
-              className="button secondary"
-              onClick={() => dispatchTranscriptCommand("reset-ai")}
-            >
-              Reset to AI
-            </button>
-          </div>
-        </div>
-      ) : null}
-
       <div ref={transcriptListRef} className="clip-studio-transcript-list" aria-label="Spoken transcript lines">
         {transcriptSegments.length > 0 ? (
           transcriptSegments.map((segment, index) => {
@@ -620,8 +701,9 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
               <button
                 key={segment.id}
                 type="button"
-                aria-label={`Play spoken transcript line at ${formatSecondsForPastorView(segment.startTimeSeconds)}: ${displayText}. ${clipStatusLabel}.`}
+                aria-label={`Select and play spoken transcript line at ${formatSecondsForPastorView(segment.startTimeSeconds)}: ${displayText}. ${clipStatusLabel}.`}
                 aria-current={isCurrent ? "true" : undefined}
+                aria-pressed={focusedSegment?.id === segment.id}
                 data-testid="clip-studio-transcript-line"
                 data-transcript-segment-id={segment.id}
                 data-clip-status={clipStatus}
@@ -636,6 +718,9 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
               >
                 <span>{formatSecondsForPastorView(segment.startTimeSeconds)}</span>
                 <strong>{displayText}</strong>
+                <small className="clip-studio-transcript-line-action">
+                  {focusedSegment?.id === segment.id ? "Selected" : "Select & play"}
+                </small>
                 {typeof segment.confidence === "number" && segment.confidence < 0.78 ? (
                   <small className="status-pill quality-needs-editing">Check wording</small>
                 ) : null}
