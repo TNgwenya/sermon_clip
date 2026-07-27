@@ -163,7 +163,10 @@ import {
   type CaptionStyleSource,
   type SpeechCleanupIntensity,
 } from "@/lib/clipStudio";
-import { buildClipStudioPrepareAssetPlan } from "@/lib/clipStudioPrepare";
+import {
+  buildClipStudioPrepareAssetPlan,
+  buildClipStudioQueuedAssets,
+} from "@/lib/clipStudioPrepare";
 import {
   canChooseClipForProduction,
   resolveClipStudioAssetInvalidation,
@@ -6355,7 +6358,73 @@ export async function prepareClipStudioForPostingAction(
 
   if (!canRunInlineMediaProcessing()) {
     try {
-      const queued = await queueSermonMediaAssetJobs(clip.sermonId, undefined, { clipIds: [clip.id] });
+      const queuedClip = await prisma.clipCandidate.findUnique({
+        where: { id: clip.id },
+        select: {
+          renderStatus: true,
+          renderFreshness: true,
+          renderedFilePath: true,
+          captionStatus: true,
+          captionBurnStatus: true,
+          captionBurnFreshness: true,
+          captionedVideoPath: true,
+          captionData: true,
+          exportStatus: true,
+          exportFreshness: true,
+        },
+      });
+      if (!queuedClip) {
+        throw new Error("Clip candidate was not found after saving the Studio draft.");
+      }
+
+      const captionPreferences = resolveSavedClipCaptionPreferences(
+        queuedClip.captionData,
+        "clean-lower",
+      );
+      const prepareSnapshot = {
+        renderStatus: queuedClip.renderStatus,
+        renderFreshness: queuedClip.renderFreshness,
+        renderedFileReady: Boolean(queuedClip.renderedFilePath?.trim()),
+        captionsEnabled: captionPreferences.applyCaptionsToClip,
+        captionStatus: queuedClip.captionStatus,
+        captionBurnStatus: queuedClip.captionBurnStatus,
+        captionBurnFreshness: queuedClip.captionBurnFreshness,
+        captionedFileReady: Boolean(queuedClip.captionedVideoPath?.trim()),
+        exportStatus: queuedClip.exportStatus,
+        exportFreshness: queuedClip.exportFreshness,
+      };
+      const preparePlan = buildClipStudioPrepareAssetPlan(
+        prepareSnapshot,
+        { forceRebuild: input.forceRebuild === true },
+      );
+      const requestedAssets = buildClipStudioQueuedAssets(prepareSnapshot, preparePlan);
+
+      if (requestedAssets.length === 0) {
+        await prisma.clipCandidate.update({
+          where: { id: clip.id },
+          data: { status: "EXPORTED" },
+        });
+        revalidatePath(`/sermons/${clip.sermonId}`);
+        revalidatePath(`/sermons/${clip.sermonId}/review`);
+        revalidatePath(`/sermons/${clip.sermonId}/clips/${clip.id}/studio`);
+        revalidatePath("/ready-to-post");
+        revalidatePath("/");
+
+        return {
+          success: true,
+          draftSaved: true,
+          queued: false,
+          message: "Draft saved. The final video is already ready.",
+          results: [],
+          warnings: draftResult.warnings,
+        };
+      }
+
+      const queued = await queueSermonMediaAssetJobs(
+        clip.sermonId,
+        requestedAssets,
+        { clipIds: [clip.id] },
+      );
       // The control panel cannot observe a Mac worker's in-memory queue. Keep
       // the durable clip state honest so a refresh shows "Preparing" and the
       // prepare button cannot enqueue the same composition repeatedly.

@@ -7,6 +7,8 @@ import {
   isValidExportFormat,
   isValidFramingMode,
   isValidPlatformPreset,
+  markInProgressClipStudioExportsFailed,
+  markLatestClipStudioExportCompleted,
   mapPlatformPresetToFormat,
   orderExportFormatsForCanonicalPrimary,
   resolveExportHistory,
@@ -269,6 +271,86 @@ describe("export history", () => {
 
     expect(oldRecord?.isLatest).toBe(false);
     expect(newRecord?.isLatest).toBe(true);
+  });
+
+  it("fails only the latest in-progress Studio exports after an upstream media failure", () => {
+    const updated = markInProgressClipStudioExportsFailed({
+      captionStylePresetId: "bold-sermon",
+      exportHistory: [
+        {
+          id: "record-old",
+          clipId: "clip-1",
+          sermonId: "sermon-1",
+          format: "VERTICAL_9_16",
+          platformPreset: "INSTAGRAM_REELS",
+          framingMode: "SMART_CROP",
+          status: "COMPLETED",
+          outputPath: "/tmp/old.mp4",
+          renderVersion: "v1",
+          createdAt: "2026-06-18T09:00:00.000Z",
+        },
+        {
+          id: "record-new",
+          clipId: "clip-1",
+          sermonId: "sermon-1",
+          format: "VERTICAL_9_16",
+          platformPreset: "INSTAGRAM_REELS",
+          framingMode: "SMART_CROP",
+          status: "WAITING",
+          outputPath: null,
+          renderVersion: "v2",
+          createdAt: "2026-06-18T11:00:00.000Z",
+        },
+      ],
+    }, "Caption render failed", "2026-06-18T11:05:00.000Z");
+
+    expect(updated.captionStylePresetId).toBe("bold-sermon");
+    expect(resolveExportHistory(updated)).toEqual([
+      expect.objectContaining({
+        id: "record-new",
+        status: "FAILED",
+        errorMessage: "Caption render failed",
+        completedAt: "2026-06-18T11:05:00.000Z",
+      }),
+      expect.objectContaining({
+        id: "record-old",
+        status: "COMPLETED",
+      }),
+    ]);
+  });
+
+  it("marks the matching latest Studio export complete from worker metadata", () => {
+    const updated = markLatestClipStudioExportCompleted({
+      captionRevealMode: "single-word",
+      exportHistory: [{
+        id: "record-new",
+        clipId: "clip-1",
+        sermonId: "sermon-1",
+        format: "VERTICAL_9_16",
+        platformPreset: "INSTAGRAM_REELS",
+        framingMode: "SMART_CROP",
+        status: "WAITING",
+        outputPath: null,
+        renderVersion: "v2",
+        createdAt: "2026-06-18T11:00:00.000Z",
+      }],
+    }, {
+      format: "VERTICAL_9_16",
+      outputPath: "/tmp/final.mp4",
+      outputFilename: "final.mp4",
+      fileSizeBytes: 1234,
+      captionBurnStatus: "COMPLETED",
+      completedAt: "2026-06-18T11:10:00.000Z",
+    });
+
+    expect(updated.captionRevealMode).toBe("single-word");
+    expect(resolveExportHistory(updated)[0]).toMatchObject({
+      status: "COMPLETED",
+      outputPath: "/tmp/final.mp4",
+      outputFilename: "final.mp4",
+      fileSizeBytes: 1234,
+      captionBurnStatus: "COMPLETED",
+    });
   });
 });
 

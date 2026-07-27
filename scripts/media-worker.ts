@@ -157,6 +157,7 @@ function startJobHeartbeat(jobId: string): () => void {
 async function runCaptionBurnJob(
   sermonId: string,
   request: ReturnType<typeof resolveMediaAssetWorkerRequest>,
+  processingJobId: string,
 ): Promise<string> {
   const clips = await prisma.clipCandidate.findMany({
     where: {
@@ -185,13 +186,17 @@ async function runCaptionBurnJob(
 
   const { burnCaptionsIntoRenderedClip } = await import("../src/server/agents/captionBurnService");
   return runCaptionBurnBatch(clips, {
-    burnCaptions: burnCaptionsIntoRenderedClip,
+    burnCaptions: (clipId, options) => burnCaptionsIntoRenderedClip(clipId, {
+      ...options,
+      processingJobId,
+    }),
   });
 }
 
 async function runOverlayAndExportJob(
   sermonId: string,
   request: ReturnType<typeof resolveMediaAssetWorkerRequest>,
+  processingJobId: string,
 ): Promise<string> {
   const clips = await prisma.clipCandidate.findMany({
     where: {
@@ -213,6 +218,8 @@ async function runOverlayAndExportJob(
     orderBy: [{ overallPostScore: "desc" }, { score: "desc" }, { createdAt: "asc" }],
     select: {
       id: true,
+      captionData: true,
+      captionBurnStatus: true,
       overlayStatus: true,
       overlayFreshness: true,
       exportStatus: true,
@@ -228,8 +235,14 @@ async function runOverlayAndExportJob(
   const { renderClipOverlay } = await import("../src/server/agents/clipOverlayService");
   const { exportVerticalClip } = await import("../src/server/agents/clipExportService");
   return runOverlayAndExportBatch(clips, {
-    renderOverlay: renderClipOverlay,
-    exportClip: exportVerticalClip,
+    renderOverlay: (clipId, options) => renderClipOverlay(clipId, {
+      ...options,
+      processingJobId,
+    }),
+    exportClip: (clipId, options) => exportVerticalClip(clipId, {
+      ...options,
+      processingJobId,
+    }),
     prepareFitBlurredFallback: async (clipId) => {
       await prisma.clipCandidate.update({
         where: { id: clipId },
@@ -461,10 +474,10 @@ async function runJob(job: ProcessingJob): Promise<string> {
     }
     case "BURN_SUBTITLES":
     {
-      return runCaptionBurnJob(sermonId, mediaAssetRequest);
+      return runCaptionBurnJob(sermonId, mediaAssetRequest, job.id);
     }
     case "RENDER_OVERLAY": {
-      return runOverlayAndExportJob(sermonId, mediaAssetRequest);
+      return runOverlayAndExportJob(sermonId, mediaAssetRequest, job.id);
     }
     default:
       throw new Error(`Unsupported processing job type: ${type}`);

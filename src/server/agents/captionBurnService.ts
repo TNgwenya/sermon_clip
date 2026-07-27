@@ -6,10 +6,10 @@ import type { ClipCandidate, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   appendJobLog,
-  createProcessingJob,
   markJobFailed,
   markJobRunning,
   markJobSucceeded,
+  resolveOperationProcessingJob,
 } from "@/server/agents/processing";
 import {
   appendPipelineLog,
@@ -73,12 +73,14 @@ import {
   discardPromotedMediaIfUnchanged,
   type PromotedMediaIdentity,
 } from "@/server/agents/mediaPromotionGuard";
+import { markInProgressClipStudioExportsFailed } from "@/lib/clipExportSettings";
 
 type CaptionBurnOptions = {
   ffmpegPath?: string;
   allowReburn?: boolean;
   force?: boolean;
   captionStylePresetId?: CaptionStylePresetId;
+  processingJobId?: string;
 };
 
 type ClipForCaptionBurn = Pick<
@@ -133,13 +135,31 @@ type CaptionCueOverlay = {
 type CaptionSafeArea = "STANDARD" | "RAISED" | "LOWER_MINIMAL";
 
 const FALLBACK_VIDEO_ENCODER = SOFTWARE_VIDEO_ENCODER;
-// Typical 60–120 second clips regularly exceed 120 spoken words. Keep active-
-// word final renders aligned with Studio preview for those normal short-form
-// lengths while retaining a guardrail for unusually large FFmpeg graphs.
+// These are absolute validation ceilings. The runtime budget below is much
+// smaller because FFmpeg creates resources per image input; a small EC2 host
+// can exhaust threads long before reaching these historical design limits.
 const MAX_WORD_HIGHLIGHT_OVERLAY_CUES = 360;
 const MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES = 180;
 const MAX_SEMANTIC_CAPTION_SPLITS_PER_CUE = 120;
-const CAPTION_RENDERER_VERSION = 5;
+const CAPTION_RENDERER_VERSION = 6;
+
+function resolveSafeCaptionOverlayInputLimit(input: {
+  durationSeconds: number;
+  animated: boolean;
+  reducedMotion: boolean;
+}): number {
+  const baseLimit = input.animated && !input.reducedMotion ? 28 : 40;
+  const durationMultiplier =
+    input.durationSeconds >= 180
+      ? 0.5
+      : input.durationSeconds >= 90
+        ? 0.75
+        : input.durationSeconds >= 45
+          ? 0.875
+          : 1;
+
+  return Math.max(12, Math.floor(baseLimit * durationMultiplier));
+}
 
 function commandFor(binaryPath?: string): string {
   return binaryPath?.trim() || "ffmpeg";
@@ -379,11 +399,12 @@ function requiresCaptionImageOverlayForDesign(
 function shouldUseStaticCaptionImageOverlay(
   requiresImageOverlay: boolean,
   cueCount: number,
+  maxCueCount = MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES,
 ): boolean {
   return (
     requiresImageOverlay
     && cueCount > 0
-    && cueCount <= MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES
+    && cueCount <= maxCueCount
   );
 }
 
@@ -1811,6 +1832,10 @@ async function burnCaptionsForClipCore(
   const singleWordCues = captionRevealMode === "single-word"
     ? expandCaptionCueSingleWordOverlays(styledLayoutCaptionCues)
     : [];
+  const captionDurationSeconds = styledLayoutCaptionCues.reduce(
+    (duration, cue) => Math.max(duration, cue.endSeconds),
+    0,
+  );
   const requiresCaptionDesignOverlay = requiresCaptionImageOverlayForDesign(
     clip.captionData,
     captionDesign,
@@ -1826,22 +1851,48 @@ async function burnCaptionsForClipCore(
     && shouldUseStaticCaptionImageOverlay(
       requiresStaticCaptionOverlay,
       styledLayoutCaptionCues.length,
+      Math.min(
+        MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES,
+        resolveSafeCaptionOverlayInputLimit({
+          durationSeconds: captionDurationSeconds,
+          animated: false,
+          reducedMotion: true,
+        }),
+      ),
     );
-  const singleWordOverlayLimit = captionDesign.highlighting.reducedMotion
-    ? MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES
-    : MAX_WORD_HIGHLIGHT_OVERLAY_CUES;
+  const wordHighlightOverlayLimit = Math.min(
+    MAX_WORD_HIGHLIGHT_OVERLAY_CUES,
+    resolveSafeCaptionOverlayInputLimit({
+      durationSeconds: captionDurationSeconds,
+      animated: false,
+      reducedMotion: true,
+    }),
+  );
+  const singleWordOverlayLimit = Math.min(
+    captionDesign.highlighting.reducedMotion
+      ? MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES
+      : MAX_WORD_HIGHLIGHT_OVERLAY_CUES,
+    resolveSafeCaptionOverlayInputLimit({
+      durationSeconds: captionDurationSeconds,
+      animated: true,
+      reducedMotion: captionDesign.highlighting.reducedMotion,
+    }),
+  );
   const useSingleWordPopOverlay =
     singleWordCues.length > 0
     && singleWordCues.length <= singleWordOverlayLimit;
   const skippedOversizedWordHighlightOverlay =
-    wordHighlightCues.length > MAX_WORD_HIGHLIGHT_OVERLAY_CUES;
+    wordHighlightCues.length > wordHighlightOverlayLimit;
 
   if (skippedOversizedWordHighlightOverlay) {
-    await appendJobLog(jobId, `Caption burn skipped active-word image overlays because ${wordHighlightCues.length} overlays exceeds the ${MAX_WORD_HIGHLIGHT_OVERLAY_CUES} local limit.`);
-    await appendPipelineLog(clip.sermonId, "Caption burn omitted active-word animation because its overlay graph is too large.");
+    await appendJobLog(
+      jobId,
+      `Caption burn preserved the saved caption style with efficient ASS rendering because ${wordHighlightCues.length} active-word image inputs exceed the safe ${wordHighlightOverlayLimit}-input budget for this ${captionDurationSeconds.toFixed(1)}s clip.`,
+    );
+    await appendPipelineLog(clip.sermonId, "Caption burn reduced active-word animation to keep the final render reliable on the media worker.");
   }
 
-  if (wordHighlightCues.length > 0 && wordHighlightCues.length <= MAX_WORD_HIGHLIGHT_OVERLAY_CUES) {
+  if (wordHighlightCues.length > 0 && wordHighlightCues.length <= wordHighlightOverlayLimit) {
     usedWordHighlightOverlay = true;
     await appendJobLog(jobId, "Caption burn using active-word image overlays.");
     await appendPipelineLog(clip.sermonId, "Caption burn using active-word image overlays.");
@@ -1884,11 +1935,11 @@ async function burnCaptionsForClipCore(
   } else {
     if (
       requiresStaticCaptionOverlay
-      && styledLayoutCaptionCues.length > MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES
+      && !useStaticCaptionOverlay
     ) {
       await appendJobLog(
         jobId,
-        `Caption design has ${styledLayoutCaptionCues.length} cues, above the ${MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES} exact-design overlay limit. Using the efficient ASS renderer to keep this unusually long export reliable.`,
+        `Caption design has ${styledLayoutCaptionCues.length} cues, above the safe exact-design image-input budget for this clip. Using the efficient ASS renderer while retaining its saved typography, colours, outline, and placement.`,
       );
       await appendPipelineLog(
         clip.sermonId,
@@ -1901,7 +1952,7 @@ async function burnCaptionsForClipCore(
     ) {
       await appendJobLog(
         jobId,
-        `Caption burn skipped one-word image animation because ${singleWordCues.length} word overlays exceeds the ${singleWordOverlayLimit} local limit.`,
+        `Caption burn retained single-word timing but reduced pop animation because ${singleWordCues.length} word image inputs exceed the safe ${singleWordOverlayLimit}-input budget for this ${captionDurationSeconds.toFixed(1)}s clip.`,
       );
       await appendPipelineLog(
         clip.sermonId,
@@ -2043,7 +2094,12 @@ export async function burnCaptionsIntoRenderedClip(
 
   const clip = await loadClipForCaptionBurn(normalizedClipId);
   await assertClipEditPlanStillActive(editPlanGuard);
-  const job = await createProcessingJob(clip.sermonId, "BURN_SUBTITLES");
+  const processingJob = await resolveOperationProcessingJob(
+    clip.sermonId,
+    "BURN_SUBTITLES",
+    options?.processingJobId,
+  );
+  const { job, ownsLifecycle } = processingJob;
   const renderedPath = clip.renderedFilePath?.trim() || getClipOutputPath(clip.sermonId, clip.id);
   const subtitlePath = clip.subtitleFilePath?.trim() || clip.srtPath?.trim() || getClipSrtPath(clip.sermonId, clip.id);
   const storedCaptionCues = extractCaptionCueOverlays(clip.captionData);
@@ -2067,7 +2123,9 @@ export async function burnCaptionsIntoRenderedClip(
   try {
     await claimCaptionBurnStart(editPlanGuard);
     didClaimBurnStart = true;
-    await markJobRunning(job.id);
+    if (ownsLifecycle) {
+      await markJobRunning(job.id);
+    }
     await appendJobLog(job.id, `Caption burn started for clip ${clip.id}.`);
     await appendPipelineLog(clip.sermonId, `Caption burn requested for clip ${clip.id}.`);
 
@@ -2078,12 +2136,14 @@ export async function burnCaptionsIntoRenderedClip(
       editPlanGuard,
     );
 
-    await markJobSucceeded(
-      job.id,
-      result.reusedExistingFile
-        ? `Reused existing captioned video for ${clip.id}.`
-        : `Captioned video generated for ${clip.id}.`,
-    );
+    if (ownsLifecycle) {
+      await markJobSucceeded(
+        job.id,
+        result.reusedExistingFile
+          ? `Reused existing captioned video for ${clip.id}.`
+          : `Captioned video generated for ${clip.id}.`,
+      );
+    }
 
     return result;
   } catch (error) {
@@ -2092,7 +2152,9 @@ export async function burnCaptionsIntoRenderedClip(
     const captionedVideoPath = getCaptionedClipPath(clip.sermonId, clip.id);
     await unlink(getTempBurnPath(captionedVideoPath, editPlanGuard.editPlanId)).catch(() => undefined);
     if (isStaleClipCompositionError(completionError)) {
-      await markJobFailed(job.id, message, "Stale caption burn discarded after newer Clip Studio changes.").catch(() => undefined);
+      if (ownsLifecycle) {
+        await markJobFailed(job.id, message, "Stale caption burn discarded after newer Clip Studio changes.").catch(() => undefined);
+      }
       await appendPipelineLog(clip.sermonId, `Discarded stale caption burn for clip ${clip.id}: ${message}`).catch(() => undefined);
       throw completionError;
     }
@@ -2103,6 +2165,22 @@ export async function burnCaptionsIntoRenderedClip(
             captionBurnStatus: "FAILED",
             captionBurnError: message,
             captionBurnFreshness: "FAILED",
+            captionData: markInProgressClipStudioExportsFailed(
+              clip.captionData,
+              `Final video was not exported because caption rendering failed: ${message}`,
+            ) as Prisma.InputJsonObject,
+            overlayStatus: "NOT_RENDERED",
+            overlayVideoPath: null,
+            overlayRenderedAt: null,
+            overlayRenderError: null,
+            overlayFreshness: "NEEDS_REGENERATION",
+            exportStatus: "NOT_EXPORTED",
+            exportedFilePath: null,
+            exportPath: null,
+            exportedAt: null,
+            exportError: null,
+            exportFreshness: "NEEDS_REGENERATION",
+            assetInvalidationReason: "Caption rendering failed. Dependent branding and final export were not started.",
           },
         }).catch(() => false)
       : false;
@@ -2118,7 +2196,11 @@ export async function burnCaptionsIntoRenderedClip(
         },
       }).catch(() => undefined);
     }
-    await markJobFailed(job.id, message, "Caption burn failed.");
+    if (ownsLifecycle) {
+      await markJobFailed(job.id, message, "Caption burn failed.");
+    } else {
+      await appendJobLog(job.id, `Caption burn failed for clip ${clip.id}: ${message}`).catch(() => undefined);
+    }
     await appendPipelineLog(clip.sermonId, `Caption burn failed for clip ${clip.id}: ${message}`);
     throw new Error(message);
   }
@@ -2151,6 +2233,7 @@ export const __captionBurnTestUtils = {
   captionOverlayXExpression,
   captionOverlayYExpression,
   shouldUseCaptionOverlayFallback,
+  resolveSafeCaptionOverlayInputLimit,
   MAX_WORD_HIGHLIGHT_OVERLAY_CUES,
   MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES,
   CAPTION_RENDERER_VERSION,

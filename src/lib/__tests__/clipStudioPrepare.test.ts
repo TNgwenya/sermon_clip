@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildClipStudioPrepareAssetPlan,
+  buildClipStudioQueuedAssets,
   resolveClipStudioPreparationState,
   type ClipStudioPrepareAssetSnapshot,
   type ClipStudioPreparationRecord,
@@ -82,6 +83,56 @@ describe("buildClipStudioPrepareAssetPlan", () => {
       skipCaptionBurn: true,
       exportPreparedVideo: true,
     });
+  });
+});
+
+describe("buildClipStudioQueuedAssets", () => {
+  it("queues nothing for a current caption-free final video", () => {
+    const snapshot = readySnapshot({
+      captionsEnabled: false,
+      captionBurnStatus: "NOT_BURNED",
+      captionedFileReady: false,
+    });
+
+    expect(buildClipStudioQueuedAssets(
+      snapshot,
+      buildClipStudioPrepareAssetPlan(snapshot),
+    )).toEqual([]);
+  });
+
+  it("never queues caption work when captions are disabled", () => {
+    const snapshot = readySnapshot({
+      renderFreshness: "OUTDATED",
+      captionsEnabled: false,
+      captionStatus: "NOT_GENERATED",
+      captionBurnStatus: "NOT_BURNED",
+      captionedFileReady: false,
+      exportFreshness: "OUTDATED",
+    });
+
+    expect(buildClipStudioQueuedAssets(
+      snapshot,
+      buildClipStudioPrepareAssetPlan(snapshot),
+    )).toEqual(["render", "export"]);
+  });
+
+  it("queues every required stage for an unprepared captioned clip", () => {
+    const snapshot = readySnapshot({
+      renderStatus: "NOT_RENDERED",
+      renderFreshness: "NEEDS_REGENERATION",
+      renderedFileReady: false,
+      captionStatus: "NOT_GENERATED",
+      captionBurnStatus: "NOT_BURNED",
+      captionBurnFreshness: "NEEDS_REGENERATION",
+      captionedFileReady: false,
+      exportStatus: "NOT_EXPORTED",
+      exportFreshness: "NEEDS_REGENERATION",
+    });
+
+    expect(buildClipStudioQueuedAssets(
+      snapshot,
+      buildClipStudioPrepareAssetPlan(snapshot),
+    )).toEqual(["render", "caption", "captionBurn", "export"]);
   });
 });
 

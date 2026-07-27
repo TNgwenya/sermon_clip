@@ -278,6 +278,8 @@ function overlayClip(
 ): OverlayExportClip {
   return {
     id,
+    captionData: {},
+    captionBurnStatus: "COMPLETED",
     overlayStatus: "NOT_RENDERED",
     overlayFreshness: "NEEDS_REGENERATION",
     exportStatus: "NOT_EXPORTED",
@@ -304,7 +306,7 @@ describe("media worker overlay/export orchestration", () => {
       renderOverlay,
       exportClip,
       prepareFitBlurredFallback,
-    })).resolves.toBe("Overlay/export completed: 1 overlay(s), 1 export(s).");
+    })).resolves.toBe("Overlay/export completed: 1 overlay(s), 1 export(s); skipped 0 because required captions were not ready.");
     expect(prepareFitBlurredFallback).toHaveBeenCalledWith("clip-a");
     expect(exportClip.mock.calls.map(([, options]) => options.layoutStrategy)).toEqual([
       "SMART_CROP",
@@ -329,12 +331,38 @@ describe("media worker overlay/export orchestration", () => {
       exportClip,
       prepareFitBlurredFallback,
     })).rejects.toThrow(
-      "Overlay/export failed for 1 of 2 clip(s) after completing 1 overlay(s) and 1 export(s). Failures: clip-a: Overlay renderer failed",
+      "Overlay/export failed for 1 of 2 attempted clip(s) after completing 1 overlay(s) and 1 export(s); skipped 0 because required captions were not ready. Failures: clip-a: Overlay renderer failed",
     );
     expect(renderOverlay.mock.calls.map(([clipId]) => clipId)).toEqual(["clip-a", "clip-b"]);
     expect(exportClip).toHaveBeenCalledTimes(1);
     expect(exportClip).toHaveBeenCalledWith("clip-b", expect.objectContaining({
       layoutStrategy: "SMART_CROP",
     }));
+  });
+
+  it("does not run branding or export after a required caption burn failed", async () => {
+    const renderOverlay = vi.fn(async () => undefined);
+    const exportClip = vi.fn(async () => undefined);
+    const prepareFitBlurredFallback = vi.fn(async () => undefined);
+
+    await expect(runOverlayAndExportBatch([
+      overlayClip("clip-a", {
+        captionBurnStatus: "FAILED",
+        captionData: { applyCaptionsToClip: true },
+      }),
+      overlayClip("clip-b", {
+        captionBurnStatus: "NOT_BURNED",
+        captionData: { applyCaptionsToClip: false },
+      }),
+    ], {
+      renderOverlay,
+      exportClip,
+      prepareFitBlurredFallback,
+    })).resolves.toBe(
+      "Overlay/export completed: 1 overlay(s), 1 export(s); skipped 1 because required captions were not ready.",
+    );
+    expect(renderOverlay).toHaveBeenCalledTimes(1);
+    expect(renderOverlay).toHaveBeenCalledWith("clip-b", expect.any(Object));
+    expect(exportClip).toHaveBeenCalledTimes(1);
   });
 });

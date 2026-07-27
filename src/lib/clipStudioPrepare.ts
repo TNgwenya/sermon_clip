@@ -22,6 +22,30 @@ export type ClipStudioPrepareAssetPlan = {
   exportPreparedVideo: boolean;
 };
 
+export type ClipStudioQueuedAsset = "render" | "caption" | "captionBurn" | "export";
+
+export function buildClipStudioQueuedAssets(
+  snapshot: ClipStudioPrepareAssetSnapshot,
+  plan: ClipStudioPrepareAssetPlan,
+): ClipStudioQueuedAsset[] {
+  const assets: ClipStudioQueuedAsset[] = [];
+
+  if (plan.prepareVideo) {
+    assets.push("render");
+  }
+  if (snapshot.captionsEnabled && snapshot.captionStatus !== "GENERATED") {
+    assets.push("caption");
+  }
+  if (plan.burnCaptions) {
+    assets.push("captionBurn");
+  }
+  if (plan.exportPreparedVideo) {
+    assets.push("export");
+  }
+
+  return assets;
+}
+
 export type ClipStudioPreparationRecord = {
   format: ClipExportFormat;
   status: "WAITING" | "RENDERING" | "COMPLETED" | "FAILED";

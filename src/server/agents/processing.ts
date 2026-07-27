@@ -72,6 +72,11 @@ export type QueuedProcessingJobResult = {
   intentConflict: boolean;
 };
 
+export type OperationProcessingJob = {
+  job: ProcessingJob;
+  ownsLifecycle: boolean;
+};
+
 export async function createProcessingJob(
   sermonId: string,
   type: ProcessingJobType,
@@ -299,6 +304,37 @@ export async function resolveProcessingJob(
     throw new Error(`Processing job ${processingJobId} is already ${job.status}.`);
   }
   return job;
+}
+
+export async function resolveOperationProcessingJob(
+  sermonId: string,
+  type: ProcessingJobType,
+  processingJobId?: string,
+  allowedParentTypes: ProcessingJobType[] = [type],
+): Promise<OperationProcessingJob> {
+  if (!processingJobId) {
+    return {
+      job: await createProcessingJob(sermonId, type),
+      ownsLifecycle: true,
+    };
+  }
+
+  const job = await prisma.processingJob.findUnique({ where: { id: processingJobId } });
+  if (
+    !job
+    || job.sermonId !== sermonId
+    || !allowedParentTypes.includes(job.type)
+    || (job.status !== "PENDING" && job.status !== "RUNNING")
+  ) {
+    throw new Error(
+      `Processing job ${processingJobId} is not an active ${allowedParentTypes.join(" or ")} job for sermon ${sermonId}.`,
+    );
+  }
+
+  return {
+    job,
+    ownsLifecycle: false,
+  };
 }
 
 export async function ensureProcessingJobRunning(job: ProcessingJob): Promise<void> {

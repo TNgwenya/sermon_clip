@@ -29,10 +29,10 @@ import {
 } from "@/lib/captionStylePresets";
 import {
   appendJobLog,
-  createProcessingJob,
   markJobFailed,
   markJobRunning,
   markJobSucceeded,
+  resolveOperationProcessingJob,
 } from "@/server/agents/processing";
 import {
   appendPipelineLog,
@@ -83,6 +83,7 @@ import {
   discardPromotedMediaIfUnchanged,
   type PromotedMediaIdentity,
 } from "@/server/agents/mediaPromotionGuard";
+import { markInProgressClipStudioExportsFailed } from "@/lib/clipExportSettings";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -90,6 +91,7 @@ type OverlayOptions = {
   ffmpegPath?: string;
   allowRerender?: boolean;
   force?: boolean;
+  processingJobId?: string;
 };
 
 type ClipForOverlay = Pick<
@@ -1123,6 +1125,12 @@ export async function renderClipOverlay(
 
   const outputPath = getOverlayClipPath(clip.sermonId, clip.id);
   const tempOutputPath = getTempOverlayPath(outputPath, editPlanGuard.editPlanId);
+  const processingJob = await resolveOperationProcessingJob(
+    clip.sermonId,
+    "RENDER_OVERLAY",
+    options?.processingJobId,
+  );
+  const { job, ownsLifecycle } = processingJob;
 
   // Claim the render slot — prevents duplicate concurrent renders.
   const claimResult = await prisma.clipCandidate.updateMany({
@@ -1144,16 +1152,24 @@ export async function renderClipOverlay(
   });
 
   if (claimResult.count === 0) {
+    if (ownsLifecycle) {
+      await markJobFailed(
+        job.id,
+        "Overlay render is already in progress for this clip.",
+        "Overlay render was not started.",
+      ).catch(() => undefined);
+    }
     await assertClipEditPlanStillActive(editPlanGuard);
     throw new Error("Overlay render is already in progress for this clip.");
   }
 
-  const job = await createProcessingJob(clip.sermonId, "RENDER_OVERLAY");
   let promotedOutputIdentity: PromotedMediaIdentity | null = null;
 
   try {
     await assertClipEditPlanStillActive(editPlanGuard);
-    await markJobRunning(job.id);
+    if (ownsLifecycle) {
+      await markJobRunning(job.id);
+    }
     await appendJobLog(job.id, `Overlay render requested for clip ${clip.id}.`);
 
     const overlayDimensions = getBrandingOverlayDimensions("VERTICAL_9_16");
@@ -1366,7 +1382,9 @@ export async function renderClipOverlay(
       },
     });
     await appendPipelineLog(clip.sermonId, `Overlay render completed for clip ${clip.id}.`);
-    await markJobSucceeded(job.id, `Overlay rendered for clip ${clip.id}.`);
+    if (ownsLifecycle) {
+      await markJobSucceeded(job.id, `Overlay rendered for clip ${clip.id}.`);
+    }
 
     return {
       clipId: clip.id,
@@ -1393,7 +1411,9 @@ export async function renderClipOverlay(
       if (promotedOutputIdentity) {
         await discardPromotedMediaIfUnchanged(outputPath, promotedOutputIdentity);
       }
-      await markJobFailed(job.id, message, "Stale overlay discarded after newer Clip Studio changes.").catch(() => undefined);
+      if (ownsLifecycle) {
+        await markJobFailed(job.id, message, "Stale overlay discarded after newer Clip Studio changes.").catch(() => undefined);
+      }
       await appendPipelineLog(clip.sermonId, `Discarded stale overlay for clip ${clip.id}: ${message}`).catch(() => undefined);
       throw completionError;
     }
@@ -1404,6 +1424,17 @@ export async function renderClipOverlay(
         overlayStatus: "FAILED",
         overlayRenderError: message,
         overlayFreshness: "FAILED",
+        captionData: markInProgressClipStudioExportsFailed(
+          clip.captionData,
+          `Final video was not exported because branding failed: ${message}`,
+        ) as Prisma.InputJsonObject,
+        exportStatus: "NOT_EXPORTED",
+        exportedFilePath: null,
+        exportPath: null,
+        exportedAt: null,
+        exportError: null,
+        exportFreshness: "NEEDS_REGENERATION",
+        assetInvalidationReason: "Branding render failed. Dependent final export was not started.",
       },
     });
     if (failureRecorded) {
@@ -1419,7 +1450,11 @@ export async function renderClipOverlay(
         },
       }).catch(() => undefined);
     }
-    await markJobFailed(job.id, message, "Overlay render failed.");
+    if (ownsLifecycle) {
+      await markJobFailed(job.id, message, "Overlay render failed.");
+    } else {
+      await appendJobLog(job.id, `Overlay render failed for clip ${clip.id}: ${message}`).catch(() => undefined);
+    }
     await appendPipelineLog(clip.sermonId, `Overlay render failed for clip ${clip.id}: ${message}`);
 
     throw new Error(message);

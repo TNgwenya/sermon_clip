@@ -44,7 +44,10 @@ describe("portable sermon storage paths", () => {
       data: {
         sourceVideoPath: `${macRoot}/sermons/grace/source/source.mp4`,
         unrelatedPath: `${macRoot}/leave-this-alone`,
-        clips: [{ filePath: `${macRoot}/sermons/grace/clips/clip.mp4` }],
+        clips: [{
+          filePath: `${macRoot}/sermons/grace/clips/clip.mp4`,
+          outputPath: `${macRoot}/sermons/grace/clips/exports/clip.mp4`,
+        }],
       },
     }, "store", macRoot);
 
@@ -52,7 +55,10 @@ describe("portable sermon storage paths", () => {
       data: {
         sourceVideoPath: `${PORTABLE_STORAGE_PATH_PREFIX}sermons/grace/source/source.mp4`,
         unrelatedPath: `${macRoot}/leave-this-alone`,
-        clips: [{ filePath: `${PORTABLE_STORAGE_PATH_PREFIX}sermons/grace/clips/clip.mp4` }],
+        clips: [{
+          filePath: `${PORTABLE_STORAGE_PATH_PREFIX}sermons/grace/clips/clip.mp4`,
+          outputPath: `${PORTABLE_STORAGE_PATH_PREFIX}sermons/grace/clips/exports/clip.mp4`,
+        }],
       },
     });
   });

@@ -139,9 +139,9 @@ describe("caption burn service validation", () => {
           reducedMotion: false,
         },
       },
-      captionRendererVersion: 5,
+      captionRendererVersion: 6,
     });
-    expect(__captionBurnTestUtils.CAPTION_RENDERER_VERSION).toBe(5);
+    expect(__captionBurnTestUtils.CAPTION_RENDERER_VERSION).toBe(6);
   });
 
   it("prefers hardware-friendly video encoder args when available", () => {
@@ -374,6 +374,27 @@ describe("caption burn service validation", () => {
     ).toBe(false);
     expect(
       __captionBurnTestUtils.shouldUseStaticCaptionImageOverlay(false, 12),
+    ).toBe(false);
+  });
+
+  it("uses a conservative duration-aware image-input budget on long EC2 renders", () => {
+    expect(__captionBurnTestUtils.resolveSafeCaptionOverlayInputLimit({
+      durationSeconds: 20,
+      animated: true,
+      reducedMotion: false,
+    })).toBe(28);
+    expect(__captionBurnTestUtils.resolveSafeCaptionOverlayInputLimit({
+      durationSeconds: 110,
+      animated: true,
+      reducedMotion: false,
+    })).toBe(21);
+    expect(__captionBurnTestUtils.resolveSafeCaptionOverlayInputLimit({
+      durationSeconds: 110,
+      animated: true,
+      reducedMotion: true,
+    })).toBe(30);
+    expect(
+      __captionBurnTestUtils.shouldUseStaticCaptionImageOverlay(true, 31, 30),
     ).toBe(false);
   });
 

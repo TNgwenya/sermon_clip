@@ -12,10 +12,10 @@ import type {
 import { prisma } from "@/lib/prisma";
 import {
   appendJobLog,
-  createProcessingJob,
   markJobFailed,
   markJobRunning,
   markJobSucceeded,
+  resolveOperationProcessingJob,
 } from "@/server/agents/processing";
 import {
   appendPipelineLog,
@@ -40,7 +40,11 @@ import {
   isFfmpegCropFilterFailure,
 } from "@/lib/clipFraming";
 import { normalizeManualCropKeyframes } from "@/lib/manualCrop";
-import { resolveExportSettings } from "@/lib/clipExportSettings";
+import {
+  markInProgressClipStudioExportsFailed,
+  markLatestClipStudioExportCompleted,
+  resolveExportSettings,
+} from "@/lib/clipExportSettings";
 import { resolveIntelligentFramingDecision } from "@/lib/clipFramingIntelligence";
 import { type ClipBrandingConfig, type WatermarkPosition } from "@/lib/clipBranding";
 import { getBrandingOverlayDimensions, renderBrandingOverlayPng } from "@/server/agents/brandingOverlay";
@@ -79,6 +83,7 @@ export type ClipExportOptions = {
   force?: boolean;
   ffmpegPath?: string;
   versionTag?: string;
+  processingJobId?: string;
   brandingOverlay?: {
     config: ClipBrandingConfig;
     sermonTitle: string;
@@ -810,6 +815,13 @@ export async function exportClipWithPreset(
         exportPath: outputPath,
         exportedAt: new Date(),
         exportError: null,
+        captionData: markLatestClipStudioExportCompleted(clip.captionData, {
+          format,
+          outputPath,
+          outputFilename: path.basename(outputPath),
+          fileSizeBytes: outputStats?.size ?? null,
+          captionBurnStatus: clip.captionBurnStatus,
+        }) as Prisma.InputJsonObject,
       },
     });
     await ensureClipThumbnail({
@@ -873,6 +885,14 @@ export async function exportClipWithPreset(
 
   await validateVideoInput(exportSourcePath, options?.ffmpegPath, exportSource.trim);
 
+  const processingJob = await resolveOperationProcessingJob(
+    clip.sermonId,
+    "EXPORT_CLIPS",
+    options?.processingJobId,
+    ["EXPORT_CLIPS", "RENDER_OVERLAY"],
+  );
+  const { job, ownsLifecycle } = processingJob;
+
   const queued = await prisma.clipCandidate.updateMany({
     where: {
       id: clip.id,
@@ -896,17 +916,25 @@ export async function exportClipWithPreset(
   });
 
   if (queued.count === 0) {
+    if (ownsLifecycle) {
+      await markJobFailed(
+        job.id,
+        "Clip export is already in progress. Duplicate request blocked.",
+        "Clip export was not started.",
+      ).catch(() => undefined);
+    }
     await assertClipEditPlanStillActive(editPlanGuard);
     throw new Error("Clip export is already in progress. Duplicate request blocked.");
   }
 
-  const job = await createProcessingJob(clip.sermonId, "EXPORT_CLIPS");
   const startedAt = Date.now();
   let promotedOutputIdentity: PromotedMediaIdentity | null = null;
 
   try {
     await assertClipEditPlanStillActive(editPlanGuard);
-    await markJobRunning(job.id);
+    if (ownsLifecycle) {
+      await markJobRunning(job.id);
+    }
     await appendJobLog(job.id, `Export requested for clip ${clip.id} with format ${format}.`);
     await appendJobLog(job.id, `Export source selected: ${exportSource.kind}. ${exportSource.reason}`);
     await appendPipelineLog(clip.sermonId, `Export source selected for clip ${clip.id}: ${exportSource.kind}. ${exportSource.reason}`);
@@ -1169,9 +1197,13 @@ export async function exportClipWithPreset(
           outputPath,
         }),
         captionData: {
-          ...(clip.captionData && typeof clip.captionData === "object" && !Array.isArray(clip.captionData)
-            ? (clip.captionData as Record<string, unknown>)
-            : {}),
+          ...markLatestClipStudioExportCompleted(clip.captionData, {
+            format,
+            outputPath,
+            outputFilename: path.basename(outputPath),
+            fileSizeBytes: outputStats.size,
+            captionBurnStatus: clip.captionBurnStatus,
+          }),
           framingDecision: {
             requestedPersonality: framingDecision.requestedPersonality,
             resolvedPersonality: framingDecision.resolvedPersonality,
@@ -1255,7 +1287,9 @@ export async function exportClipWithPreset(
 
     const elapsedMs = Date.now() - startedAt;
     await appendPipelineLog(clip.sermonId, `Clip ${clip.id} export ${format} completed in ${elapsedMs}ms.`);
-    await markJobSucceeded(job.id, `Clip ${clip.id} export ${format} completed in ${elapsedMs}ms.`);
+    if (ownsLifecycle) {
+      await markJobSucceeded(job.id, `Clip ${clip.id} export ${format} completed in ${elapsedMs}ms.`);
+    }
 
     return {
       clipId: clip.id,
@@ -1271,7 +1305,9 @@ export async function exportClipWithPreset(
       if (promotedOutputIdentity) {
         await discardPromotedMediaIfUnchanged(outputPath, promotedOutputIdentity);
       }
-      await markJobFailed(job.id, message, `Stale export for clip ${clip.id} discarded after newer Clip Studio changes.`).catch(() => undefined);
+      if (ownsLifecycle) {
+        await markJobFailed(job.id, message, `Stale export for clip ${clip.id} discarded after newer Clip Studio changes.`).catch(() => undefined);
+      }
       await appendPipelineLog(clip.sermonId, `Discarded stale export for clip ${clip.id}: ${message}`).catch(() => undefined);
       throw completionError;
     }
@@ -1282,6 +1318,10 @@ export async function exportClipWithPreset(
         exportStatus: "FAILED",
         exportError: message,
         exportFreshness: "FAILED",
+        captionData: markInProgressClipStudioExportsFailed(
+          clip.captionData,
+          `Final video export failed: ${message}`,
+        ) as Prisma.InputJsonObject,
       },
     });
     if (failureRecorded) {
@@ -1301,7 +1341,11 @@ export async function exportClipWithPreset(
         },
       }).catch(() => undefined);
     }
-    await markJobFailed(job.id, message, `Clip ${clip.id} export failed.`);
+    if (ownsLifecycle) {
+      await markJobFailed(job.id, message, `Clip ${clip.id} export failed.`);
+    } else {
+      await appendJobLog(job.id, `Clip ${clip.id} export ${format} failed: ${message}`).catch(() => undefined);
+    }
     await appendPipelineLog(clip.sermonId, `Clip ${clip.id} export failed: ${message}`);
     throw new Error(message);
   }

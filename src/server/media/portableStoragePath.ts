@@ -18,6 +18,7 @@ export const PORTABLE_MEDIA_PATH_FIELDS = new Set([
   "subtitleFilePath",
   "captionedVideoPath",
   "overlayVideoPath",
+  "outputPath",
   "filePath",
   "churchLogoPath",
 ]);

@@ -310,6 +310,78 @@ export function markLatestExports(records: ClipStudioExportRecord[]): ClipStudio
   }));
 }
 
+function captionDataRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+export function markInProgressClipStudioExportsFailed(
+  captionData: unknown,
+  errorMessage: string,
+  completedAt = new Date().toISOString(),
+): Record<string, unknown> {
+  const root = captionDataRecord(captionData);
+  const history = resolveExportHistory(captionData);
+  if (history.length === 0) {
+    return root;
+  }
+
+  return {
+    ...root,
+    exportHistory: history.map((record) =>
+      record.isLatest && (record.status === "WAITING" || record.status === "RENDERING")
+        ? {
+            ...record,
+            status: "FAILED" as const,
+            errorMessage,
+            completedAt,
+          }
+        : record,
+    ),
+  };
+}
+
+export function markLatestClipStudioExportCompleted(
+  captionData: unknown,
+  input: {
+    format: ClipExportFormat;
+    outputPath: string;
+    outputFilename: string | null;
+    fileSizeBytes: number | null;
+    captionBurnStatus: ClipStudioExportRecord["captionBurnStatus"];
+    completedAt?: string;
+  },
+): Record<string, unknown> {
+  const root = captionDataRecord(captionData);
+  const history = resolveExportHistory(captionData);
+  if (history.length === 0) {
+    return root;
+  }
+
+  const completedAt = input.completedAt ?? new Date().toISOString();
+  return {
+    ...root,
+    exportHistory: history.map((record) =>
+      record.isLatest
+      && record.format === input.format
+      && (record.status === "WAITING" || record.status === "RENDERING")
+        ? {
+            ...record,
+            status: "COMPLETED" as const,
+            outputPath: input.outputPath,
+            outputFilename: input.outputFilename,
+            fileSizeBytes: input.fileSizeBytes,
+            captionBurnStatus: input.captionBurnStatus,
+            errorMessage: null,
+            startedAt: record.startedAt ?? completedAt,
+            completedAt,
+          }
+        : record,
+    ),
+  };
+}
+
 export function toPastorFriendlyExportStatus(status: ClipStudioExportStatus): string {
   switch (status) {
     case "WAITING":

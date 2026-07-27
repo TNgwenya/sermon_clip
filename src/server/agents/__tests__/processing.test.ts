@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   findMany: vi.fn(),
   findFirst: vi.fn(),
+  findUnique: vi.fn(),
   queryRaw: vi.fn(),
   transaction: vi.fn(),
   updateMany: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("@/lib/prisma", () => ({
       create: mocks.create,
       findMany: mocks.findMany,
       findFirst: mocks.findFirst,
+      findUnique: mocks.findUnique,
       updateMany: mocks.updateMany,
     },
   },
@@ -32,6 +34,7 @@ import {
   createProcessingJob,
   markJobAwaitingClipPreviewPreparation,
   queueSermonProcessingJob,
+  resolveOperationProcessingJob,
 } from "@/server/agents/processing";
 
 function processingJob(overrides: Partial<ProcessingJob> = {}): ProcessingJob {
@@ -120,6 +123,60 @@ describe("createProcessingJob", () => {
         },
       },
     });
+  });
+});
+
+describe("resolveOperationProcessingJob", () => {
+  it("owns the lifecycle only when it creates an inline operation job", async () => {
+    const created = processingJob({
+      id: "job-inline",
+      type: "BURN_SUBTITLES",
+      workerId: "inline:123",
+    });
+    mocks.create.mockResolvedValueOnce(created);
+
+    await expect(resolveOperationProcessingJob(
+      "sermon-1",
+      "BURN_SUBTITLES",
+    )).resolves.toEqual({
+      job: created,
+      ownsLifecycle: true,
+    });
+  });
+
+  it("reuses an active worker parent without creating a nested child job", async () => {
+    const parent = processingJob({
+      id: "job-overlay-parent",
+      type: "RENDER_OVERLAY",
+    });
+    mocks.findUnique.mockResolvedValueOnce(parent);
+
+    await expect(resolveOperationProcessingJob(
+      "sermon-1",
+      "EXPORT_CLIPS",
+      parent.id,
+      ["EXPORT_CLIPS", "RENDER_OVERLAY"],
+    )).resolves.toEqual({
+      job: parent,
+      ownsLifecycle: false,
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a completed or mismatched parent before the operation starts", async () => {
+    mocks.findUnique.mockResolvedValueOnce(processingJob({
+      id: "job-wrong-parent",
+      type: "EXPORT_CLIPS",
+      status: "SUCCEEDED",
+    }));
+
+    await expect(resolveOperationProcessingJob(
+      "sermon-1",
+      "BURN_SUBTITLES",
+      "job-wrong-parent",
+    )).rejects.toThrow(
+      "Processing job job-wrong-parent is not an active BURN_SUBTITLES job for sermon sermon-1.",
+    );
   });
 });
 

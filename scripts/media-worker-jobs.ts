@@ -80,12 +80,26 @@ export type CaptionBurnClip = {
 
 export type OverlayExportClip = {
   id: string;
+  captionData: unknown;
+  captionBurnStatus: string;
   overlayStatus: string;
   overlayFreshness: string;
   exportStatus: string;
   exportFreshness: string;
   exportLayoutStrategy: ExportLayoutStrategy | null;
 };
+
+export function shouldRunDependentOverlayExport(
+  clip: Pick<OverlayExportClip, "captionData" | "captionBurnStatus">,
+): boolean {
+  const captionData = clip.captionData
+    && typeof clip.captionData === "object"
+    && !Array.isArray(clip.captionData)
+    ? clip.captionData as Record<string, unknown>
+    : {};
+  const captionsEnabled = captionData["applyCaptionsToClip"] !== false;
+  return !captionsEnabled || clip.captionBurnStatus === "COMPLETED";
+}
 
 type CaptionBurnDependencies = {
   burnCaptions: (
@@ -315,9 +329,15 @@ export async function runOverlayAndExportBatch(
 ): Promise<string> {
   let overlaysCompleted = 0;
   let exportsCompleted = 0;
+  let skippedForCaptionPrerequisite = 0;
   const failures: BatchError[] = [];
 
   for (const clip of clips) {
+    if (!shouldRunDependentOverlayExport(clip)) {
+      skippedForCaptionPrerequisite += 1;
+      continue;
+    }
+
     const needsOverlay = clip.overlayStatus !== "COMPLETED" || clip.overlayFreshness !== "UP_TO_DATE";
     const needsExport = clip.exportStatus !== "COMPLETED" || clip.exportFreshness !== "UP_TO_DATE";
 
@@ -359,9 +379,9 @@ export async function runOverlayAndExportBatch(
 
   if (failures.length > 0) {
     throw new Error(
-      `Overlay/export failed for ${failures.length} of ${clips.length} clip(s) after completing ${overlaysCompleted} overlay(s) and ${exportsCompleted} export(s).${failureDetails(failures)}`,
+      `Overlay/export failed for ${failures.length} of ${clips.length - skippedForCaptionPrerequisite} attempted clip(s) after completing ${overlaysCompleted} overlay(s) and ${exportsCompleted} export(s); skipped ${skippedForCaptionPrerequisite} because required captions were not ready.${failureDetails(failures)}`,
     );
   }
 
-  return `Overlay/export completed: ${overlaysCompleted} overlay(s), ${exportsCompleted} export(s).`;
+  return `Overlay/export completed: ${overlaysCompleted} overlay(s), ${exportsCompleted} export(s); skipped ${skippedForCaptionPrerequisite} because required captions were not ready.`;
 }
