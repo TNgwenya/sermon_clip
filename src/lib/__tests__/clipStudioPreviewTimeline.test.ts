@@ -103,6 +103,90 @@ describe("manual speech cuts", () => {
     });
   });
 
+  it("keeps legacy timeline cuts whose manual id was incorrectly tagged as audio", () => {
+    const plan = buildSpeechCleanupPreviewPlan({
+      captionCues: [],
+      durationSeconds: 12,
+      speechCleanup: {
+        removeDeadAir: false,
+        tightenLongPauses: false,
+        flagFillerWords: false,
+        intensity: "normal",
+      },
+      speechCleanupEdits: {
+        version: 1,
+        cuts: [{
+          id: "manual-internal-3-5-legacy",
+          enabled: true,
+          kind: "internal",
+          source: "audio",
+          confidence: "confirmed",
+          startSeconds: 3,
+          endSeconds: 5,
+          removedSeconds: 2,
+          rawGapSeconds: 2,
+          beforeText: null,
+          afterText: null,
+        }],
+      },
+    });
+
+    expect(plan.enabled).toBe(true);
+    expect(plan.cleanedDurationSeconds).toBe(10);
+    expect(plan.cuts).toEqual([{ startSeconds: 3, endSeconds: 5, removedSeconds: 2 }]);
+    expect(plan.removedRanges[0]).toMatchObject({
+      source: "manual",
+      confidence: "confirmed",
+    });
+    expect(plan.reviewItems[0]).toMatchObject({
+      label: "User cut 1",
+      confidenceLabel: "Selected speech",
+    });
+  });
+
+  it("applies saved timeline cuts when a fresh render detects no silence events", () => {
+    const cuts = [
+      [13.454, 14.154],
+      [28.092, 30.36],
+      [39.752, 46.028],
+      [53.066, 58.571],
+    ].map(([startSeconds, endSeconds], index) => ({
+      id: `manual-internal-${startSeconds}-${endSeconds}-${index}`,
+      enabled: true,
+      kind: "internal" as const,
+      source: "audio" as const,
+      confidence: "confirmed" as const,
+      startSeconds,
+      endSeconds,
+      removedSeconds: Number((endSeconds - startSeconds).toFixed(3)),
+      rawGapSeconds: Number((endSeconds - startSeconds).toFixed(3)),
+      beforeText: null,
+      afterText: null,
+    }));
+
+    const plan = buildSpeechCleanupPreviewPlan({
+      captionCues: [],
+      durationSeconds: 86.1,
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "maximum",
+      },
+      audioSilenceEvents: [],
+      audioSilenceAnalysisAvailable: false,
+      speechCleanupEdits: {
+        version: 1,
+        cuts,
+      },
+    });
+
+    expect(plan.enabled).toBe(true);
+    expect(plan.cuts).toHaveLength(4);
+    expect(plan.cleanedDurationSeconds).toBe(71.351);
+    expect(plan.removedRanges.every((range) => range.source === "manual")).toBe(true);
+  });
+
   it("does not revive stale automatic cuts merely because a user cut exists", () => {
     const plan = buildSpeechCleanupPreviewPlan({
       captionCues: [],

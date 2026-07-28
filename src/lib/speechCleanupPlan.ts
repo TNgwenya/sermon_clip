@@ -353,7 +353,14 @@ function normalizeEditableCut(
     return null;
   }
 
+  const storedId = typeof record["id"] === "string" && record["id"].trim()
+    ? record["id"].trim()
+    : null;
+  // Timeline-created cuts were briefly persisted with a `manual-*` id but an
+  // `audio` source. Treat that exact legacy shape as the user-authored cut it
+  // represents, without reviving genuinely automatic audio cuts.
   const source: SpeechCleanupMarkerSource = record["source"] === "manual"
+    || storedId?.startsWith("manual-")
     ? "manual"
     : record["source"] === "transcript"
       ? "transcript"
@@ -381,9 +388,7 @@ function normalizeEditableCut(
 
   return {
     ...cut,
-    id: typeof record["id"] === "string" && record["id"].trim()
-      ? record["id"].trim()
-      : buildEditableCutId(cut, index),
+    id: storedId ?? buildEditableCutId(cut, index),
     enabled: record["enabled"] !== false,
   };
 }

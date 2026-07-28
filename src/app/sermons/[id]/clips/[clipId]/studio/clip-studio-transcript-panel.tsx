@@ -1326,6 +1326,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
 
     dispatchCleanupEdit({
       command: "add-cut",
+      source: "manual",
       startSeconds: Number(startSeconds.toFixed(3)),
       endSeconds: Number(endSeconds.toFixed(3)),
     });
