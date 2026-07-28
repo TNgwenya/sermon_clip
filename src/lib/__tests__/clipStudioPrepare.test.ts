@@ -5,6 +5,7 @@ import {
   buildClipStudioQueuedAssetIntent,
   buildClipStudioQueuedAssets,
   resolveClipStudioPreparationState,
+  shouldForceClipStudioPrepare,
   type ClipStudioPrepareAssetSnapshot,
   type ClipStudioPreparationRecord,
 } from "@/lib/clipStudioPrepare";
@@ -150,6 +151,17 @@ describe("buildClipStudioQueuedAssetIntent", () => {
       clipIds: ["clip-1"],
       force: false,
     });
+  });
+});
+
+describe("shouldForceClipStudioPrepare", () => {
+  it("forces every prepare of a clip that already has prepared media", () => {
+    expect(shouldForceClipStudioPrepare("prepare", true)).toBe(true);
+  });
+
+  it("does not force a first prepare or a draft-only save", () => {
+    expect(shouldForceClipStudioPrepare("prepare", false)).toBe(false);
+    expect(shouldForceClipStudioPrepare("save", true)).toBe(false);
   });
 });
 

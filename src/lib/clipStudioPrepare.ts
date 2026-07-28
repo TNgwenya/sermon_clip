@@ -34,6 +34,13 @@ export function buildClipStudioQueuedAssetIntent(
   };
 }
 
+export function shouldForceClipStudioPrepare(
+  operation: "save" | "prepare",
+  hasPreparedMedia: boolean,
+): boolean {
+  return operation === "prepare" && hasPreparedMedia;
+}
+
 export function buildClipStudioQueuedAssets(
   snapshot: ClipStudioPrepareAssetSnapshot,
   plan: ClipStudioPrepareAssetPlan,

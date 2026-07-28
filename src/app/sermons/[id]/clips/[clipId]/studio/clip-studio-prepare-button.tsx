@@ -11,6 +11,7 @@ import {
   type PrepareClipStudioForPostingState,
 } from "@/server/actions/sermons";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
+import { shouldForceClipStudioPrepare } from "@/lib/clipStudioPrepare";
 
 type ClipStudioPrepareButtonProps = {
   clipId: string;
@@ -215,7 +216,7 @@ export function ClipStudioPrepareButton({
     }
 
     const submittedDraftKey = draftCompositionKey;
-    const forceRebuild = operation === "prepare" && finalIsReady;
+    const forceRebuild = shouldForceClipStudioPrepare(operation, hasPreparedMedia);
     setActiveOperation(operation);
 
     startTransition(async () => {
