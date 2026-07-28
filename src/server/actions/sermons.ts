@@ -359,12 +359,16 @@ async function queueSermonMediaAssetJobs(
   const assetSet = new Set(requestedAssets ?? ["render", "caption", "captionBurn", "overlay", "export"]);
   const jobTypes: ProcessingJobType[] = [];
 
-  if (assetSet.has("render")) {
-    jobTypes.push("EXPORT_CLIPS");
-  }
-
+  // Caption cues are part of the immutable media-plan identity. Generate them
+  // before the base render so framing, caption burn, overlays, and export all
+  // share one active revision instead of stranding the rendered artifact on
+  // the pre-caption plan.
   if (assetSet.has("caption")) {
     jobTypes.push("GENERATE_SUBTITLES");
+  }
+
+  if (assetSet.has("render")) {
+    jobTypes.push("EXPORT_CLIPS");
   }
 
   if (assetSet.has("captionBurn")) {
@@ -377,15 +381,20 @@ async function queueSermonMediaAssetJobs(
 
   let queued = 0;
   let reused = 0;
+  let dependsOnJobId: string | null = null;
   const clipIds = Array.from(new Set(
     (intent?.clipIds ?? []).map((clipId) => clipId.trim()).filter(Boolean),
   )).sort();
   for (const jobType of Array.from(new Set(jobTypes))) {
-    const generationSummary = clipIds.length > 0 || intent?.force
+    const baseIntentKey = `media-assets:${jobType}:${intent?.force === true ? "force" : "normal"}:${clipIds.join(",") || "all"}`;
+    const generationSummary = clipIds.length > 0 || intent?.force || dependsOnJobId
       ? {
-          intentKey: `media-assets:${jobType}:${intent?.force === true ? "force" : "normal"}:${clipIds.join(",") || "all"}`,
+          intentKey: dependsOnJobId
+            ? `${baseIntentKey}:after:${dependsOnJobId}`
+            : baseIntentKey,
           ...(clipIds.length > 0 ? { mediaAssetClipIds: clipIds } : {}),
           ...(intent?.force ? { forceMediaAssets: true } : {}),
+          ...(dependsOnJobId ? { mediaAssetDependsOnJobId: dependsOnJobId } : {}),
         }
       : undefined;
     const job = await queueSermonProcessingJob(sermonId, jobType, generationSummary);
@@ -394,6 +403,10 @@ async function queueSermonMediaAssetJobs(
     } else {
       queued += 1;
     }
+    // Persist an exact predecessor id in every later stage. A repeated request
+    // reuses the same pending chain, while a newly required caption stage
+    // cannot be overtaken by an older render/burn/export job on another worker.
+    dependsOnJobId = job.id;
   }
 
   return { queued, reused, jobTypes: Array.from(new Set(jobTypes)) };
@@ -4157,17 +4170,17 @@ export async function prepareApprovedClipsAction(input: {
             await refreshVideoSubjectTrackingBestEffort(clip.id, sermonId);
           }
 
+          if (writeCaptions) {
+            await generateCaptionsForClip(clip.id, { force: true });
+            captionsAdded += 1;
+          }
+
           if (prepareVideo) {
             await renderApprovedClipWithFallback({
               clipId: clip.id,
               sermonId,
               exportLayoutStrategy: resolvedLayoutStrategy,
             });
-          }
-
-          if (writeCaptions) {
-            await generateCaptionsForClip(clip.id, { force: true });
-            captionsAdded += 1;
           }
 
           if (addCaptionsToVideo) {

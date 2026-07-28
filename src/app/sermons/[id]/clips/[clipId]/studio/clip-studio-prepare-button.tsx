@@ -198,7 +198,10 @@ export function ClipStudioPrepareButton({
     };
   }
 
-  function runStudioOperation(operation: "save" | "prepare") {
+  function runStudioOperation(
+    operation: "save" | "prepare",
+    options: { explicitRebuild?: boolean } = {},
+  ) {
     setResult(null);
     setElapsedSeconds(0);
 
@@ -220,6 +223,7 @@ export function ClipStudioPrepareButton({
       operation,
       hasPreparedMedia,
       serverNeedsUpdate,
+      options.explicitRebuild === true,
     );
     setActiveOperation(operation);
 
@@ -280,7 +284,7 @@ export function ClipStudioPrepareButton({
           <button
             type="button"
             className="button tertiary"
-            onClick={() => runStudioOperation("prepare")}
+            onClick={() => runStudioOperation("prepare", { explicitRebuild: true })}
             disabled={!canPrepareFinal}
           >
             Rebuild video

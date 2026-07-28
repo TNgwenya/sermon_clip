@@ -4,7 +4,10 @@ import { prisma } from "@/lib/prisma";
 import { hashStableJson } from "@/server/utils/stableJson";
 import { extractSpeechCleanupCutPlan } from "@/lib/speechCleanupPlan";
 import {
+  extractCaptionAppearanceSettings,
+  extractCaptionDesignSettings,
   extractCaptionRevealMode,
+  extractCaptionStyleSource,
   extractCaptionSyncOffsetSeconds,
 } from "@/lib/clipStudio";
 
@@ -97,6 +100,28 @@ function toNullableJsonValue(value: unknown): Prisma.InputJsonValue | null {
   return value === null || value === undefined ? null : toJsonValue(value);
 }
 
+const MEDIA_PLAN_AUDIT_FIELDS_BY_PATH = {
+  "speechCleanup.settings": new Set(["updatedAt"]),
+  "speechCleanup.edits": new Set(["updatedAt"]),
+  "overlays.brandingSettings": new Set(["updatedAt"]),
+  "export.exportSettings": new Set(["updatedAt", "manuallyEdited"]),
+} as const;
+
+function normalizeMediaPlanAuditFields(
+  value: unknown,
+  path: keyof typeof MEDIA_PLAN_AUDIT_FIELDS_BY_PATH,
+): unknown {
+  const record = asRecord(value);
+  if (Object.keys(record).length === 0) {
+    return value ?? null;
+  }
+
+  const auditFields = MEDIA_PLAN_AUDIT_FIELDS_BY_PATH[path];
+  return Object.fromEntries(
+    Object.entries(record).filter(([key]) => !auditFields.has(key)),
+  );
+}
+
 function readBoolean(record: Record<string, unknown>, key: string, fallback: boolean): boolean {
   return typeof record[key] === "boolean" ? Boolean(record[key]) : fallback;
 }
@@ -111,6 +136,9 @@ function readBoolean(record: Record<string, unknown>, key: string, fallback: boo
 function normalizeMediaPlanDocument(value: unknown): Prisma.InputJsonValue | null {
   const document = asRecord(value);
   const clip = asRecord(document["clip"]);
+  const speechCleanup = asRecord(document["speechCleanup"]);
+  const overlays = asRecord(document["overlays"]);
+  const exportSettings = asRecord(document["export"]);
   if (
     typeof document["schemaVersion"] !== "number"
     || !document["boundaries"]
@@ -130,6 +158,31 @@ function normalizeMediaPlanDocument(value: unknown): Prisma.InputJsonValue | nul
       sermonId: clip["sermonId"],
       transcriptText: clip["transcriptText"],
     },
+    speechCleanup: {
+      ...speechCleanup,
+      settings: normalizeMediaPlanAuditFields(
+        speechCleanup["settings"],
+        "speechCleanup.settings",
+      ),
+      edits: normalizeMediaPlanAuditFields(
+        speechCleanup["edits"],
+        "speechCleanup.edits",
+      ),
+    },
+    overlays: {
+      ...overlays,
+      brandingSettings: normalizeMediaPlanAuditFields(
+        overlays["brandingSettings"],
+        "overlays.brandingSettings",
+      ),
+    },
+    export: {
+      ...exportSettings,
+      exportSettings: normalizeMediaPlanAuditFields(
+        exportSettings["exportSettings"],
+        "export.exportSettings",
+      ),
+    },
   });
 }
 
@@ -145,6 +198,7 @@ function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot 
   const speechCleanupPlan = extractSpeechCleanupCutPlan(captionData);
   const captionCues = Array.isArray(captionData["cues"]) ? captionData["cues"] : [];
   const captionCueHash = captionCues.length > 0 ? hashStableJson(captionCues) : null;
+  const captionDesign = extractCaptionDesignSettings(captionData);
   const cropPlan = {
     exportLayoutStrategy: clip.exportLayoutStrategy,
     manualCropKeyframes: clip.manualCropKeyframes ?? null,
@@ -155,7 +209,7 @@ function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot 
     exportSettings: captionData["exportSettings"] ?? null,
     framingPersonality: captionData["framingPersonality"] ?? null,
   };
-  const planDocument = {
+  const rawPlanDocument = {
     schemaVersion: CLIP_EDIT_PLAN_SCHEMA_VERSION,
     clip: {
       id: clip.id,
@@ -174,12 +228,12 @@ function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot 
     },
     captions: {
       applyCaptionsToClip: readBoolean(captionData, "applyCaptionsToClip", true),
-      captionStyleSource: captionData["captionStyleSource"] ?? null,
+      captionStyleSource: extractCaptionStyleSource(captionData),
       cues: captionCues,
-      captionStylePresetId: captionData["captionStylePresetId"] ?? null,
-      captionPosition: captionData["captionPosition"] ?? null,
-      captionAppearance: captionData["captionAppearance"] ?? null,
-      captionDesign: captionData["captionDesign"] ?? null,
+      captionStylePresetId: captionDesign.presetId,
+      captionPosition: captionDesign.layout.verticalPosition,
+      captionAppearance: extractCaptionAppearanceSettings(captionData),
+      captionDesign,
       captionRevealMode: extractCaptionRevealMode(captionData),
       captionSyncOffsetSeconds: extractCaptionSyncOffsetSeconds(captionData),
       wordHighlightEnabled: readBoolean(captionData, "wordHighlightEnabled", false),
@@ -192,7 +246,12 @@ function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot 
     framing: cropPlan,
     export: exportSettings,
   };
+  const planDocument = normalizeMediaPlanDocument(rawPlanDocument);
+  if (!planDocument) {
+    throw new Error("Unable to normalize the clip media plan.");
+  }
   const planHash = hashStableJson(planDocument);
+  const normalizedExportSettings = asRecord(planDocument)["export"];
 
   return {
     sourceStartTimeSeconds,
@@ -201,8 +260,8 @@ function buildClipEditPlanSnapshot(clip: ClipForEditPlan): ClipEditPlanSnapshot 
     planHash,
     captionCueHash,
     cropPlanHash: hashStableJson(cropPlan),
-    exportSettingsHash: hashStableJson(exportSettings),
-    planJson: toJsonValue(planDocument),
+    exportSettingsHash: hashStableJson(normalizedExportSettings),
+    planJson: planDocument,
     cleanupPlanJson: toNullableJsonValue(speechCleanupPlan),
   };
 }

@@ -130,6 +130,7 @@ describe("caption burn service validation", () => {
     expect(metadata.captionBurnError).toBeNull();
     expect(metadata.subtitlesBurned).toBe(true);
     expect(metadata.captionData).toMatchObject({
+      captionStyleSource: "brand-kit",
       captionStylePresetId: "clean-lower",
       captionPosition: "lower",
       captionDesign: {
@@ -142,6 +143,22 @@ describe("caption burn service validation", () => {
       captionRendererVersion: 6,
     });
     expect(__captionBurnTestUtils.CAPTION_RENDERER_VERSION).toBe(6);
+  });
+
+  it("preserves an explicit per-clip caption style while materializing burn metadata", () => {
+    const metadata = __captionBurnTestUtils.buildCaptionBurnMetadata({
+      outputPath: "/tmp/clip.captioned.mp4",
+      burnedAt: new Date("2026-06-17T23:59:00.000Z"),
+      captionData: {
+        captionStyleSource: "clip",
+        captionStylePresetId: "cinematic-testimony",
+      },
+    });
+
+    expect(metadata.captionData).toMatchObject({
+      captionStyleSource: "clip",
+      captionStylePresetId: "cinematic-testimony",
+    });
   });
 
   it("prefers hardware-friendly video encoder args when available", () => {
@@ -230,7 +247,45 @@ describe("caption burn service validation", () => {
         },
         "golden-hour",
       ),
-    ).toBe("golden-hour");
+    ).toBe("cinematic-testimony");
+  });
+
+  it("freezes an approved Brand Kit caption snapshot instead of rereading a newer default", () => {
+    const approvedCaptionData = {
+      captionStyleSource: "brand-kit",
+      captionStylePresetId: "clean-lower",
+      captionDesign: normalizeCaptionDesignSettings(undefined, {
+        presetId: "clean-lower",
+      }),
+    };
+
+    expect(
+      __captionBurnTestUtils.resolveClipCaptionStylePresetId(
+        approvedCaptionData,
+        "bold-sermon",
+      ),
+    ).toBe("clean-lower");
+    expect(
+      __captionBurnTestUtils.resolveCaptionDesign(
+        approvedCaptionData,
+        "bold-sermon",
+      ).presetId,
+    ).toBe("clean-lower");
+  });
+
+  it("uses the current Brand Kit fallback only when no approved style snapshot exists", () => {
+    expect(
+      __captionBurnTestUtils.resolveClipCaptionStylePresetId(
+        { captionStyleSource: "brand-kit" },
+        "bold-sermon",
+      ),
+    ).toBe("bold-sermon");
+    expect(
+      __captionBurnTestUtils.resolveCaptionDesign(
+        { captionStyleSource: "brand-kit" },
+        "bold-sermon",
+      ).presetId,
+    ).toBe("bold-sermon");
   });
 
   it("detects when captions are disabled for a clip", () => {

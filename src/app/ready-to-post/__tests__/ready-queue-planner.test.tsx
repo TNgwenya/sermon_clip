@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ReadyQueueExperience,
+  type ReadyQueueClip,
   selectVisibleCalendarPosts,
 } from "@/app/ready-to-post/ready-queue-experience";
 import type { ScheduledPost } from "@/lib/scheduledPosts";
@@ -66,6 +67,41 @@ function renderPlanner(contentAssetFocus = false): string {
       contentAssetFocus={contentAssetFocus}
     />,
   );
+}
+
+function buildReadyClip(): ReadyQueueClip {
+  return {
+    id: "clip-1",
+    title: "Darkness They Don't Want Jesus",
+    hook: "Look at the light",
+    caption: "The entrance of God's Word brings light.",
+    hashtags: ["#Faith"],
+    score: 8.4,
+    finalQualityScore: 8.2,
+    qualityLabel: "POST_READY",
+    postReadyStatus: "POST_READY",
+    postReadyReasons: [],
+    postReadyBlockers: [],
+    recommendedNextAction: "POST_NOW",
+    qualityWarnings: [],
+    qualityReasons: [],
+    pastorFriendlyReason: null,
+    qualitySummary: "Ready to share.",
+    visualConfidenceScore: 8,
+    audioQualityScore: 8,
+    captionQualityScore: 8,
+    manualCropRecommended: false,
+    smartClipCategory: "Faith",
+    intendedAudience: "Church",
+    mediaReady: true,
+    estimatedBytes: 1_000,
+    remotePreviewUrl: null,
+    sermon: {
+      id: "sermon-1",
+      title: "Fix your eyes on Jesus",
+      churchName: "Melusi Christian Community",
+    },
+  };
 }
 
 describe("ready-to-post compact planner", () => {
@@ -140,5 +176,36 @@ describe("ready-to-post compact planner", () => {
     expect(markup).toContain('tabindex="-1"');
     expect(markup).toContain('id="scheduled-post-post-0"');
     expect(markup).toContain("Instagram: Planned message 0. Manual media-team handoff.");
+  });
+
+  it("keeps a directly focused clip visible after it has moved into the publishing plan", () => {
+    const post = buildScheduledPost(0);
+    post.clipIds = ["clip-1"];
+    const markup = renderToStaticMarkup(
+      <ReadyQueueExperience
+        clips={[buildReadyClip()]}
+        clipScopeIds={["clip-1"]}
+        initialFocusedClipId="clip-1"
+        initialDrafts={[]}
+        packageHistory={[]}
+        initialSocialAccounts={[]}
+        initialScheduledPosts={[post]}
+        initialPublishingServiceHealth={{
+          status: "ONLINE",
+          lastSeenAt: new Date().toISOString(),
+          workerId: "test-worker",
+          dryRun: true,
+          ageSeconds: 0,
+          capabilities: null,
+          summary: "Publishing test service is online.",
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Darkness They Don&#x27;t Want Jesus");
+    expect(markup).toContain("Final video prepared");
+    expect(markup).toContain("Already scheduled");
+    expect(markup).not.toContain(">Schedule</button>");
+    expect(markup).not.toContain("All prepared clips are already scheduled");
   });
 });

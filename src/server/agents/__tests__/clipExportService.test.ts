@@ -1,9 +1,66 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { __clipExportTestUtils } from "../clipExportService";
+
+type PassthroughInput = Parameters<
+  typeof __clipExportTestUtils.decidePreparedExportPassthrough
+>[0];
+
+function compatiblePassthroughInput(
+  overrides: Partial<PassthroughInput> = {},
+): PassthroughInput {
+  return {
+    format: "VERTICAL_9_16",
+    sourceKind: "PREPARED_OVERLAY",
+    sourcePath: "/tmp/overlay.mp4",
+    outputPath: "/tmp/final-export.mp4",
+    trim: undefined,
+    hasAdditionalBrandingOverlay: false,
+    framing: {
+      shouldApplyFraming: false,
+      framingAlreadyApplied: true,
+      preserveWithSafeFit: false,
+    },
+    provenance: {
+      verified: true,
+      reason: "Exact active-plan artifact.",
+      expectedDurationSeconds: 71.351,
+    },
+    probe: {
+      formatNames: ["mov", "mp4"],
+      durationSeconds: 71.351,
+      startTimeSeconds: 0,
+      streams: [
+        {
+          index: 0,
+          codecType: "video",
+          codecName: "h264",
+          width: 1080,
+          height: 1920,
+          pixelFormat: "yuv420p",
+          sampleAspectRatio: "1:1",
+          startTimeSeconds: 0,
+          rotationDegrees: 0,
+        },
+        {
+          index: 1,
+          codecType: "audio",
+          codecName: "aac",
+          width: null,
+          height: null,
+          pixelFormat: null,
+          sampleAspectRatio: null,
+          startTimeSeconds: 0,
+          rotationDegrees: 0,
+        },
+      ],
+    },
+    ...overrides,
+  };
+}
 
 describe("clip export service", () => {
   it("rejects export before render is completed", () => {
@@ -682,5 +739,194 @@ describe("clip export service", () => {
       null,
       "framing-v3",
     )).toBe(false);
+  });
+
+  it("uses a lossless final copy only for an exact compatible prepared portrait master", () => {
+    const decision = __clipExportTestUtils.decidePreparedExportPassthrough(
+      compatiblePassthroughInput(),
+    );
+
+    expect(decision).toMatchObject({
+      eligible: true,
+      unsafeSource: false,
+    });
+  });
+
+  it("verifies prepared overlay provenance against both the active source and framing artifact", () => {
+    const provenance = __clipExportTestUtils.decidePreparedExportProvenance({
+      sourceArtifactKind: "OVERLAY",
+      sourcePath: "/tmp/overlay.mp4",
+      resolvedFramingPlanHash: "framing-v3",
+      artifacts: [
+        {
+          kind: "OVERLAY",
+          filePath: "/tmp/overlay.mp4",
+          durationSeconds: null,
+          metadataJson: { resolvedFramingPlanHash: "framing-v3" },
+        },
+        {
+          kind: "RENDERED_SOURCE",
+          filePath: "/tmp/rendered.mp4",
+          durationSeconds: 71.351,
+          metadataJson: { resolvedFramingPlanHash: "framing-v3" },
+        },
+      ],
+    });
+
+    expect(provenance).toEqual({
+      verified: true,
+      reason: expect.stringContaining("active Studio revision"),
+      expectedDurationSeconds: 71.351,
+    });
+  });
+
+  it("lets captioned provenance inherit exact framing identity only from the same-plan base artifact", () => {
+    const valid = __clipExportTestUtils.decidePreparedExportProvenance({
+      sourceArtifactKind: "CAPTIONED",
+      sourcePath: "/tmp/captioned.mp4",
+      resolvedFramingPlanHash: "framing-v3",
+      artifacts: [
+        {
+          kind: "CAPTIONED",
+          filePath: "/tmp/captioned.mp4",
+          durationSeconds: null,
+          metadataJson: { captionStylePresetId: "clean-lower" },
+        },
+        {
+          kind: "RENDERED_SOURCE",
+          filePath: "/tmp/rendered.mp4",
+          durationSeconds: 71.351,
+          metadataJson: { resolvedFramingPlanHash: "framing-v3" },
+        },
+      ],
+    });
+    const staleFraming = __clipExportTestUtils.decidePreparedExportProvenance({
+      sourceArtifactKind: "CAPTIONED",
+      sourcePath: "/tmp/captioned.mp4",
+      resolvedFramingPlanHash: "framing-v3",
+      artifacts: [
+        {
+          kind: "CAPTIONED",
+          filePath: "/tmp/captioned.mp4",
+          durationSeconds: null,
+          metadataJson: {},
+        },
+        {
+          kind: "RENDERED_SOURCE",
+          filePath: "/tmp/rendered.mp4",
+          durationSeconds: 71.351,
+          metadataJson: { resolvedFramingPlanHash: "framing-v2" },
+        },
+      ],
+    });
+
+    expect(valid.verified).toBe(true);
+    expect(staleFraming.verified).toBe(false);
+  });
+
+  it.each([
+    ["original sermon source", { sourceKind: "ORIGINAL_SERMON" as const }],
+    ["non-vertical output", { format: "SQUARE_1_1" as const }],
+    ["remaining trim", { trim: { startTimeSeconds: 10, endTimeSeconds: 70 } }],
+    ["additional branding", { hasAdditionalBrandingOverlay: true }],
+    ["remaining framing", {
+      framing: {
+        shouldApplyFraming: true,
+        framingAlreadyApplied: false,
+        preserveWithSafeFit: false,
+      },
+    }],
+    ["unverified provenance", {
+      provenance: {
+        verified: false,
+        reason: "No exact active-plan artifact.",
+        expectedDurationSeconds: 71.351,
+      },
+    }],
+  ])("falls back to the encoder for %s", (_label, overrides) => {
+    const decision = __clipExportTestUtils.decidePreparedExportPassthrough(
+      compatiblePassthroughInput(overrides),
+    );
+
+    expect(decision.eligible).toBe(false);
+    expect(decision.unsafeSource).toBe(false);
+  });
+
+  it.each([
+    ["HEVC video", (input: PassthroughInput) => {
+      input.probe.streams[0].codecName = "hevc";
+    }],
+    ["non-yuv420p video", (input: PassthroughInput) => {
+      input.probe.streams[0].pixelFormat = "yuv444p";
+    }],
+    ["wrong dimensions", (input: PassthroughInput) => {
+      input.probe.streams[0].width = 720;
+    }],
+    ["non-square pixels", (input: PassthroughInput) => {
+      input.probe.streams[0].sampleAspectRatio = "4:3";
+    }],
+    ["rotation metadata", (input: PassthroughInput) => {
+      input.probe.streams[0].rotationDegrees = 90;
+    }],
+    ["non-AAC audio", (input: PassthroughInput) => {
+      input.probe.streams[1].codecName = "mp3";
+    }],
+    ["an extra subtitle stream", (input: PassthroughInput) => {
+      input.probe.streams.push({
+        index: 2,
+        codecType: "subtitle",
+        codecName: "mov_text",
+        width: null,
+        height: null,
+        pixelFormat: null,
+        sampleAspectRatio: null,
+        startTimeSeconds: 0,
+        rotationDegrees: 0,
+      });
+    }],
+  ])("falls back to compatibility encoding for %s", (_label, mutate) => {
+    const input = compatiblePassthroughInput();
+    mutate(input);
+
+    const decision = __clipExportTestUtils.decidePreparedExportPassthrough(input);
+
+    expect(decision.eligible).toBe(false);
+    expect(decision.unsafeSource).toBe(false);
+  });
+
+  it("fails closed when the prepared duration differs from the active rendered artifact", () => {
+    const input = compatiblePassthroughInput();
+    input.probe.durationSeconds = 65;
+
+    expect(
+      __clipExportTestUtils.decidePreparedExportPassthrough(input),
+    ).toMatchObject({
+      eligible: false,
+      unsafeSource: true,
+      reason: expect.stringContaining("duration"),
+    });
+  });
+
+  it("copies prepared media into a distinct immutable file without changing its bytes", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "lossless-export-copy-"));
+    try {
+      const sourcePath = path.join(directory, "prepared.mp4");
+      const tempPath = path.join(directory, "export.partial.mp4");
+      const approvedBytes = Buffer.from("approved-video-and-audio-bytes");
+      await writeFile(sourcePath, approvedBytes);
+
+      await __clipExportTestUtils.copyPreparedExportSource({
+        sourcePath,
+        tempPath,
+      });
+
+      expect(await readFile(tempPath)).toEqual(approvedBytes);
+      expect((await stat(tempPath)).ino).not.toBe((await stat(sourcePath)).ino);
+
+      await writeFile(sourcePath, "later-source-replacement");
+      expect(await readFile(tempPath)).toEqual(approvedBytes);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

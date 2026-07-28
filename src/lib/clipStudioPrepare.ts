@@ -36,10 +36,11 @@ export function buildClipStudioQueuedAssetIntent(
 
 export function shouldForceClipStudioPrepare(
   operation: "save" | "prepare",
-  hasPreparedMedia: boolean,
-  serverNeedsUpdate: boolean,
+  _hasPreparedMedia: boolean,
+  _serverNeedsUpdate: boolean,
+  explicitRebuild = false,
 ): boolean {
-  return operation === "prepare" && (hasPreparedMedia || serverNeedsUpdate);
+  return operation === "prepare" && explicitRebuild;
 }
 
 export function buildClipStudioQueuedAssets(
@@ -48,11 +49,11 @@ export function buildClipStudioQueuedAssets(
 ): ClipStudioQueuedAsset[] {
   const assets: ClipStudioQueuedAsset[] = [];
 
-  if (plan.prepareVideo) {
-    assets.push("render");
-  }
   if (snapshot.captionsEnabled && snapshot.captionStatus !== "GENERATED") {
     assets.push("caption");
+  }
+  if (plan.prepareVideo) {
+    assets.push("render");
   }
   if (plan.burnCaptions) {
     assets.push("captionBurn");

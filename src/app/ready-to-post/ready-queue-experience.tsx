@@ -90,6 +90,7 @@ type ReadyQueueExperienceProps = {
   initialPublishingServiceHealth: PublishingServiceHealth;
   controlPanelMode?: boolean;
   contentAssetFocus?: boolean;
+  initialFocusedClipId?: string | null;
   initialFocusedScheduledPostId?: string | null;
   scheduledPostScope?: {
     scheduledPostId?: string | null;
@@ -840,6 +841,7 @@ export function ReadyQueueExperience({
   initialPublishingServiceHealth,
   controlPanelMode = false,
   contentAssetFocus = false,
+  initialFocusedClipId = null,
   initialFocusedScheduledPostId = null,
   scheduledPostScope,
 }: ReadyQueueExperienceProps) {
@@ -856,7 +858,9 @@ export function ReadyQueueExperience({
   const [publishingFilter, setPublishingFilter] = useState<PublishingFilter>("PLANNED");
   const [qualityFilter, setQualityFilter] = useState<ClipQualityFilter>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
-  const [focusedClipId, setFocusedClipId] = useState<string | null>(clips[0]?.id ?? null);
+  const [focusedClipId, setFocusedClipId] = useState<string | null>(
+    clips.some((clip) => clip.id === initialFocusedClipId) ? initialFocusedClipId : clips[0]?.id ?? null,
+  );
   const [activeCaptionPlatform, setActiveCaptionPlatform] = useState<ScheduledPost["platform"]>("TikTok");
   const [videoPreviewStates, setVideoPreviewStates] = useState<Record<string, VideoPreviewState>>({});
   const [calendarStartDate, setCalendarStartDate] = useState(() => {
@@ -917,7 +921,10 @@ export function ReadyQueueExperience({
     [scheduledClipIds, selectedClipIds],
   );
   const selectedClipIdSet = useMemo(() => new Set(visibleSelectedClipIds), [visibleSelectedClipIds]);
-  const readyQueueClips = useMemo(() => clips.filter((clip) => !scheduledClipIds.has(clip.id)), [clips, scheduledClipIds]);
+  const readyQueueClips = useMemo(
+    () => clips.filter((clip) => !scheduledClipIds.has(clip.id) || clip.id === initialFocusedClipId),
+    [clips, initialFocusedClipId, scheduledClipIds],
+  );
   const hiddenScheduledClipCount = clips.length - readyQueueClips.length;
   const downloadableClips = useMemo(() => readyQueueClips.filter((clip) => clip.mediaReady), [readyQueueClips]);
   const downloadableClipIds = useMemo(() => new Set(downloadableClips.map((clip) => clip.id)), [downloadableClips]);
@@ -950,6 +957,7 @@ export function ReadyQueueExperience({
     ?? filteredClips[0]
     ?? readyQueueClips[0]
     ?? null;
+  const selectedClipIsScheduled = selectedClip ? scheduledClipIds.has(selectedClip.id) : false;
   const selectedReadyPackage = selectedClip
     ? buildReadyToPostPackage({
       clipId: selectedClip.id,
@@ -1746,14 +1754,25 @@ export function ReadyQueueExperience({
                   <>
                     {!controlPanelMode ? <a className="button primary" href={selectedReadyPackage.downloadHref}>Download video</a> : null}
                     <CopyCaptionButton label="Copy suggested copy" text={activeHandoff?.captionText ?? selectedClip.caption} />
-                    <SchedulePostButton
-                      clipId={selectedClip.id}
-                      clipDetails={[buildScheduleClipSummary(selectedClip)]}
-                      label="Schedule"
-                      initialPlatform={activeCaptionPlatform}
-                      socialAccounts={socialAccounts}
-                      onDraftCreated={addDraft}
-                    />
+                    {selectedClipIsScheduled ? (
+                      <button
+                        type="button"
+                        className="button tertiary"
+                        disabled
+                        title="This clip is already in the publishing plan."
+                      >
+                        Already scheduled
+                      </button>
+                    ) : (
+                      <SchedulePostButton
+                        clipId={selectedClip.id}
+                        clipDetails={[buildScheduleClipSummary(selectedClip)]}
+                        label="Schedule"
+                        initialPlatform={activeCaptionPlatform}
+                        socialAccounts={socialAccounts}
+                        onDraftCreated={addDraft}
+                      />
+                    )}
                     {activeHandoff ? (
                       <a className="button tertiary" href={activeHandoff.uploadUrl} target="_blank" rel="noreferrer">
                         Open {activeHandoff.platform}
@@ -1775,14 +1794,25 @@ export function ReadyQueueExperience({
                   <>
                     {!controlPanelMode ? <a className="button primary" href={selectedReadyPackage.downloadHref}>Download</a> : null}
                     <CopyCaptionButton label="Copy suggested copy" text={activeHandoff?.captionText ?? selectedClip.caption} />
-                    <SchedulePostButton
-                      clipId={selectedClip.id}
-                      clipDetails={[buildScheduleClipSummary(selectedClip)]}
-                      label="Schedule"
-                      initialPlatform={activeCaptionPlatform}
-                      socialAccounts={socialAccounts}
-                      onDraftCreated={addDraft}
-                    />
+                    {selectedClipIsScheduled ? (
+                      <button
+                        type="button"
+                        className="button tertiary"
+                        disabled
+                        title="This clip is already in the publishing plan."
+                      >
+                        Already scheduled
+                      </button>
+                    ) : (
+                      <SchedulePostButton
+                        clipId={selectedClip.id}
+                        clipDetails={[buildScheduleClipSummary(selectedClip)]}
+                        label="Schedule"
+                        initialPlatform={activeCaptionPlatform}
+                        socialAccounts={socialAccounts}
+                        onDraftCreated={addDraft}
+                      />
+                    )}
                     <Link href={`/sermons/${selectedClip.sermon.id}/clips/${selectedClip.id}/studio`} className="button tertiary">Edit clip</Link>
                   </>
                 ) : (

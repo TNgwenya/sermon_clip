@@ -131,6 +131,10 @@ describe("production media action queue routing", () => {
   });
 
   it("queues forced export and caption-burn work with durable worker intent", async () => {
+    mocks.queue
+      .mockResolvedValueOnce({ id: "export-job", reusedExisting: false, intentConflict: false })
+      .mockResolvedValueOnce({ id: "caption-job", reusedExisting: false, intentConflict: false })
+      .mockResolvedValueOnce({ id: "burn-job", reusedExisting: false, intentConflict: false });
     const exportForm = new FormData();
     exportForm.set("sermonId", "sermon-1");
     exportForm.set("force", "true");
@@ -152,8 +156,9 @@ describe("production media action queue routing", () => {
       forceMediaAssets: true,
     });
     expect(mocks.queue).toHaveBeenCalledWith("sermon-1", "BURN_SUBTITLES", {
-      intentKey: "media-assets:BURN_SUBTITLES:force:all",
+      intentKey: "media-assets:BURN_SUBTITLES:force:all:after:caption-job",
       forceMediaAssets: true,
+      mediaAssetDependsOnJobId: "caption-job",
     });
   });
 

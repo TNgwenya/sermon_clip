@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { access, rm, stat } from "node:fs/promises";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +25,14 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function fileSha256(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
 }
 
 function runFfmpeg(args: string[]): Promise<void> {
@@ -183,10 +193,6 @@ describeMedia("one-click prepare approved clips media integration", () => {
       clipIds: [clip.id],
     });
 
-    if (!result.success) {
-      expect(result.failures).toEqual([]);
-    }
-
     expect(result).toMatchObject({
       success: true,
       processed: 1,
@@ -225,7 +231,7 @@ describeMedia("one-click prepare approved clips media integration", () => {
       overlayStatus: "COMPLETED",
       exportStatus: "COMPLETED",
       exportFormat: "VERTICAL_9_16",
-      exportLayoutStrategy: "SMART_CROP",
+      exportLayoutStrategy: "CENTER_CROP",
     });
 
     for (const filePath of [
@@ -241,6 +247,90 @@ describeMedia("one-click prepare approved clips media integration", () => {
 
     const exportedStats = await stat(preparedClip.exportedFilePath!);
     expect(exportedStats.size).toBeGreaterThan(10_000);
+
+    const [overlayStats, exportArtifact, activePlan] = await Promise.all([
+      stat(preparedClip.overlayVideoPath!),
+      prisma.clipArtifact.findFirstOrThrow({
+        where: {
+          clipCandidateId: clip.id,
+          kind: "EXPORT",
+          status: "READY",
+          freshness: "UP_TO_DATE",
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          editPlanId: true,
+          planHash: true,
+          metadataJson: true,
+        },
+      }),
+      prisma.clipEditPlan.findFirstOrThrow({
+        where: {
+          clipCandidateId: clip.id,
+          status: "ACTIVE",
+        },
+        select: {
+          id: true,
+          planHash: true,
+          resolvedFramingPlanHash: true,
+        },
+      }),
+    ]);
+    expect(exportArtifact).toMatchObject({
+      editPlanId: activePlan.id,
+      planHash: activePlan.planHash,
+      metadataJson: {
+        exportMethod: "LOSSLESS_SOURCE_COPY",
+        videoEncoder: "copy",
+        audioBitrate: "source",
+        sourceKind: "PREPARED_OVERLAY",
+        resolvedFramingPlanHash: activePlan.resolvedFramingPlanHash,
+      },
+    });
+    expect(preparedClip.exportedFilePath).not.toBe(preparedClip.overlayVideoPath);
+    expect(exportedStats.ino).not.toBe(overlayStats.ino);
+    expect(await fileSha256(preparedClip.exportedFilePath!)).toBe(
+      await fileSha256(preparedClip.overlayVideoPath!),
+    );
+
+    const artifactCountBeforeRepeat = await prisma.clipArtifact.count({
+      where: {
+        clipCandidateId: clip.id,
+        status: "READY",
+      },
+    });
+    const repeatedResult = await prepareApprovedClipsAction({
+      sermonId: sermon.id,
+      clipIds: [clip.id],
+    });
+    const [repeatedExportStats, artifactCountAfterRepeat, editPlanCountAfterRepeat] = await Promise.all([
+      stat(preparedClip.exportedFilePath!),
+      prisma.clipArtifact.count({
+        where: {
+          clipCandidateId: clip.id,
+          status: "READY",
+        },
+      }),
+      prisma.clipEditPlan.count({
+        where: { clipCandidateId: clip.id },
+      }),
+    ]);
+    expect(repeatedResult).toMatchObject({
+      success: true,
+      processed: 1,
+      prepared: 1,
+      captionsAdded: 0,
+      brandingAdded: 0,
+      readyToPost: 1,
+      failed: 0,
+    });
+    expect(artifactCountAfterRepeat).toBe(artifactCountBeforeRepeat);
+    expect(editPlanCountAfterRepeat).toBe(1);
+    expect(repeatedExportStats).toMatchObject({
+      ino: exportedStats.ino,
+      size: exportedStats.size,
+      mtimeMs: exportedStats.mtimeMs,
+    });
 
     const downloadResponse = await downloadClip(
       new Request(`http://localhost/api/clips/${clip.id}/download?variant=vertical`),

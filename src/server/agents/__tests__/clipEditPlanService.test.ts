@@ -98,6 +98,166 @@ describe("clip edit plan composition guards", () => {
     expect(afterOutput.planJson).not.toHaveProperty("artifactPaths");
   });
 
+  it("does not churn the composition hash when Studio save audit fields change", () => {
+    const mediaSettings = {
+      applyCaptionsToClip: false,
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "normal",
+        updatedAt: "2026-07-28T10:00:00.000Z",
+      },
+      speechCleanupEdits: {
+        version: 1,
+        cuts: [{
+          id: "manual-cut-1",
+          enabled: true,
+          startSeconds: 12,
+          endSeconds: 13,
+          removedSeconds: 1,
+        }],
+        updatedAt: "2026-07-28T10:00:00.000Z",
+      },
+      brandingSettings: {
+        enabled: true,
+        preset: "MINIMAL_WATERMARK",
+        watermarkEnabled: true,
+        themeColor: "#0F766E",
+        updatedAt: "2026-07-28T10:00:00.000Z",
+      },
+      exportSettings: {
+        platformPreset: "YOUTUBE_SHORTS",
+        primaryFormat: "VERTICAL_9_16",
+        selectedFormats: ["VERTICAL_9_16"],
+        framingMode: "SMART_CROP",
+        framingPersonality: "AUTO_INTELLIGENT",
+        manuallyEdited: true,
+        updatedAt: "2026-07-28T10:00:00.000Z",
+      },
+    };
+    const before = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(snapshotInput(mediaSettings));
+    const after = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(snapshotInput({
+      ...mediaSettings,
+      speechCleanup: {
+        ...mediaSettings.speechCleanup,
+        updatedAt: "2026-07-28T10:05:00.000Z",
+      },
+      speechCleanupEdits: {
+        ...mediaSettings.speechCleanupEdits,
+        updatedAt: "2026-07-28T10:05:00.000Z",
+      },
+      brandingSettings: {
+        ...mediaSettings.brandingSettings,
+        updatedAt: "2026-07-28T10:05:00.000Z",
+      },
+      exportSettings: {
+        ...mediaSettings.exportSettings,
+        manuallyEdited: false,
+        updatedAt: "2026-07-28T10:05:00.000Z",
+      },
+    }));
+
+    expect(after.planHash).toBe(before.planHash);
+    expect(after.exportSettingsHash).toBe(before.exportSettingsHash);
+    expect(after.planJson).toMatchObject({
+      speechCleanup: {
+        settings: expect.not.objectContaining({ updatedAt: expect.anything() }),
+        edits: expect.not.objectContaining({ updatedAt: expect.anything() }),
+      },
+      overlays: {
+        brandingSettings: expect.not.objectContaining({ updatedAt: expect.anything() }),
+      },
+      export: {
+        exportSettings: expect.not.objectContaining({
+          updatedAt: expect.anything(),
+          manuallyEdited: expect.anything(),
+        }),
+      },
+    });
+  });
+
+  it("still changes the composition hash for real cleanup, overlay, branding, and export edits", () => {
+    const baseCaptionData = {
+      applyCaptionsToClip: false,
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "normal",
+      },
+      speechCleanupEdits: {
+        version: 1,
+        cuts: [{ id: "cut-1", enabled: true, startSeconds: 12, endSeconds: 13, removedSeconds: 1 }],
+      },
+      hookOverlay: {
+        enabled: true,
+        text: "Keep running",
+        startSeconds: 0,
+        durationSeconds: 4,
+      },
+      brollLayer: {
+        enabled: true,
+        cards: [{ id: "card-1", text: "Run your race", startSeconds: 8, durationSeconds: 4 }],
+      },
+      brandingSettings: {
+        enabled: true,
+        preset: "MINIMAL_WATERMARK",
+        watermarkEnabled: true,
+        themeColor: "#0F766E",
+      },
+      exportSettings: {
+        platformPreset: "YOUTUBE_SHORTS",
+        primaryFormat: "VERTICAL_9_16",
+        selectedFormats: ["VERTICAL_9_16"],
+        framingMode: "SMART_CROP",
+        framingPersonality: "AUTO_INTELLIGENT",
+      },
+    };
+    const original = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(snapshotInput(baseCaptionData));
+    const variants = [
+      {
+        ...baseCaptionData,
+        speechCleanup: { ...baseCaptionData.speechCleanup, intensity: "strong" },
+      },
+      {
+        ...baseCaptionData,
+        speechCleanupEdits: {
+          ...baseCaptionData.speechCleanupEdits,
+          cuts: [{ id: "cut-1", enabled: false, startSeconds: 12, endSeconds: 13, removedSeconds: 1 }],
+        },
+      },
+      {
+        ...baseCaptionData,
+        hookOverlay: { ...baseCaptionData.hookOverlay, durationSeconds: 6 },
+      },
+      {
+        ...baseCaptionData,
+        brollLayer: {
+          ...baseCaptionData.brollLayer,
+          cards: [{ id: "card-1", text: "Run your race", startSeconds: 10, durationSeconds: 4 }],
+        },
+      },
+      {
+        ...baseCaptionData,
+        brandingSettings: { ...baseCaptionData.brandingSettings, themeColor: "#A21CAF" },
+      },
+      {
+        ...baseCaptionData,
+        exportSettings: {
+          ...baseCaptionData.exportSettings,
+          selectedFormats: ["VERTICAL_9_16", "SQUARE_1_1"],
+        },
+      },
+    ];
+
+    for (const variant of variants) {
+      expect(
+        __clipEditPlanTestUtils.buildClipEditPlanSnapshot(snapshotInput(variant)).planHash,
+      ).not.toBe(original.planHash);
+    }
+  });
+
   it("keeps the media composition stable when only post-distribution copy changes", () => {
     const beforeCopyEdit = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(snapshotInput({
       applyCaptionsToClip: false,
@@ -134,9 +294,27 @@ describe("clip edit plan composition guards", () => {
     const current = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(snapshotInput({
       applyCaptionsToClip: true,
       cues: [{ index: 0, startSeconds: 0, endSeconds: 2, text: "Approved words" }],
+      speechCleanup: {
+        removeDeadAir: true,
+        tightenLongPauses: true,
+        flagFillerWords: true,
+        intensity: "normal",
+      },
+      brandingSettings: {
+        enabled: true,
+        preset: "MINIMAL_WATERMARK",
+      },
+      exportSettings: {
+        platformPreset: "YOUTUBE_SHORTS",
+        primaryFormat: "VERTICAL_9_16",
+        selectedFormats: ["VERTICAL_9_16"],
+      },
     }));
     const currentDocument = current.planJson as Record<string, unknown>;
     const currentClip = currentDocument["clip"] as Record<string, unknown>;
+    const currentSpeechCleanup = currentDocument["speechCleanup"] as Record<string, unknown>;
+    const currentOverlays = currentDocument["overlays"] as Record<string, unknown>;
+    const currentExport = currentDocument["export"] as Record<string, unknown>;
     const legacyDocument = {
       ...currentDocument,
       clip: {
@@ -145,6 +323,28 @@ describe("clip edit plan composition guards", () => {
         hook: "Legacy editorial opener",
         caption: "Legacy platform copy",
         hashtags: ["legacy"],
+      },
+      speechCleanup: {
+        ...currentSpeechCleanup,
+        settings: {
+          ...(currentSpeechCleanup["settings"] as Record<string, unknown>),
+          updatedAt: "2026-07-28T09:00:00.000Z",
+        },
+      },
+      overlays: {
+        ...currentOverlays,
+        brandingSettings: {
+          ...(currentOverlays["brandingSettings"] as Record<string, unknown>),
+          updatedAt: "2026-07-28T09:00:00.000Z",
+        },
+      },
+      export: {
+        ...currentExport,
+        exportSettings: {
+          ...(currentExport["exportSettings"] as Record<string, unknown>),
+          manuallyEdited: true,
+          updatedAt: "2026-07-28T09:00:00.000Z",
+        },
       },
     };
 

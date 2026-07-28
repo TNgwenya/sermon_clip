@@ -1,8 +1,9 @@
-import { mkdir, rename, stat, unlink } from "node:fs/promises";
+import { copyFile, mkdir, rename, stat, unlink } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
 import type {
+  ClipArtifactKind,
   ClipCandidate,
   ClipExportFormat,
   ClipExportLayoutStrategy,
@@ -26,7 +27,11 @@ import {
   getSourceVideoPath,
 } from "@/server/agents/storage";
 import { buildClipExportBaseName, buildSermonExportDirectoryName } from "@/lib/exportNaming";
-import { checkFfmpegInstalled } from "@/server/media/ffmpeg";
+import {
+  checkFfmpegInstalled,
+  probeMediaFile,
+  type MediaProbe,
+} from "@/server/media/ffmpeg";
 import {
   SOFTWARE_VIDEO_ENCODER,
   buildVideoEncoderArgs as buildSharedVideoEncoderArgs,
@@ -74,6 +79,7 @@ import {
 } from "@/server/agents/resolvedFramingPlanService";
 import {
   resolveResolvedFramingPlanConsumption,
+  type ResolvedFramingPlanConsumption,
   type ResolvedFramingSourceRole,
 } from "@/lib/resolvedFramingPlan";
 
@@ -241,6 +247,262 @@ function artifactMatchesResolvedFramingPlan(
     && (metadata as Record<string, unknown>)["resolvedFramingPlanHash"]
       === resolvedFramingPlanHash,
   );
+}
+
+type PreparedExportProvenance = {
+  verified: boolean;
+  reason: string;
+  expectedDurationSeconds: number | null;
+};
+
+type PreparedExportPassthroughDecision = {
+  eligible: boolean;
+  unsafeSource: boolean;
+  reason: string;
+};
+
+type PreparedArtifactProvenanceRecord = {
+  kind: ClipArtifactKind;
+  filePath: string | null;
+  durationSeconds: number | null;
+  metadataJson: unknown;
+};
+
+function preparedArtifactKindForSource(
+  sourceKind: ExportSourceKind,
+): ClipArtifactKind | null {
+  if (sourceKind === "PREPARED_OVERLAY") return "OVERLAY";
+  if (sourceKind === "PREPARED_CAPTIONED") return "CAPTIONED";
+  if (sourceKind === "PREPARED_RENDERED") return "RENDERED_SOURCE";
+  return null;
+}
+
+async function verifyPreparedExportProvenance(input: {
+  clipCandidateId: string;
+  editPlan: ClipEditPlanGuard;
+  sourceKind: ExportSourceKind;
+  sourcePath: string;
+  resolvedFramingPlanHash: string;
+}): Promise<PreparedExportProvenance> {
+  const sourceArtifactKind = preparedArtifactKindForSource(input.sourceKind);
+  if (!sourceArtifactKind) {
+    return {
+      verified: false,
+      reason: "Original sermon media must be rendered into the requested export.",
+      expectedDurationSeconds: null,
+    };
+  }
+
+  const artifacts = await prisma.clipArtifact.findMany({
+    where: {
+      clipCandidateId: input.clipCandidateId,
+      editPlanId: input.editPlan.editPlanId,
+      planHash: input.editPlan.planHash,
+      status: "READY",
+      freshness: "UP_TO_DATE",
+      kind: {
+        in: Array.from(new Set<ClipArtifactKind>([
+          sourceArtifactKind,
+          "RENDERED_SOURCE",
+        ])),
+      },
+    },
+    orderBy: { generatedAt: "desc" },
+    select: {
+      kind: true,
+      filePath: true,
+      durationSeconds: true,
+      metadataJson: true,
+    },
+  });
+  return decidePreparedExportProvenance({
+    sourceArtifactKind,
+    sourcePath: input.sourcePath,
+    resolvedFramingPlanHash: input.resolvedFramingPlanHash,
+    artifacts,
+  });
+}
+
+function decidePreparedExportProvenance(input: {
+  sourceArtifactKind: ClipArtifactKind;
+  sourcePath: string;
+  resolvedFramingPlanHash: string;
+  artifacts: PreparedArtifactProvenanceRecord[];
+}): PreparedExportProvenance {
+  const sourceArtifact = input.artifacts.find(
+    (artifact) => artifact.kind === input.sourceArtifactKind && artifact.filePath === input.sourcePath,
+  );
+  if (!sourceArtifact) {
+    return {
+      verified: false,
+      reason: "The selected prepared file has no READY artifact for the active Studio revision.",
+      expectedDurationSeconds: null,
+    };
+  }
+
+  const renderedArtifact = input.artifacts.find(
+    (artifact) => artifact.kind === "RENDERED_SOURCE"
+      && artifactMatchesResolvedFramingPlan(
+        artifact.metadataJson,
+        input.resolvedFramingPlanHash,
+      ),
+  );
+  if (!renderedArtifact) {
+    return {
+      verified: false,
+      reason: "The active revision has no prepared base artifact with the exact framing identity.",
+      expectedDurationSeconds: null,
+    };
+  }
+
+  if (
+    input.sourceArtifactKind !== "CAPTIONED"
+    && !artifactMatchesResolvedFramingPlan(
+      sourceArtifact.metadataJson,
+      input.resolvedFramingPlanHash,
+    )
+  ) {
+    return {
+      verified: false,
+      reason: "The selected prepared file does not carry the active framing identity.",
+      expectedDurationSeconds: renderedArtifact.durationSeconds,
+    };
+  }
+
+  return {
+    verified: true,
+    reason: "The selected prepared file belongs to the active Studio revision and canonical framing plan.",
+    expectedDurationSeconds: renderedArtifact.durationSeconds,
+  };
+}
+
+function isNearZero(value: number | null): boolean {
+  return value === null || Math.abs(value) <= 0.05;
+}
+
+function decidePreparedExportPassthrough(input: {
+  format: ExportPreset;
+  sourceKind: ExportSourceKind;
+  sourcePath: string;
+  outputPath: string;
+  trim?: ExportSourceSelection["trim"];
+  hasAdditionalBrandingOverlay: boolean;
+  framing: Pick<
+    ResolvedFramingPlanConsumption,
+    "shouldApplyFraming" | "framingAlreadyApplied" | "preserveWithSafeFit"
+  >;
+  provenance: PreparedExportProvenance;
+  probe: MediaProbe;
+}): PreparedExportPassthroughDecision {
+  if (!preparedArtifactKindForSource(input.sourceKind)) {
+    return { eligible: false, unsafeSource: false, reason: "The original sermon source requires rendering." };
+  }
+  if (input.format !== "VERTICAL_9_16") {
+    return { eligible: false, unsafeSource: false, reason: "Only the canonical vertical master can be copied without reframing." };
+  }
+  if (input.trim) {
+    return { eligible: false, unsafeSource: false, reason: "The requested export still requires source trimming." };
+  }
+  if (input.hasAdditionalBrandingOverlay) {
+    return { eligible: false, unsafeSource: false, reason: "An additional branding layer still needs to be rendered." };
+  }
+  if (
+    input.framing.shouldApplyFraming
+    || !input.framing.framingAlreadyApplied
+    || input.framing.preserveWithSafeFit
+  ) {
+    return { eligible: false, unsafeSource: false, reason: "The requested export still requires a framing transform." };
+  }
+  if (path.resolve(input.sourcePath) === path.resolve(input.outputPath)) {
+    return { eligible: false, unsafeSource: false, reason: "The immutable export path must differ from its prepared source." };
+  }
+  if (!input.provenance.verified) {
+    return { eligible: false, unsafeSource: false, reason: input.provenance.reason };
+  }
+  if (!input.probe.formatNames.some((name) => name === "mp4" || name === "mov")) {
+    return { eligible: false, unsafeSource: false, reason: "The prepared source is not an MP4-compatible container." };
+  }
+  if (!isNearZero(input.probe.startTimeSeconds)) {
+    return { eligible: false, unsafeSource: false, reason: "The prepared source has a non-zero container start time." };
+  }
+
+  const videoStreams = input.probe.streams.filter((stream) => stream.codecType === "video");
+  const audioStreams = input.probe.streams.filter((stream) => stream.codecType === "audio");
+  if (
+    videoStreams.length !== 1
+    || audioStreams.length > 1
+    || input.probe.streams.length !== videoStreams.length + audioStreams.length
+  ) {
+    return { eligible: false, unsafeSource: false, reason: "The prepared source has an unsupported stream layout." };
+  }
+
+  const video = videoStreams[0];
+  if (
+    video.codecName !== "h264"
+    || video.width !== EXPORT_SPECS.VERTICAL_9_16.width
+    || video.height !== EXPORT_SPECS.VERTICAL_9_16.height
+    || video.pixelFormat !== "yuv420p"
+    || video.sampleAspectRatio !== "1:1"
+    || !isNearZero(video.startTimeSeconds)
+    || Math.abs(video.rotationDegrees % 360) > 0.01
+  ) {
+    return {
+      eligible: false,
+      unsafeSource: false,
+      reason: "The prepared video needs compatibility normalization before publishing.",
+    };
+  }
+
+  const audio = audioStreams[0];
+  if (audio && (audio.codecName !== "aac" || !isNearZero(audio.startTimeSeconds))) {
+    return {
+      eligible: false,
+      unsafeSource: false,
+      reason: "The prepared audio needs compatibility normalization before publishing.",
+    };
+  }
+
+  if (input.probe.durationSeconds === null) {
+    return {
+      eligible: false,
+      unsafeSource: true,
+      reason: "The prepared source duration could not be verified.",
+    };
+  }
+  if (
+    input.provenance.expectedDurationSeconds !== null
+    && Math.abs(input.probe.durationSeconds - input.provenance.expectedDurationSeconds)
+      > Math.max(0.75, input.provenance.expectedDurationSeconds * 0.01)
+  ) {
+    return {
+      eligible: false,
+      unsafeSource: true,
+      reason: "The prepared source duration does not match the active rendered artifact.",
+    };
+  }
+
+  return {
+    eligible: true,
+    unsafeSource: false,
+    reason: "The active prepared portrait master is already platform-compatible; preserve its exact video and audio bytes.",
+  };
+}
+
+async function copyPreparedExportSource(input: {
+  sourcePath: string;
+  tempPath: string;
+}): Promise<void> {
+  const sourceStats = await stat(input.sourcePath);
+  if (sourceStats.size <= 0) {
+    throw new Error("Prepared export source is empty.");
+  }
+
+  await copyFile(input.sourcePath, input.tempPath);
+  const copiedStats = await stat(input.tempPath);
+  if (copiedStats.size !== sourceStats.size || copiedStats.size <= 0) {
+    await unlink(input.tempPath).catch(() => undefined);
+    throw new Error("Lossless export copy did not preserve the complete prepared file.");
+  }
 }
 
 function buildVideoFilter(
@@ -1125,6 +1387,9 @@ export async function exportClipWithPreset(
 
     const preferredVideoEncoder = resolvePreferredVideoEncoder();
     let completedVideoEncoder = preferredVideoEncoder;
+    let completedAudioBitrate = resolveAudioBitrate("export");
+    let exportMethod: "TRANSCODE" | "LOSSLESS_SOURCE_COPY" = "TRANSCODE";
+    let sourceProbe: MediaProbe | null = null;
     const exportWithEncoder = async (videoEncoder: string) => {
       await runFfmpeg({
         sourcePath: exportSourcePath,
@@ -1140,29 +1405,105 @@ export async function exportClipWithPreset(
       completedVideoEncoder = videoEncoder;
     };
 
-    try {
+    const provenance = await verifyPreparedExportProvenance({
+      clipCandidateId: clip.id,
+      editPlan: editPlanGuard,
+      sourceKind: exportSource.kind,
+      sourcePath: exportSourcePath,
+      resolvedFramingPlanHash: resolvedFramingRecord.planHash,
+    });
+    const canProbeForPassthrough = Boolean(
+      preparedArtifactKindForSource(exportSource.kind)
+      && format === "VERTICAL_9_16"
+      && !exportSource.trim
+      && !options?.brandingOverlay
+      && !framingConsumption.shouldApplyFraming
+      && framingConsumption.framingAlreadyApplied
+      && !framingConsumption.preserveWithSafeFit
+      && path.resolve(exportSourcePath) !== path.resolve(outputPath),
+    );
+    if (canProbeForPassthrough) {
       try {
-        await exportWithEncoder(preferredVideoEncoder);
+        sourceProbe = await probeMediaFile(exportSourcePath, options?.ffmpegPath);
       } catch (error) {
-        if (!isHardwareVideoEncoder(preferredVideoEncoder)) {
-          throw error;
-        }
+        const message = error instanceof Error ? error.message : "Unknown media probe error.";
+        await appendJobLog(job.id, `Lossless export probe was unavailable; using the compatibility encoder. ${message}`);
+      }
+    }
 
-        const message = error instanceof Error ? error.message : "Unknown clip export error.";
-        await unlink(tempPath).catch(() => undefined);
-        await appendJobLog(job.id, `Hardware export failed with ${preferredVideoEncoder}; retrying with ${FALLBACK_VIDEO_ENCODER}. Original error: ${message}`);
-        await appendPipelineLog(clip.sermonId, `Hardware export fallback used for clip ${clip.id}: ${preferredVideoEncoder} failed.`);
-        await exportWithEncoder(FALLBACK_VIDEO_ENCODER);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown clip export error.";
-      if (effectiveLayoutStrategy === "SMART_CROP" && isFfmpegCropFilterFailure(message)) {
-        throw new Error(
-          `The canonical tracked framing failed during export. Rebuild the base video to resolve one shared fallback before exporting. Original error: ${message}`,
-          { cause: error },
+    const passthroughDecision = sourceProbe
+      ? decidePreparedExportPassthrough({
+          format,
+          sourceKind: exportSource.kind,
+          sourcePath: exportSourcePath,
+          outputPath,
+          trim: exportSource.trim,
+          hasAdditionalBrandingOverlay: Boolean(options?.brandingOverlay),
+          framing: framingConsumption,
+          provenance,
+          probe: sourceProbe,
+        })
+      : {
+          eligible: false,
+          unsafeSource: false,
+          reason: canProbeForPassthrough
+            ? provenance.reason
+            : "The export still requires a media transform.",
+        };
+    if (passthroughDecision.unsafeSource) {
+      throw new Error(`The prepared video failed final integrity checks. ${passthroughDecision.reason}`);
+    }
+
+    let copiedPreparedSource = false;
+    if (passthroughDecision.eligible) {
+      try {
+        await copyPreparedExportSource({
+          sourcePath: exportSourcePath,
+          tempPath,
+        });
+        copiedPreparedSource = true;
+        exportMethod = "LOSSLESS_SOURCE_COPY";
+        completedVideoEncoder = "copy";
+        completedAudioBitrate = "source";
+        await appendJobLog(job.id, `Lossless final export used for ${clip.id}. ${passthroughDecision.reason}`);
+        await appendPipelineLog(
+          clip.sermonId,
+          `Lossless final export preserved the active prepared video for clip ${clip.id}; no additional video or audio encode was needed.`,
         );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown lossless export copy error.";
+        await unlink(tempPath).catch(() => undefined);
+        await appendJobLog(job.id, `Lossless export copy failed; using the compatibility encoder. ${message}`);
       }
-      throw error;
+    } else if (canProbeForPassthrough) {
+      await appendJobLog(job.id, `Lossless export was not eligible; using the compatibility encoder. ${passthroughDecision.reason}`);
+    }
+
+    if (!copiedPreparedSource) {
+      try {
+        try {
+          await exportWithEncoder(preferredVideoEncoder);
+        } catch (error) {
+          if (!isHardwareVideoEncoder(preferredVideoEncoder)) {
+            throw error;
+          }
+
+          const message = error instanceof Error ? error.message : "Unknown clip export error.";
+          await unlink(tempPath).catch(() => undefined);
+          await appendJobLog(job.id, `Hardware export failed with ${preferredVideoEncoder}; retrying with ${FALLBACK_VIDEO_ENCODER}. Original error: ${message}`);
+          await appendPipelineLog(clip.sermonId, `Hardware export fallback used for clip ${clip.id}: ${preferredVideoEncoder} failed.`);
+          await exportWithEncoder(FALLBACK_VIDEO_ENCODER);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown clip export error.";
+        if (effectiveLayoutStrategy === "SMART_CROP" && isFfmpegCropFilterFailure(message)) {
+          throw new Error(
+            `The canonical tracked framing failed during export. Rebuild the base video to resolve one shared fallback before exporting. Original error: ${message}`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
     }
 
     await assertClipEditPlanStillActive(editPlanGuard);
@@ -1222,7 +1563,8 @@ export async function exportClipWithPreset(
           },
           exportQualityProfile: {
             videoEncoder: completedVideoEncoder,
-            audioBitrate: resolveAudioBitrate("export"),
+            audioBitrate: completedAudioBitrate,
+            exportMethod,
             targetWidth: spec.width,
             targetHeight: spec.height,
             format,
@@ -1271,7 +1613,11 @@ export async function exportClipWithPreset(
         sourceReason: exportSource.reason,
         sourceTrim: exportSource.trim ?? null,
         videoEncoder: completedVideoEncoder,
-        audioBitrate: resolveAudioBitrate("export"),
+        audioBitrate: completedAudioBitrate,
+        exportMethod,
+        sourceVideoCodec: sourceProbe?.streams.find((stream) => stream.codecType === "video")?.codecName ?? null,
+        sourcePixelFormat: sourceProbe?.streams.find((stream) => stream.codecType === "video")?.pixelFormat ?? null,
+        sourceAudioCodec: sourceProbe?.streams.find((stream) => stream.codecType === "audio")?.codecName ?? null,
       },
       editPlan: {
         editPlanId: editPlanGuard.editPlanId,
@@ -1364,6 +1710,9 @@ export const __clipExportTestUtils = {
   artifactMatchesResolvedFramingPlan,
   buildVideoEncoderArgs,
   buildVideoFilter,
+  copyPreparedExportSource,
+  decidePreparedExportProvenance,
+  decidePreparedExportPassthrough,
   validateExportEligibility,
   buildExportMetadata,
   getSmartCropFilterRiskReason,

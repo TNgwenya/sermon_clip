@@ -25,7 +25,11 @@ import {
   isClipGenerationForcedRetrySummary,
   isClipGenerationPreviewRepairSummary,
 } from "../src/lib/clipGenerationRetry.ts";
-import { isForcedProcessingJobSummary } from "../src/lib/mediaProcessingJobIntent.ts";
+import {
+  evaluateMediaAssetJobDependency,
+  isForcedProcessingJobSummary,
+  resolveMediaAssetJobDependencyId,
+} from "../src/lib/mediaProcessingJobIntent.ts";
 
 process.env.WORKER_ENABLED ||= "true";
 // This process-only marker distinguishes the persistent media worker from a
@@ -250,7 +254,7 @@ async function claimNextJob(): Promise<ProcessingJob | null> {
   await failExhaustedStaleJobs();
 
   const cutoff = staleJobCutoff();
-  const next = await prisma.processingJob.findFirst({
+  const candidates = await prisma.processingJob.findMany({
     where: {
       attemptCount: { lt: maxWorkerAttempts },
       OR: [
@@ -262,40 +266,89 @@ async function claimNextJob(): Promise<ProcessingJob | null> {
     orderBy: {
       createdAt: "asc",
     },
+    take: 200,
   });
 
-  if (!next) {
+  if (candidates.length === 0) {
     return null;
   }
 
-  const claimed = await prisma.processingJob.updateMany({
-    where: {
-      id: next.id,
-      attemptCount: { lt: maxWorkerAttempts },
-      OR: [
-        { status: "PENDING", workerId: null },
-        { status: "PENDING", workerId: { startsWith: "inline:" }, updatedAt: { lt: cutoff } },
-        staleRunningJobWhere(cutoff),
-      ],
-    },
-    data: {
-      status: "RUNNING",
-      startedAt: new Date(),
-      completedAt: null,
-      heartbeatAt: new Date(),
-      workerId,
-      attemptCount: { increment: 1 },
-      errorMessage: null,
-    },
-  });
+  const dependencyIds = Array.from(new Set(
+    candidates
+      .map((candidate) => resolveMediaAssetJobDependencyId(candidate.generationSummary))
+      .filter((dependencyId): dependencyId is string => Boolean(dependencyId)),
+  ));
+  const dependencies = dependencyIds.length > 0
+    ? await prisma.processingJob.findMany({
+        where: { id: { in: dependencyIds } },
+        select: {
+          id: true,
+          sermonId: true,
+          status: true,
+        },
+      })
+    : [];
+  const dependenciesById = new Map(
+    dependencies.map((dependency) => [dependency.id, dependency]),
+  );
 
-  if (claimed.count === 0) {
-    return null;
+  for (const next of candidates) {
+    const dependencyId = resolveMediaAssetJobDependencyId(next.generationSummary);
+    const dependencyDecision = evaluateMediaAssetJobDependency({
+      jobId: next.id,
+      sermonId: next.sermonId,
+      generationSummary: next.generationSummary,
+      dependency: dependencyId ? dependenciesById.get(dependencyId) : null,
+    });
+    if (dependencyDecision.state === "WAITING") {
+      continue;
+    }
+    if (dependencyDecision.state === "FAILED") {
+      const message = `Media preparation stage blocked: ${dependencyDecision.reason}`;
+      await markJobFailed(
+        next.id,
+        message,
+        `${message} Retry preparation to create a fresh ordered stage chain.`,
+      );
+      logger.warn("dependent media job failed closed", {
+        job: next.id,
+        sermon: next.sermonId,
+        type: next.type,
+        dependency: dependencyDecision.dependencyId,
+      });
+      continue;
+    }
+
+    const claimed = await prisma.processingJob.updateMany({
+      where: {
+        id: next.id,
+        attemptCount: { lt: maxWorkerAttempts },
+        OR: [
+          { status: "PENDING", workerId: null },
+          { status: "PENDING", workerId: { startsWith: "inline:" }, updatedAt: { lt: cutoff } },
+          staleRunningJobWhere(cutoff),
+        ],
+      },
+      data: {
+        status: "RUNNING",
+        startedAt: new Date(),
+        completedAt: null,
+        heartbeatAt: new Date(),
+        workerId,
+        attemptCount: { increment: 1 },
+        errorMessage: null,
+      },
+    });
+    if (claimed.count === 0) {
+      continue;
+    }
+
+    return prisma.processingJob.findUnique({
+      where: { id: next.id },
+    });
   }
 
-  return prisma.processingJob.findUnique({
-    where: { id: next.id },
-  });
+  return null;
 }
 
 function generationSummary(job: ProcessingJob): Record<string, unknown> | null {

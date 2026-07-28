@@ -134,7 +134,7 @@ describe("buildClipStudioQueuedAssets", () => {
     expect(buildClipStudioQueuedAssets(
       snapshot,
       buildClipStudioPrepareAssetPlan(snapshot),
-    )).toEqual(["render", "caption", "captionBurn", "export"]);
+    )).toEqual(["caption", "render", "captionBurn", "export"]);
   });
 });
 
@@ -155,17 +155,18 @@ describe("buildClipStudioQueuedAssetIntent", () => {
 });
 
 describe("shouldForceClipStudioPrepare", () => {
-  it("forces every prepare of a clip that already has prepared media", () => {
-    expect(shouldForceClipStudioPrepare("prepare", true, false)).toBe(true);
+  it("keeps an ordinary prepare idempotent when current media already exists", () => {
+    expect(shouldForceClipStudioPrepare("prepare", true, false)).toBe(false);
   });
 
-  it("forces a prepare when the server reports that media needs rebuilding", () => {
-    expect(shouldForceClipStudioPrepare("prepare", false, true)).toBe(true);
+  it("lets server freshness select only the assets that need rebuilding", () => {
+    expect(shouldForceClipStudioPrepare("prepare", true, true)).toBe(false);
   });
 
-  it("does not force a current first prepare or a draft-only save", () => {
+  it("reserves a forced full rebuild for the explicit recovery control", () => {
+    expect(shouldForceClipStudioPrepare("prepare", true, false, true)).toBe(true);
     expect(shouldForceClipStudioPrepare("prepare", false, false)).toBe(false);
-    expect(shouldForceClipStudioPrepare("save", true, true)).toBe(false);
+    expect(shouldForceClipStudioPrepare("save", true, true, true)).toBe(false);
   });
 });
 

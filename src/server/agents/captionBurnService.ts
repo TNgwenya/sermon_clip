@@ -20,6 +20,7 @@ import {
 } from "@/server/agents/storage";
 import { checkFfmpegInstalled } from "@/server/media/ffmpeg";
 import {
+  isCaptionStylePresetId,
   resolveCaptionFontFamily,
   resolveCaptionSafeWidthPercent,
   resolveCaptionStylePreset,
@@ -30,6 +31,7 @@ import {
   DEFAULT_CAPTION_APPEARANCE_SETTINGS,
   extractCaptionDesignSettings,
   extractCaptionRevealMode,
+  extractCaptionStyleSource,
   extractCaptionStyleOverride,
   extractCaptionSyncOffsetSeconds,
   hasCaptionDesignSettings,
@@ -337,7 +339,17 @@ function resolveCaptionDesign(
   captionData: unknown,
   fallback: CaptionStylePresetId,
 ): CaptionDesignSettingsV1 {
-  return extractCaptionDesignSettings(captionData, fallback);
+  const captionDataRecord =
+    captionData && typeof captionData === "object" && !Array.isArray(captionData)
+      ? captionData as Record<string, unknown>
+      : {};
+  const hasFrozenStyleSnapshot =
+    isCaptionStylePresetId(captionDataRecord["captionStylePresetId"])
+    || hasCaptionDesignSettings(captionData);
+  return extractCaptionDesignSettings(
+    captionData,
+    hasFrozenStyleSnapshot ? undefined : fallback,
+  );
 }
 
 /**
@@ -412,7 +424,23 @@ function resolveClipCaptionStylePresetId(
   captionData: unknown,
   fallback: CaptionStylePresetId,
 ): CaptionStylePresetId {
-  return extractCaptionStyleOverride(captionData) || fallback;
+  const clipOverride = extractCaptionStyleOverride(captionData);
+  if (clipOverride) {
+    return clipOverride;
+  }
+
+  const captionDataRecord =
+    captionData && typeof captionData === "object" && !Array.isArray(captionData)
+      ? captionData as Record<string, unknown>
+      : {};
+  const savedPresetId = captionDataRecord["captionStylePresetId"];
+  if (isCaptionStylePresetId(savedPresetId)) {
+    return savedPresetId;
+  }
+  if (hasCaptionDesignSettings(captionData)) {
+    return extractCaptionDesignSettings(captionData).presetId;
+  }
+  return fallback;
 }
 
 function shouldApplyCaptionsToClip(captionData: unknown): boolean {
@@ -1225,6 +1253,7 @@ function buildCaptionBurnMetadata(input: {
     subtitlesBurned: true,
     captionData: {
       ...currentCaptionData,
+      captionStyleSource: extractCaptionStyleSource(currentCaptionData),
       captionStylePresetId: captionDesign.presetId,
       captionSafeArea: input.captionSafeArea ?? resolveCaptionSafeArea(input.captionData),
       captionPosition: captionDesign.layout.verticalPosition,
@@ -2212,6 +2241,7 @@ export const __captionBurnTestUtils = {
   buildCaptionForceStyle,
   buildVideoEncoderArgs,
   resolveCaptionPosition,
+  resolveCaptionDesign,
   requiresCaptionImageOverlayForDesign,
   shouldUseStaticCaptionImageOverlay,
   resolveClipCaptionStylePresetId,

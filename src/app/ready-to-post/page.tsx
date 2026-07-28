@@ -803,6 +803,7 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
           initialPublishingServiceHealth={publishingServiceHealth}
           controlPanelMode={controlPanelMode}
           contentAssetFocus={Boolean(focusedPublishingAsset)}
+          initialFocusedClipId={clipId}
           initialFocusedScheduledPostId={scheduledPostId}
           scheduledPostScope={{ scheduledPostId, contentAssetId }}
         />
