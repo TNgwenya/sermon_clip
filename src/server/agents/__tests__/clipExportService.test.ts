@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -894,6 +894,28 @@ describe("clip export service", () => {
     expect(decision.unsafeSource).toBe(false);
   });
 
+  it.each([
+    ["container", (input: PassthroughInput) => {
+      input.probe.startTimeSeconds = null;
+    }],
+    ["video", (input: PassthroughInput) => {
+      input.probe.streams[0].startTimeSeconds = null;
+    }],
+    ["audio", (input: PassthroughInput) => {
+      input.probe.streams[1].startTimeSeconds = null;
+    }],
+  ])("rejects lossless passthrough when the %s start timestamp is unknown", (_label, mutate) => {
+    const input = compatiblePassthroughInput();
+    mutate(input);
+
+    expect(
+      __clipExportTestUtils.decidePreparedExportPassthrough(input),
+    ).toMatchObject({
+      eligible: false,
+      unsafeSource: false,
+    });
+  });
+
   it("fails closed when the prepared duration differs from the active rendered artifact", () => {
     const input = compatiblePassthroughInput();
     input.probe.durationSeconds = 65;
@@ -914,10 +936,13 @@ describe("clip export service", () => {
       const tempPath = path.join(directory, "export.partial.mp4");
       const approvedBytes = Buffer.from("approved-video-and-audio-bytes");
       await writeFile(sourcePath, approvedBytes);
+      const expectedSourceIdentity =
+        await __clipExportTestUtils.capturePreparedExportSourceIdentity(sourcePath);
 
       await __clipExportTestUtils.copyPreparedExportSource({
         sourcePath,
         tempPath,
+        expectedSourceIdentity,
       });
 
       expect(await readFile(tempPath)).toEqual(approvedBytes);
@@ -925,6 +950,34 @@ describe("clip export service", () => {
 
       await writeFile(sourcePath, "later-source-replacement");
       expect(await readFile(tempPath)).toEqual(approvedBytes);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an atomic same-size source replacement made after identity capture", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "lossless-export-identity-"));
+    try {
+      const sourcePath = path.join(directory, "prepared.mp4");
+      const replacementPath = path.join(directory, "replacement.mp4");
+      const tempPath = path.join(directory, "export.partial.mp4");
+      const approvedBytes = Buffer.from("approved-master-bytes");
+      const replacementBytes = Buffer.from("replaced-master-bytes");
+      expect(replacementBytes.byteLength).toBe(approvedBytes.byteLength);
+      await writeFile(sourcePath, approvedBytes);
+      const expectedSourceIdentity =
+        await __clipExportTestUtils.capturePreparedExportSourceIdentity(sourcePath);
+      await writeFile(replacementPath, replacementBytes);
+      await rename(replacementPath, sourcePath);
+
+      await expect(
+        __clipExportTestUtils.copyPreparedExportSource({
+          sourcePath,
+          tempPath,
+          expectedSourceIdentity,
+        }),
+      ).rejects.toThrow("prepared export source changed");
+      await expect(stat(tempPath)).rejects.toThrow();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

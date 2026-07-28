@@ -9,6 +9,10 @@ import { prisma } from "@/lib/prisma";
 import { GET as downloadClip } from "@/app/api/clips/[id]/download/route";
 import { prepareApprovedClipsAction } from "@/server/actions/sermons";
 import { ensureSermonFolders, getSermonStoragePath, getSourceVideoPath } from "@/server/agents/storage";
+import {
+  getBrandingSettings,
+  updateBrandingSettings,
+} from "@/server/branding/settings";
 
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
@@ -17,6 +21,7 @@ vi.mock("next/cache", () => ({
 const runMediaIntegration = process.env.RUN_MEDIA_INTEGRATION === "1";
 const describeMedia = runMediaIntegration ? describe : describe.skip;
 const createdSermonIds: string[] = [];
+let originalBrandingCaptionStyle: string | null = null;
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -84,6 +89,13 @@ async function createSyntheticSourceVideo(outputPath: string): Promise<void> {
 
 describeMedia("one-click prepare approved clips media integration", () => {
   afterEach(async () => {
+    if (originalBrandingCaptionStyle) {
+      await updateBrandingSettings({
+        defaultCaptionStyleName: originalBrandingCaptionStyle,
+      });
+      originalBrandingCaptionStyle = null;
+    }
+
     while (createdSermonIds.length > 0) {
       const sermonId = createdSermonIds.pop();
       if (!sermonId) {
@@ -96,6 +108,12 @@ describeMedia("one-click prepare approved clips media integration", () => {
   });
 
   it("turns an approved local sermon clip into a downloadable ready-to-post video", async () => {
+    const originalBranding = await getBrandingSettings();
+    originalBrandingCaptionStyle = originalBranding.defaultCaptionStyleName;
+    await updateBrandingSettings({
+      defaultCaptionStyleName: "golden-hour",
+    });
+
     const sermon = await prisma.sermon.create({
       data: {
         youtubeUrl: "local-upload://integration-fixture/source.mp4",
@@ -220,6 +238,7 @@ describeMedia("one-click prepare approved clips media integration", () => {
         captionedVideoPath: true,
         overlayVideoPath: true,
         exportedFilePath: true,
+        captionData: true,
       },
     });
 
@@ -232,6 +251,13 @@ describeMedia("one-click prepare approved clips media integration", () => {
       exportStatus: "COMPLETED",
       exportFormat: "VERTICAL_9_16",
       exportLayoutStrategy: "CENTER_CROP",
+      captionData: {
+        captionStyleSource: "brand-kit",
+        captionStylePresetId: "golden-hour",
+        captionDesign: {
+          presetId: "golden-hour",
+        },
+      },
     });
 
     for (const filePath of [
@@ -248,7 +274,7 @@ describeMedia("one-click prepare approved clips media integration", () => {
     const exportedStats = await stat(preparedClip.exportedFilePath!);
     expect(exportedStats.size).toBeGreaterThan(10_000);
 
-    const [overlayStats, exportArtifact, activePlan] = await Promise.all([
+    const [overlayStats, exportArtifact, activePlan, readyArtifacts] = await Promise.all([
       stat(preparedClip.overlayVideoPath!),
       prisma.clipArtifact.findFirstOrThrow({
         where: {
@@ -272,10 +298,37 @@ describeMedia("one-click prepare approved clips media integration", () => {
         select: {
           id: true,
           planHash: true,
+          planJson: true,
           resolvedFramingPlanHash: true,
         },
       }),
+      prisma.clipArtifact.findMany({
+        where: {
+          clipCandidateId: clip.id,
+          status: "READY",
+          freshness: "UP_TO_DATE",
+        },
+        select: {
+          editPlanId: true,
+          planHash: true,
+        },
+      }),
     ]);
+    expect(activePlan.planJson).toMatchObject({
+      captions: {
+        captionStyleSource: "brand-kit",
+        captionStylePresetId: "golden-hour",
+        captionDesign: {
+          presetId: "golden-hour",
+        },
+      },
+    });
+    expect(new Set(readyArtifacts.map((artifact) => artifact.editPlanId))).toEqual(
+      new Set([activePlan.id]),
+    );
+    expect(new Set(readyArtifacts.map((artifact) => artifact.planHash))).toEqual(
+      new Set([activePlan.planHash]),
+    );
     expect(exportArtifact).toMatchObject({
       editPlanId: activePlan.id,
       planHash: activePlan.planHash,
@@ -342,4 +395,88 @@ describeMedia("one-click prepare approved clips media integration", () => {
     expect(downloadResponse.headers.get("content-disposition")).toContain(".mp4");
     expect((await downloadResponse.arrayBuffer()).byteLength).toBe(exportedStats.size);
   }, 120_000);
+
+  it("does not freeze caption identity or queue media before transcript review", async () => {
+    const originalBranding = await getBrandingSettings();
+    originalBrandingCaptionStyle = originalBranding.defaultCaptionStyleName;
+    await updateBrandingSettings({
+      defaultCaptionStyleName: "golden-hour",
+    });
+
+    const sermon = await prisma.sermon.create({
+      data: {
+        youtubeUrl: "local-upload://integration-fixture/review-required.mp4",
+        title: "Transcript Review Test Sermon",
+        speakerName: "Pastor Test",
+        churchName: "Test Church",
+        language: "zu",
+        status: "CLIPS_GENERATED",
+        rightsConfirmed: true,
+      },
+      select: { id: true },
+    });
+    createdSermonIds.push(sermon.id);
+
+    const clip = await prisma.clipCandidate.create({
+      data: {
+        sermonId: sermon.id,
+        startTimeSeconds: 1,
+        endTimeSeconds: 25,
+        durationSeconds: 24,
+        transcriptText: "Local-language words awaiting an explicit transcript review.",
+        title: "Review Required Clip",
+        hook: "Review this transcript first.",
+        caption: "This must not prepare before review.",
+        hashtags: ["#Review"],
+        score: 8,
+        reasonSelected: "Integration safety fixture.",
+        clipType: "Teaching",
+        riskLevel: "MEDIUM",
+        riskReasons: ["LOCAL_LANGUAGE_REVIEW"],
+        contextWarning: true,
+        boundaryQuality: "GOOD",
+        status: "APPROVED",
+        transcriptSafetyStatus: "REVIEW_REQUIRED",
+      },
+      select: { id: true },
+    });
+
+    const result = await prepareApprovedClipsAction({
+      sermonId: sermon.id,
+      clipIds: [clip.id],
+    });
+    const [unchangedClip, jobCount, editPlanCount, artifactCount] = await Promise.all([
+      prisma.clipCandidate.findUniqueOrThrow({
+        where: { id: clip.id },
+        select: {
+          captionData: true,
+          renderStatus: true,
+          captionStatus: true,
+          exportStatus: true,
+        },
+      }),
+      prisma.processingJob.count({ where: { sermonId: sermon.id } }),
+      prisma.clipEditPlan.count({ where: { clipCandidateId: clip.id } }),
+      prisma.clipArtifact.count({ where: { clipCandidateId: clip.id } }),
+    ]);
+
+    expect(result).toMatchObject({
+      success: false,
+      processed: 0,
+      prepared: 0,
+      failed: 1,
+      failures: [{
+        clipId: clip.id,
+      }],
+    });
+    expect(unchangedClip).toEqual({
+      captionData: null,
+      renderStatus: "NOT_RENDERED",
+      captionStatus: "NOT_GENERATED",
+      exportStatus: "NOT_EXPORTED",
+    });
+    expect(jobCount).toBe(0);
+    expect(editPlanCount).toBe(0);
+    expect(artifactCount).toBe(0);
+  });
 });

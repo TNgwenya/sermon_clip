@@ -100,6 +100,8 @@ type ClipWithSermon = Pick<
   | "durationSeconds"
   | "transcriptText"
   | "captionData"
+  | "captionStatus"
+  | "captionFreshness"
   | "silenceAtBeginningSeconds"
   | "silenceAtEndSeconds"
   | "renderStatus"
@@ -251,6 +253,14 @@ function getBatchRenderDecision(clip: BatchRenderClip, force = false): {
     shouldRender: clip.renderStatus !== "COMPLETED" || forceRender,
     forceRender,
   };
+}
+
+function resolveCaptionFreshnessAfterRender(
+  clip: Pick<ClipCandidate, "captionStatus" | "captionFreshness">,
+): ClipCandidate["captionFreshness"] {
+  return clip.captionStatus === "GENERATED" && clip.captionFreshness === "UP_TO_DATE"
+    ? "UP_TO_DATE"
+    : "NEEDS_REGENERATION";
 }
 
 function roundSeconds(value: number): number {
@@ -883,6 +893,8 @@ async function loadClipForRender(clipCandidateId: string): Promise<ClipWithSermo
       durationSeconds: true,
       transcriptText: true,
       captionData: true,
+      captionStatus: true,
+      captionFreshness: true,
       silenceAtBeginningSeconds: true,
       silenceAtEndSeconds: true,
       renderStatus: true,
@@ -1236,6 +1248,7 @@ export async function renderApprovedClip(
       ...captionDataRecord,
       speechCleanupPlan: speechCleanupPlan?.enabled ? serializeSpeechCleanupCutPlan(speechCleanupPlan) : null,
     } as Prisma.InputJsonValue;
+    const nextCaptionFreshness = resolveCaptionFreshnessAfterRender(clip);
 
     await updateClipCandidateForActiveEditPlan({
       guard: editPlanGuard,
@@ -1245,11 +1258,13 @@ export async function renderApprovedClip(
         captionData: updatedCaptionData,
         renderFreshness: "UP_TO_DATE",
         renderAssetVersion: { increment: 1 },
-        captionFreshness: "NEEDS_REGENERATION",
+        captionFreshness: nextCaptionFreshness,
         captionBurnFreshness: "NEEDS_REGENERATION",
         overlayFreshness: "NEEDS_REGENERATION",
         exportFreshness: "NEEDS_REGENERATION",
-        assetInvalidationReason: "Render asset regenerated. Caption/burn/overlay/export assets now require regeneration.",
+        assetInvalidationReason: nextCaptionFreshness === "UP_TO_DATE"
+          ? "Render asset regenerated. Current caption cues were preserved; burn/overlay/export assets now require regeneration."
+          : "Render asset regenerated. Caption/burn/overlay/export assets now require regeneration.",
       },
     });
     await recordClipArtifact({
@@ -1403,6 +1418,7 @@ export const __clipRenderTestUtils = {
   buildRenderFilter,
   buildRenderMetadata,
   buildVideoEncoderArgs,
+  resolveCaptionFreshnessAfterRender,
   fileHasBytes,
   getBatchRenderDecision,
   mapInternalSilenceEvents,

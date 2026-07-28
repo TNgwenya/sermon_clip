@@ -167,6 +167,7 @@ import {
   buildClipStudioPrepareAssetPlan,
   buildClipStudioQueuedAssetIntent,
   buildClipStudioQueuedAssets,
+  freezeEffectiveCaptionStyleSnapshot,
 } from "@/lib/clipStudioPrepare";
 import {
   canChooseClipForProduction,
@@ -4066,11 +4067,16 @@ export async function prepareApprovedClipsAction(input: {
       id: true,
       exportLayoutStrategy: true,
       renderStatus: true,
+      renderFreshness: true,
       captionStatus: true,
+      captionFreshness: true,
       captionBurnStatus: true,
+      captionBurnFreshness: true,
       captionData: true,
       overlayStatus: true,
+      overlayFreshness: true,
       exportStatus: true,
+      exportFreshness: true,
       transcriptSafetyStatus: true,
     },
   });
@@ -4092,12 +4098,52 @@ export async function prepareApprovedClipsAction(input: {
     };
   }
 
+  const transcriptReviewFailures = clips
+    .filter((clip) => clip.transcriptSafetyStatus === "REVIEW_REQUIRED")
+    .map((clip) => ({
+      clipId: clip.id,
+      reason: "Review the local-language transcript before preparing captions, export, or posting.",
+    }));
+  const clipsEligibleForPreparation = clips.filter(
+    (clip) => clip.transcriptSafetyStatus !== "REVIEW_REQUIRED",
+  );
+  if (clipsEligibleForPreparation.length === 0) {
+    return {
+      success: false,
+      message: "Review the local-language transcript before preparing captions, export, or posting.",
+      processed: 0,
+      prepared: 0,
+      captionsAdded: 0,
+      brandingAdded: 0,
+      readyToPost: 0,
+      failed: transcriptReviewFailures.length,
+      failures: transcriptReviewFailures,
+    };
+  }
+
+  const brandingSettings = await getBrandingSettings();
+  const preparedCaptionIdentityByClipId = new Map(
+    await Promise.all(
+      clipsEligibleForPreparation.map(async (clip) => [
+        clip.id,
+        await freezeClipCaptionStyleIdentityForPreparation(
+          clip.id,
+          brandingSettings.defaultCaptionStyleName as CaptionStylePresetId,
+        ),
+      ] as const),
+    ),
+  );
+  const preparationClips = clipsEligibleForPreparation.map((clip) => ({
+    ...clip,
+    ...preparedCaptionIdentityByClipId.get(clip.id),
+  }));
+
   if (!canRunInlineMediaProcessing()) {
     const queued = await queueSermonMediaAssetJobs(sermonId, undefined, {
-      clipIds: clips.map((clip) => clip.id),
+      clipIds: preparationClips.map((clip) => clip.id),
     });
     await prisma.clipCandidate.updateMany({
-      where: { id: { in: clips.map((clip) => clip.id) } },
+      where: { id: { in: preparationClips.map((clip) => clip.id) } },
       data: {
         exportStatus: "QUEUED",
         exportError: null,
@@ -4105,7 +4151,7 @@ export async function prepareApprovedClipsAction(input: {
     });
     await appendPipelineLog(
       sermonId,
-      `Queued preparation for ${clips.length} approved clip(s). Jobs: ${queued.jobTypes.join(", ")}.`,
+      `Queued preparation for ${preparationClips.length} approved clip(s). Jobs: ${queued.jobTypes.join(", ")}.`,
     );
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath(`/sermons/${sermonId}/review`);
@@ -4113,37 +4159,36 @@ export async function prepareApprovedClipsAction(input: {
     revalidatePath("/");
 
     return {
-      success: true,
-      message: queued.queued > 0
-        ? `Preparing ${clips.length} approved clip(s) in the media worker.`
-        : `Preparation is already queued for ${clips.length} approved clip(s).`,
-      processed: clips.length,
+      success: transcriptReviewFailures.length === 0,
+      message: transcriptReviewFailures.length > 0
+        ? `Preparing ${preparationClips.length} approved clip(s); ${transcriptReviewFailures.length} need transcript review first.`
+        : queued.queued > 0
+          ? `Preparing ${preparationClips.length} approved clip(s) in the media worker.`
+          : `Preparation is already queued for ${preparationClips.length} approved clip(s).`,
+      processed: preparationClips.length,
       prepared: 0,
       captionsAdded: 0,
       brandingAdded: 0,
       readyToPost: 0,
-      failed: 0,
-      failures: [],
+      failed: transcriptReviewFailures.length,
+      failures: transcriptReviewFailures,
     };
   }
 
   return runOperationWithLogging<PrepareApprovedClipsState>(
     { sermonId, operation: "prepare_approved_clips" },
     async () => {
-      const brandingSettings = await getBrandingSettings();
       let processed = 0;
       let prepared = 0;
       let captionsAdded = 0;
       let brandingAdded = 0;
       let readyToPost = 0;
-      const failures: Array<{ clipId: string; reason: string }> = [];
+      const failures: Array<{ clipId: string; reason: string }> = [
+        ...transcriptReviewFailures,
+      ];
 
-      for (const clip of clips) {
+      for (const clip of preparationClips) {
         try {
-          if (clip.transcriptSafetyStatus === "REVIEW_REQUIRED") {
-            throw new Error("Review the local-language transcript before preparing captions, export, or posting.");
-          }
-
           const plan = buildPrepareClipPlan(clip);
           const captionDataRecord =
             clip.captionData && typeof clip.captionData === "object" && !Array.isArray(clip.captionData)
@@ -5613,6 +5658,88 @@ function resolveSavedClipCaptionPreferences(
     applyCaptionsToClip,
     captionStylePresetId: captionStylePresetId || fallbackCaptionStylePresetId,
   };
+}
+
+type PreparedCaptionIdentityState = {
+  captionData: Prisma.JsonValue | null;
+  captionStyleIdentityFrozen: boolean;
+  renderFreshness?: "NEEDS_REGENERATION";
+  captionBurnFreshness?: "NEEDS_REGENERATION";
+  overlayFreshness?: "NEEDS_REGENERATION";
+  exportFreshness?: "NEEDS_REGENERATION";
+};
+
+async function freezeClipCaptionStyleIdentityForPreparation(
+  clipId: string,
+  fallbackCaptionStylePresetId: CaptionStylePresetId,
+): Promise<PreparedCaptionIdentityState> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const clip = await prisma.clipCandidate.findUnique({
+      where: { id: clipId },
+      select: {
+        captionData: true,
+        updatedAt: true,
+      },
+    });
+    if (!clip) {
+      throw new Error(`Clip ${clipId} was not found while freezing its caption style.`);
+    }
+
+    const captionDataRecord =
+      clip.captionData && typeof clip.captionData === "object" && !Array.isArray(clip.captionData)
+        ? clip.captionData as Record<string, unknown>
+        : {};
+    if (captionDataRecord["applyCaptionsToClip"] === false) {
+      return {
+        captionData: clip.captionData,
+        captionStyleIdentityFrozen: false,
+      };
+    }
+
+    const frozen = freezeEffectiveCaptionStyleSnapshot(
+      clip.captionData,
+      fallbackCaptionStylePresetId,
+    );
+    if (!frozen.changed) {
+      return {
+        captionData: clip.captionData,
+        captionStyleIdentityFrozen: false,
+      };
+    }
+
+    const updated = await prisma.clipCandidate.updateMany({
+      where: {
+        id: clipId,
+        updatedAt: clip.updatedAt,
+      },
+      data: {
+        captionData: frozen.captionData as Prisma.InputJsonObject,
+        // Every prepared derivative is revision-bound. Freeze the effective
+        // Brand Kit style before rendering so render, burn, overlay, and export
+        // all share one plan instead of adopting the preset halfway through.
+        renderFreshness: "NEEDS_REGENERATION",
+        captionBurnFreshness: "NEEDS_REGENERATION",
+        overlayFreshness: "NEEDS_REGENERATION",
+        exportFreshness: "NEEDS_REGENERATION",
+        assetInvalidationReason:
+          "Effective Brand Kit caption style frozen before media preparation.",
+      },
+    });
+    if (updated.count === 1) {
+      return {
+        captionData: frozen.captionData as Prisma.JsonObject,
+        captionStyleIdentityFrozen: true,
+        renderFreshness: "NEEDS_REGENERATION",
+        captionBurnFreshness: "NEEDS_REGENERATION",
+        overlayFreshness: "NEEDS_REGENERATION",
+        exportFreshness: "NEEDS_REGENERATION",
+      };
+    }
+  }
+
+  throw new Error(
+    "This clip changed while preparation was starting. Save the latest Studio changes and try Prepare again.",
+  );
 }
 
 async function markCaptionBurnSkippedForDisabledCaptions(clipId: string, sermonId: string): Promise<void> {

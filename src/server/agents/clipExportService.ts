@@ -268,6 +268,33 @@ type PreparedArtifactProvenanceRecord = {
   metadataJson: unknown;
 };
 
+class PreparedExportSourceChangedError extends Error {
+  constructor() {
+    super("The prepared export source changed while its final copy was being verified. Retry preparation from the active Studio revision.");
+    this.name = "PreparedExportSourceChangedError";
+  }
+}
+
+function preparedSourceIdentityMatches(
+  current: PromotedMediaIdentity,
+  expected: PromotedMediaIdentity,
+): boolean {
+  return current.device === expected.device
+    && current.inode === expected.inode
+    && current.sizeBytes === expected.sizeBytes
+    && current.modifiedAtMs === expected.modifiedAtMs;
+}
+
+async function capturePreparedExportSourceIdentity(
+  sourcePath: string,
+): Promise<PromotedMediaIdentity> {
+  const identity = await capturePromotedMediaIdentity(sourcePath);
+  if (identity.sizeBytes <= 0) {
+    throw new Error("Prepared export source is empty.");
+  }
+  return identity;
+}
+
 function preparedArtifactKindForSource(
   sourceKind: ExportSourceKind,
 ): ClipArtifactKind | null {
@@ -377,7 +404,7 @@ function decidePreparedExportProvenance(input: {
 }
 
 function isNearZero(value: number | null): boolean {
-  return value === null || Math.abs(value) <= 0.05;
+  return value !== null && Number.isFinite(value) && Math.abs(value) <= 0.05;
 }
 
 function decidePreparedExportPassthrough(input: {
@@ -491,15 +518,32 @@ function decidePreparedExportPassthrough(input: {
 async function copyPreparedExportSource(input: {
   sourcePath: string;
   tempPath: string;
+  expectedSourceIdentity: PromotedMediaIdentity;
 }): Promise<void> {
-  const sourceStats = await stat(input.sourcePath);
-  if (sourceStats.size <= 0) {
-    throw new Error("Prepared export source is empty.");
+  const identityBeforeCopy = await capturePromotedMediaIdentity(input.sourcePath).catch(() => null);
+  if (
+    !identityBeforeCopy
+    || !preparedSourceIdentityMatches(identityBeforeCopy, input.expectedSourceIdentity)
+  ) {
+    throw new PreparedExportSourceChangedError();
   }
 
   await copyFile(input.sourcePath, input.tempPath);
-  const copiedStats = await stat(input.tempPath);
-  if (copiedStats.size !== sourceStats.size || copiedStats.size <= 0) {
+  const [identityAfterCopy, copiedStats] = await Promise.all([
+    capturePromotedMediaIdentity(input.sourcePath).catch(() => null),
+    stat(input.tempPath),
+  ]);
+  if (
+    !identityAfterCopy
+    || !preparedSourceIdentityMatches(identityAfterCopy, input.expectedSourceIdentity)
+  ) {
+    await unlink(input.tempPath).catch(() => undefined);
+    throw new PreparedExportSourceChangedError();
+  }
+  if (
+    copiedStats.size !== input.expectedSourceIdentity.sizeBytes
+    || copiedStats.size <= 0
+  ) {
     await unlink(input.tempPath).catch(() => undefined);
     throw new Error("Lossless export copy did not preserve the complete prepared file.");
   }
@@ -1390,6 +1434,7 @@ export async function exportClipWithPreset(
     let completedAudioBitrate = resolveAudioBitrate("export");
     let exportMethod: "TRANSCODE" | "LOSSLESS_SOURCE_COPY" = "TRANSCODE";
     let sourceProbe: MediaProbe | null = null;
+    let sourceIdentity: PromotedMediaIdentity | null = null;
     const exportWithEncoder = async (videoEncoder: string) => {
       await runFfmpeg({
         sourcePath: exportSourcePath,
@@ -1424,8 +1469,11 @@ export async function exportClipWithPreset(
     );
     if (canProbeForPassthrough) {
       try {
+        sourceIdentity = await capturePreparedExportSourceIdentity(exportSourcePath);
         sourceProbe = await probeMediaFile(exportSourcePath, options?.ffmpegPath);
       } catch (error) {
+        sourceIdentity = null;
+        sourceProbe = null;
         const message = error instanceof Error ? error.message : "Unknown media probe error.";
         await appendJobLog(job.id, `Lossless export probe was unavailable; using the compatibility encoder. ${message}`);
       }
@@ -1456,24 +1504,41 @@ export async function exportClipWithPreset(
 
     let copiedPreparedSource = false;
     if (passthroughDecision.eligible) {
+      if (!sourceIdentity) {
+        throw new Error("The prepared export source identity could not be verified for a lossless final copy.");
+      }
       try {
         await copyPreparedExportSource({
           sourcePath: exportSourcePath,
           tempPath,
+          expectedSourceIdentity: sourceIdentity,
         });
         copiedPreparedSource = true;
+      } catch (error) {
+        await unlink(tempPath).catch(() => undefined);
+        if (error instanceof PreparedExportSourceChangedError) {
+          await appendJobLog(
+            job.id,
+            `Lossless export stopped because the prepared source changed during verification. ${error.message}`,
+          ).catch(() => undefined);
+          throw error;
+        }
+
+        const message = error instanceof Error ? error.message : "Unknown lossless export copy error.";
+        await appendJobLog(job.id, `Lossless export copy failed; using the compatibility encoder. ${message}`);
+      }
+      if (copiedPreparedSource) {
         exportMethod = "LOSSLESS_SOURCE_COPY";
         completedVideoEncoder = "copy";
         completedAudioBitrate = "source";
-        await appendJobLog(job.id, `Lossless final export used for ${clip.id}. ${passthroughDecision.reason}`);
+        await appendJobLog(
+          job.id,
+          `Lossless final export used for ${clip.id}. ${passthroughDecision.reason}`,
+        ).catch(() => undefined);
         await appendPipelineLog(
           clip.sermonId,
           `Lossless final export preserved the active prepared video for clip ${clip.id}; no additional video or audio encode was needed.`,
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown lossless export copy error.";
-        await unlink(tempPath).catch(() => undefined);
-        await appendJobLog(job.id, `Lossless export copy failed; using the compatibility encoder. ${message}`);
+        ).catch(() => undefined);
       }
     } else if (canProbeForPassthrough) {
       await appendJobLog(job.id, `Lossless export was not eligible; using the compatibility encoder. ${passthroughDecision.reason}`);
@@ -1710,6 +1775,7 @@ export const __clipExportTestUtils = {
   artifactMatchesResolvedFramingPlan,
   buildVideoEncoderArgs,
   buildVideoFilter,
+  capturePreparedExportSourceIdentity,
   copyPreparedExportSource,
   decidePreparedExportProvenance,
   decidePreparedExportPassthrough,

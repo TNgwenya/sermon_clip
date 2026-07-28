@@ -1,5 +1,16 @@
 import type { ClipExportFormat } from "@prisma/client";
 
+import {
+  isCaptionStylePresetId,
+  type CaptionStylePresetId,
+} from "@/lib/captionStylePresets";
+import {
+  extractCaptionAppearanceSettings,
+  extractCaptionDesignSettings,
+  extractCaptionStyleOverride,
+  extractCaptionStyleSource,
+} from "@/lib/clipStudio";
+
 export type ClipStudioPrepareFreshness = "UP_TO_DATE" | "OUTDATED" | "NEEDS_REGENERATION" | "FAILED";
 
 export type ClipStudioPrepareAssetSnapshot = {
@@ -23,6 +34,67 @@ export type ClipStudioPrepareAssetPlan = {
 };
 
 export type ClipStudioQueuedAsset = "render" | "caption" | "captionBurn" | "export";
+
+export type FrozenCaptionStyleSnapshot = {
+  captionData: Record<string, unknown>;
+  changed: boolean;
+  captionStylePresetId: CaptionStylePresetId;
+};
+
+function normalizeJsonKeyOrder(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeJsonKeyOrder);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nestedValue]) => [key, normalizeJsonKeyOrder(nestedValue)]),
+    );
+  }
+  return value;
+}
+
+function hasEquivalentJsonValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(normalizeJsonKeyOrder(left))
+    === JSON.stringify(normalizeJsonKeyOrder(right));
+}
+
+export function freezeEffectiveCaptionStyleSnapshot(
+  captionData: unknown,
+  fallbackCaptionStylePresetId: CaptionStylePresetId,
+): FrozenCaptionStyleSnapshot {
+  const current =
+    captionData && typeof captionData === "object" && !Array.isArray(captionData)
+      ? captionData as Record<string, unknown>
+      : {};
+  const captionStyleSource = extractCaptionStyleSource(current);
+  const savedPresetId = isCaptionStylePresetId(current["captionStylePresetId"])
+    ? current["captionStylePresetId"]
+    : null;
+  const captionStylePresetId =
+    extractCaptionStyleOverride(current)
+    || savedPresetId
+    || fallbackCaptionStylePresetId;
+  const captionDesign = extractCaptionDesignSettings(
+    current,
+    captionStylePresetId,
+  );
+  const frozenCaptionData = {
+    ...current,
+    captionStyleSource,
+    captionStylePresetId: captionDesign.presetId,
+    captionPosition: captionDesign.layout.verticalPosition,
+    captionAppearance: extractCaptionAppearanceSettings(current),
+    captionDesign,
+  };
+
+  return {
+    captionData: frozenCaptionData,
+    changed: !hasEquivalentJsonValue(frozenCaptionData, current),
+    captionStylePresetId: captionDesign.presetId,
+  };
+}
 
 export function buildClipStudioQueuedAssetIntent(
   clipId: string,

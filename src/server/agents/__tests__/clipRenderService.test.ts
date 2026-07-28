@@ -9,6 +9,24 @@ import {
 } from "../clipRenderService";
 
 describe("clip render service validation", () => {
+  it("preserves caption cues that were current before the base render", () => {
+    expect(__clipRenderTestUtils.resolveCaptionFreshnessAfterRender({
+      captionStatus: "GENERATED",
+      captionFreshness: "UP_TO_DATE",
+    })).toBe("UP_TO_DATE");
+  });
+
+  it("does not bless missing or previously stale caption cues during render", () => {
+    expect(__clipRenderTestUtils.resolveCaptionFreshnessAfterRender({
+      captionStatus: "GENERATED",
+      captionFreshness: "NEEDS_REGENERATION",
+    })).toBe("NEEDS_REGENERATION");
+    expect(__clipRenderTestUtils.resolveCaptionFreshnessAfterRender({
+      captionStatus: "NOT_GENERATED",
+      captionFreshness: "UP_TO_DATE",
+    })).toBe("NEEDS_REGENERATION");
+  });
+
   it("allows an approved clip with valid boundaries", () => {
     const result = validateRenderEligibility({
       status: "APPROVED",

@@ -4,6 +4,7 @@ import {
   buildClipStudioPrepareAssetPlan,
   buildClipStudioQueuedAssetIntent,
   buildClipStudioQueuedAssets,
+  freezeEffectiveCaptionStyleSnapshot,
   resolveClipStudioPreparationState,
   shouldForceClipStudioPrepare,
   type ClipStudioPrepareAssetSnapshot,
@@ -167,6 +168,77 @@ describe("shouldForceClipStudioPrepare", () => {
     expect(shouldForceClipStudioPrepare("prepare", true, false, true)).toBe(true);
     expect(shouldForceClipStudioPrepare("prepare", false, false)).toBe(false);
     expect(shouldForceClipStudioPrepare("save", true, true, true)).toBe(false);
+  });
+});
+
+describe("freezeEffectiveCaptionStyleSnapshot", () => {
+  it("freezes a non-default Brand Kit style before the first media plan is created", () => {
+    const frozen = freezeEffectiveCaptionStyleSnapshot(
+      { applyCaptionsToClip: true },
+      "golden-hour",
+    );
+
+    expect(frozen).toMatchObject({
+      changed: true,
+      captionStylePresetId: "golden-hour",
+      captionData: {
+        applyCaptionsToClip: true,
+        captionStyleSource: "brand-kit",
+        captionStylePresetId: "golden-hour",
+        captionPosition: "lower",
+        captionDesign: {
+          presetId: "golden-hour",
+        },
+      },
+    });
+    expect(
+      freezeEffectiveCaptionStyleSnapshot(
+        frozen.captionData,
+        "bold-sermon",
+      ),
+    ).toMatchObject({
+      changed: false,
+      captionStylePresetId: "golden-hour",
+    });
+  });
+
+  it("preserves an explicit clip style instead of replacing it with Brand Kit", () => {
+    const frozen = freezeEffectiveCaptionStyleSnapshot(
+      {
+        applyCaptionsToClip: true,
+        captionStyleSource: "clip",
+        captionStylePresetId: "cinematic-testimony",
+      },
+      "golden-hour",
+    );
+
+    expect(frozen.captionData).toMatchObject({
+      captionStyleSource: "clip",
+      captionStylePresetId: "cinematic-testimony",
+      captionDesign: {
+        presetId: "cinematic-testimony",
+      },
+    });
+  });
+
+  it("does not invalidate prepared media when persisted JSON keys are reordered", () => {
+    const firstFreeze = freezeEffectiveCaptionStyleSnapshot(
+      { applyCaptionsToClip: true },
+      "golden-hour",
+    );
+    const databaseOrderedCaptionData = Object.fromEntries(
+      Object.entries(firstFreeze.captionData).reverse(),
+    );
+
+    expect(
+      freezeEffectiveCaptionStyleSnapshot(
+        databaseOrderedCaptionData,
+        "bold-sermon",
+      ),
+    ).toMatchObject({
+      changed: false,
+      captionStylePresetId: "golden-hour",
+    });
   });
 });
 

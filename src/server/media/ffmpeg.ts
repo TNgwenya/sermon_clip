@@ -74,6 +74,15 @@ export type MediaProbe = {
 };
 
 function finiteNumber(value: unknown): number | null {
+  if (
+    value === null
+    || value === undefined
+    || (typeof value !== "number" && typeof value !== "string")
+    || (typeof value === "string" && value.trim().length === 0)
+  ) {
+    return null;
+  }
+
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -83,50 +92,7 @@ function positiveInteger(value: unknown): number | null {
   return parsed !== null && Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-export async function probeMediaFile(filePath: string, binaryPath?: string): Promise<MediaProbe> {
-  const command = ffprobeCommandFor(binaryPath);
-  const args = [
-    "-v",
-    "error",
-    "-show_entries",
-    "format=format_name,duration,start_time:stream=index,codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,start_time:stream_tags=rotate:stream_side_data=rotation",
-    "-of",
-    "json",
-    filePath,
-  ];
-
-  const probeText = await new Promise<string>((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-
-    child.on("error", (error) => {
-      reject(new Error(`ffprobe is not available: ${error.message}`));
-    });
-
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve(stdout.trim());
-        return;
-      }
-
-      const details = stderr.trim() || `exit code ${code ?? "unknown"}`;
-      reject(new Error(`ffprobe failed to inspect media (${details}).`));
-    });
-  });
-
+function parseMediaProbeOutput(probeText: string): MediaProbe {
   let parsed: unknown;
   try {
     parsed = JSON.parse(probeText);
@@ -184,6 +150,53 @@ export async function probeMediaFile(filePath: string, binaryPath?: string): Pro
     startTimeSeconds: finiteNumber(format["start_time"]),
     streams,
   };
+}
+
+export async function probeMediaFile(filePath: string, binaryPath?: string): Promise<MediaProbe> {
+  const command = ffprobeCommandFor(binaryPath);
+  const args = [
+    "-v",
+    "error",
+    "-show_entries",
+    "format=format_name,duration,start_time:stream=index,codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,start_time:stream_tags=rotate:stream_side_data=rotation",
+    "-of",
+    "json",
+    filePath,
+  ];
+
+  const probeText = await new Promise<string>((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+
+    child.on("error", (error) => {
+      reject(new Error(`ffprobe is not available: ${error.message}`));
+    });
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve(stdout.trim());
+        return;
+      }
+
+      const details = stderr.trim() || `exit code ${code ?? "unknown"}`;
+      reject(new Error(`ffprobe failed to inspect media (${details}).`));
+    });
+  });
+
+  return parseMediaProbeOutput(probeText);
 }
 
 export async function getMediaDurationSeconds(filePath: string, binaryPath?: string): Promise<number> {
@@ -342,3 +355,7 @@ export async function hasAudioStream(filePath: string, binaryPath?: string): Pro
 
   return streamText.split(/\s+/).some((value) => value === "audio");
 }
+
+export const __ffmpegTestUtils = {
+  parseMediaProbeOutput,
+};
