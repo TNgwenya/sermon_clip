@@ -65,6 +65,7 @@ import {
   getCachedClipBrollSuggestions,
   type ClipBrollSuggestion,
 } from "@/lib/clipBrollSuggestions";
+import { STUDIO_BOUNDARY_CONTEXT_SECONDS } from "@/lib/clipStudioBoundaryTiming";
 
 type ClipStudioPageParams = {
   params: Promise<{ id: string; clipId: string }>;
@@ -311,11 +312,11 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     prisma.transcriptSegment.findMany({
       where: {
         sermonId,
-        startTimeSeconds: { lte: clip.endTimeSeconds + 20 },
-        endTimeSeconds: { gte: Math.max(0, clip.startTimeSeconds - 20) },
+        startTimeSeconds: { lte: clip.endTimeSeconds + STUDIO_BOUNDARY_CONTEXT_SECONDS },
+        endTimeSeconds: { gte: Math.max(0, clip.startTimeSeconds - STUDIO_BOUNDARY_CONTEXT_SECONDS) },
       },
       orderBy: { startTimeSeconds: "asc" },
-      take: 240,
+      take: 720,
       select: {
         id: true,
         startTimeSeconds: true,
@@ -449,8 +450,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   ) satisfies readonly ClipBrollSuggestion[];
   const transcriptWords = parseCaptionSourceWords(transcriptRecord?.wordTimings).filter(
     (word) =>
-      word.endTimeSeconds >= Math.max(0, clip.startTimeSeconds - 20) &&
-      word.startTimeSeconds <= clip.endTimeSeconds + 20,
+      word.endTimeSeconds >= Math.max(0, clip.startTimeSeconds - STUDIO_BOUNDARY_CONTEXT_SECONDS) &&
+      word.startTimeSeconds <= clip.endTimeSeconds + STUDIO_BOUNDARY_CONTEXT_SECONDS,
   );
   const exactWordCaptionCues = transcriptWords.length > 0
     ? buildTimedCaptionCuesFromTranscriptWords({

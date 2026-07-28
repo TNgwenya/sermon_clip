@@ -80,6 +80,12 @@ import {
   createSpeechCleanupEditsFromPlan,
   type SpeechCleanupEdits,
 } from "@/lib/speechCleanupPlan";
+import {
+  remapBrollLayerForClipBoundaryChange,
+  remapCaptionCueOverridesForClipBoundaryChange,
+  remapCaptionCueTextEditsForClipBoundaryChange,
+  remapSpeechCleanupEditsForClipBoundaryChange,
+} from "@/lib/clipStudioBoundaryTiming";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
 import styles from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-editor.module.css";
 
@@ -524,7 +530,6 @@ export function ClipStudioEditor({
   captionImprovementSuggestions,
 }: ClipStudioEditorProps) {
   const {
-    isDraftDirty,
     previewClock,
     requestPreviewPlayback,
     seekPreviewTo,
@@ -534,6 +539,10 @@ export function ClipStudioEditor({
   const isPending = false;
   const historyRestorePendingRef = useRef(false);
   const lastHistorySnapshotRef = useRef<StudioDraftSnapshot | null>(null);
+  const draftTimingWindowRef = useRef({
+    startSeconds: initialStartTimeSeconds,
+    endSeconds: initialEndTimeSeconds,
+  });
   const audioReviewSectionRef = useRef<HTMLDetailsElement | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusSuccess, setStatusSuccess] = useState(true);
@@ -1162,6 +1171,64 @@ export function ClipStudioEditor({
     return () => window.clearTimeout(historyTimer);
   }, [currentDraftSnapshot]);
 
+  function clearFeedback() {
+    setStatusMessage("");
+  }
+
+  function applyDraftTimingWindow({
+    startSeconds,
+    endSeconds,
+  }: {
+    startSeconds: number;
+    endSeconds: number;
+  }): boolean {
+    const previousStartSeconds = draftTimingWindowRef.current.startSeconds;
+    const previousEndSeconds = draftTimingWindowRef.current.endSeconds;
+    const hardEndSeconds = knownDurationSeconds && knownDurationSeconds > 0
+      ? knownDurationSeconds
+      : Math.max(localTimeline.end, previousEndSeconds, endSeconds);
+    const nextStartSeconds = clampSeconds(startSeconds, 0, Math.max(0, hardEndSeconds - 0.1));
+    const nextEndSeconds = clampSeconds(endSeconds, nextStartSeconds + 0.1, hardEndSeconds);
+
+    if (
+      !Number.isFinite(nextStartSeconds)
+      || !Number.isFinite(nextEndSeconds)
+      || nextEndSeconds <= nextStartSeconds
+    ) {
+      return false;
+    }
+
+    if (
+      Math.abs(previousStartSeconds - nextStartSeconds) > 0.001
+      || Math.abs(previousEndSeconds - nextEndSeconds) > 0.001
+    ) {
+      const boundaryWindow = {
+        previousStartSeconds,
+        nextStartSeconds,
+        nextEndSeconds,
+      };
+      setCaptionCueOverrides((current) =>
+        remapCaptionCueOverridesForClipBoundaryChange(current, boundaryWindow));
+      setCaptionCueTextEdits((current) =>
+        remapCaptionCueTextEditsForClipBoundaryChange(current, boundaryWindow));
+      setBrollLayer((current) =>
+        remapBrollLayerForClipBoundaryChange(current, boundaryWindow));
+      setSpeechCleanupEdits((current) =>
+        remapSpeechCleanupEditsForClipBoundaryChange(current, boundaryWindow));
+      setCaptionCueSelection(null);
+      setCaptionCorrectionText(null);
+      setConfirmCaptionSelectionCut(false);
+    }
+
+    draftTimingWindowRef.current = {
+      startSeconds: nextStartSeconds,
+      endSeconds: nextEndSeconds,
+    };
+    setStartTimestamp(formatSecondsForTimestampInput(nextStartSeconds));
+    setEndTimestamp(formatSecondsForTimestampInput(nextEndSeconds));
+    return true;
+  }
+
   useEffect(() => {
     function handleTimelineDurationRequest(event: Event) {
       const detail = (event as CustomEvent<{ lengthSeconds?: unknown }>).detail;
@@ -1180,7 +1247,10 @@ export function ClipStudioEditor({
       const nextEnd = clampSeconds(currentStart + targetDurationSeconds, currentStart + 0.1, hardEnd);
       const lastSegment = findClosestTranscriptSegment(transcriptSegments, nextEnd, "end");
 
-      setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
+      applyDraftTimingWindow({
+        startSeconds: currentStart,
+        endSeconds: nextEnd,
+      });
       if (lastSegment) {
         setLastSegmentId(lastSegment.id);
       }
@@ -1191,6 +1261,9 @@ export function ClipStudioEditor({
 
     window.addEventListener("clip-studio-set-duration", handleTimelineDurationRequest);
     return () => window.removeEventListener("clip-studio-set-duration", handleTimelineDurationRequest);
+  // applyDraftTimingWindow intentionally reads the same timing dependencies
+  // below so the event listener always remaps layers from the current window.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     initialStartTimeSeconds,
     knownDurationSeconds,
@@ -1200,12 +1273,23 @@ export function ClipStudioEditor({
     transcriptSegments,
   ]);
 
-  function clearFeedback() {
-    setStatusMessage("");
-  }
-
   function restoreDraftSnapshot(snapshot: StudioDraftSnapshot, message: string) {
     const nextSnapshot = cloneStudioDraftSnapshot(snapshot);
+    const restoredTiming = validateClipStudioTiming({
+      startTimestamp: nextSnapshot.startTimestamp,
+      endTimestamp: nextSnapshot.endTimestamp,
+      knownDurationSeconds,
+    });
+    if (
+      restoredTiming.startSeconds !== null
+      && restoredTiming.endSeconds !== null
+      && restoredTiming.endSeconds > restoredTiming.startSeconds
+    ) {
+      draftTimingWindowRef.current = {
+        startSeconds: restoredTiming.startSeconds,
+        endSeconds: restoredTiming.endSeconds,
+      };
+    }
     historyRestorePendingRef.current = true;
     setStartTimestamp(nextSnapshot.startTimestamp);
     setEndTimestamp(nextSnapshot.endTimestamp);
@@ -1279,8 +1363,10 @@ export function ClipStudioEditor({
       return;
     }
 
-    setStartTimestamp(formatSecondsForTimestampInput(firstSegment.startTimeSeconds));
-    setEndTimestamp(formatSecondsForTimestampInput(lastSegment.endTimeSeconds));
+    applyDraftTimingWindow({
+      startSeconds: firstSegment.startTimeSeconds,
+      endSeconds: lastSegment.endTimeSeconds,
+    });
     setStatusSuccess(true);
     setStatusMessage("Trim updated from transcript text. Preview updated.");
   }
@@ -1291,7 +1377,10 @@ export function ClipStudioEditor({
     if (boundary === "start") {
       const currentEnd = timingPreview.endSeconds ?? initialEndTimeSeconds;
       const nextStart = Math.min(segment.startTimeSeconds, Math.max(0, currentEnd - 0.1));
-      setStartTimestamp(formatSecondsForTimestampInput(nextStart));
+      applyDraftTimingWindow({
+        startSeconds: nextStart,
+        endSeconds: currentEnd,
+      });
       setFirstSegmentId(segment.id);
       setStatusMessage("Start point set from the selected spoken line.");
       setStatusSuccess(true);
@@ -1301,7 +1390,10 @@ export function ClipStudioEditor({
     const currentStart = timingPreview.startSeconds ?? initialStartTimeSeconds;
     const hardEnd = knownDurationSeconds && knownDurationSeconds > 0 ? knownDurationSeconds : segment.endTimeSeconds;
     const nextEnd = clampSeconds(segment.endTimeSeconds, currentStart + 0.1, hardEnd);
-    setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
+    applyDraftTimingWindow({
+      startSeconds: currentStart,
+      endSeconds: nextEnd,
+    });
     setLastSegmentId(segment.id);
     setStatusMessage("End point set from the selected spoken line.");
     setStatusSuccess(true);
@@ -1355,8 +1447,10 @@ export function ClipStudioEditor({
     const firstSegment = findClosestTranscriptSegment(transcriptSegments, nextStart, "start");
     const lastSegment = findClosestTranscriptSegment(transcriptSegments, nextEnd, "end");
 
-    setStartTimestamp(formatSecondsForTimestampInput(firstSegment?.startTimeSeconds ?? nextStart));
-    setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
+    applyDraftTimingWindow({
+      startSeconds: firstSegment?.startTimeSeconds ?? nextStart,
+      endSeconds: nextEnd,
+    });
     setFirstSegmentId(firstSegment?.id ?? segment.id);
     setLastSegmentId(lastSegment?.id ?? segment.id);
     setStatusSuccess(true);
@@ -1373,7 +1467,10 @@ export function ClipStudioEditor({
     const nextEnd = clampSeconds(currentStart + targetDurationSeconds, currentStart + 0.1, hardEnd);
     const lastSegment = findClosestTranscriptSegment(transcriptSegments, nextEnd, "end");
 
-    setEndTimestamp(formatSecondsForTimestampInput(lastSegment?.endTimeSeconds ?? nextEnd));
+    applyDraftTimingWindow({
+      startSeconds: currentStart,
+      endSeconds: lastSegment?.endTimeSeconds ?? nextEnd,
+    });
     if (lastSegment) {
       setLastSegmentId(lastSegment.id);
     }
@@ -1384,8 +1481,10 @@ export function ClipStudioEditor({
 
   function resetTiming() {
     clearFeedback();
-    setStartTimestamp(formatSecondsForTimestampInput(initialStartTimeSeconds));
-    setEndTimestamp(formatSecondsForTimestampInput(initialEndTimeSeconds));
+    applyDraftTimingWindow({
+      startSeconds: initialStartTimeSeconds,
+      endSeconds: initialEndTimeSeconds,
+    });
     setFirstSegmentId(initialFirstSegmentId);
     setLastSegmentId(initialLastSegmentId);
     setFocusedSegmentId(initialFirstSegmentId);
@@ -1410,8 +1509,10 @@ export function ClipStudioEditor({
 
     setFirstSegmentId(firstSegment.id);
     setLastSegmentId(lastSegment.id);
-    setStartTimestamp(formatSecondsForTimestampInput(firstSegment.startTimeSeconds));
-    setEndTimestamp(formatSecondsForTimestampInput(lastSegment.endTimeSeconds));
+    applyDraftTimingWindow({
+      startSeconds: firstSegment.startTimeSeconds,
+      endSeconds: lastSegment.endTimeSeconds,
+    });
     setStatusSuccess(true);
     setStatusMessage("Timing snapped to the nearest spoken lines. Preview updated.");
   }
@@ -1424,25 +1525,37 @@ export function ClipStudioEditor({
     if (boundary === "start") {
       const maxStart = Math.max(0, currentEnd - 0.1);
       const nextStart = Math.max(0, Math.min(maxStart, currentStart + deltaSeconds));
-      setStartTimestamp(formatSecondsForTimestampInput(nextStart));
+      applyDraftTimingWindow({
+        startSeconds: nextStart,
+        endSeconds: currentEnd,
+      });
       return;
     }
 
     const minEnd = Math.max(0.1, currentStart + 0.1);
     const nextEnd = Math.max(minEnd, Math.min(maxKnownEnd, currentEnd + deltaSeconds));
-    setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
+    applyDraftTimingWindow({
+      startSeconds: currentStart,
+      endSeconds: nextEnd,
+    });
   }
 
   function onStartSliderChange(rawValue: number) {
     const maxStart = Math.max(0, sliderEndSeconds - 0.1);
     const nextStart = clampSeconds(rawValue, localTimeline.start, Math.min(localTimeline.end, maxStart));
-    setStartTimestamp(formatSecondsForTimestampInput(nextStart));
+    applyDraftTimingWindow({
+      startSeconds: nextStart,
+      endSeconds: sliderEndSeconds,
+    });
   }
 
   function onEndSliderChange(rawValue: number) {
     const minEnd = Math.min(localTimeline.end, sliderStartSeconds + 0.1);
     const nextEnd = clampSeconds(rawValue, minEnd, localTimeline.end);
-    setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
+    applyDraftTimingWindow({
+      startSeconds: sliderStartSeconds,
+      endSeconds: nextEnd,
+    });
   }
 
   function applyBoundaryFromAbsoluteSeconds(rawSeconds: number, boundary: "start" | "end") {
@@ -1456,7 +1569,10 @@ export function ClipStudioEditor({
       const currentEnd = timingPreview.endSeconds ?? initialEndTimeSeconds;
       const nextStart = clampSeconds(rawSeconds, 0, Math.max(0, currentEnd - 0.1));
       const firstSegment = findClosestTranscriptSegment(transcriptSegments, nextStart, "start");
-      setStartTimestamp(formatSecondsForTimestampInput(nextStart));
+      applyDraftTimingWindow({
+        startSeconds: nextStart,
+        endSeconds: currentEnd,
+      });
       if (firstSegment) {
         setFirstSegmentId(firstSegment.id);
         setFocusedSegmentId(firstSegment.id);
@@ -1473,7 +1589,10 @@ export function ClipStudioEditor({
       : Math.max(localTimeline.end, rawSeconds);
     const nextEnd = clampSeconds(rawSeconds, currentStart + 0.1, hardEnd);
     const lastSegment = findClosestTranscriptSegment(transcriptSegments, nextEnd, "end");
-    setEndTimestamp(formatSecondsForTimestampInput(nextEnd));
+    applyDraftTimingWindow({
+      startSeconds: currentStart,
+      endSeconds: nextEnd,
+    });
     if (lastSegment) {
       setLastSegmentId(lastSegment.id);
       setFocusedSegmentId(lastSegment.id);
@@ -2698,9 +2817,9 @@ export function ClipStudioEditor({
     hookOverlay.enabled && applyCaptionsToClip && hookOverlay.position === "lower"
       ? "Hook and captions can compete in the lower safe area. Move the hook higher before preparing."
       : null;
-  const hookOverlayVisibility = useMemo(
-    () => normalizeHookOverlayForClipDuration(hookOverlay, timingPreview.durationSeconds),
-    [hookOverlay, timingPreview.durationSeconds],
+  const hookOverlayVisibility = normalizeHookOverlayForClipDuration(
+    hookOverlay,
+    timingPreview.durationSeconds,
   );
   const hookTimingWarning = hookOverlay.enabled
     ? hookOverlayVisibility.error ?? (hookOverlayVisibility.wasClamped

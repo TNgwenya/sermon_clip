@@ -98,10 +98,9 @@ describe("ClipStudioEditor caption selection workflow", () => {
       />,
     );
 
-    expect(markup).toContain("Caption script");
-    expect(markup).toContain("Select words or phrases to edit");
-    expect(markup).toContain("Shift-click another to select a range");
-    expect(markup).toContain("Caption actions never rewrite the spoken transcript");
+    expect(markup).toContain("Select caption words");
+    expect(markup).toContain("Click, then Shift-click to select a range. Changes affect captions only.");
+    expect(markup).toContain("Select a caption item to preview it, correct visible wording");
     expect(markup).toContain("set clip boundaries");
     expect(markup).toContain("confirmed video cut");
     expect(markup).toContain('aria-pressed="false"');

@@ -21,6 +21,7 @@ import {
 import {
   buildSpeechCleanupPreviewPlan,
 } from "@/lib/clipStudioPreviewTimeline";
+import { STUDIO_BOUNDARY_CONTEXT_SECONDS } from "@/lib/clipStudioBoundaryTiming";
 import {
   resizeSpeechCleanupEditableCut,
   resolveSpeechCleanupEditableCuts,
@@ -1711,7 +1712,9 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
         </div>
       </div>
       <p id="clip-studio-timeline-draft-help" className="muted small clip-studio-timeline-draft-help">
-        Click to seek. Timing stays draft-only until saved.
+        Click to seek. Drag either white Clip range edge to include more of the original sermon.
+        {" "}Up to {STUDIO_BOUNDARY_CONTEXT_SECONDS} seconds of nearby context is loaded on each side.
+        {" "}Timing stays draft-only until saved.
       </p>
 
       <div className="clip-studio-transcript-range" aria-label="Precise clip timing">
@@ -1730,6 +1733,15 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
             />
           </label>
           <div className="clip-studio-transcript-actions compact">
+            <button
+              type="button"
+              className="button secondary"
+              aria-label="Extend clip 5 seconds earlier"
+              disabled={activeClipStartSeconds <= timelineStart}
+              onClick={() => updateTimelineBoundary("set-start-seconds", activeClipStartSeconds - 5)}
+            >
+              Extend 5s earlier
+            </button>
             <button
               type="button"
               className="button tertiary"
@@ -1765,6 +1777,15 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
             />
           </label>
           <div className="clip-studio-transcript-actions compact">
+            <button
+              type="button"
+              className="button secondary"
+              aria-label="Extend clip 5 seconds later"
+              disabled={activeClipEndSeconds >= timelineEnd}
+              onClick={() => updateTimelineBoundary("set-end-seconds", activeClipEndSeconds + 5)}
+            >
+              Extend 5s later
+            </button>
             <button
               type="button"
               className="button tertiary"
@@ -2100,7 +2121,8 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                 step={0.1}
                 value={activeClipStartSeconds}
                 onChange={(event) => updateTimelineBoundary("set-start-seconds", Number(event.target.value))}
-                aria-label="Clip start handle"
+                aria-label="Clip start handle. Drag left to include earlier sermon context."
+                aria-describedby="clip-studio-timeline-draft-help"
               />
               <input
                 className="clip-studio-timeline-slider clip-studio-timeline-slider-end"
@@ -2110,7 +2132,8 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                 step={0.1}
                 value={activeClipEndSeconds}
                 onChange={(event) => updateTimelineBoundary("set-end-seconds", Number(event.target.value))}
-                aria-label="Clip end handle"
+                aria-label="Clip end handle. Drag right to include later sermon context."
+                aria-describedby="clip-studio-timeline-draft-help"
               />
             </div>
             <span className="clip-studio-layer-action-spacer" aria-hidden="true" />

@@ -193,6 +193,12 @@ describe("Clip Studio transcript and timing controls", () => {
     expect(markup).toContain('id="clip-studio-timeline-out-seconds"');
     expect(markup).toContain('aria-label="Move In point earlier by 0.1 seconds"');
     expect(markup).toContain('aria-label="Move Out point later by 0.1 seconds"');
+    expect(markup).toContain('aria-label="Extend clip 5 seconds earlier"');
+    expect(markup).toContain('aria-label="Extend clip 5 seconds later"');
+    expect(markup).toContain("Drag either white Clip range edge to include more of the original sermon.");
+    expect(markup).toContain("Up to 90 seconds of nearby context is loaded on each side.");
+    expect(markup).toContain("Clip start handle. Drag left to include earlier sermon context.");
+    expect(markup).toContain("Clip end handle. Drag right to include later sermon context.");
 
     expect(__clipStudioTranscriptPanelTestUtils.resolveTimelineBoundarySeconds({
       command: "set-start-seconds",
