@@ -142,13 +142,6 @@ function isStaleFinalExportFreshness(value: string | null | undefined): boolean 
   return value === "OUTDATED" || value === "NEEDS_REGENERATION" || value === "FAILED";
 }
 
-function formatContentPotential(score: number): string {
-  const normalized = score > 10 && score <= 100 ? score / 10 : score;
-  if (normalized >= 8) return "Strong";
-  if (normalized >= 6) return "Worth reviewing";
-  return "Needs refinement";
-}
-
 function extractFramingDecisionSummary(captionData: unknown): string | null {
   if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
     return null;
@@ -646,10 +639,9 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
           <div className="clip-studio-topbar-row">
             <div className="clip-studio-title-block">
               <div className="clip-studio-title-copy stack-sm">
-                <p className="kicker">Clip Studio · Message-safe editing</p>
                 <h1 id="clip-studio-title">{clip.title}</h1>
                 <p className="muted clip-studio-topbar-subtitle">
-                  {sermon.title} · Polish the moment without losing its meaning.
+                  {sermon.title}
                 </p>
               </div>
 
@@ -660,15 +652,11 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                     renderStatus,
                   })}
                 </StatusBadge>
-                <span className="muted small">Content potential · {formatContentPotential(clip.score)}</span>
               </div>
 
               <details className="clip-studio-status-details">
                 <summary>
-                  <span>Clip checks</span>
-                  <span className="muted small">
-                    {clip.boundaryQuality === "GOOD" ? "Timing looks good" : "Review timing and context"}
-                  </span>
+                  <span>{clip.boundaryQuality === "GOOD" ? "Timing ready" : "Review timing"}</span>
                 </summary>
                 <div className="clip-studio-status-row">
                   <StatusBadge

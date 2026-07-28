@@ -4,6 +4,7 @@ import {
   buildClipBrollSuggestions,
   clearClipBrollSuggestionCacheForTests,
   getCachedClipBrollSuggestions,
+  resolveAddedBrollSuggestionLabel,
   type ClipBrollSuggestionInput,
 } from "@/lib/clipBrollSuggestions";
 
@@ -53,6 +54,13 @@ function input(
 describe("clip B-roll suggestions", () => {
   beforeEach(() => {
     clearClipBrollSuggestionCacheForTests();
+  });
+
+  it("keeps the meaningful suggestion label instead of injecting an uneditable edited-highlight title", () => {
+    expect(resolveAddedBrollSuggestionLabel({ label: "Key quote" })).toBe("Key quote");
+    expect(resolveAddedBrollSuggestionLabel({ label: "  Takeaway  " })).toBe("Takeaway");
+    expect(resolveAddedBrollSuggestionLabel({ label: "" })).toBe("Highlight");
+    expect(resolveAddedBrollSuggestionLabel({ label: "Key quote" })).not.toBe("Edited highlight");
   });
 
   it("returns at most two transcript-grounded suggestions with clip-relative timing", () => {

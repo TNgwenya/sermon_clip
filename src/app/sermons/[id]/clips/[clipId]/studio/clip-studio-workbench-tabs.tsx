@@ -15,7 +15,6 @@ type MobileStudioTaskId = "preview" | "transcript" | StudioTabId;
 type StudioTab = {
   id: StudioTabId;
   label: string;
-  eyebrow: string;
   content: ReactNode;
 };
 
@@ -68,15 +67,14 @@ export function ClipStudioWorkbenchTabs({
 
   const tabs: StudioTab[] = useMemo(
     () => [
-      { id: "edit", label: "Captions", eyebrow: "Style, words and timing", content: edit },
-      { id: "format", label: "Frame", eyebrow: "Format and crop", content: format },
-      { id: "branding", label: "Brand", eyebrow: "Church identity", content: branding },
-      { id: "post", label: "Export", eyebrow: "Prepared media and handoff", content: post },
+      { id: "edit", label: "Captions", content: edit },
+      { id: "format", label: "Frame", content: format },
+      { id: "branding", label: "Brand", content: branding },
+      { id: "post", label: "Export", content: post },
     ],
     [branding, edit, format, post],
   );
 
-  const activeEyebrow = tabs.find((tab) => tab.id === activeTab)?.eyebrow ?? "Clip tools";
   const mobileTasks: Array<{ id: MobileStudioTaskId; label: string }> = [
     { id: "preview", label: "Preview" },
     { id: "transcript", label: "Transcript" },
@@ -162,10 +160,7 @@ export function ClipStudioWorkbenchTabs({
       </nav>
 
       <div className="clip-studio-workbench-head">
-        <div>
-          <p className="kicker">Clip inspector</p>
-          <h2>{activeEyebrow}</h2>
-        </div>
+        <h2 className="sr-only">Clip inspector</h2>
         <div
           className="clip-studio-tabs"
           role="tablist"

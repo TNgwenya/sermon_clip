@@ -16,6 +16,13 @@ import {
   validateClipStudioTiming,
 } from "@/lib/clipStudioEditing";
 import {
+  hideSelectedCaptionCues,
+  isCaptionCueSelected,
+  replaceSelectedCaptionCueText,
+  resolveCaptionCueSelection,
+  type CaptionCueSelection,
+} from "@/lib/clipStudioCaptionSelection";
+import {
   CLIP_STUDIO_TRANSCRIPT_COMMAND_EVENT,
   type ClipStudioTranscriptCommandDetail,
 } from "@/lib/clipStudioTranscriptEvents";
@@ -66,6 +73,7 @@ import {
   type SpeechCleanupAudioSilenceEvent,
 } from "@/lib/clipStudioPreviewTimeline";
 import {
+  resolveAddedBrollSuggestionLabel,
   type ClipBrollSuggestion,
 } from "@/lib/clipBrollSuggestions";
 import {
@@ -566,6 +574,9 @@ export function ClipStudioEditor({
     () => buildCaptionCueTextEditSeed(initialCaptionCues),
   );
   const [captionCueOverrides, setCaptionCueOverrides] = useState<EditableCaptionCue[] | null>(null);
+  const [captionCueSelection, setCaptionCueSelection] = useState<CaptionCueSelection | null>(null);
+  const [captionCorrectionText, setCaptionCorrectionText] = useState<string | null>(null);
+  const [confirmCaptionSelectionCut, setConfirmCaptionSelectionCut] = useState(false);
   const [hookOverlay, setHookOverlay] = useState<HookOverlayConfig>(initialHookOverlay);
   const [brollLayer, setBrollLayer] = useState<BrollLayerConfig>(initialBrollLayer);
   const [brollSuggestionDrafts, setBrollSuggestionDrafts] = useState<ClipBrollSuggestion[]>(
@@ -768,6 +779,10 @@ export function ClipStudioEditor({
         text: captionCueTextEdits[getCaptionCueKey(cue)] ?? cue.text,
       })),
     [captionCueOverrides, captionCueTextEdits, generatedCaptionCues],
+  );
+  const selectedCaptionCueRange = useMemo(
+    () => resolveCaptionCueSelection(captionCues, captionCueSelection),
+    [captionCueSelection, captionCues],
   );
   const onVideoCaptionText = captionCues.map((cue) => cue.text.trim()).filter(Boolean).join(" ");
   const captionLineLabel = captionRevealMode === "single-word"
@@ -1476,6 +1491,161 @@ export function ClipStudioEditor({
     }));
   }
 
+  function selectCaptionCue(cueIndex: number, extendSelection: boolean) {
+    setCaptionCueSelection((current) => ({
+      anchorIndex: extendSelection && current ? current.anchorIndex : cueIndex,
+      focusIndex: cueIndex,
+    }));
+    setCaptionCorrectionText(null);
+    setConfirmCaptionSelectionCut(false);
+    seekSourcePreviewTo(captionCues[cueIndex]?.startSeconds ?? 0);
+  }
+
+  function previewSelectedCaptionRange() {
+    if (!selectedCaptionCueRange) {
+      return;
+    }
+
+    seekSourcePreviewTo(selectedCaptionCueRange.startSeconds);
+    requestPreviewPlayback();
+    setStatusSuccess(true);
+    setStatusMessage(
+      `Previewing selected captions at ${formatSecondsForPastorView(selectedCaptionCueRange.startSeconds)}.`,
+    );
+  }
+
+  function beginCaptionCorrection() {
+    if (!selectedCaptionCueRange) {
+      return;
+    }
+
+    setCaptionCorrectionText(selectedCaptionCueRange.text);
+    setConfirmCaptionSelectionCut(false);
+  }
+
+  function applyCaptionCorrection() {
+    if (!captionCueSelection || captionCorrectionText === null) {
+      return;
+    }
+
+    if (!captionCorrectionText.trim()) {
+      setStatusSuccess(false);
+      setStatusMessage("Enter the spoken wording, or use Hide caption only to remove it from the overlay.");
+      return;
+    }
+
+    const nextCues = replaceSelectedCaptionCueText({
+      cues: captionCues,
+      selection: captionCueSelection,
+      replacementText: captionCorrectionText,
+    });
+    setCaptionCueOverrides(nextCues);
+    setCaptionCueTextEdits(buildCaptionCueTextEditSeed(nextCues));
+    setCaptionCorrectionText(null);
+    setStatusSuccess(true);
+    setStatusMessage("Caption wording corrected in this draft. The spoken audio was not changed.");
+  }
+
+  function hideSelectedCaptions() {
+    if (!captionCueSelection || !selectedCaptionCueRange) {
+      return;
+    }
+
+    const nextCues = hideSelectedCaptionCues({
+      cues: captionCues,
+      selection: captionCueSelection,
+    });
+    const hasVisibleCaption = nextCues.some((cue) => cue.text.trim().length > 0);
+    setCaptionCueOverrides(nextCues);
+    setCaptionCueTextEdits(buildCaptionCueTextEditSeed(nextCues));
+    setCaptionCorrectionText(null);
+    setConfirmCaptionSelectionCut(false);
+    if (!hasVisibleCaption) {
+      setApplyCaptionsToClip(false);
+    }
+    setStatusSuccess(true);
+    setStatusMessage(
+      hasVisibleCaption
+        ? "Selected words hidden from captions. The spoken audio and video were not changed."
+        : "All caption words are hidden, so on-video captions were turned off. The spoken video was not changed.",
+    );
+  }
+
+  function setBoundaryFromSelectedCaption(boundary: "start" | "end") {
+    if (!selectedCaptionCueRange) {
+      return;
+    }
+
+    const clipStartSeconds = timingPreview.startSeconds ?? initialStartTimeSeconds;
+    const relativeSeconds = boundary === "start"
+      ? selectedCaptionCueRange.startSeconds
+      : selectedCaptionCueRange.endSeconds;
+    applyBoundaryFromAbsoluteSeconds(clipStartSeconds + relativeSeconds, boundary);
+    setCaptionCorrectionText(null);
+    setConfirmCaptionSelectionCut(false);
+  }
+
+  function requestSelectedSpeechCut() {
+    if (!selectedCaptionCueRange) {
+      return;
+    }
+
+    if (selectedCaptionCueRange.endSeconds - selectedCaptionCueRange.startSeconds < 0.2) {
+      setStatusSuccess(false);
+      setStatusMessage("Select at least 0.2 seconds of speech before making a video cut.");
+      return;
+    }
+
+    const seed = speechCleanupEdits ?? createSpeechCleanupEditsFromPlan(speechCleanupPreviewPlan);
+    const overlapsExistingCut = seed.cuts.some((cut) => (
+      cut.enabled
+      && Math.min(cut.endSeconds, selectedCaptionCueRange.endSeconds)
+        - Math.max(cut.startSeconds, selectedCaptionCueRange.startSeconds) > 0.05
+    ));
+    if (overlapsExistingCut) {
+      setStatusSuccess(false);
+      setStatusMessage("That speech already overlaps an existing pacing cut. Adjust or remove the existing cut first.");
+      return;
+    }
+
+    previewSelectedCaptionRange();
+    setCaptionCorrectionText(null);
+    setConfirmCaptionSelectionCut(true);
+  }
+
+  function cutSelectedSpeechFromDraft() {
+    if (!captionCueSelection || !selectedCaptionCueRange) {
+      return;
+    }
+
+    window.dispatchEvent(new CustomEvent<ClipStudioSpeechCleanupEditDetail>(
+      CLIP_STUDIO_SPEECH_CLEANUP_EDIT_EVENT,
+      {
+        detail: {
+          command: "add-cut",
+          source: "manual",
+          startSeconds: selectedCaptionCueRange.startSeconds,
+          endSeconds: selectedCaptionCueRange.endSeconds,
+        },
+      },
+    ));
+
+    const nextCues = hideSelectedCaptionCues({
+      cues: captionCues,
+      selection: captionCueSelection,
+    });
+    const hasVisibleCaption = nextCues.some((cue) => cue.text.trim().length > 0);
+    setCaptionCueOverrides(nextCues);
+    setCaptionCueTextEdits(buildCaptionCueTextEditSeed(nextCues));
+    if (!hasVisibleCaption) {
+      setApplyCaptionsToClip(false);
+    }
+    setConfirmCaptionSelectionCut(false);
+    setCaptionCueSelection(null);
+    setStatusSuccess(true);
+    setStatusMessage("Selected speech cut from the draft preview and final render. The original source video remains untouched.");
+  }
+
   function applyCaptionCueEdit(
     result: ReturnType<typeof updateEditableCaptionCueTiming>,
     successMessage: string,
@@ -1874,7 +2044,7 @@ export function ClipStudioEditor({
           const cut = {
             id: `manual-internal-${roundedStart}-${roundedEnd}-${Date.now()}`,
             kind: "internal" as const,
-            source: "audio" as const,
+            source: detail.source === "manual" ? "manual" as const : "audio" as const,
             confidence: "confirmed" as const,
             startSeconds: roundedStart,
             endSeconds: roundedEnd,
@@ -2092,7 +2262,7 @@ export function ClipStudioEditor({
       id: `broll-${suggestion.type}-${Date.now().toString(36)}`,
       enabled: true,
       text: trimBrollText(suggestion.text, 140),
-      label: groundingWasEdited ? "Edited highlight" : suggestion.label,
+      label: resolveAddedBrollSuggestionLabel(suggestion),
       startSeconds: suggestion.startSeconds,
       durationSeconds: suggestion.durationSeconds,
       tone: groundingWasEdited ? "context" : suggestion.tone,
@@ -2112,7 +2282,7 @@ export function ClipStudioEditor({
     setStatusSuccess(true);
     setStatusMessage(
       groundingWasEdited
-        ? "Edited highlight added as user-authored context. Review it, then prepare to save it."
+        ? "Your edited card was added as user-authored context. Review it, then prepare to save it."
         : "Suggested highlight added to this draft. Review it, then prepare to save it.",
     );
   }
@@ -2324,6 +2494,46 @@ export function ClipStudioEditor({
             card.id === detail.cardId ? { ...card, enabled: !card.enabled } : card,
           ),
         }));
+        return;
+      }
+
+      if (
+        detail.command === "set-broll-card-start"
+        && detail.cardId
+        && typeof detail.startSeconds === "number"
+        && Number.isFinite(detail.startSeconds)
+      ) {
+        updateBrollCard(detail.cardId, { startSeconds: detail.startSeconds });
+        return;
+      }
+
+      if (
+        detail.command === "set-broll-card-timing"
+        && detail.cardId
+        && typeof detail.startSeconds === "number"
+        && Number.isFinite(detail.startSeconds)
+        && typeof detail.durationSeconds === "number"
+        && Number.isFinite(detail.durationSeconds)
+      ) {
+        updateBrollCard(detail.cardId, {
+          startSeconds: detail.startSeconds,
+          durationSeconds: detail.durationSeconds,
+        });
+        return;
+      }
+
+      if (
+        detail.command === "set-hook-overlay-timing"
+        && typeof detail.startSeconds === "number"
+        && Number.isFinite(detail.startSeconds)
+        && typeof detail.durationSeconds === "number"
+        && Number.isFinite(detail.durationSeconds)
+      ) {
+        setHookOverlay((current) => normalizeHookOverlayForClipDuration({
+          ...current,
+          startSeconds: detail.startSeconds!,
+          durationSeconds: detail.durationSeconds!,
+        }, timingPreview.durationSeconds).hookOverlay);
       }
     }
 
@@ -3072,10 +3282,10 @@ export function ClipStudioEditor({
             type="button"
             className={activeWorkspace === workspace.id ? styles.workspaceActive : undefined}
             aria-pressed={activeWorkspace === workspace.id}
+            aria-label={`${workspace.label}: ${workspace.description}`}
             onClick={() => setActiveWorkspace(workspace.id)}
           >
             <strong>{workspace.label}</strong>
-            <span>{workspace.description}</span>
           </button>
         ))}
       </nav>
@@ -3460,7 +3670,7 @@ export function ClipStudioEditor({
             </div>
           </section>
 
-          <details id="clip-studio-caption-lines" className="clip-studio-caption-dropdown">
+          <details id="clip-studio-caption-lines" className="clip-studio-caption-dropdown" open>
             <summary aria-label={`Caption lines, ${captionLineLabel}, captions ${applyCaptionsToClip ? "on" : "off"}`}>
               <span className="clip-studio-caption-dropdown-copy">
                 <span className="kicker">Caption lines</span>
@@ -3476,6 +3686,178 @@ export function ClipStudioEditor({
             </summary>
 
             <div className="clip-studio-caption-dropdown-body">
+              <section className={styles.captionScriptEditor} aria-labelledby="caption-script-editor-heading">
+                <div className={styles.captionScriptHeading}>
+                  <div>
+                    <h4 id="caption-script-editor-heading">Select caption words</h4>
+                    <p className="muted small">
+                      Click, then Shift-click to select a range. Changes affect captions only.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="button tertiary"
+                    onClick={() => {
+                      if (captionCues.length > 0) {
+                        setCaptionCueSelection({ anchorIndex: 0, focusIndex: captionCues.length - 1 });
+                        setCaptionCorrectionText(null);
+                        setConfirmCaptionSelectionCut(false);
+                      }
+                    }}
+                    disabled={isPending || captionCues.length === 0}
+                  >
+                    Select all
+                  </button>
+                </div>
+
+                {captionCues.length > 0 ? (
+                  <div
+                    className={styles.captionTokenList}
+                    role="group"
+                    aria-label="Selectable caption words and phrases"
+                  >
+                    {captionCues.map((cue, cueIndex) => {
+                      const isSelected = isCaptionCueSelected(cueIndex, selectedCaptionCueRange);
+                      const cueLabel = cue.text.trim() || "Hidden caption";
+                      return (
+                        <button
+                          type="button"
+                          key={`caption-token-${cue.index}-${cueIndex}`}
+                          className={[
+                            styles.captionToken,
+                            isSelected ? styles.captionTokenSelected : "",
+                            !cue.text.trim() ? styles.captionTokenHidden : "",
+                          ].filter(Boolean).join(" ")}
+                          aria-pressed={isSelected}
+                          aria-label={`${cueLabel}, ${formatSecondsForPastorView(cue.startSeconds)} to ${formatSecondsForPastorView(cue.endSeconds)}`}
+                          onClick={(event) => selectCaptionCue(cueIndex, event.shiftKey)}
+                          disabled={isPending}
+                        >
+                          <span>{cueLabel}</span>
+                          <small>{formatSecondsForPastorView(cue.startSeconds)}</small>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="muted small">Caption words will appear here after speech timing is available.</p>
+                )}
+
+                {selectedCaptionCueRange ? (
+                  <div className={styles.captionSelectionPanel}>
+                    <div className={styles.captionSelectionSummary} aria-live="polite">
+                      <strong>
+                        {selectedCaptionCueRange.cueCount} {selectedCaptionCueRange.cueCount === 1 ? "item" : "items"} selected
+                      </strong>
+                      <span>
+                        {formatSecondsForPastorView(selectedCaptionCueRange.startSeconds)}
+                        {" – "}
+                        {formatSecondsForPastorView(selectedCaptionCueRange.endSeconds)}
+                      </span>
+                    </div>
+                    <div className={styles.captionSelectionActions}>
+                      <button type="button" className="button tertiary" onClick={previewSelectedCaptionRange}>
+                        Preview selection
+                      </button>
+                      <button
+                        type="button"
+                        className="button secondary"
+                        onClick={beginCaptionCorrection}
+                        disabled={!applyCaptionsToClip}
+                      >
+                        Correct caption
+                      </button>
+                      <button
+                        type="button"
+                        className="button tertiary"
+                        onClick={hideSelectedCaptions}
+                        disabled={!applyCaptionsToClip}
+                      >
+                        Hide caption only
+                      </button>
+                      <button type="button" className="button tertiary" onClick={() => setBoundaryFromSelectedCaption("start")}>
+                        Start clip here
+                      </button>
+                      <button type="button" className="button tertiary" onClick={() => setBoundaryFromSelectedCaption("end")}>
+                        End clip here
+                      </button>
+                      <button type="button" className="button danger" onClick={requestSelectedSpeechCut}>
+                        Cut audio + video
+                      </button>
+                      <button
+                        type="button"
+                        className="button tertiary"
+                        onClick={() => {
+                          setCaptionCueSelection(null);
+                          setCaptionCorrectionText(null);
+                          setConfirmCaptionSelectionCut(false);
+                        }}
+                      >
+                        Clear selection
+                      </button>
+                    </div>
+                    {!applyCaptionsToClip ? (
+                      <p className="muted small">
+                        On-video captions are off. Turn them on to correct or hide caption text; preview, boundaries, and video cuts remain available.
+                      </p>
+                    ) : null}
+
+                    {captionCorrectionText !== null ? (
+                      <div className={styles.captionCorrectionEditor}>
+                        <label className="stack-sm">
+                          Correct selected caption wording
+                          <textarea
+                            value={captionCorrectionText}
+                            onChange={(event) => setCaptionCorrectionText(event.target.value)}
+                            aria-describedby="caption-correction-safety"
+                            autoFocus
+                          />
+                        </label>
+                        <p id="caption-correction-safety" className="muted small">
+                          Match what the speaker actually said. This changes visible captions only, never the audio or spoken transcript.
+                        </p>
+                        <div className={styles.captionSelectionActions}>
+                          <button type="button" className="button primary" onClick={applyCaptionCorrection}>
+                            Apply correction
+                          </button>
+                          <button type="button" className="button tertiary" onClick={() => setCaptionCorrectionText(null)}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {confirmCaptionSelectionCut ? (
+                      <div
+                        className={styles.captionCutConfirmation}
+                        role="alertdialog"
+                        aria-labelledby="caption-cut-confirmation-heading"
+                        aria-describedby="caption-cut-confirmation-copy"
+                      >
+                        <strong id="caption-cut-confirmation-heading">Cut this spoken section?</strong>
+                        <p id="caption-cut-confirmation-copy">
+                          This removes {formatSecondsForPastorView(
+                            selectedCaptionCueRange.endSeconds - selectedCaptionCueRange.startSeconds,
+                          )} from the draft preview and prepared video. It also hides the selected captions. The original uploaded video stays untouched.
+                        </p>
+                        <div className={styles.captionSelectionActions}>
+                          <button type="button" className="button danger" onClick={cutSelectedSpeechFromDraft}>
+                            Confirm cut
+                          </button>
+                          <button type="button" className="button tertiary" onClick={() => setConfirmCaptionSelectionCut(false)}>
+                            Keep this speech
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className={styles.captionSelectionEmpty}>
+                    Select a caption item to preview it, correct visible wording, set clip boundaries, or make a confirmed video cut.
+                  </p>
+                )}
+              </section>
+
               {captionRevealMode === "single-word" ? (
                 <div className="clip-studio-caption-word-pop-summary">
                   <strong>{captionCues.length} spoken-word pops</strong>
@@ -4746,13 +5128,6 @@ export function ClipStudioEditor({
       </div>
 
       <div className="clip-studio-save-strip">
-        <div>
-          <p className="muted small">Studio draft</p>
-          <p className="clip-studio-save-title">
-            {isDraftDirty ? "Unsaved draft" : "Saved settings"}
-          </p>
-        </div>
-
         <div className="clip-studio-history-actions" aria-label="Draft history controls">
           <button
             type="button"

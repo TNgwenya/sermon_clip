@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   clampCaptionOverlayOffset,
   clampOverlayRatio,
+  nudgeCaptionOverlayOffset,
   resolveBrollPositionFromOverlayRatio,
   resolveCaptionPositionFromOverlayRatio,
   resolveHookPositionFromOverlayRatio,
@@ -35,5 +36,29 @@ describe("clip studio overlay positioning", () => {
     expect(clampCaptionOverlayOffset(-180.2)).toBe(-160);
     expect(clampCaptionOverlayOffset(11.6)).toBe(12);
     expect(clampCaptionOverlayOffset(199)).toBe(160);
+  });
+
+  it("supports accessible arrow-key caption nudging with bounded normal and large steps", () => {
+    expect(nudgeCaptionOverlayOffset({
+      horizontalOffset: 0,
+      verticalOffset: 0,
+      key: "ArrowLeft",
+    })).toEqual({ horizontalOffset: -8, verticalOffset: 0 });
+    expect(nudgeCaptionOverlayOffset({
+      horizontalOffset: 155,
+      verticalOffset: -150,
+      key: "ArrowRight",
+      largeStep: true,
+    })).toEqual({ horizontalOffset: 160, verticalOffset: -150 });
+    expect(nudgeCaptionOverlayOffset({
+      horizontalOffset: 12,
+      verticalOffset: 155,
+      key: "ArrowUp",
+    })).toEqual({ horizontalOffset: 12, verticalOffset: 160 });
+    expect(nudgeCaptionOverlayOffset({
+      horizontalOffset: 0,
+      verticalOffset: 0,
+      key: "Enter",
+    })).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { type CSSProperties, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type KeyboardEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmptyState, StatusBadge } from "@/components/ui";
 import {
@@ -42,6 +42,7 @@ import {
   CLIP_STUDIO_OVERLAY_POSITION_EVENT,
   clampCaptionOverlayOffset,
   clampOverlayRatio,
+  nudgeCaptionOverlayOffset,
   resolveBrollPositionFromOverlayRatio,
   resolveCaptionPositionFromOverlayRatio,
   resolveHookPositionFromOverlayRatio,
@@ -983,6 +984,26 @@ export function ClipStudioLivePreview({
 
     setOverlayDragState(null);
   }
+
+  function handleCaptionOverlayKeyDown(event: KeyboardEvent<HTMLElement>) {
+    const nextOffset = nudgeCaptionOverlayOffset({
+      horizontalOffset: editPreview.captionDesign.layout.horizontalOffset,
+      verticalOffset: editPreview.captionDesign.layout.verticalOffset,
+      key: event.key,
+      largeStep: event.shiftKey,
+    });
+    if (!nextOffset) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    dispatchOverlayPosition({
+      overlay: "caption",
+      position: editPreview.captionPosition,
+      ...nextOffset,
+    });
+  }
   const updatePreviewSeconds = useCallback(() => {
     const video = videoRef.current;
     const videoSeconds = video?.currentTime ?? 0;
@@ -1466,7 +1487,12 @@ export function ClipStudioLivePreview({
                 onPointerMove={moveOverlayDrag}
                 onPointerUp={endOverlayDrag}
                 onPointerCancel={endOverlayDrag}
-                title="Drag captions"
+                onKeyDown={handleCaptionOverlayKeyDown}
+                tabIndex={0}
+                role="button"
+                aria-roledescription="draggable caption overlay"
+                aria-label="Caption position. Drag to move, or use the arrow keys to nudge within the safe area."
+                title="Drag captions, or use arrow keys to nudge"
               >
                 <span aria-label={captionDisplayText}>
                   {captionWords.map((word, index) => (
@@ -1544,7 +1570,6 @@ export function ClipStudioLivePreview({
               >
                 {framingPreview.statusLabel}
               </span>
-              <span>{framingDisplayLabel}</span>
             </div>
             {protectsPreparedVisualLayers && !hasManualCropPreview ? (
               <p className="clip-studio-preview-truth-note">

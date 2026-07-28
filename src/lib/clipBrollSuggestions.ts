@@ -46,6 +46,12 @@ export type ClipBrollSuggestionInput = {
   }>;
 };
 
+export function resolveAddedBrollSuggestionLabel(
+  suggestion: Pick<ClipBrollSuggestion, "label">,
+): string {
+  return suggestion.label.replace(/\s+/g, " ").trim().slice(0, 32) || "Highlight";
+}
+
 type PhraseCandidate = {
   segmentId: string;
   text: string;

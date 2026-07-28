@@ -1082,25 +1082,31 @@ export async function renderApprovedClip(
     let detectedSilenceEvents: DetectedSilenceEvent[] = [];
     let speechCleanupPlan: SpeechCleanupCutPlan | null = null;
 
-    if (speechCleanup.removeDeadAir || speechCleanup.tightenLongPauses) {
+    const clipDurationSeconds = roundSeconds(boundaries.endTimeSeconds - boundaries.startTimeSeconds);
+    const speechCleanupEdits = extractSpeechCleanupEdits(clip.captionData, clipDurationSeconds);
+    const hasManualSpeechCuts = Boolean(
+      speechCleanupEdits?.cuts.some((cut) => cut.enabled && cut.source === "manual"),
+    );
+
+    if (speechCleanup.removeDeadAir || speechCleanup.tightenLongPauses || hasManualSpeechCuts) {
       const speechCleanupProfile = resolveSpeechCleanupProfile(speechCleanup.intensity);
-      try {
-        detectedSilenceEvents = await detectSilenceEventsForClip({
-          sourceVideoPath,
-          startTimeSeconds: boundaries.startTimeSeconds,
-          endTimeSeconds: boundaries.endTimeSeconds,
-          profile: speechCleanupProfile,
-          ffmpegPath: options?.ffmpegPath,
-          jobId: job.id,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown silence detection error.";
-        await appendJobLog(job.id, `Speech cleanup probe skipped: ${message}`);
-        await appendPipelineLog(clip.sermonId, `Speech cleanup probe skipped for clip ${clip.id}: ${message}`);
+      if (speechCleanup.removeDeadAir || speechCleanup.tightenLongPauses) {
+        try {
+          detectedSilenceEvents = await detectSilenceEventsForClip({
+            sourceVideoPath,
+            startTimeSeconds: boundaries.startTimeSeconds,
+            endTimeSeconds: boundaries.endTimeSeconds,
+            profile: speechCleanupProfile,
+            ffmpegPath: options?.ffmpegPath,
+            jobId: job.id,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unknown silence detection error.";
+          await appendJobLog(job.id, `Speech cleanup probe skipped: ${message}`);
+          await appendPipelineLog(clip.sermonId, `Speech cleanup probe skipped for clip ${clip.id}: ${message}`);
+        }
       }
 
-      const clipDurationSeconds = roundSeconds(boundaries.endTimeSeconds - boundaries.startTimeSeconds);
-      const speechCleanupEdits = extractSpeechCleanupEdits(clip.captionData, clipDurationSeconds);
       speechCleanupPlan = buildSpeechCleanupCutPlan({
         captionCues: [],
         durationSeconds: clipDurationSeconds,

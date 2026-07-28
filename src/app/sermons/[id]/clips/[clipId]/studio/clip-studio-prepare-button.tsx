@@ -260,7 +260,6 @@ export function ClipStudioPrepareButton({
         <summary>
           <span>
             <strong>Final video checklist</strong>
-            <small>Review exactly what will be rendered</small>
           </span>
           <span aria-hidden="true">⌄</span>
         </summary>

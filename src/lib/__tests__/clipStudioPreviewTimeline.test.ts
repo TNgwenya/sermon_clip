@@ -65,6 +65,92 @@ describe("resolveCompositionPreviewDuration", () => {
   });
 });
 
+describe("manual speech cuts", () => {
+  it("keeps an explicit user cut active when automatic pause cleanup is off", () => {
+    const plan = buildSpeechCleanupPreviewPlan({
+      captionCues: [],
+      durationSeconds: 12,
+      speechCleanup: {
+        removeDeadAir: false,
+        tightenLongPauses: false,
+        flagFillerWords: false,
+        intensity: "normal",
+      },
+      speechCleanupEdits: {
+        version: 1,
+        cuts: [{
+          id: "manual-cut-1",
+          enabled: true,
+          kind: "internal",
+          source: "manual",
+          confidence: "confirmed",
+          startSeconds: 3,
+          endSeconds: 5,
+          removedSeconds: 2,
+          rawGapSeconds: 2,
+          beforeText: null,
+          afterText: null,
+        }],
+      },
+    });
+
+    expect(plan.enabled).toBe(true);
+    expect(plan.cleanedDurationSeconds).toBe(10);
+    expect(plan.cuts).toEqual([{ startSeconds: 3, endSeconds: 5, removedSeconds: 2 }]);
+    expect(plan.reviewItems[0]).toMatchObject({
+      label: "User cut 1",
+      confidenceLabel: "Selected speech",
+    });
+  });
+
+  it("does not revive stale automatic cuts merely because a user cut exists", () => {
+    const plan = buildSpeechCleanupPreviewPlan({
+      captionCues: [],
+      durationSeconds: 12,
+      speechCleanup: {
+        removeDeadAir: false,
+        tightenLongPauses: false,
+        flagFillerWords: false,
+        intensity: "normal",
+      },
+      speechCleanupEdits: {
+        version: 1,
+        cuts: [
+          {
+            id: "old-auto-cut",
+            enabled: true,
+            kind: "internal",
+            source: "audio",
+            confidence: "confirmed",
+            startSeconds: 1,
+            endSeconds: 2,
+            removedSeconds: 1,
+            rawGapSeconds: 1,
+            beforeText: null,
+            afterText: null,
+          },
+          {
+            id: "manual-cut-1",
+            enabled: true,
+            kind: "internal",
+            source: "manual",
+            confidence: "confirmed",
+            startSeconds: 3,
+            endSeconds: 5,
+            removedSeconds: 2,
+            rawGapSeconds: 2,
+            beforeText: null,
+            afterText: null,
+          },
+        ],
+      },
+    });
+
+    expect(plan.cuts).toEqual([{ startSeconds: 3, endSeconds: 5, removedSeconds: 2 }]);
+    expect(plan.cleanedDurationSeconds).toBe(10);
+  });
+});
+
 describe("synchronizePreviewBackdropMedia", () => {
   it("matches foreground time and playback when the blurred backdrop is ready", () => {
     let playCount = 0;

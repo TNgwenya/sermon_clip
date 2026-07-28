@@ -1,6 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+import type { BrollLayerConfig } from "@/lib/clipStudio";
+import type { SpeechCleanupEdits } from "@/lib/speechCleanupPlan";
+
 const previewState = vi.hoisted(() => ({
   editPreview: {
     startSeconds: 10,
@@ -16,7 +19,7 @@ const previewState = vi.hoisted(() => ({
       flagFillerWords: true,
       intensity: "normal" as const,
     },
-    speechCleanupEdits: null,
+    speechCleanupEdits: null as SpeechCleanupEdits | null,
     audioSilenceEvents: [],
     audioSilenceAnalyzed: false,
     applyCaptionsToClip: true,
@@ -32,7 +35,7 @@ const previewState = vi.hoisted(() => ({
     },
     brollLayer: {
       enabled: false,
-      cards: [],
+      cards: [] as BrollLayerConfig["cards"],
     },
   },
   isDraftDirty: false,
@@ -59,7 +62,7 @@ import {
 
 const panelProps = {
   transcriptSegments: [
-    { id: "line-1", startTimeSeconds: 10, endTimeSeconds: 12, text: "Grace meets us here" },
+    { id: "line-1", startTimeSeconds: 10, endTimeSeconds: 12, text: "Grace meets us here", confidence: 0.72 },
     { id: "line-2", startTimeSeconds: 14, endTimeSeconds: 16, text: "and carries us forward" },
   ],
   clipStartSeconds: 10,
@@ -78,19 +81,22 @@ describe("Clip Studio transcript and timing controls", () => {
   it("makes playable transcript rows and selected-line actions explicit", () => {
     const markup = renderToStaticMarkup(<ClipStudioTranscriptPanel {...panelProps} />);
 
-    expect(markup).toContain("Spoken transcript");
-    expect(markup).toContain("Choose what stays");
-    expect(markup).toContain("Every row is a playable spoken line");
+    expect(markup).toContain(">Transcript</h2>");
+    expect(markup).toContain("Selected line");
+    expect(markup.match(/Check wording/g)).toHaveLength(1);
+    expect(markup).toContain("Select a line to preview or edit its timing.");
+    expect(markup).not.toContain("Choose what stays");
+    expect(markup).not.toContain("Choose an action");
     expect(markup).toContain("In clip: highlighted green");
     expect(markup).toContain("Follow playback");
-    expect(markup).toContain("Start and end change which spoken audio stays");
-    expect(markup).toContain("Wording corrections change captions only");
+    expect(markup).toContain("Start and end trim the recording");
+    expect(markup).toContain("Caption corrections change text only");
     expect(markup).toContain('type="checkbox" checked=""');
     expect(markup).toContain("Preview selected line");
     expect(markup).toContain("Set start to 0:10");
     expect(markup).toContain("Set end to 0:12");
-    expect(markup).toContain("Edit words shown on video");
-    expect(markup).toContain("Review spoken transcript");
+    expect(markup).toContain("Edit caption words");
+    expect(markup).toContain("Review transcript");
     expect(markup).toContain('href="/sermons/sermon-1/review#clip-clip-1"');
     expect(markup).toMatch(/aria-pressed="true"[^>]*data-transcript-segment-id="line-1"/);
     expect(markup).toContain("Select &amp; play");
@@ -154,7 +160,7 @@ describe("Clip Studio transcript and timing controls", () => {
     );
 
     expect(markup).toContain("Captions are off");
-    expect(markup).toContain("Turn on captions and edit words");
+    expect(markup).toContain("Enable captions to edit");
     expect(markup).toContain("Spoken transcript review required before final video");
     expect(markup).toContain("Preparing is locked until a reviewer confirms the spoken wording");
     expect(markup).toContain("Caption edits here do not complete that review");
@@ -204,6 +210,201 @@ describe("Clip Studio transcript and timing controls", () => {
       activeClipStartSeconds: 10,
       activeClipEndSeconds: 40,
     })).toBe(10.1);
+  });
+
+  it("renders one aligned playhead across spoken, caption, hook, B-roll, pacing, and clip rows", () => {
+    previewState.editPreview.hookOverlay = {
+      ...previewState.editPreview.hookOverlay,
+      enabled: true,
+      text: "Do not stop running",
+      startSeconds: 1,
+    };
+    previewState.editPreview.brollLayer = {
+      enabled: true,
+      cards: [{
+        id: "quote-card",
+        enabled: true,
+        text: "Run the race set before you",
+        label: "Key quote",
+        startSeconds: 8,
+        durationSeconds: 4,
+        tone: "quote" as const,
+        position: "full" as const,
+      }],
+    };
+    previewState.isDraftDirty = true;
+
+    const markup = renderToStaticMarkup(<ClipStudioTimeline {...panelProps} />);
+
+    expect(markup).toContain('aria-label="Shared editing timeline"');
+    expect(markup).toContain("Captions");
+    expect(markup).toContain("Hook");
+    expect(markup).toContain("B-roll");
+    expect(markup).toContain("Pacing");
+    expect(markup).toContain("Clip range");
+    expect(markup).toContain("Spoken");
+    expect(markup.match(/clip-studio-shared-playhead/g)).toHaveLength(1);
+    expect(markup).not.toContain("clip-studio-transcript-playhead");
+    expect(markup).not.toContain("clip-studio-timeline-playhead");
+    expect(markup).not.toContain("Unsaved timeline draft");
+    expect(markup).toContain("Timing stays draft-only until saved.");
+    expect(markup).toContain("Drag the purple hook to move it");
+    expect(markup).toContain("Drag the yellow cutaway to move it");
+    expect(markup).toContain('data-hook-overlay="true"');
+    expect(markup).toContain("drag either edge to resize it");
+    expect(markup).toContain("Starts (seconds)");
+    expect(markup).toContain("Duration (seconds)");
+    expect(markup).toContain("0.5s earlier");
+    expect(markup).toContain("Preview hook");
+    expect(markup).toContain("Preview here");
+
+    previewState.editPreview.hookOverlay = {
+      ...previewState.editPreview.hookOverlay,
+      enabled: false,
+      text: "",
+      startSeconds: 0,
+    };
+    previewState.editPreview.brollLayer = { enabled: false, cards: [] };
+    previewState.isDraftDirty = false;
+  });
+
+  it("exposes direct pacing-cut resizing, moving, creation, and exact accessible controls", () => {
+    previewState.editPreview.speechCleanupEdits = {
+      version: 1 as const,
+      cuts: [{
+        id: "manual-pause",
+        enabled: true,
+        startSeconds: 8,
+        endSeconds: 9.2,
+        removedSeconds: 1.2,
+        kind: "internal" as const,
+        source: "audio" as const,
+        confidence: "confirmed" as const,
+        rawGapSeconds: 1.2,
+        beforeText: "Grace meets us here",
+        afterText: "and carries us forward",
+      }],
+    };
+
+    const markup = renderToStaticMarkup(<ClipStudioTimeline {...panelProps} />);
+
+    expect(markup).toContain("Add cut at playhead");
+    expect(markup).toContain("Drag a pacing block to move it");
+    expect(markup).toContain('data-cleanup-cut-id="manual-pause"');
+    expect(markup).toContain("Drag the block to move it or drag either edge to change its length.");
+    expect(markup).toContain("clip-studio-timeline-cut-resize is-start");
+    expect(markup).toContain("clip-studio-timeline-cut-resize is-end");
+    expect(markup).toContain("Review pauses (1)");
+    expect(markup).toContain("Use Review pauses for exact controls.");
+
+    previewState.editPreview.speechCleanupEdits = null;
+  });
+
+  it("maps pointer positions and B-roll drags to bounded, precise timeline seconds", () => {
+    expect(__clipStudioTranscriptPanelTestUtils.resolveTimelinePointerSeconds({
+      clientX: 300,
+      trackLeft: 100,
+      trackWidth: 400,
+      timelineStart: 10,
+      timelineDuration: 40,
+    })).toBe(30);
+    expect(__clipStudioTranscriptPanelTestUtils.resolveTimelinePointerSeconds({
+      clientX: 50,
+      trackLeft: 100,
+      trackWidth: 400,
+      timelineStart: 10,
+      timelineDuration: 40,
+    })).toBe(10);
+    expect(__clipStudioTranscriptPanelTestUtils.resolveTimelinePointerSeconds({
+      clientX: 100,
+      trackLeft: 100,
+      trackWidth: 0,
+      timelineStart: 10,
+      timelineDuration: 40,
+    })).toBeNull();
+
+    expect(__clipStudioTranscriptPanelTestUtils.resolveBrollCardStartSeconds({
+      originStartSeconds: 4,
+      deltaPixels: 40,
+      trackWidth: 200,
+      timelineDuration: 30,
+      clipDurationSeconds: 30,
+      cardDurationSeconds: 5,
+    })).toBe(10);
+    expect(__clipStudioTranscriptPanelTestUtils.resolveBrollCardStartSeconds({
+      originStartSeconds: 24,
+      deltaPixels: 100,
+      trackWidth: 200,
+      timelineDuration: 30,
+      clipDurationSeconds: 30,
+      cardDurationSeconds: 5,
+    })).toBe(25);
+    expect(__clipStudioTranscriptPanelTestUtils.resolveBrollCardStartSeconds({
+      originStartSeconds: 2,
+      deltaPixels: -100,
+      trackWidth: 200,
+      timelineDuration: 30,
+      clipDurationSeconds: 30,
+      cardDurationSeconds: 5,
+    })).toBe(0);
+
+    expect(__clipStudioTranscriptPanelTestUtils.resolveVisualLayerTimingDrag({
+      mode: "move",
+      originStartSeconds: 4,
+      originDurationSeconds: 5,
+      deltaPixels: 40,
+      trackWidth: 200,
+      timelineDuration: 30,
+      clipDurationSeconds: 30,
+      maximumDurationSeconds: 12,
+    })).toEqual({ startSeconds: 10, durationSeconds: 5 });
+    expect(__clipStudioTranscriptPanelTestUtils.resolveVisualLayerTimingDrag({
+      mode: "end",
+      originStartSeconds: 4,
+      originDurationSeconds: 5,
+      deltaPixels: 40,
+      trackWidth: 200,
+      timelineDuration: 30,
+      clipDurationSeconds: 30,
+      maximumDurationSeconds: 12,
+    })).toEqual({ startSeconds: 4, durationSeconds: 11 });
+    expect(__clipStudioTranscriptPanelTestUtils.resolveVisualLayerTimingDrag({
+      mode: "start",
+      originStartSeconds: 4,
+      originDurationSeconds: 5,
+      deltaPixels: -40,
+      trackWidth: 200,
+      timelineDuration: 30,
+      clipDurationSeconds: 30,
+      maximumDurationSeconds: 12,
+    })).toEqual({ startSeconds: 0, durationSeconds: 9 });
+    expect(__clipStudioTranscriptPanelTestUtils.resolveVisualLayerTimingDrag({
+      mode: "end",
+      originStartSeconds: 24,
+      originDurationSeconds: 5,
+      deltaPixels: 100,
+      trackWidth: 200,
+      timelineDuration: 30,
+      clipDurationSeconds: 30,
+      maximumDurationSeconds: 12,
+    })).toEqual({ startSeconds: 24, durationSeconds: 6 });
+  });
+
+  it("previews hook and B-roll markers at their exact start and selects a B-roll card", () => {
+    const seekToAbsolute = vi.fn();
+    const requestPreviewPlayback = vi.fn();
+    const setSelectedBrollCardId = vi.fn();
+
+    __clipStudioTranscriptPanelTestUtils.previewTimelineLayerSegment({
+      segment: { startSeconds: 18.25, cardId: "quote-card" },
+      setSelectedBrollCardId,
+      seekToAbsolute,
+      requestPreviewPlayback,
+    });
+
+    expect(setSelectedBrollCardId).toHaveBeenCalledWith("quote-card");
+    expect(seekToAbsolute).toHaveBeenCalledWith(18.25);
+    expect(requestPreviewPlayback).toHaveBeenCalledOnce();
   });
 
   it("describes deleting a cleanup edit as removing its marker", () => {

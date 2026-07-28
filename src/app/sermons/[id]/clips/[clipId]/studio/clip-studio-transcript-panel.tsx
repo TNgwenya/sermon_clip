@@ -54,8 +54,10 @@ type ClipStudioTranscriptPanelProps = {
 const QUICK_CLIP_LENGTH_SECONDS = [30, 45, 60, 90];
 const MIN_CLEANUP_CUT_SECONDS = 0.2;
 const CLEANUP_CUT_GAP_SECONDS = 0.05;
+const MIN_VISUAL_LAYER_SECONDS = 1;
 
 type CleanupCutDragMode = "move" | "start" | "end";
+type VisualLayerDragMode = CleanupCutDragMode;
 
 type CleanupCutDragState = {
   cutId: string;
@@ -65,6 +67,18 @@ type CleanupCutDragState = {
   originStartSeconds: number;
   originEndSeconds: number;
   trackLeft: number;
+  trackWidth: number;
+};
+
+type VisualLayerDragState = {
+  target: "hook" | "broll";
+  cardId?: string;
+  mode: VisualLayerDragMode;
+  pointerId: number;
+  originClientX: number;
+  originStartSeconds: number;
+  originDurationSeconds: number;
+  maximumDurationSeconds: number;
   trackWidth: number;
 };
 
@@ -79,6 +93,8 @@ type TimelineLayerSegment = {
   widthPercent: number;
   tone: TimelineLayerSegmentTone;
   cardId?: string;
+  hookOverlay?: boolean;
+  cleanupCutId?: string;
 };
 
 type TimelineLayerRow = {
@@ -101,6 +117,157 @@ function clampSeconds(value: number, min: number, max: number): number {
 
 function markerPercent(seconds: number, start: number, duration: number): number {
   return clampPercent(((seconds - start) / duration) * 100);
+}
+
+function resolveTimelinePointerSeconds({
+  clientX,
+  trackLeft,
+  trackWidth,
+  timelineStart,
+  timelineDuration,
+}: {
+  clientX: number;
+  trackLeft: number;
+  trackWidth: number;
+  timelineStart: number;
+  timelineDuration: number;
+}): number | null {
+  if (
+    !Number.isFinite(clientX)
+    || !Number.isFinite(trackLeft)
+    || !Number.isFinite(trackWidth)
+    || trackWidth <= 0
+    || !Number.isFinite(timelineStart)
+    || !Number.isFinite(timelineDuration)
+    || timelineDuration <= 0
+  ) {
+    return null;
+  }
+
+  const ratio = clampSeconds((clientX - trackLeft) / trackWidth, 0, 1);
+  return Number((timelineStart + ratio * timelineDuration).toFixed(3));
+}
+
+function resolveBrollCardStartSeconds({
+  originStartSeconds,
+  deltaPixels,
+  trackWidth,
+  timelineDuration,
+  clipDurationSeconds,
+  cardDurationSeconds,
+}: {
+  originStartSeconds: number;
+  deltaPixels: number;
+  trackWidth: number;
+  timelineDuration: number;
+  clipDurationSeconds: number;
+  cardDurationSeconds: number;
+}): number {
+  if (
+    !Number.isFinite(originStartSeconds)
+    || !Number.isFinite(deltaPixels)
+    || !Number.isFinite(trackWidth)
+    || trackWidth <= 0
+    || !Number.isFinite(timelineDuration)
+    || timelineDuration <= 0
+    || !Number.isFinite(clipDurationSeconds)
+    || clipDurationSeconds < 0
+    || !Number.isFinite(cardDurationSeconds)
+    || cardDurationSeconds < 0
+  ) {
+    return Number(Math.max(0, originStartSeconds || 0).toFixed(2));
+  }
+
+  const maximumStartSeconds = Math.max(0, clipDurationSeconds - Math.max(0, cardDurationSeconds));
+  const deltaSeconds = (deltaPixels / trackWidth) * timelineDuration;
+  return Number(clampSeconds(originStartSeconds + deltaSeconds, 0, maximumStartSeconds).toFixed(2));
+}
+
+function resolveVisualLayerTimingDrag({
+  mode,
+  originStartSeconds,
+  originDurationSeconds,
+  deltaPixels,
+  trackWidth,
+  timelineDuration,
+  clipDurationSeconds,
+  minimumDurationSeconds = MIN_VISUAL_LAYER_SECONDS,
+  maximumDurationSeconds,
+}: {
+  mode: VisualLayerDragMode;
+  originStartSeconds: number;
+  originDurationSeconds: number;
+  deltaPixels: number;
+  trackWidth: number;
+  timelineDuration: number;
+  clipDurationSeconds: number;
+  minimumDurationSeconds?: number;
+  maximumDurationSeconds: number;
+}): { startSeconds: number; durationSeconds: number } {
+  const safeClipDuration = Math.max(minimumDurationSeconds, clipDurationSeconds);
+  const safeMaximumDuration = Math.max(
+    minimumDurationSeconds,
+    Math.min(maximumDurationSeconds, safeClipDuration),
+  );
+  const safeOriginStart = clampSeconds(
+    Number.isFinite(originStartSeconds) ? originStartSeconds : 0,
+    0,
+    Math.max(0, safeClipDuration - minimumDurationSeconds),
+  );
+  const safeOriginDuration = clampSeconds(
+    Number.isFinite(originDurationSeconds) ? originDurationSeconds : minimumDurationSeconds,
+    minimumDurationSeconds,
+    Math.min(safeMaximumDuration, safeClipDuration - safeOriginStart),
+  );
+  if (
+    !Number.isFinite(deltaPixels)
+    || !Number.isFinite(trackWidth)
+    || trackWidth <= 0
+    || !Number.isFinite(timelineDuration)
+    || timelineDuration <= 0
+  ) {
+    return {
+      startSeconds: Number(safeOriginStart.toFixed(2)),
+      durationSeconds: Number(safeOriginDuration.toFixed(2)),
+    };
+  }
+
+  const deltaSeconds = (deltaPixels / trackWidth) * timelineDuration;
+  const originEndSeconds = safeOriginStart + safeOriginDuration;
+
+  if (mode === "start") {
+    const startSeconds = clampSeconds(
+      safeOriginStart + deltaSeconds,
+      Math.max(0, originEndSeconds - safeMaximumDuration),
+      originEndSeconds - minimumDurationSeconds,
+    );
+    return {
+      startSeconds: Number(startSeconds.toFixed(2)),
+      durationSeconds: Number((originEndSeconds - startSeconds).toFixed(2)),
+    };
+  }
+
+  if (mode === "end") {
+    const endSeconds = clampSeconds(
+      originEndSeconds + deltaSeconds,
+      safeOriginStart + minimumDurationSeconds,
+      Math.min(safeClipDuration, safeOriginStart + safeMaximumDuration),
+    );
+    return {
+      startSeconds: Number(safeOriginStart.toFixed(2)),
+      durationSeconds: Number((endSeconds - safeOriginStart).toFixed(2)),
+    };
+  }
+
+  const startSeconds = clampSeconds(
+    safeOriginStart + deltaSeconds,
+    0,
+    Math.max(0, safeClipDuration - safeOriginDuration),
+  );
+  return {
+    startSeconds: Number(startSeconds.toFixed(2)),
+    durationSeconds: Number(safeOriginDuration.toFixed(2)),
+  };
 }
 
 function formatCleanupDuration(seconds: number): string {
@@ -144,6 +311,8 @@ function clipLayerSegment({
   timelineDuration,
   tone,
   cardId,
+  hookOverlay,
+  cleanupCutId,
 }: {
   id: string;
   label: string;
@@ -155,6 +324,8 @@ function clipLayerSegment({
   timelineDuration: number;
   tone: TimelineLayerSegmentTone;
   cardId?: string;
+  hookOverlay?: boolean;
+  cleanupCutId?: string;
 }): TimelineLayerSegment | null {
   if (!Number.isFinite(relativeStartSeconds) || !Number.isFinite(relativeEndSeconds) || relativeEndSeconds <= relativeStartSeconds) {
     return null;
@@ -174,6 +345,8 @@ function clipLayerSegment({
     widthPercent: Math.max(0.9, rightPercent - leftPercent),
     tone,
     cardId,
+    hookOverlay,
+    cleanupCutId,
   };
 }
 
@@ -253,6 +426,24 @@ function activateTranscriptSegment({
   setFocusedSegmentId(segment.id);
   seekToAbsolute(segment.startTimeSeconds);
   requestPreviewPlayback?.();
+}
+
+function previewTimelineLayerSegment({
+  segment,
+  setSelectedBrollCardId,
+  seekToAbsolute,
+  requestPreviewPlayback,
+}: {
+  segment: Pick<TimelineLayerSegment, "cardId" | "startSeconds">;
+  setSelectedBrollCardId?: (cardId: string) => void;
+  seekToAbsolute: (seconds: number) => void;
+  requestPreviewPlayback: () => void;
+}) {
+  if (segment.cardId) {
+    setSelectedBrollCardId?.(segment.cardId);
+  }
+  seekToAbsolute(segment.startSeconds);
+  requestPreviewPlayback();
 }
 
 function resolveTimelineBoundarySeconds({
@@ -408,7 +599,6 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     activeClipStartSeconds,
     durationSeconds,
     editPreview,
-    isDraftDirty,
     previewClock,
     requestPreviewPlayback,
     seekToAbsolute,
@@ -517,13 +707,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
       tabIndex={-1}
     >
       <div className="section-heading-row">
-        <div>
-          <p className="kicker">Spoken transcript</p>
-          <h2>Choose what stays</h2>
-        </div>
-        <StatusBadge tone={isDraftDirty ? "warning" : "success"}>
-          {isDraftDirty ? "Unsaved draft" : "Saved settings"}
-        </StatusBadge>
+        <h2>Transcript</h2>
       </div>
 
       {focusedSegment ? (
@@ -533,13 +717,15 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
           aria-live="polite"
         >
           <div className="clip-studio-transcript-active-heading">
-            <div>
-              <span className="kicker">Selected spoken line</span>
-              <h3>Choose an action</h3>
+            <h3>Selected line</h3>
+            <div className="actions-row">
+              {typeof focusedSegment.confidence === "number" && focusedSegment.confidence < 0.78 ? (
+                <span className="status-pill quality-needs-editing">Check wording</span>
+              ) : null}
+              <span className={`status-pill ${focusedClipStatus === "outside" ? "quality-needs-editing" : "quality-good"}`}>
+                {focusedClipStatusLabel}
+              </span>
             </div>
-            <span className={`status-pill ${focusedClipStatus === "outside" ? "quality-needs-editing" : "quality-good"}`}>
-              {focusedClipStatusLabel}
-            </span>
           </div>
           <div>
             <strong>
@@ -547,7 +733,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
             </strong>
             <p className="clip-studio-transcript-spoken-line">{focusedSegment.text}</p>
             <p className="muted small">
-              Start and end change which spoken audio stays. Wording corrections change captions only; they never alter the recording.
+              Start and end trim the recording. Caption corrections change text only.
             </p>
           </div>
           <div className="clip-studio-transcript-actions" aria-label="Transcript line actions">
@@ -575,7 +761,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
           </div>
           <div className="clip-studio-transcript-correction" aria-label="Transcript wording and review">
             <div>
-              <strong>Need to correct the words?</strong>
+              <strong>Caption wording</strong>
               <p className="muted small">
                 {wordingCorrectionLocked
                   ? "This line is outside the clip. Set a start or end boundary that includes it before editing its on-screen words."
@@ -592,10 +778,10 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
                 disabled={wordingCorrectionLocked}
                 aria-describedby={wordingCorrectionLocked ? "clip-studio-wording-requirement" : undefined}
               >
-                {editPreview.applyCaptionsToClip ? "Edit words shown on video" : "Turn on captions and edit words"}
+                {editPreview.applyCaptionsToClip ? "Edit caption words" : "Enable captions to edit"}
               </button>
               <Link href={transcriptReviewHref} className="button tertiary">
-                Review spoken transcript
+                Review transcript
               </Link>
             </div>
             {wordingCorrectionLocked ? (
@@ -623,7 +809,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
               className="button secondary"
               onClick={() => dispatchTranscriptCommand("snap-to-sentence")}
             >
-              Snap to Sentence
+              Snap to sentence
             </button>
             <button
               type="button"
@@ -637,13 +823,13 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
       ) : null}
 
       <p className="muted small">
-        Every row is a playable spoken line. Select one to hear it and reveal clear start, end, and wording controls.
+        Select a line to preview or edit its timing.
       </p>
 
       <div className="clip-studio-ministry-tags" aria-label="Spoken transcript guide">
-        <span>In clip: highlighted green</span>
-        <span>Playing now: highlighted yellow</span>
-        <span>Selected row: white outline</span>
+        <span aria-label="In clip: highlighted green">In clip</span>
+        <span aria-label="Playing now: highlighted yellow">Playing</span>
+        <span aria-label="Selected row: white outline">Selected</span>
       </div>
 
       <label className="muted small">
@@ -721,9 +907,6 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
                 <small className="clip-studio-transcript-line-action">
                   {focusedSegment?.id === segment.id ? "Selected" : "Select & play"}
                 </small>
-                {typeof segment.confidence === "number" && segment.confidence < 0.78 ? (
-                  <small className="status-pill quality-needs-editing">Check wording</small>
-                ) : null}
               </button>
             );
           })
@@ -743,7 +926,11 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
   const [cleanupReviewOpen, setCleanupReviewOpen] = useState(false);
   const [advancedCleanupOpen, setAdvancedCleanupOpen] = useState(false);
   const [cleanupCutDrag, setCleanupCutDrag] = useState<CleanupCutDragState | null>(null);
+  const [selectedBrollCardId, setSelectedBrollCardId] = useState<string | null>(null);
+  const [visualLayerDrag, setVisualLayerDrag] = useState<VisualLayerDragState | null>(null);
   const cleanupCutDragMovedRef = useRef(false);
+  const visualLayerDragMovedRef = useRef(false);
+  const visualLayerDragRangeRef = useRef<{ startSeconds: number; durationSeconds: number } | null>(null);
   const {
     absolutePlayheadSeconds,
     activeClipEndSeconds,
@@ -789,6 +976,11 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
   const selectedCleanupCut = selectedCleanupCutId
     ? editableCleanupCuts.find((cut) => cut.id === selectedCleanupCutId) ?? null
     : null;
+  const selectedBrollCard = (
+    selectedBrollCardId
+      ? editPreview.brollLayer.cards.find((card) => card.id === selectedBrollCardId)
+      : null
+  ) ?? editPreview.brollLayer.cards.find((card) => card.enabled && card.text.trim()) ?? null;
   const playheadRelativeSeconds = clampSeconds(absolutePlayheadSeconds - activeClipStartSeconds, 0, durationSeconds);
   const canAddCleanupCut = cleanupPlan.enabled && durationSeconds >= MIN_CLEANUP_CUT_SECONDS;
   const cleanupTimelineLabel = cleanupPlan.enabled
@@ -836,6 +1028,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
           timelineStart,
           timelineDuration,
           tone: "hook",
+          hookOverlay: true,
         })
       : null;
     const brollSegments = editPreview.brollLayer.enabled
@@ -871,6 +1064,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
         timelineStart,
         timelineDuration,
         tone: cut.enabled ? "audio" : "kept",
+        cleanupCutId: cut.id,
       });
 
       return segment ? [segment] : [];
@@ -932,12 +1126,94 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
     window.dispatchEvent(new CustomEvent("clip-studio-set-duration", { detail: { lengthSeconds } }));
   }
 
-  function dispatchLayerCommand(command: ClipStudioLayerCommand, cardId?: string) {
+  function dispatchLayerCommand(
+    command: ClipStudioLayerCommand,
+    cardId?: string,
+    startSeconds?: number,
+    layerDurationSeconds?: number,
+  ) {
     window.dispatchEvent(
       new CustomEvent(CLIP_STUDIO_LAYER_COMMAND_EVENT, {
-        detail: { command, cardId },
+        detail: {
+          command,
+          cardId,
+          startSeconds,
+          durationSeconds: layerDurationSeconds,
+        },
       }),
     );
+  }
+
+  function updateBrollCardStart(cardId: string, startSeconds: number, seekPreview = true) {
+    const card = editPreview.brollLayer.cards.find((item) => item.id === cardId);
+    if (!card || !Number.isFinite(startSeconds)) {
+      return;
+    }
+
+    const nextStartSeconds = resolveBrollCardStartSeconds({
+      originStartSeconds: startSeconds,
+      deltaPixels: 0,
+      trackWidth: 1,
+      timelineDuration,
+      clipDurationSeconds: durationSeconds,
+      cardDurationSeconds: card.durationSeconds,
+    });
+    setSelectedBrollCardId(cardId);
+    dispatchLayerCommand("set-broll-card-timing", cardId, nextStartSeconds, card.durationSeconds);
+    if (seekPreview) {
+      seekToAbsolute(activeClipStartSeconds + nextStartSeconds);
+    }
+  }
+
+  function updateBrollCardDuration(cardId: string, nextDurationSeconds: number) {
+    const card = editPreview.brollLayer.cards.find((item) => item.id === cardId);
+    if (!card || !Number.isFinite(nextDurationSeconds)) {
+      return;
+    }
+
+    const nextRange = resolveVisualLayerTimingDrag({
+      mode: "move",
+      originStartSeconds: card.startSeconds,
+      originDurationSeconds: nextDurationSeconds,
+      deltaPixels: 0,
+      trackWidth: 1,
+      timelineDuration,
+      clipDurationSeconds: durationSeconds,
+      maximumDurationSeconds: 12,
+    });
+    setSelectedBrollCardId(cardId);
+    dispatchLayerCommand(
+      "set-broll-card-timing",
+      cardId,
+      nextRange.startSeconds,
+      nextRange.durationSeconds,
+    );
+  }
+
+  function updateHookTiming(startSeconds: number, hookDurationSeconds: number, seekPreview = false) {
+    if (!Number.isFinite(startSeconds) || !Number.isFinite(hookDurationSeconds)) {
+      return;
+    }
+
+    const nextRange = resolveVisualLayerTimingDrag({
+      mode: "move",
+      originStartSeconds: startSeconds,
+      originDurationSeconds: hookDurationSeconds,
+      deltaPixels: 0,
+      trackWidth: 1,
+      timelineDuration,
+      clipDurationSeconds: durationSeconds,
+      maximumDurationSeconds: 20,
+    });
+    dispatchLayerCommand(
+      "set-hook-overlay-timing",
+      undefined,
+      nextRange.startSeconds,
+      nextRange.durationSeconds,
+    );
+    if (seekPreview) {
+      seekToAbsolute(activeClipStartSeconds + nextRange.startSeconds);
+    }
   }
 
   function dispatchTimelineBoundary(command: "set-start-seconds" | "set-end-seconds", seconds: number) {
@@ -975,19 +1251,25 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
     );
   }
 
-  function onTimelineTrackClick(event: MouseEvent<HTMLDivElement>) {
+  function seekFromTimelineTrack(event: MouseEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
-    if (target.closest("input") || target.closest("[data-cleanup-cut-id]")) {
+    if (target.closest("button") || target.closest("input") || target.closest("[data-cleanup-cut-id]")) {
       return;
     }
 
     const rect = event.currentTarget.getBoundingClientRect();
-    if (rect.width <= 0) {
+    const seconds = resolveTimelinePointerSeconds({
+      clientX: event.clientX,
+      trackLeft: rect.left,
+      trackWidth: rect.width,
+      timelineStart,
+      timelineDuration,
+    });
+    if (seconds === null) {
       return;
     }
 
-    const clickRatio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-    seekToAbsolute(timelineStart + clickRatio * timelineDuration);
+    seekToAbsolute(seconds);
   }
 
   function dispatchCleanupEdit(detail: ClipStudioSpeechCleanupEditDetail) {
@@ -1133,7 +1415,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
     cut: SpeechCleanupEditableCut,
     mode: CleanupCutDragMode,
   ) {
-    const track = event.currentTarget.closest(".clip-studio-timeline-track");
+    const track = event.currentTarget.closest(".clip-studio-timeline-track, .clip-studio-layer-track");
     if (!(track instanceof HTMLElement)) {
       return;
     }
@@ -1221,6 +1503,143 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
     };
   }, [cleanupCutDrag, constrainCleanupCutRange, editableCleanupCuts, timelineDuration]);
 
+  function startVisualLayerDrag(
+    event: PointerEvent<HTMLElement>,
+    {
+      target,
+      cardId,
+      mode,
+    }: {
+      target: "hook" | "broll";
+      cardId?: string;
+      mode: VisualLayerDragMode;
+    },
+  ) {
+    const card = target === "broll" && cardId
+      ? editPreview.brollLayer.cards.find((item) => item.id === cardId) ?? null
+      : null;
+    const startSeconds = target === "hook"
+      ? editPreview.hookOverlay.startSeconds
+      : card?.startSeconds;
+    const duration = target === "hook"
+      ? editPreview.hookOverlay.durationSeconds
+      : card?.durationSeconds;
+    const track = event.currentTarget.closest(".clip-studio-layer-track");
+    if (
+      !(track instanceof HTMLElement)
+      || typeof startSeconds !== "number"
+      || !Number.isFinite(startSeconds)
+      || typeof duration !== "number"
+      || !Number.isFinite(duration)
+    ) {
+      return;
+    }
+
+    const rect = track.getBoundingClientRect();
+    if (rect.width <= 0) {
+      return;
+    }
+
+    event.stopPropagation();
+    if (mode !== "move") {
+      event.preventDefault();
+    }
+    visualLayerDragMovedRef.current = false;
+    visualLayerDragRangeRef.current = {
+      startSeconds,
+      durationSeconds: duration,
+    };
+    if (cardId) {
+      setSelectedBrollCardId(cardId);
+    }
+    setVisualLayerDrag({
+      target,
+      cardId,
+      mode,
+      pointerId: event.pointerId,
+      originClientX: event.clientX,
+      originStartSeconds: startSeconds,
+      originDurationSeconds: duration,
+      maximumDurationSeconds: target === "hook" ? 20 : 12,
+      trackWidth: rect.width,
+    });
+  }
+
+  useEffect(() => {
+    if (!visualLayerDrag) {
+      return undefined;
+    }
+
+    const activeDrag = visualLayerDrag;
+
+    function handlePointerMove(event: globalThis.PointerEvent) {
+      if (event.pointerId !== activeDrag.pointerId) {
+        return;
+      }
+
+      const deltaPixels = event.clientX - activeDrag.originClientX;
+      if (Math.abs(deltaPixels) <= 3) {
+        return;
+      }
+
+      event.preventDefault();
+      visualLayerDragMovedRef.current = true;
+      const nextRange = resolveVisualLayerTimingDrag({
+        mode: activeDrag.mode,
+        originStartSeconds: activeDrag.originStartSeconds,
+        originDurationSeconds: activeDrag.originDurationSeconds,
+        deltaPixels,
+        trackWidth: activeDrag.trackWidth,
+        timelineDuration,
+        clipDurationSeconds: durationSeconds,
+        maximumDurationSeconds: activeDrag.maximumDurationSeconds,
+      });
+      visualLayerDragRangeRef.current = nextRange;
+      window.dispatchEvent(
+        new CustomEvent(CLIP_STUDIO_LAYER_COMMAND_EVENT, {
+          detail: activeDrag.target === "hook"
+            ? {
+                command: "set-hook-overlay-timing",
+                startSeconds: nextRange.startSeconds,
+                durationSeconds: nextRange.durationSeconds,
+              }
+            : {
+                command: "set-broll-card-timing",
+                cardId: activeDrag.cardId,
+                startSeconds: nextRange.startSeconds,
+                durationSeconds: nextRange.durationSeconds,
+              },
+        }),
+      );
+      seekToAbsolute(activeClipStartSeconds + nextRange.startSeconds);
+    }
+
+    function handlePointerUp(event: globalThis.PointerEvent) {
+      if (event.pointerId !== activeDrag.pointerId) {
+        return;
+      }
+
+      if (visualLayerDragMovedRef.current && visualLayerDragRangeRef.current !== null) {
+        seekToAbsolute(activeClipStartSeconds + visualLayerDragRangeRef.current.startSeconds);
+      }
+      setVisualLayerDrag(null);
+      window.setTimeout(() => {
+        visualLayerDragMovedRef.current = false;
+        visualLayerDragRangeRef.current = null;
+      }, 0);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { passive: false });
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, [activeClipStartSeconds, durationSeconds, seekToAbsolute, timelineDuration, visualLayerDrag]);
+
   return (
     <section className="card clip-studio-bottom-timeline stack-sm" aria-label="Clip timeline">
       <div className="clip-studio-edit-deck-head">
@@ -1229,8 +1648,6 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
           <strong>{formatSecondsForPastorView(activeClipStartSeconds)} - {formatSecondsForPastorView(activeClipEndSeconds)}</strong>
         </div>
         <div className="clip-studio-edit-deck-meta">
-          <span>AI start</span>
-          <span>AI end</span>
           <StatusBadge tone={durationTone}>{durationLabel}</StatusBadge>
           <span>{cleanupTimelineLabel}</span>
         </div>
@@ -1249,6 +1666,18 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
             </button>
           ))}
         </div>
+        <label className="clip-studio-playhead-time-control">
+          <span>Playhead (seconds)</span>
+          <input
+            type="number"
+            min={timelineStart}
+            max={timelineEnd}
+            step={0.1}
+            value={Number(absolutePlayheadSeconds.toFixed(3))}
+            onChange={(event) => seekToAbsolute(event.currentTarget.valueAsNumber)}
+            aria-describedby="clip-studio-timeline-draft-help"
+          />
+        </label>
         <div className="clip-studio-timeline-boundary-actions" aria-label="Timeline boundary actions">
           <button
             type="button"
@@ -1280,6 +1709,9 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
           </button>
         </div>
       </div>
+      <p id="clip-studio-timeline-draft-help" className="muted small clip-studio-timeline-draft-help">
+        Click to seek. Timing stays draft-only until saved.
+      </p>
 
       <div className="clip-studio-transcript-range" aria-label="Precise clip timing">
         <article>
@@ -1367,6 +1799,9 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
             <p className="kicker">Pacing cleanup</p>
             <strong>{cleanupSummaryTitle}</strong>
             <span>{cleanupSummaryMeta}</span>
+            <span id="clip-studio-pacing-drag-help" className="muted small">
+              Drag a pacing block to move it, or drag either edge to change the cut length. Use Review pauses for exact controls.
+            </span>
           </div>
           <StatusBadge tone={cleanupPlan.enabled && tightenedPauseCount > 0 ? "success" : "neutral"}>
             {cleanupPlan.enabled ? "Preview ready" : "Off"}
@@ -1393,9 +1828,10 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                 Tighten all
               </button>
             </>
-          ) : cleanupPlan.enabled ? (
+          ) : null}
+          {cleanupPlan.enabled ? (
             <button type="button" className="button secondary" onClick={addCleanupCutAtPlayhead} disabled={!canAddCleanupCut}>
-              Add pause at playhead
+              Add cut at playhead
             </button>
           ) : null}
           <button
@@ -1409,150 +1845,453 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
         </div>
       </div>
 
-      <div className="clip-studio-layer-stack" aria-label="Edit layers">
-        {timelineLayerRows.map((row) => (
+      <div
+        className="clip-studio-unified-timeline-scroll"
+        aria-label="Shared editing timeline"
+        tabIndex={0}
+      >
+        <div className="clip-studio-layer-stack clip-studio-unified-timeline">
+          {timelineLayerRows.map((row, rowIndex) => (
+            <div
+              key={row.id}
+              className={[
+                "clip-studio-layer-row",
+                row.enabled ? "is-enabled" : "is-disabled",
+              ].join(" ")}
+              style={{ gridRow: rowIndex + 1 }}
+            >
+              <div className="clip-studio-layer-label">
+                <strong>{row.label}</strong>
+                <span>{row.status}</span>
+              </div>
+              <div
+                className="clip-studio-layer-track"
+                aria-label={`${row.label} layer timeline`}
+                onClick={seekFromTimelineTrack}
+              >
+                {row.segments.length > 0 ? (
+                  row.segments.map((segment) => {
+                    const isBrollSegment = Boolean(segment.cardId);
+                    const isHookSegment = segment.hookOverlay === true;
+                    const isVisualTimingSegment = isBrollSegment || isHookSegment;
+                    const isSelectedBrollSegment = isBrollSegment && selectedBrollCard?.id === segment.cardId;
+                    const cleanupCut = segment.cleanupCutId
+                      ? editableCleanupCuts.find((cut) => cut.id === segment.cleanupCutId) ?? null
+                      : null;
+                    const isPacingSegment = cleanupCut !== null;
+                    return (
+                      <button
+                        key={segment.id}
+                        type="button"
+                        className={[
+                          "clip-studio-layer-segment",
+                          `is-${segment.tone}`,
+                          isVisualTimingSegment ? "is-draggable is-resizable" : "",
+                          isPacingSegment ? "is-pacing-cut is-draggable is-resizable" : "",
+                          isSelectedBrollSegment ? "is-selected" : "",
+                        ].filter(Boolean).join(" ")}
+                        data-cleanup-cut-id={cleanupCut?.id}
+                        data-hook-overlay={isHookSegment ? "true" : undefined}
+                        style={{ left: `${segment.leftPercent}%`, width: `${segment.widthPercent}%` }}
+                        title={
+                          isVisualTimingSegment
+                            ? `${segment.title} · drag the block or either edge`
+                            : isPacingSegment
+                              ? `${segment.title} · drag the block or either edge`
+                              : segment.title
+                        }
+                        aria-label={
+                          isBrollSegment
+                            ? `Preview and select ${row.label} item at ${formatSecondsForPastorView(segment.startSeconds)}. Drag the block to move it or drag either edge to change its duration.`
+                            : isHookSegment
+                              ? `Preview hook at ${formatSecondsForPastorView(segment.startSeconds)}. Drag the block to move it or drag either edge to change its duration.`
+                            : isPacingSegment
+                              ? `Preview pacing cut at ${formatSecondsForPastorView(segment.startSeconds)}. Drag the block to move it or drag either edge to change its length.`
+                              : `Preview ${row.label} layer at ${formatSecondsForPastorView(segment.startSeconds)}`
+                        }
+                        aria-describedby={
+                          isBrollSegment
+                            ? "clip-studio-broll-drag-help"
+                            : isHookSegment
+                              ? "clip-studio-hook-drag-help"
+                            : isPacingSegment
+                              ? "clip-studio-pacing-drag-help"
+                              : undefined
+                        }
+                        onPointerDown={(event) => {
+                          if (segment.cardId) {
+                            startVisualLayerDrag(event, {
+                              target: "broll",
+                              cardId: segment.cardId,
+                              mode: "move",
+                            });
+                          } else if (isHookSegment) {
+                            startVisualLayerDrag(event, { target: "hook", mode: "move" });
+                          } else if (cleanupCut) {
+                            startCleanupCutDrag(event, cleanupCut, "move");
+                          }
+                        }}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (isVisualTimingSegment && visualLayerDragMovedRef.current) {
+                            visualLayerDragMovedRef.current = false;
+                            return;
+                          }
+                          if (cleanupCut && cleanupCutDragMovedRef.current) {
+                            cleanupCutDragMovedRef.current = false;
+                            return;
+                          }
+                          if (cleanupCut) {
+                            setSelectedCleanupCutId(cleanupCut.id);
+                            setCleanupReviewOpen(true);
+                          }
+                          previewTimelineLayerSegment({
+                            segment,
+                            setSelectedBrollCardId,
+                            seekToAbsolute,
+                            requestPreviewPlayback,
+                          });
+                        }}
+                      >
+                        {cleanupCut || isVisualTimingSegment ? (
+                          <span
+                            className="clip-studio-timeline-cut-resize is-start"
+                            aria-hidden="true"
+                            onPointerDown={(event) => {
+                              if (cleanupCut) {
+                                startCleanupCutDrag(event, cleanupCut, "start");
+                              } else {
+                                startVisualLayerDrag(event, {
+                                  target: isHookSegment ? "hook" : "broll",
+                                  cardId: segment.cardId,
+                                  mode: "start",
+                                });
+                              }
+                            }}
+                          />
+                        ) : null}
+                        <span>{segment.label}</span>
+                        {cleanupCut || isVisualTimingSegment ? (
+                          <span
+                            className="clip-studio-timeline-cut-resize is-end"
+                            aria-hidden="true"
+                            onPointerDown={(event) => {
+                              if (cleanupCut) {
+                                startCleanupCutDrag(event, cleanupCut, "end");
+                              } else {
+                                startVisualLayerDrag(event, {
+                                  target: isHookSegment ? "hook" : "broll",
+                                  cardId: segment.cardId,
+                                  mode: "end",
+                                });
+                              }
+                            }}
+                          />
+                        ) : null}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <span className="clip-studio-layer-empty" aria-hidden="true" />
+                )}
+              </div>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => {
+                  if (row.action === "review-pauses") {
+                    setCleanupReviewOpen((open) => !open);
+                    return;
+                  }
+
+                  dispatchLayerCommand(row.action);
+                }}
+              >
+                {row.actionLabel}
+              </button>
+            </div>
+          ))}
+
           <div
-            key={row.id}
-            className={[
-              "clip-studio-layer-row",
-              row.enabled ? "is-enabled" : "is-disabled",
-            ].join(" ")}
+            className="clip-studio-layer-row is-enabled"
+            style={{ gridRow: timelineLayerRows.length + 1 }}
           >
             <div className="clip-studio-layer-label">
-              <strong>{row.label}</strong>
-              <span>{row.status}</span>
+              <strong>Clip range</strong>
+              <span>Start and end</span>
             </div>
-            <div className="clip-studio-layer-track" aria-label={`${row.label} layer timeline`}>
-              {row.segments.length > 0 ? (
-                row.segments.map((segment) => (
+            <div
+              className="clip-studio-timeline-track clip-studio-timeline-track-interactive"
+              aria-label="Clip boundary timeline"
+              onClick={seekFromTimelineTrack}
+            >
+              <span
+                className="clip-studio-timeline-selection"
+                style={{ left: `${selectedStartPercent}%`, width: `${selectedWidthPercent}%` }}
+              />
+              <span className="clip-studio-timeline-ai-marker" style={{ left: `${selectedStartPercent}%` }} title="AI start" />
+              <span className="clip-studio-timeline-ai-marker" style={{ left: `${selectedEndPercent}%` }} title="AI end" />
+              {editableCleanupCuts.map((range) => {
+                const cutStart = activeClipStartSeconds + range.startSeconds;
+                const cutEnd = activeClipStartSeconds + range.endSeconds;
+                const left = markerPercent(cutStart, timelineStart, timelineDuration);
+                const width = Math.max(0.6, markerPercent(cutEnd, timelineStart, timelineDuration) - left);
+                const title = range.source === "audio"
+                  ? `${formatCleanupDuration(range.removedSeconds)} audio silence`
+                  : `${formatCleanupDuration(range.removedSeconds)} estimated pause`;
+
+                return (
+                  <button
+                    key={range.id}
+                    type="button"
+                    data-cleanup-cut-id={range.id}
+                    aria-pressed={range.enabled}
+                    aria-label={`${range.enabled ? "Keep" : "Restore"} and preview pause cleanup at ${formatSecondsForPastorView(cutStart)}`}
+                    className={[
+                      "clip-studio-timeline-dead-air",
+                      range.source === "audio" ? "is-audio" : "is-transcript",
+                      range.enabled ? "is-active" : "is-disabled",
+                      selectedCleanupCut?.id === range.id ? "is-selected" : "",
+                    ].join(" ")}
+                    style={{ left: `${left}%`, width: `${width}%` }}
+                    title={title}
+                    onPointerDown={(event) => {
+                      if (advancedCleanupOpen) {
+                        startCleanupCutDrag(event, range, "move");
+                      }
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (cleanupCutDragMovedRef.current) {
+                        cleanupCutDragMovedRef.current = false;
+                        return;
+                      }
+                      seekToAbsolute(cutStart);
+                      requestPreviewPlayback();
+                      toggleCleanupCut(range);
+                    }}
+                  >
+                    {advancedCleanupOpen ? (
+                      <span
+                        className="clip-studio-timeline-cut-resize is-start"
+                        aria-hidden="true"
+                        onPointerDown={(event) => startCleanupCutDrag(event, range, "start")}
+                      />
+                    ) : null}
+                    <span className="clip-studio-timeline-cut-label">{range.enabled ? "" : "Kept"}</span>
+                    {advancedCleanupOpen ? (
+                      <span
+                        className="clip-studio-timeline-cut-resize is-end"
+                        aria-hidden="true"
+                        onPointerDown={(event) => startCleanupCutDrag(event, range, "end")}
+                      />
+                    ) : null}
+                  </button>
+                );
+              })}
+              <span className="clip-studio-timeline-handle" style={{ left: `${selectedStartPercent}%` }} aria-hidden="true" />
+              <span className="clip-studio-timeline-handle" style={{ left: `${selectedEndPercent}%` }} aria-hidden="true" />
+              <input
+                className="clip-studio-timeline-slider clip-studio-timeline-slider-start"
+                type="range"
+                min={timelineStart}
+                max={timelineEnd}
+                step={0.1}
+                value={activeClipStartSeconds}
+                onChange={(event) => updateTimelineBoundary("set-start-seconds", Number(event.target.value))}
+                aria-label="Clip start handle"
+              />
+              <input
+                className="clip-studio-timeline-slider clip-studio-timeline-slider-end"
+                type="range"
+                min={timelineStart}
+                max={timelineEnd}
+                step={0.1}
+                value={activeClipEndSeconds}
+                onChange={(event) => updateTimelineBoundary("set-end-seconds", Number(event.target.value))}
+                aria-label="Clip end handle"
+              />
+            </div>
+            <span className="clip-studio-layer-action-spacer" aria-hidden="true" />
+          </div>
+
+          <div
+            className="clip-studio-layer-row is-enabled"
+            style={{ gridRow: timelineLayerRows.length + 2 }}
+          >
+            <div className="clip-studio-layer-label">
+              <strong>Spoken</strong>
+              <span>{transcriptSegments.length} line{transcriptSegments.length === 1 ? "" : "s"}</span>
+            </div>
+            <div
+              className="clip-studio-transcript-strip"
+              aria-label="Spoken transcript timeline"
+              onClick={seekFromTimelineTrack}
+            >
+              {transcriptSegments.map((segment, index) => {
+                const left = markerPercent(segment.startTimeSeconds, timelineStart, timelineDuration);
+                const right = markerPercent(segment.endTimeSeconds, timelineStart, timelineDuration);
+                const isSelected = selectedSegmentIds.has(segment.id);
+
+                return (
                   <button
                     key={segment.id}
                     type="button"
-                    className={`clip-studio-layer-segment is-${segment.tone}`}
-                    style={{ left: `${segment.leftPercent}%`, width: `${segment.widthPercent}%` }}
-                    title={segment.title}
-                    aria-label={`Preview ${row.label} layer at ${formatSecondsForPastorView(segment.startSeconds)}`}
-                    onClick={() => {
-                      seekToAbsolute(segment.startSeconds);
+                    className={isSelected ? "clip-studio-transcript-block is-selected" : "clip-studio-transcript-block"}
+                    style={{ left: `${left}%`, width: `${Math.max(0.65, right - left)}%` }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      seekToAbsolute(segment.startTimeSeconds);
                       requestPreviewPlayback();
                     }}
+                    aria-label={`Preview spoken line ${index + 1} at ${formatSecondsForPastorView(segment.startTimeSeconds)}`}
+                    title={segment.text}
                   >
-                    <span>{segment.label}</span>
+                    <span>{index + 1}</span>
                   </button>
-                ))
-              ) : (
-                <span className="clip-studio-layer-empty" aria-hidden="true" />
-              )}
+                );
+              })}
             </div>
+            <span className="clip-studio-layer-action-spacer" aria-hidden="true" />
+          </div>
+
+          <span
+            className="clip-studio-shared-playhead"
+            style={{ gridRow: `1 / span ${timelineLayerRows.length + 2}` }}
+            aria-hidden="true"
+          >
+            <span style={{ left: `${playheadPercent}%` }} />
+          </span>
+        </div>
+      </div>
+
+      <div className="clip-studio-timeline-labels muted small">
+        <span>{formatSecondsForPastorView(timelineStart)}</span>
+        <span>{previewClock.isPlaying ? "Playing" : "Ready"}</span>
+        <span>{formatSecondsForPastorView(timelineEnd)}</span>
+      </div>
+
+      {editPreview.hookOverlay.enabled && editPreview.hookOverlay.text.trim() ? (
+        <div className="clip-studio-broll-timeline-controls" aria-label="Hook timing">
+          <div>
+            <span className="kicker">Opening hook</span>
+            <strong>{editPreview.hookOverlay.text}</strong>
+          </div>
+          <label>
+            Starts (seconds)
+            <input
+              type="number"
+              min={0}
+              max={Math.max(0, durationSeconds - editPreview.hookOverlay.durationSeconds)}
+              step={0.1}
+              value={editPreview.hookOverlay.startSeconds}
+              onChange={(event) => updateHookTiming(
+                event.currentTarget.valueAsNumber,
+                editPreview.hookOverlay.durationSeconds,
+                true,
+              )}
+              aria-describedby="clip-studio-hook-drag-help"
+            />
+          </label>
+          <label>
+            Duration (seconds)
+            <input
+              type="number"
+              min={MIN_VISUAL_LAYER_SECONDS}
+              max={Math.min(20, durationSeconds - editPreview.hookOverlay.startSeconds)}
+              step={0.1}
+              value={editPreview.hookOverlay.durationSeconds}
+              onChange={(event) => updateHookTiming(
+                editPreview.hookOverlay.startSeconds,
+                event.currentTarget.valueAsNumber,
+              )}
+              aria-describedby="clip-studio-hook-drag-help"
+            />
+          </label>
+          <div className="clip-studio-broll-timeline-nudges">
             <button
               type="button"
               className="button secondary"
               onClick={() => {
-                if (row.action === "review-pauses") {
-                  setCleanupReviewOpen((open) => !open);
-                  return;
-                }
-
-                dispatchLayerCommand(row.action);
+                seekToAbsolute(activeClipStartSeconds + editPreview.hookOverlay.startSeconds);
+                requestPreviewPlayback();
               }}
             >
-              {row.actionLabel}
+              Preview hook
             </button>
           </div>
-        ))}
-      </div>
-
-        <div
-          className="clip-studio-timeline-track clip-studio-timeline-track-interactive"
-          aria-label="Clip boundary timeline"
-          onClick={onTimelineTrackClick}
-        >
-          <span
-            className="clip-studio-timeline-selection"
-            style={{ left: `${selectedStartPercent}%`, width: `${selectedWidthPercent}%` }}
-          />
-          <span className="clip-studio-timeline-ai-marker" style={{ left: `${selectedStartPercent}%` }} title="AI start" />
-          <span className="clip-studio-timeline-ai-marker" style={{ left: `${selectedEndPercent}%` }} title="AI end" />
-          {editableCleanupCuts.map((range) => {
-            const cutStart = activeClipStartSeconds + range.startSeconds;
-            const cutEnd = activeClipStartSeconds + range.endSeconds;
-            const left = markerPercent(cutStart, timelineStart, timelineDuration);
-            const width = Math.max(0.6, markerPercent(cutEnd, timelineStart, timelineDuration) - left);
-            const title = range.source === "audio"
-              ? `${formatCleanupDuration(range.removedSeconds)} audio silence`
-              : `${formatCleanupDuration(range.removedSeconds)} estimated pause`;
-
-            return (
-              <button
-                key={range.id}
-                type="button"
-                data-cleanup-cut-id={range.id}
-                aria-pressed={range.enabled}
-                aria-label={`${range.enabled ? "Keep" : "Restore"} pause cleanup at ${formatSecondsForPastorView(cutStart)}`}
-                className={[
-                  "clip-studio-timeline-dead-air",
-                  range.source === "audio" ? "is-audio" : "is-transcript",
-                  range.enabled ? "is-active" : "is-disabled",
-                  selectedCleanupCut?.id === range.id ? "is-selected" : "",
-                ].join(" ")}
-                style={{ left: `${left}%`, width: `${width}%` }}
-                title={title}
-                onPointerDown={(event) => {
-                  if (advancedCleanupOpen) {
-                    startCleanupCutDrag(event, range, "move");
-                  }
-                }}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (cleanupCutDragMovedRef.current) {
-                    cleanupCutDragMovedRef.current = false;
-                    return;
-                  }
-                  toggleCleanupCut(range);
-                }}
-              >
-                {advancedCleanupOpen ? (
-                  <span
-                    className="clip-studio-timeline-cut-resize is-start"
-                    aria-hidden="true"
-                    onPointerDown={(event) => startCleanupCutDrag(event, range, "start")}
-                  />
-                ) : null}
-                <span className="clip-studio-timeline-cut-label">{range.enabled ? "" : "Kept"}</span>
-                {advancedCleanupOpen ? (
-                  <span
-                    className="clip-studio-timeline-cut-resize is-end"
-                    aria-hidden="true"
-                    onPointerDown={(event) => startCleanupCutDrag(event, range, "end")}
-                  />
-                ) : null}
-              </button>
-            );
-          })}
-          <span className="clip-studio-timeline-playhead" style={{ left: `${playheadPercent}%` }} aria-hidden="true" />
-          <span className="clip-studio-timeline-handle" style={{ left: `${selectedStartPercent}%` }} aria-hidden="true" />
-          <span className="clip-studio-timeline-handle" style={{ left: `${selectedEndPercent}%` }} aria-hidden="true" />
-          <input
-            className="clip-studio-timeline-slider clip-studio-timeline-slider-start"
-            type="range"
-            min={timelineStart}
-            max={timelineEnd}
-            step={0.1}
-            value={activeClipStartSeconds}
-            onChange={(event) => updateTimelineBoundary("set-start-seconds", Number(event.target.value))}
-            aria-label="Clip start handle"
-          />
-          <input
-            className="clip-studio-timeline-slider clip-studio-timeline-slider-end"
-            type="range"
-            min={timelineStart}
-            max={timelineEnd}
-            step={0.1}
-            value={activeClipEndSeconds}
-            onChange={(event) => updateTimelineBoundary("set-end-seconds", Number(event.target.value))}
-            aria-label="Clip end handle"
-          />
+          <span id="clip-studio-hook-drag-help" className="muted small">
+            Drag the purple hook to move it, drag either edge to resize it, or type exact values. Changes stay in this unsaved draft.
+          </span>
         </div>
+      ) : null}
+
+      {selectedBrollCard ? (
+        <div className="clip-studio-broll-timeline-controls" aria-label="Selected B-roll or highlight card timing">
+          <div>
+            <span className="kicker">Selected cutaway</span>
+            <strong>{selectedBrollCard.label || selectedBrollCard.text}</strong>
+          </div>
+          <label>
+            Starts (seconds)
+            <input
+              type="number"
+              min={0}
+              max={Math.max(0, durationSeconds - selectedBrollCard.durationSeconds)}
+              step={0.1}
+              value={selectedBrollCard.startSeconds}
+              onChange={(event) => updateBrollCardStart(selectedBrollCard.id, event.currentTarget.valueAsNumber)}
+              aria-describedby="clip-studio-broll-drag-help"
+            />
+          </label>
+          <label>
+            Duration (seconds)
+            <input
+              type="number"
+              min={MIN_VISUAL_LAYER_SECONDS}
+              max={Math.min(12, durationSeconds - selectedBrollCard.startSeconds)}
+              step={0.1}
+              value={selectedBrollCard.durationSeconds}
+              onChange={(event) => updateBrollCardDuration(
+                selectedBrollCard.id,
+                event.currentTarget.valueAsNumber,
+              )}
+              aria-describedby="clip-studio-broll-drag-help"
+            />
+          </label>
+          <div className="clip-studio-broll-timeline-nudges" aria-label="Nudge selected cutaway">
+            <button
+              type="button"
+              className="button tertiary"
+              onClick={() => updateBrollCardStart(selectedBrollCard.id, selectedBrollCard.startSeconds - 0.5)}
+              disabled={selectedBrollCard.startSeconds <= 0}
+            >
+              0.5s earlier
+            </button>
+            <button
+              type="button"
+              className="button tertiary"
+              onClick={() => updateBrollCardStart(selectedBrollCard.id, selectedBrollCard.startSeconds + 0.5)}
+              disabled={selectedBrollCard.startSeconds >= durationSeconds - selectedBrollCard.durationSeconds}
+            >
+              0.5s later
+            </button>
+            <button
+              type="button"
+              className="button secondary"
+              onClick={() => {
+                seekToAbsolute(activeClipStartSeconds + selectedBrollCard.startSeconds);
+                requestPreviewPlayback();
+              }}
+            >
+              Preview here
+            </button>
+          </div>
+          <span id="clip-studio-broll-drag-help" className="muted small">
+            Drag the yellow cutaway to move it, drag either edge to resize it, or type exact values. This changes only the unsaved draft.
+          </span>
+        </div>
+      ) : null}
 
         {cleanupReviewOpen ? (
           <div className="clip-studio-cleanup-review" aria-label="Pause review">
@@ -1655,7 +2394,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
             )}
             <div className="clip-studio-cleanup-review-footer">
               <button type="button" className="button secondary" onClick={addCleanupCutAtPlayhead} disabled={!canAddCleanupCut}>
-                Add pause at playhead
+                Add cut at playhead
               </button>
               <button type="button" className="button tertiary" onClick={resetCleanupCuts}>
                 Reset cleanup
@@ -1664,40 +2403,17 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
           </div>
         ) : null}
 
-        <div className="clip-studio-transcript-strip" aria-label="Transcript timeline markers">
-          <span className="clip-studio-transcript-playhead" style={{ left: `${playheadPercent}%` }} aria-hidden="true" />
-          {transcriptSegments.map((segment, index) => {
-            const left = markerPercent(segment.startTimeSeconds, timelineStart, timelineDuration);
-            const right = markerPercent(segment.endTimeSeconds, timelineStart, timelineDuration);
-            const isSelected = selectedSegmentIds.has(segment.id);
-
-            return (
-              <button
-                key={segment.id}
-                type="button"
-                className={isSelected ? "clip-studio-transcript-block is-selected" : "clip-studio-transcript-block"}
-                style={{ left: `${left}%`, width: `${Math.max(0.65, right - left)}%` }}
-                onClick={() => seekToAbsolute(segment.startTimeSeconds)}
-                title={segment.text}
-              >
-                <span>{index + 1}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="clip-studio-timeline-labels muted small">
-          <span>{formatSecondsForPastorView(timelineStart)}</span>
-          <span>{previewClock.isPlaying ? "Playing" : "Ready"}</span>
-          <span>{formatSecondsForPastorView(timelineEnd)}</span>
-        </div>
     </section>
   );
 }
 
 export const __clipStudioTranscriptPanelTestUtils = {
   activateTranscriptSegment,
+  previewTimelineLayerSegment,
   removeCleanupMarkerAriaLabel,
+  resolveBrollCardStartSeconds,
+  resolveVisualLayerTimingDrag,
+  resolveTimelinePointerSeconds,
   resolveTranscriptSegmentClipStatus,
   resolveTimelineBoundarySeconds,
 };

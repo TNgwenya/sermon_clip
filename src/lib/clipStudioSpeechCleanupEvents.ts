@@ -14,4 +14,5 @@ export type ClipStudioSpeechCleanupEditDetail = {
   startSeconds?: number;
   endSeconds?: number;
   enabled?: boolean;
+  source?: "audio" | "manual";
 };

@@ -211,6 +211,38 @@
   paint-order: stroke fill;
 }
 
+.designedCaption::after {
+  position: absolute;
+  top: -1.55rem;
+  left: 50%;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 999px;
+  background: rgb(8 10 14 / 90%);
+  color: #dbe4ef;
+  content: "Drag captions · arrows nudge";
+  font-family: system-ui, sans-serif;
+  font-size: 0.56rem;
+  font-weight: 760;
+  letter-spacing: normal;
+  opacity: 0;
+  padding: 0.22rem 0.42rem;
+  pointer-events: none;
+  text-transform: none;
+  transform: translateX(-50%);
+  transition: opacity 120ms ease;
+  white-space: nowrap;
+}
+
+.designedCaption:hover::after,
+.designedCaption:focus-visible::after {
+  opacity: 1;
+}
+
+.designedCaption:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 86%, white);
+  outline-offset: 4px;
+}
+
 :global(.clip-studio-live-caption).designedCaption .designWord.designWordActive {
   transform: scale(var(--caption-active-scale)) !important;
   background: var(--caption-active-background) !important;

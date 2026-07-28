@@ -10,6 +10,40 @@ export function clampCaptionOverlayOffset(value: number): number {
   return Math.max(-160, Math.min(160, Math.round(value)));
 }
 
+export function nudgeCaptionOverlayOffset({
+  horizontalOffset,
+  verticalOffset,
+  key,
+  largeStep = false,
+}: {
+  horizontalOffset: number;
+  verticalOffset: number;
+  key: string;
+  largeStep?: boolean;
+}): { horizontalOffset: number; verticalOffset: number } | null {
+  const step = largeStep ? 24 : 8;
+
+  if (key === "ArrowLeft" || key === "ArrowRight") {
+    return {
+      horizontalOffset: clampCaptionOverlayOffset(
+        horizontalOffset + (key === "ArrowLeft" ? -step : step),
+      ),
+      verticalOffset: clampCaptionOverlayOffset(verticalOffset),
+    };
+  }
+
+  if (key === "ArrowUp" || key === "ArrowDown") {
+    return {
+      horizontalOffset: clampCaptionOverlayOffset(horizontalOffset),
+      verticalOffset: clampCaptionOverlayOffset(
+        verticalOffset + (key === "ArrowUp" ? step : -step),
+      ),
+    };
+  }
+
+  return null;
+}
+
 export function resolveCaptionPositionFromOverlayRatio(ratio: number): CaptionPosition {
   const safeRatio = clampOverlayRatio(ratio);
 

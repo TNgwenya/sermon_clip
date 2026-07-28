@@ -29,6 +29,8 @@ describe("Clip Studio inspector navigation", () => {
     expect(markup).toContain(">Export</button>");
     expect(markup).not.toContain(">Insights</button>");
     expect(markup).not.toContain("Message evidence");
+    expect(markup).not.toContain("Style, words and timing");
+    expect(markup).toContain('<h2 class="sr-only">Clip inspector</h2>');
   });
 
   it("keeps tab and panel relationships accessible", () => {

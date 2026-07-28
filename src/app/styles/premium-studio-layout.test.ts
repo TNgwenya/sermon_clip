@@ -21,6 +21,14 @@ describe("Clip Studio responsive workspace layout", () => {
     expect(stylesheet).not.toContain("@media (max-width: 1439px)");
   });
 
+  it("reclaims the app rail before the three-column studio can overflow", () => {
+    const compactDesktopRule = stylesheet.match(
+      /@media \(max-width: 1310px\) \{[\s\S]*?body:has\(\.clip-studio-shell\) \.app-rail \{[\s\S]*?display: none;[\s\S]*?\n  \}/,
+    )?.[0];
+
+    expect(compactDesktopRule).toBeTruthy();
+  });
+
   it("gives both side panels bounded independent scrolling", () => {
     const transcriptRule = stylesheet.match(
       /\.clip-studio-shell \.clip-studio-transcript-rail \{[\s\S]*?\n\}/,

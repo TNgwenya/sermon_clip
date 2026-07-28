@@ -15,7 +15,7 @@ export type SpeechCleanupCut = {
   removedSeconds: number;
 };
 
-export type SpeechCleanupMarkerSource = "audio" | "transcript";
+export type SpeechCleanupMarkerSource = "audio" | "transcript" | "manual";
 export type SpeechCleanupMarkerConfidence = "confirmed" | "candidate";
 
 export type SpeechCleanupRemovedRange = SpeechCleanupCut & {
@@ -137,8 +137,12 @@ function buildReviewItems(ranges: SpeechCleanupRemovedRange[]): SpeechCleanupRev
       ...range,
       id: `${range.source}-${range.kind}-${range.startSeconds}-${range.endSeconds}-${index}`,
       index: index + 1,
-      label: `${range.source === "audio" ? "Cut" : "Review"} ${index + 1}`,
-      confidenceLabel: range.source === "audio" ? "Confirmed silence" : "Transcript gap",
+      label: `${range.source === "manual" ? "User cut" : range.source === "audio" ? "Cut" : "Review"} ${index + 1}`,
+      confidenceLabel: range.source === "manual"
+        ? "Selected speech"
+        : range.source === "audio"
+          ? "Confirmed silence"
+          : "Transcript gap",
     }));
 }
 
@@ -349,7 +353,11 @@ function normalizeEditableCut(
     return null;
   }
 
-  const source: SpeechCleanupMarkerSource = record["source"] === "transcript" ? "transcript" : "audio";
+  const source: SpeechCleanupMarkerSource = record["source"] === "manual"
+    ? "manual"
+    : record["source"] === "transcript"
+      ? "transcript"
+      : "audio";
   const confidence: SpeechCleanupMarkerConfidence = record["confidence"] === "candidate" ? "candidate" : "confirmed";
   const kind: SpeechCleanupRemovedRange["kind"] = record["kind"] === "edge" ? "edge" : "internal";
   const beforeText = typeof record["beforeText"] === "string" ? record["beforeText"] : null;
@@ -514,7 +522,7 @@ export function applySpeechCleanupEditsToPlan(
     rawGapSeconds: Math.max(cut.rawGapSeconds, generatedCutsById.get(cut.id)?.rawGapSeconds ?? 0),
   }));
   const activeCuts = editableCuts
-    .filter((cut) => cut.enabled)
+    .filter((cut) => cut.enabled && (plan.enabled || cut.source === "manual"))
     .map((cut) => {
       const startSeconds = roundPlanSeconds(clampPlanSeconds(cut.startSeconds, plan.sourceStartSeconds, plan.sourceEndSeconds));
       const endSeconds = roundPlanSeconds(clampPlanSeconds(cut.endSeconds, plan.sourceStartSeconds, plan.sourceEndSeconds));
@@ -547,10 +555,11 @@ export function applySpeechCleanupEditsToPlan(
   }));
   const internalRemovedSeconds = nextCuts.reduce((total, cut) => total + cut.removedSeconds, 0);
   const sourceDurationSeconds = Math.max(0, plan.sourceEndSeconds - plan.sourceStartSeconds);
+  const hasActiveManualCut = activeCuts.some((cut) => cut.source === "manual");
 
   return {
     ...plan,
-    enabled: plan.enabled,
+    enabled: plan.enabled || hasActiveManualCut,
     cleanedDurationSeconds: roundPlanSeconds(Math.max(0, sourceDurationSeconds - internalRemovedSeconds)),
     cuts: nextCuts,
     removedRanges: [...edgeRanges, ...internalRanges].sort((left, right) => left.startSeconds - right.startSeconds),
