@@ -156,12 +156,16 @@ describe("buildClipStudioQueuedAssetIntent", () => {
 
 describe("shouldForceClipStudioPrepare", () => {
   it("forces every prepare of a clip that already has prepared media", () => {
-    expect(shouldForceClipStudioPrepare("prepare", true)).toBe(true);
+    expect(shouldForceClipStudioPrepare("prepare", true, false)).toBe(true);
   });
 
-  it("does not force a first prepare or a draft-only save", () => {
-    expect(shouldForceClipStudioPrepare("prepare", false)).toBe(false);
-    expect(shouldForceClipStudioPrepare("save", true)).toBe(false);
+  it("forces a prepare when the server reports that media needs rebuilding", () => {
+    expect(shouldForceClipStudioPrepare("prepare", false, true)).toBe(true);
+  });
+
+  it("does not force a current first prepare or a draft-only save", () => {
+    expect(shouldForceClipStudioPrepare("prepare", false, false)).toBe(false);
+    expect(shouldForceClipStudioPrepare("save", true, true)).toBe(false);
   });
 });
 

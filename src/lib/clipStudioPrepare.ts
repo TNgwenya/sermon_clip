@@ -37,8 +37,9 @@ export function buildClipStudioQueuedAssetIntent(
 export function shouldForceClipStudioPrepare(
   operation: "save" | "prepare",
   hasPreparedMedia: boolean,
+  serverNeedsUpdate: boolean,
 ): boolean {
-  return operation === "prepare" && hasPreparedMedia;
+  return operation === "prepare" && (hasPreparedMedia || serverNeedsUpdate);
 }
 
 export function buildClipStudioQueuedAssets(

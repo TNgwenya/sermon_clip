@@ -216,7 +216,11 @@ export function ClipStudioPrepareButton({
     }
 
     const submittedDraftKey = draftCompositionKey;
-    const forceRebuild = shouldForceClipStudioPrepare(operation, hasPreparedMedia);
+    const forceRebuild = shouldForceClipStudioPrepare(
+      operation,
+      hasPreparedMedia,
+      serverNeedsUpdate,
+    );
     setActiveOperation(operation);
 
     startTransition(async () => {
