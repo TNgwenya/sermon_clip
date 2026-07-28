@@ -165,6 +165,7 @@ import {
 } from "@/lib/clipStudio";
 import {
   buildClipStudioPrepareAssetPlan,
+  buildClipStudioQueuedAssetIntent,
   buildClipStudioQueuedAssets,
 } from "@/lib/clipStudioPrepare";
 import {
@@ -6445,7 +6446,7 @@ export async function prepareClipStudioForPostingAction(
       const queued = await queueSermonMediaAssetJobs(
         clip.sermonId,
         requestedAssets,
-        { clipIds: [clip.id] },
+        buildClipStudioQueuedAssetIntent(clip.id, input.forceRebuild === true),
       );
       // The control panel cannot observe a Mac worker's in-memory queue. Keep
       // the durable clip state honest so a refresh shows "Preparing" and the

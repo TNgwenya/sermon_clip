@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildClipStudioPrepareAssetPlan,
+  buildClipStudioQueuedAssetIntent,
   buildClipStudioQueuedAssets,
   resolveClipStudioPreparationState,
   type ClipStudioPrepareAssetSnapshot,
@@ -133,6 +134,22 @@ describe("buildClipStudioQueuedAssets", () => {
       snapshot,
       buildClipStudioPrepareAssetPlan(snapshot),
     )).toEqual(["render", "caption", "captionBurn", "export"]);
+  });
+});
+
+describe("buildClipStudioQueuedAssetIntent", () => {
+  it("forwards an explicit rebuild to the durable media worker", () => {
+    expect(buildClipStudioQueuedAssetIntent("clip-1", true)).toEqual({
+      clipIds: ["clip-1"],
+      force: true,
+    });
+  });
+
+  it("keeps an ordinary prepare request non-forced", () => {
+    expect(buildClipStudioQueuedAssetIntent("clip-1", false)).toEqual({
+      clipIds: ["clip-1"],
+      force: false,
+    });
   });
 });
 

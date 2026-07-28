@@ -24,6 +24,16 @@ export type ClipStudioPrepareAssetPlan = {
 
 export type ClipStudioQueuedAsset = "render" | "caption" | "captionBurn" | "export";
 
+export function buildClipStudioQueuedAssetIntent(
+  clipId: string,
+  forceRebuild: boolean,
+): { clipIds: string[]; force: boolean } {
+  return {
+    clipIds: [clipId],
+    force: forceRebuild,
+  };
+}
+
 export function buildClipStudioQueuedAssets(
   snapshot: ClipStudioPrepareAssetSnapshot,
   plan: ClipStudioPrepareAssetPlan,
