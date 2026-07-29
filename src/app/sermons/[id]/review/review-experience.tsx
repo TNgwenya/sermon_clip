@@ -78,6 +78,7 @@ type ClipReviewItem = {
   qualityReviewedAt: string | null;
   qualityReviewSource: "AI" | "FALLBACK" | null;
   reasonSelected: string;
+  contentKind: "SERMON" | "WORSHIP";
   suggestedHook: string | null;
   suggestedCaption: string | null;
   smartClipCategory: string | null;
@@ -816,6 +817,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       <span className={`status-pill review-workflow-status status-${clip.status.toLowerCase()}`}>
                         {workflowLabel}
                       </span>
+                      {clip.contentKind === "WORSHIP" ? <span className="status-pill">Worship</span> : null}
                       {transcriptReviewRequired ? <span className="status-pill quality-needs-editing">Transcript review needed</span> : null}
                     </div>
 

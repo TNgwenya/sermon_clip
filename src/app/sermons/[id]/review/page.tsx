@@ -49,6 +49,7 @@ type ReviewPageData = {
     qualityReviewedAt: Date | null;
     qualityReviewSource: "AI" | "FALLBACK" | null;
     reasonSelected: string;
+    contentKind: "SERMON" | "WORSHIP";
     clipType: string;
     smartClipCategory: string | null;
     recommendationReason: string | null;
@@ -201,6 +202,7 @@ async function SermonReviewContent({ id }: { id: string }) {
           qualityReviewedAt: true,
           qualityReviewSource: true,
           reasonSelected: true,
+          contentKind: true,
           clipType: true,
           smartClipCategory: true,
           recommendationReason: true,

@@ -189,6 +189,7 @@ export function NewSermonForm({
   const [uploadProgressPercent, setUploadProgressPercent] = useState<number | null>(null);
   const [selectedFile, setSelectedFile] = useState<{ name: string; size: number } | null>(null);
   const [selectedFileError, setSelectedFileError] = useState<string | null>(null);
+  const [includeWorshipMoments, setIncludeWorshipMoments] = useState(false);
   const displayState = uploadState ?? state;
   const hasSermonWindowErrors = Boolean(
     displayState.fieldErrors?.sermonStartTimestamp || displayState.fieldErrors?.sermonEndTimestamp,
@@ -256,6 +257,7 @@ export function NewSermonForm({
     uploadUrl.searchParams.set("sermonDate", String(formData.get("sermonDate") ?? ""));
     uploadUrl.searchParams.set("sermonStartTimestamp", String(formData.get("sermonStartTimestamp") ?? ""));
     uploadUrl.searchParams.set("sermonEndTimestamp", String(formData.get("sermonEndTimestamp") ?? ""));
+    uploadUrl.searchParams.set("includeWorshipMoments", formData.get("includeWorshipMoments") === "on" ? "true" : "false");
     uploadUrl.searchParams.set("rightsConfirmed", formData.get("rightsConfirmed") === "on" ? "true" : "false");
 
     window.sessionStorage.setItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY, "true");
@@ -587,35 +589,75 @@ export function NewSermonForm({
           </div>
         </section>
 
-        <details className="sermon-window-panel sermon-window-disclosure" open={hasSermonWindowErrors || undefined}>
+        <details
+          className="sermon-window-panel sermon-window-disclosure"
+          open={hasSermonWindowErrors || includeWorshipMoments || undefined}
+        >
           <summary>
             <span>
-              <span className="kicker">Optional setup</span>
+              <span className="kicker">{includeWorshipMoments ? "Required for worship clips" : "Optional setup"}</span>
               <strong id="sermon-window-title">Tell us where the sermon begins</strong>
             </span>
             <span className="summary-hint">For full service recordings</span>
           </summary>
           <div className="review-edit-grid upload-meta-grid">
             <div className="stack-sm">
-              <label htmlFor="sermonStartTimestamp">Sermon starts at</label>
-              <input id="sermonStartTimestamp" name="sermonStartTimestamp" type="text" inputMode="numeric" placeholder="Example: 32:15" />
+              <label htmlFor="sermonStartTimestamp">
+                Sermon starts at {includeWorshipMoments ? <span className="field-required">Required</span> : null}
+              </label>
+              <input
+                id="sermonStartTimestamp"
+                name="sermonStartTimestamp"
+                type="text"
+                inputMode="numeric"
+                placeholder="Example: 32:15"
+                required={includeWorshipMoments}
+              />
               <p className="muted small">Format: <span className="code-text">MM:SS</span> or <span className="code-text">H:MM:SS</span>.</p>
               {displayState.fieldErrors?.sermonStartTimestamp ? <p className="field-error">{displayState.fieldErrors.sermonStartTimestamp}</p> : null}
             </div>
 
             <div className="stack-sm">
-              <label htmlFor="sermonEndTimestamp">Sermon ends at</label>
-              <input id="sermonEndTimestamp" name="sermonEndTimestamp" type="text" inputMode="numeric" placeholder="Example: 1:18:40" />
-              <p className="muted small">Leave blank if the sermon runs to the end of the video.</p>
+              <label htmlFor="sermonEndTimestamp">
+                Sermon ends at {includeWorshipMoments ? <span className="field-required">Required</span> : null}
+              </label>
+              <input
+                id="sermonEndTimestamp"
+                name="sermonEndTimestamp"
+                type="text"
+                inputMode="numeric"
+                placeholder="Example: 1:18:40"
+                required={includeWorshipMoments}
+              />
+              <p className="muted small">
+                {includeWorshipMoments
+                  ? "Required so sermon clips stop before any later worship or service content."
+                  : "Leave blank if the sermon runs to the end of the video."}
+              </p>
               {displayState.fieldErrors?.sermonEndTimestamp ? <p className="field-error">{displayState.fieldErrors.sermonEndTimestamp}</p> : null}
             </div>
           </div>
+          <label className="checkbox-label" htmlFor="includeWorshipMoments">
+            <input
+              id="includeWorshipMoments"
+              name="includeWorshipMoments"
+              type="checkbox"
+              checked={includeWorshipMoments}
+              onChange={(event) => setIncludeWorshipMoments(event.target.checked)}
+            />
+            <span>
+              <strong>Also find praise &amp; worship moments <span className="field-optional">Beta</span></strong>
+              <span className="muted small">
+                Search the full service for lyric-led worship moments. Sermon start and end times are required to keep sermon clips inside the preaching section.
+              </span>
+            </span>
+          </label>
         </details>
 
         <div className="rights-confirmation stack-sm">
           <label className="checkbox-label" htmlFor="rightsConfirmed">
             <input id="rightsConfirmed" name="rightsConfirmed" type="checkbox" required />
-            <span>I confirm that our church or media team has permission to process this sermon recording.</span>
+            <span>I confirm that our church or media team has permission to process this recording, including its music and congregation footage.</span>
           </label>
           {displayState.fieldErrors?.rightsConfirmed ? (
             <p className="field-error">{displayState.fieldErrors.rightsConfirmed}</p>

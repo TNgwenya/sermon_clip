@@ -126,6 +126,37 @@ describe("professional clip quality scoring service", () => {
     expect(result.recommendedNextAction).toBe("REVIEW_CLIP");
   });
 
+  it("keeps lyric-led worship moments reviewable without applying sermon-takeaway gates", () => {
+    const result = scoreProfessionalClipQuality({
+      ...baseCandidate,
+      contentKind: "WORSHIP",
+      transcriptText: "Hallelujah, You are holy. You are worthy, Jesus. We worship You, Lord.",
+      title: "You Are Holy",
+      hook: "You are holy.",
+      caption: "Join us in this moment of worship.",
+      clipType: "worship",
+      smartClipCategory: "Best Worship Clip",
+      durationSeconds: 32,
+      endTimeSeconds: 52,
+      riskLevel: "MEDIUM",
+      contextWarning: true,
+      boundaryQuality: "NEEDS_REVIEW",
+      boundaryQualityScore: 5.8,
+      transcriptSafetyStatus: "REVIEW_REQUIRED",
+      qualityWarnings: [
+        "WORSHIP_LYRICS_REVIEW_REQUIRED",
+        "WORSHIP_BOUNDARY_REVIEW_REQUIRED",
+      ],
+    });
+
+    expect(result.qualityLabel).toBe("GOOD_NEEDS_REVIEW");
+    expect(result.postReadyStatus).toBe("GOOD_NEEDS_REVIEW");
+    expect(result.recommendedNextAction).toBe("REVIEW_CLIP");
+    expect(result.qualityWarnings).toContain("WORSHIP_LYRICS_REVIEW_REQUIRED");
+    expect(result.qualityWarnings).not.toContain("PASTOR_GRADE_NO_PAYOFF_OR_APPLICATION");
+    expect(result.qualityWarnings).not.toContain("PASTOR_GRADE_LOW_SPOKEN_SUBSTANCE");
+  });
+
   it("keeps a grounded local-language ministry moment in the review tier instead of hard-rejecting English lexical gaps", () => {
     const result = scoreProfessionalClipQuality({
       ...baseCandidate,

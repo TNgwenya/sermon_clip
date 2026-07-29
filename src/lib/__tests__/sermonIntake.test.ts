@@ -8,6 +8,10 @@ import {
   MAX_UPLOADED_MEDIA_BYTES,
   uploadedMediaExceedsSizeLimit,
 } from "@/lib/sermonIntake";
+import {
+  WORSHIP_SERMON_END_REQUIRED_MESSAGE,
+  WORSHIP_SERMON_START_REQUIRED_MESSAGE,
+} from "@/lib/sermonSegment";
 
 function validInput(overrides: Partial<{
   youtubeUrl: string;
@@ -20,6 +24,7 @@ function validInput(overrides: Partial<{
   sermonDate: string;
   rightsConfirmed: boolean;
   hasUploadedVideo: boolean;
+  includeWorshipMoments: boolean;
 }> = {}) {
   return {
     youtubeUrl: "https://www.youtube.com/watch?v=abc123",
@@ -32,6 +37,7 @@ function validInput(overrides: Partial<{
     sermonDate: "",
     rightsConfirmed: true,
     hasUploadedVideo: false,
+    includeWorshipMoments: false,
     ...overrides,
   };
 }
@@ -50,6 +56,41 @@ describe("sermon intake", () => {
     }));
 
     expect(parsed.success).toBe(true);
+  });
+
+  it("defaults worship discovery off and accepts an explicit opt-in", () => {
+    const defaultResult = createSermonSchema.safeParse(validInput());
+    const optedInResult = createSermonSchema.safeParse(validInput({
+      includeWorshipMoments: true,
+      sermonStartTimestamp: "30:00",
+      sermonEndTimestamp: "1:15:00",
+    }));
+
+    expect(defaultResult.data?.includeWorshipMoments).toBe(false);
+    expect(optedInResult.data?.includeWorshipMoments).toBe(true);
+  });
+
+  it("requires both sermon boundaries when worship discovery is enabled", () => {
+    const missingBoth = createSermonSchema.safeParse(validInput({
+      includeWorshipMoments: true,
+    }));
+    const missingEnd = createSermonSchema.safeParse(validInput({
+      includeWorshipMoments: true,
+      sermonStartTimestamp: "30:00",
+    }));
+
+    expect(missingBoth.success).toBe(false);
+    expect(missingBoth.error?.flatten().fieldErrors.sermonStartTimestamp?.[0]).toBe(
+      WORSHIP_SERMON_START_REQUIRED_MESSAGE,
+    );
+    expect(missingBoth.error?.flatten().fieldErrors.sermonEndTimestamp?.[0]).toBe(
+      WORSHIP_SERMON_END_REQUIRED_MESSAGE,
+    );
+    expect(missingEnd.success).toBe(false);
+    expect(missingEnd.error?.flatten().fieldErrors.sermonStartTimestamp).toBeUndefined();
+    expect(missingEnd.error?.flatten().fieldErrors.sermonEndTimestamp?.[0]).toBe(
+      WORSHIP_SERMON_END_REQUIRED_MESSAGE,
+    );
   });
 
   it("requires either a video link or uploaded media", () => {

@@ -17,6 +17,27 @@ export type SegmentValidationResult = {
 
 const LONG_RECORDING_THRESHOLD_SECONDS = 60 * 60;
 
+export const WORSHIP_SERMON_START_REQUIRED_MESSAGE =
+  "Sermon start time is required when praise and worship discovery is enabled.";
+export const WORSHIP_SERMON_END_REQUIRED_MESSAGE =
+  "Sermon end time is required when praise and worship discovery is enabled.";
+export const WORSHIP_SERMON_RANGE_REQUIRED_MESSAGE =
+  "Praise and worship discovery requires both sermon start and end times so sermon clips stay inside the preaching section.";
+
+export function hasCompleteWorshipSermonRange(input: {
+  includeWorshipMoments: boolean;
+  sermonStartSeconds: number | null | undefined;
+  sermonEndSeconds: number | null | undefined;
+}): boolean {
+  return !input.includeWorshipMoments || (
+    typeof input.sermonStartSeconds === "number"
+    && Number.isFinite(input.sermonStartSeconds)
+    && typeof input.sermonEndSeconds === "number"
+    && Number.isFinite(input.sermonEndSeconds)
+    && input.sermonEndSeconds > input.sermonStartSeconds
+  );
+}
+
 function parseTimestampParts(value: string): number[] | null {
   const parts = value.split(":").map((part) => part.trim());
   if (parts.length < 2 || parts.length > 3) {

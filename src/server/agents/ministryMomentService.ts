@@ -83,7 +83,6 @@ const CLIP_CATEGORY_ALIASES: Record<string, (typeof SMART_CLIP_CATEGORIES)[numbe
   "Best Application Clip": "Best Call To Action Clip",
   "Best Stewardship Clip": "Best Faith Clip",
   "Best Giving Clip": "Best Faith Clip",
-  "Best Worship Clip": "Best Faith Clip",
   "Best Prophetic Clip": "Best Faith Clip",
   "Best Healing Clip": "Best Encouragement Clip",
   "Best Church Vision Clip": "Best Leadership Clip",
@@ -378,18 +377,20 @@ export async function persistMinistryMoments(
   transcriptFullText: string,
   moments: MinistryMomentRecord[],
 ): Promise<void> {
+  const sermonMoments = moments.filter((moment) => moment.momentType !== "WORSHIP_MOMENT");
   await prisma.$transaction(async (tx) => {
     await tx.ministryMoment.deleteMany({
       where: {
         sermonId,
         isAiGenerated: true,
         isManuallyAdjusted: false,
+        momentType: { not: "WORSHIP_MOMENT" },
       },
     });
 
-    if (moments.length > 0) {
+    if (sermonMoments.length > 0) {
       await tx.ministryMoment.createMany({
-        data: moments.map((moment) =>
+        data: sermonMoments.map((moment) =>
           buildMinistryMomentCreateInput(sermonId, transcriptFullText, moment),
         ),
       });
@@ -407,7 +408,11 @@ export async function generateMinistryMoments(
   }
 
   const existingMomentCount = await prisma.ministryMoment.count({
-    where: { sermonId, isAiGenerated: true },
+    where: {
+      sermonId,
+      isAiGenerated: true,
+      momentType: { not: "WORSHIP_MOMENT" },
+    },
   });
 
   if (shouldReuseExistingMoments(existingMomentCount, options?.force)) {

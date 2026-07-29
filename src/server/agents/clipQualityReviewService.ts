@@ -56,6 +56,7 @@ export type ClipQualityCandidateInput = Pick<
   | "socialPotential"
   | "selectionReasoning"
 > & {
+  contentKind?: "SERMON" | "WORSHIP" | null;
   boundaryQuality: ClipBoundaryQuality;
   boundaryAdjustmentReason?: string | null;
   visualReadinessScore?: number | null;

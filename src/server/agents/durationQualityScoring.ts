@@ -35,6 +35,9 @@ const DEFAULT_TARGET: DurationTarget = { min: 45, max: 90, hardMax: 120 };
 export function getDurationTarget(candidate: DurationCandidate): DurationTarget {
   const text = `${candidate.clipType ?? ""} ${candidate.smartClipCategory ?? ""} ${candidate.clipArcType ?? ""} ${candidate.transcriptText ?? ""}`.toLowerCase();
 
+  if (/worship|praise/.test(text)) {
+    return { min: 20, max: 90, hardMax: 90 };
+  }
   if (/quote|punchline|funny/.test(text)) {
     return { min: 20, max: 40, hardMax: 90 };
   }

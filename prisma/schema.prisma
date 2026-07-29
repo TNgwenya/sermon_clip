@@ -344,6 +344,11 @@ enum MinistryMomentReviewStatus {
   NEEDS_CORRECTION
 }
 
+enum ClipContentKind {
+  SERMON
+  WORSHIP
+}
+
 enum ContentOpportunityCategory {
   SOCIAL
   DEVOTIONAL
@@ -582,6 +587,7 @@ model Sermon {
   sermonStartSeconds    Float?
   sermonEndSeconds      Float?
   analyzeFullRecording  Boolean                  @default(false)
+  includeWorshipMoments Boolean                  @default(false)
   sermonDate            DateTime?
   status                SermonStatus             @default(CREATED)
   rightsConfirmed       Boolean
@@ -655,6 +661,7 @@ model TranscriptSegment {
 model ClipCandidate {
   id                               String                        @id @default(cuid())
   sermonId                         String
+  contentKind                      ClipContentKind               @default(SERMON)
   ministryMomentId                 String?
   smartClipCategory                String?
   recommendationReason             String?
@@ -830,6 +837,7 @@ model ClipCandidate {
   aiInvocations                    AiInvocation[]
 
   @@index([sermonId])
+  @@index([sermonId, contentKind])
   @@index([sermonId, transcriptSafetyStatus])
   @@index([sermonId, smartClipCategory])
   @@index([ministryMomentId])

@@ -376,23 +376,30 @@ export async function redoClipGenerationFromTranscript(
       `Generated clip cache cleared. Drafts removed: ${clearedDrafts}; scheduled posts removed: ${clearedScheduledPosts}; packages pruned: ${clearedPackages}.`,
     );
 
-    const [{ generateClipSuggestions }, { prepareGeneratedClipReviewAssets }] = await Promise.all([
+    const [
+      { generateClipSuggestions },
+      { generateWorshipMomentClips },
+      { prepareGeneratedClipReviewAssets },
+    ] = await Promise.all([
       import("@/server/agents/clipIntelligenceAgent"),
+      import("@/server/agents/worshipMomentService"),
       import("@/server/agents/clipReviewAssetService"),
     ]);
     const generationResult = await generateClipSuggestions(sermonId, {
       force: true,
       processingJobId: options?.currentJobId,
     });
+    const worshipResult = await generateWorshipMomentClips(sermonId, { force: true });
     const previewSummary = await prepareGeneratedClipReviewAssets({ sermonId, force: true });
+    const generatedClipCount = generationResult.clipCount + worshipResult.clipCount;
 
     return {
       success: previewSummary.failed === 0,
       message: previewSummary.failed === 0
-        ? `Redo complete. Deleted ${oldClipIds.length} old clip(s), generated ${generationResult.clipCount} new suggestion(s), and prepared ${previewSummary.prepared} preview(s).`
-        : `Redo completed with preview issues. Deleted ${oldClipIds.length} old clip(s), generated ${generationResult.clipCount} new suggestion(s), prepared ${previewSummary.prepared} preview(s), and ${previewSummary.failed} preview(s) need attention.`,
+        ? `Redo complete. Deleted ${oldClipIds.length} old clip(s), generated ${generatedClipCount} new suggestion(s)${worshipResult.clipCount > 0 ? ` including ${worshipResult.clipCount} worship` : ""}, and prepared ${previewSummary.prepared} preview(s).`
+        : `Redo completed with preview issues. Deleted ${oldClipIds.length} old clip(s), generated ${generatedClipCount} new suggestion(s), prepared ${previewSummary.prepared} preview(s), and ${previewSummary.failed} preview(s) need attention.`,
       deletedClips: oldClipIds.length,
-      generatedClips: generationResult.clipCount,
+      generatedClips: generatedClipCount,
       clearedDrafts,
       clearedScheduledPosts,
       clearedPackages,

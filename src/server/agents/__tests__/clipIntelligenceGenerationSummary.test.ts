@@ -879,6 +879,7 @@ describe("clip intelligence generation summary", () => {
   it("deletes only replaceable AI suggestions when weak suggestions are regenerated", () => {
     expect(__clipIntelligenceTestUtils.buildSuggestionDeleteWhere("sermon-1")).toEqual({
       sermonId: "sermon-1",
+      contentKind: "SERMON",
       status: "SUGGESTED",
       isAiGenerated: true,
       isManuallyEdited: false,
@@ -886,6 +887,7 @@ describe("clip intelligence generation summary", () => {
 
     expect(__clipIntelligenceTestUtils.buildSuggestionDeleteWhere("sermon-1", "Best Prayer Clip")).toEqual({
       sermonId: "sermon-1",
+      contentKind: "SERMON",
       status: "SUGGESTED",
       isAiGenerated: true,
       isManuallyEdited: false,
@@ -894,6 +896,7 @@ describe("clip intelligence generation summary", () => {
 
     expect(__clipIntelligenceTestUtils.buildSuggestionDeleteWhere("sermon-1", undefined, true)).toEqual({
       sermonId: "sermon-1",
+      contentKind: "SERMON",
       status: { in: ["SUGGESTED", "REJECTED"] },
       isAiGenerated: true,
       isManuallyEdited: false,

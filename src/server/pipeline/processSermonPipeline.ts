@@ -3,6 +3,10 @@ import type { SermonStatus } from "@prisma/client";
 import { isLocalUploadSourceUrl } from "@/lib/sermonIntake";
 import { prisma } from "@/lib/prisma";
 import {
+  hasCompleteWorshipSermonRange,
+  WORSHIP_SERMON_RANGE_REQUIRED_MESSAGE,
+} from "@/lib/sermonSegment";
+import {
   appendJobLog,
   createProcessingJob,
   markJobFailed,
@@ -21,6 +25,7 @@ import { generateClipSuggestions } from "@/server/agents/clipIntelligenceAgent";
 import { transcribeSermonAudio } from "@/server/agents/transcriptionAgent";
 import { generateSermonIntelligence } from "@/server/agents/sermonIntelligenceService";
 import { generateContentOpportunities } from "@/server/agents/contentMultiplicationService";
+import { generateWorshipMomentClips } from "@/server/agents/worshipMomentService";
 import { mediaFileIsUsable } from "@/server/media/fileGuards";
 import {
   __clipReviewAssetServiceTestUtils,
@@ -111,6 +116,9 @@ async function loadSermon(sermonId: string) {
       sourceVideoPath: true,
       audioPath: true,
       transcriptJsonPath: true,
+      includeWorshipMoments: true,
+      sermonStartSeconds: true,
+      sermonEndSeconds: true,
       transcript: {
         select: { id: true },
       },
@@ -275,6 +283,12 @@ export async function processSermonPipeline(
   await appendPipelineLog(sermon.id, "One-click sermon processing started.");
 
   try {
+    if (!hasCompleteWorshipSermonRange(sermon)) {
+      activeStepLabel = "Validate sermon range";
+      await appendJobLog(parentJob.id, WORSHIP_SERMON_RANGE_REQUIRED_MESSAGE);
+      throw new Error(WORSHIP_SERMON_RANGE_REQUIRED_MESSAGE);
+    }
+
     const advancedAtStart = isAdvancedSermonPipelineState({
       sermonStatus: sermon.status,
       clipCandidateCount: sermon._count.clipCandidates,
@@ -469,6 +483,24 @@ export async function processSermonPipeline(
       await appendJobLog(parentJob.id, "Generate clip suggestions completed.");
     }
 
+    if (afterIntelligence.includeWorshipMoments) {
+      activeStepLabel = "Find praise and worship moments";
+      const worshipResult = await generateWorshipMomentClips(sermon.id, { force: options?.force });
+      steps.push({
+        label: "Find praise and worship moments",
+        status: worshipResult.reusedExistingClips ? "SKIPPED" : "SUCCEEDED",
+        message: worshipResult.reusedExistingClips
+          ? `Existing worship suggestions reused (${worshipResult.clipCount} available).`
+          : worshipResult.clipCount > 0
+            ? `Found ${worshipResult.clipCount} lyric-led worship moment${worshipResult.clipCount === 1 ? "" : "s"}.`
+            : "No confident lyric-led worship moments were found. Instrumental-only detection is not included in this beta.",
+      });
+      await appendJobLog(
+        parentJob.id,
+        `Praise and worship discovery completed with ${worshipResult.clipCount} clip suggestion(s).`,
+      );
+    }
+
     activeStepLabel = "Prepare generated clip review assets";
     const previewResult = await prepareGeneratedClipReviewAssets({ sermonId: sermon.id, force: options?.force });
     steps.push({
@@ -557,6 +589,7 @@ export const __processSermonPipelineTestUtils = {
   advancedSermonMissingMediaMessage,
   shouldReuseDurableClipCandidates,
   incompleteLocalUploadMessage,
+  hasCompleteWorshipSermonRange,
   PipelinePartialCompletionError,
   buildGeneratedClipReviewAssetPlan: (
     clip: Parameters<typeof __clipReviewAssetServiceTestUtils.shouldPreparePreview>[0],

@@ -82,6 +82,7 @@ describe("raw sermon upload route", () => {
     queueProcessingJobMock.mockResolvedValue({ id: "job-1", reusedExisting: false, intentConflict: false });
     await rm(path.dirname(testState.sourcePath), { recursive: true, force: true });
     prismaMock.sermon.findUnique.mockResolvedValue({ id: "sermon-1", title: "Mobile Sermon" });
+    prismaMock.sermon.create.mockResolvedValue({ id: "sermon-1", title: "Mobile Sermon" });
     storageCapacityMock.mockResolvedValue(undefined);
   });
 
@@ -144,6 +145,39 @@ describe("raw sermon upload route", () => {
 
     expect(response.status).toBe(507);
     expect(storageCapacityMock).toHaveBeenCalledWith({ incomingBytes: 2_000_000 });
+    expect(prismaMock.sermon.create).not.toHaveBeenCalled();
+  });
+
+  it("persists the optional worship-moment setting when an upload session starts", async () => {
+    const url = validStartUrl();
+    url.searchParams.set("includeWorshipMoments", "true");
+    url.searchParams.set("sermonStartTimestamp", "30:00");
+    url.searchParams.set("sermonEndTimestamp", "1:15:00");
+
+    const response = await POST(new Request(url, { method: "POST" }));
+
+    expect(response.status).toBe(200);
+    expect(prismaMock.sermon.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        includeWorshipMoments: true,
+      }),
+    }));
+  });
+
+  it("rejects worship discovery when the sermon start and end times are missing", async () => {
+    const url = validStartUrl();
+    url.searchParams.set("includeWorshipMoments", "true");
+
+    const response = await POST(new Request(url, { method: "POST" }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      fieldErrors: {
+        sermonStartTimestamp: expect.stringContaining("required"),
+        sermonEndTimestamp: expect.stringContaining("required"),
+      },
+    });
     expect(prismaMock.sermon.create).not.toHaveBeenCalled();
   });
 

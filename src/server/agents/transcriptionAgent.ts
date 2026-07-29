@@ -1210,6 +1210,7 @@ async function getReusableTranscriptDecision(sermonId: string, transcriptJsonPat
         sermonStartSeconds: true,
         sermonEndSeconds: true,
         analyzeFullRecording: true,
+        includeWorshipMoments: true,
         sourceDurationSeconds: true,
       },
     }),
@@ -1234,8 +1235,14 @@ async function getReusableTranscriptDecision(sermonId: string, transcriptJsonPat
   const transcriptJsonExists = await fileExists(transcriptJsonPath);
   const transcriptConfigurationMatches = transcriptJsonExists
     ? await readFile(transcriptJsonPath, "utf8")
-        .then((value) => JSON.parse(value) as { transcriptionConfigurationKey?: unknown })
-        .then((payload) => payload.transcriptionConfigurationKey === transcriptionConfigurationKey())
+        .then((value) => JSON.parse(value) as {
+          transcriptionConfigurationKey?: unknown;
+          fullRecordingPreservedForWorship?: unknown;
+        })
+        .then((payload) => (
+          payload.transcriptionConfigurationKey === transcriptionConfigurationKey()
+          && (!sermon?.includeWorshipMoments || payload.fullRecordingPreservedForWorship === true)
+        ))
         .catch(() => false)
     : false;
   const segments = await prisma.transcriptSegment.findMany({
@@ -2073,6 +2080,7 @@ export async function transcribeSermonAudio(
       sermonStartSeconds: true,
       sermonEndSeconds: true,
       analyzeFullRecording: true,
+      includeWorshipMoments: true,
       sourceDurationSeconds: true,
       language: true,
     },
@@ -2138,19 +2146,27 @@ export async function transcribeSermonAudio(
       );
     }
 
-	    const sermonWindow = {
-	      sermonStartSeconds: sermon.sermonStartSeconds,
-	      sermonEndSeconds: sermon.sermonEndSeconds,
-	      analyzeFullRecording: sermon.analyzeFullRecording,
-	      knownDurationSeconds: sermon.sourceDurationSeconds,
-	    };
-	    const expectedTranscriptDurationSeconds = resolveExpectedTranscriptDurationSeconds(
-	      sermonWindow,
-	      audioReadiness.durationSeconds,
-	    );
-	    const manualTranscriptionWindow = resolveManualTranscriptionWindow(sermonWindow, audioReadiness.durationSeconds);
-	    const transcriptionInput: TranscriptionAudioInput = manualTranscriptionWindow
-	      ? await (async () => {
+    const sermonWindow = {
+      sermonStartSeconds: sermon.sermonStartSeconds,
+      sermonEndSeconds: sermon.sermonEndSeconds,
+      analyzeFullRecording: sermon.analyzeFullRecording,
+      knownDurationSeconds: sermon.sourceDurationSeconds,
+    };
+    const transcriptionWindow = sermon.includeWorshipMoments
+      ? {
+          ...sermonWindow,
+          sermonStartSeconds: null,
+          sermonEndSeconds: null,
+          analyzeFullRecording: true,
+        }
+      : sermonWindow;
+    const expectedTranscriptDurationSeconds = resolveExpectedTranscriptDurationSeconds(
+      sermonWindow,
+      audioReadiness.durationSeconds,
+    );
+    const manualTranscriptionWindow = resolveManualTranscriptionWindow(transcriptionWindow, audioReadiness.durationSeconds);
+    const transcriptionInput: TranscriptionAudioInput = manualTranscriptionWindow
+      ? await (async () => {
 	          await checkFfmpegInstalled();
 	          const transcriptDir = path.join(getSermonStoragePath(sermon.id), "transcript");
 	          await mkdir(transcriptDir, { recursive: true });
@@ -2308,6 +2324,9 @@ export async function transcribeSermonAudio(
     });
     const normalizedTranscript = selectedAttempt.transcript;
     const transcriptWindowed = selectedAttempt.windowed;
+    const storedTranscript = sermon.includeWorshipMoments
+      ? normalizedTranscript
+      : transcriptWindowed.transcript;
     const transcriptQuality = selectedAttempt.quality;
     const selectedExpectedDurationSeconds = selectedAttempt.expectedDurationSeconds ?? expectedTranscriptDurationSeconds;
     const degradedTranscriptUsable = isDegradedTranscriptUsableForLocalMultilingualClipping(transcriptQuality, languageHint);
@@ -2340,16 +2359,17 @@ export async function transcribeSermonAudio(
 
     const storedTranscriptLanguage = languageHint && usesLocalMultilingualLanguageHint(languageHint)
       ? languageHint.intendedLanguage
-      : transcriptWindowed.transcript.language ?? "unknown";
+      : storedTranscript.language ?? "unknown";
 
     const rawPayload = {
       transcriptionConfigurationKey: transcriptionConfigurationKey(),
       provider: normalizedTranscript.provider,
       model: normalizedTranscript.model,
       language: storedTranscriptLanguage,
-      providerDetectedLanguage: transcriptWindowed.transcript.language ?? null,
-      fullText: transcriptWindowed.transcript.fullText,
-      segmentCount: transcriptWindowed.transcript.segments.length,
+      providerDetectedLanguage: storedTranscript.language ?? null,
+      fullText: storedTranscript.fullText,
+      segmentCount: storedTranscript.segments.length,
+      fullRecordingPreservedForWorship: sermon.includeWorshipMoments,
       chunking: {
         implemented: true,
         used: shouldUseChunking,
@@ -2423,24 +2443,24 @@ export async function transcribeSermonAudio(
 
     await replaceTranscriptRecords({
       sermonId: sermon.id,
-      fullText: transcriptWindowed.transcript.fullText,
+      fullText: storedTranscript.fullText,
       provider: normalizedTranscript.provider,
       language: storedTranscriptLanguage,
       transcriptJsonPath,
-      segments: transcriptWindowed.transcript.segments,
-      words: transcriptWindowed.transcript.words,
+      segments: storedTranscript.segments,
+      words: storedTranscript.words,
     });
 
     await markSermonTranscribedUnlessAdvanced(sermon.id);
     await markJobSucceeded(
       job.id,
-      `Transcription saved with ${transcriptWindowed.transcript.segments.length} timestamped segments. Readiness: ${
+      `Transcription saved with ${storedTranscript.segments.length} timestamped segments${sermon.includeWorshipMoments ? " across the full service for worship discovery" : ""}. Readiness: ${
         degradedTranscriptUsable ? "degraded multilingual transcript saved for review" : transcriptQuality.ready ? "ready for clipping" : transcriptQuality.reason
       }.`,
     );
     await appendPipelineLog(
       sermon.id,
-      `Transcription completed with ${transcriptWindowed.transcript.segments.length} segments, ${transcriptQuality.wordCount} words, ${Math.round(transcriptQuality.durationSeconds)} seconds, ${Math.round(transcriptQuality.coverageRatio * 100)}% coverage.`,
+      `Transcription completed with ${storedTranscript.segments.length} stored segments; sermon-quality assessment used ${transcriptWindowed.transcript.segments.length} segments, ${transcriptQuality.wordCount} words, ${Math.round(transcriptQuality.durationSeconds)} seconds, ${Math.round(transcriptQuality.coverageRatio * 100)}% coverage.`,
     );
 
     return { transcriptJsonPath, reusedExistingTranscript: false };

@@ -17,6 +17,10 @@ import {
 import { appendPipelineLog } from "@/server/agents/storage";
 import { persistMinistryMoments } from "@/server/agents/ministryMomentService";
 import { refreshSubjectSpeakerTracking } from "@/server/agents/subjectSpeakerTrackingService";
+import {
+  applyInferredSermonWindowToSegments,
+  inferSermonWindowFromTranscript,
+} from "@/server/agents/sermonWindowInference";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -246,6 +250,10 @@ export async function generateSermonIntelligence(
       churchName: true,
       language: true,
       sermonDate: true,
+      sermonStartSeconds: true,
+      sermonEndSeconds: true,
+      analyzeFullRecording: true,
+      sourceDurationSeconds: true,
       transcript: {
         select: { fullText: true },
       },
@@ -305,12 +313,25 @@ export async function generateSermonIntelligence(
   await appendPipelineLog(sermonId, "Sermon intelligence generation started.");
 
   try {
-    const timestampedTranscript = sermon.transcriptSegments.length > 0
+    const configuredSegments = sermon.analyzeFullRecording
       ? sermon.transcriptSegments
+      : sermon.transcriptSegments.filter((segment) => (
+          (typeof sermon.sermonStartSeconds !== "number" || segment.endTimeSeconds > sermon.sermonStartSeconds)
+          && (typeof sermon.sermonEndSeconds !== "number" || segment.startTimeSeconds < sermon.sermonEndSeconds)
+        ));
+    const inferredSermonWindow = inferSermonWindowFromTranscript(sermon.transcriptSegments, {
+      sermonStartSeconds: sermon.sermonStartSeconds,
+      sermonEndSeconds: sermon.sermonEndSeconds,
+      analyzeFullRecording: sermon.analyzeFullRecording,
+      knownDurationSeconds: sermon.sourceDurationSeconds,
+    });
+    const sermonSegments = applyInferredSermonWindowToSegments(configuredSegments, inferredSermonWindow);
+    const sermonTranscriptText = sermonSegments.length > 0
+      ? sermonSegments
           .map((segment) => `[${segment.startTimeSeconds.toFixed(1)} - ${segment.endTimeSeconds.toFixed(1)}] ${segment.text.trim()}`)
           .join("\n")
       : sermon.transcript.fullText;
-    const intelligence = await callIntelligenceAI(sermon, timestampedTranscript, {
+    const intelligence = await callIntelligenceAI(sermon, sermonTranscriptText, {
       bypassCache: options?.force,
     });
     const intelligenceId = await persistIntelligence(sermonId, intelligence);
@@ -318,7 +339,7 @@ export async function generateSermonIntelligence(
     try {
       await persistMinistryMoments(
         sermonId,
-        sermon.transcript.fullText,
+        sermonTranscriptText,
         intelligence.ministryMoments,
       );
       await appendPipelineLog(

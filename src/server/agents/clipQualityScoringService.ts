@@ -27,6 +27,7 @@ export type ClipRankingCategory =
   | "REJECTED";
 
 export type ProfessionalQualityCandidate = {
+  contentKind?: "SERMON" | "WORSHIP" | null;
   startTimeSeconds: number;
   endTimeSeconds: number;
   durationSeconds: number;
@@ -441,12 +442,22 @@ function buildPastorGradeBlockers(input: {
   durationQualityLabel: ClipDurationQuality["durationQualityLabel"];
 }): string[] {
   const blockers: string[] = [];
+  const isWorship = input.candidate.contentKind === "WORSHIP";
 
   if (input.candidate.riskLevel === "HIGH") {
     blockers.push("PASTOR_GRADE_HIGH_CONTEXT_RISK");
   }
   if (input.candidate.boundaryQuality === "BAD" || input.boundaryQualityScore < 4.5) {
     blockers.push("PASTOR_GRADE_BAD_BOUNDARY");
+  }
+  if (isWorship) {
+    if (input.durationQualityLabel === "TOO_SHORT") {
+      blockers.push("PASTOR_GRADE_TOO_SHORT");
+    }
+    if (input.durationQualityLabel === "TOO_LONG") {
+      blockers.push("PASTOR_GRADE_TOO_LONG");
+    }
+    return blockers;
   }
   if (input.hookScore < 5.2) {
     blockers.push("PASTOR_GRADE_WEAK_OPENING");
@@ -493,6 +504,16 @@ function buildPastorGradeReviewWarnings(input: {
   durationQualityLabel: ClipDurationQuality["durationQualityLabel"];
 }): string[] {
   const warnings: string[] = [];
+  if (input.candidate.contentKind === "WORSHIP") {
+    warnings.push("WORSHIP_LYRICS_REVIEW_REQUIRED");
+    if (input.candidate.boundaryQuality !== "GOOD" || input.boundaryQualityScore < 6.2) {
+      warnings.push("WORSHIP_BOUNDARY_REVIEW_REQUIRED");
+    }
+    if (input.durationQualityLabel === "TIGHT" || input.durationQualityLabel === "SLIGHTLY_LONG") {
+      warnings.push("PASTOR_REVIEW_DURATION");
+    }
+    return warnings;
+  }
 
   if (input.hookScore < 5.8) {
     warnings.push("PASTOR_REVIEW_OPENING");
@@ -528,6 +549,7 @@ function hasCorePastorGradeBlocker(warnings: string[]): boolean {
 }
 
 export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandidate): ProfessionalQualityFields {
+  const isWorship = candidate.contentKind === "WORSHIP";
   const transcriptReviewRequired = candidate.transcriptSafetyStatus === "REVIEW_REQUIRED";
   const hook: ClipHookAnalysis = typeof candidate.hookScore === "number"
     ? {
@@ -559,28 +581,33 @@ export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandi
   const visualQualityScore = clampScore(candidate.visualQualityScore ?? candidate.visualReadinessScore ?? visualConfidenceScore);
   const socialShareabilityScore = clampScore(candidate.shareabilityScore ?? candidate.score);
   const speechPolishPenalty = speechPolish.warnings.includes("FILLER_WORD_DENSITY") ? 0.35 : 0;
-  const finalQualityScore = clampScore(
-    hook.hookScore * 0.19 +
-    standaloneClarityScore * 0.18 +
-    emotionalWeightScore * 0.14 +
-    ministryValueScore * 0.14 +
-    arc.arcCompletenessScore * 0.12 +
-    boundaryQualityScore * 0.09 +
-    visualConfidenceScore * 0.07 +
-    socialShareabilityScore * 0.07 +
-    (duration.durationQualityScore < 6 ? -0.6 : 0) -
-    speechPolishPenalty,
-  );
+  const finalQualityScore = clampScore(isWorship
+    ? candidate.score * 0.25 +
+      ministryValueScore * 0.2 +
+      boundaryQualityScore * 0.15 +
+      visualConfidenceScore * 0.15 +
+      socialShareabilityScore * 0.15 +
+      duration.durationQualityScore * 0.1
+    : hook.hookScore * 0.19 +
+      standaloneClarityScore * 0.18 +
+      emotionalWeightScore * 0.14 +
+      ministryValueScore * 0.14 +
+      arc.arcCompletenessScore * 0.12 +
+      boundaryQualityScore * 0.09 +
+      visualConfidenceScore * 0.07 +
+      socialShareabilityScore * 0.07 +
+      (duration.durationQualityScore < 6 ? -0.6 : 0) -
+      speechPolishPenalty);
   const inheritedWarnings = candidate.qualityWarnings ?? [];
   const qualityWarnings = Array.from(new Set([
     ...inheritedWarnings,
     ...(transcriptReviewRequired ? ["TRANSCRIPT_REVIEW_REQUIRED"] : []),
-    ...(hook.hookProblem ? ["WEAK_HOOK"] : []),
-    ...(arc.whatContextMightBeMissing ? ["INCOMPLETE_ARC"] : []),
+    ...(!isWorship && hook.hookProblem ? ["WEAK_HOOK"] : []),
+    ...(!isWorship && arc.whatContextMightBeMissing ? ["INCOMPLETE_ARC"] : []),
     ...(duration.durationQualityLabel === "TOO_SHORT" || duration.durationQualityLabel === "TOO_LONG" ? ["DURATION_NEEDS_EDIT"] : []),
     ...(candidate.audioWarnings ?? audio.audioWarnings),
     ...captionFields.captionQualityWarnings,
-    ...speechPolish.warnings,
+    ...(!isWorship ? speechPolish.warnings : []),
   ]));
   const detectedPastorGradeBlockers = buildPastorGradeBlockers({
     candidate,
@@ -609,14 +636,14 @@ export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandi
   const resolvedAudioWarnings = candidate.audioWarnings ?? audio.audioWarnings;
   const postReady = reviewPostReady({
     finalQualityScore,
-    hookScore: hook.hookScore,
-    arcCompletenessScore: arc.arcCompletenessScore,
+    hookScore: isWorship ? Math.max(hook.hookScore, 6) : hook.hookScore,
+    arcCompletenessScore: isWorship ? Math.max(arc.arcCompletenessScore, 6.5) : arc.arcCompletenessScore,
     boundaryQualityScore,
     visualQualityScore,
     audioQualityScore: candidate.audioQualityScore ?? audio.audioQualityScore,
     captionQualityScore: candidate.captionQualityScore ?? captionFields.captionQualityScore,
     boundaryQuality: candidate.boundaryQuality,
-    standaloneClarityScore,
+    standaloneClarityScore: isWorship ? Math.max(standaloneClarityScore, 6.5) : standaloneClarityScore,
     renderStatus: candidate.renderStatus,
     riskLevel: candidate.riskLevel,
     contextWarning: candidate.contextWarning,
@@ -625,12 +652,31 @@ export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandi
     captionWarnings: captionFields.captionQualityWarnings,
   });
   const corePastorGradeBlocked = hasCorePastorGradeBlocker(pastorGradeBlockers);
+  const worshipReviewOnly = isWorship &&
+    transcriptReviewRequired &&
+    (postReady.postReadyStatus === "POST_READY" || postReady.postReadyStatus === "GOOD_NEEDS_REVIEW");
   const qualityLabel: ClipQualityLabel = corePastorGradeBlocked
     ? "REJECT"
+    : worshipReviewOnly
+      ? "GOOD_NEEDS_REVIEW"
     : transcriptReviewRequired
       ? "NEEDS_EDITING"
     : postReady.postReadyStatus;
-  const resolvedPostReady: PostReadyReviewResult = transcriptReviewRequired && postReady.postReadyStatus !== "REJECT"
+  const resolvedPostReady: PostReadyReviewResult = worshipReviewOnly
+    ? {
+        ...postReady,
+        postReadyStatus: "GOOD_NEEDS_REVIEW",
+        postReadyReasons: Array.from(new Set([
+          ...postReady.postReadyReasons,
+          "Worship lyrics and musical boundaries require a human check.",
+        ])),
+        postReadyBlockers: Array.from(new Set([
+          ...postReady.postReadyBlockers,
+          "Review lyric accuracy, music rights, congregation visibility, and musical phrase boundaries.",
+        ])),
+        recommendedNextAction: "REVIEW_CLIP",
+      }
+    : transcriptReviewRequired && postReady.postReadyStatus !== "REJECT"
     ? {
         ...postReady,
         postReadyStatus: "NEEDS_EDITING",
@@ -648,7 +694,9 @@ export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandi
   const qualityReasons = [
     hook.hookReason,
     arc.whyThisClipFeelsComplete,
-    `Sermon arc completeness scored ${arc.arcCompletenessScore}/10.`,
+    isWorship
+      ? "Worship moments are scored on lyric confidence, duration, framing, audio, and review readiness."
+      : `Sermon arc completeness scored ${arc.arcCompletenessScore}/10.`,
     duration.durationReason,
     ...pastorGradeBlockers.map((blocker) => `Pastor-grade blocker: ${blocker.replace(/_/g, " ").toLowerCase()}.`),
     ...postReady.postReadyReasons,

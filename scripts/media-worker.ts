@@ -475,11 +475,18 @@ async function runJob(job: ProcessingJob): Promise<string> {
       }, {
         generateSuggestions: async ({ force, append: appendSuggestions }) => {
           const { generateClipSuggestions } = await import("../src/server/agents/clipIntelligenceAgent");
-          return generateClipSuggestions(sermonId, {
+          const result = await generateClipSuggestions(sermonId, {
             force,
             append: appendSuggestions,
             processingJobId: job.id,
           });
+          const { generateWorshipMomentClips } = await import("../src/server/agents/worshipMomentService");
+          const worshipResult = await generateWorshipMomentClips(sermonId, { force });
+          return {
+            clipCount: result.clipCount + worshipResult.clipCount,
+            reusedExistingSuggestions: result.reusedExistingSuggestions &&
+              (worshipResult.clipCount === 0 || worshipResult.reusedExistingClips),
+          };
         },
         preparePreviews: async () => {
           const { prepareGeneratedClipReviewAssets } = await import("../src/server/agents/clipReviewAssetService");

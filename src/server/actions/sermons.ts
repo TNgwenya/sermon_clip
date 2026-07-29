@@ -1628,6 +1628,7 @@ export async function createSermonAction(
     language: String(formData.get("language") ?? "").trim(),
     sermonStartTimestamp: String(formData.get("sermonStartTimestamp") ?? "").trim(),
     sermonEndTimestamp: String(formData.get("sermonEndTimestamp") ?? "").trim(),
+    includeWorshipMoments: formData.get("includeWorshipMoments") === "on",
     sermonDate: String(formData.get("sermonDate") ?? "").trim(),
     rightsConfirmed: formData.get("rightsConfirmed") === "on",
     hasUploadedVideo: hasUploadedMedia,
@@ -1699,6 +1700,7 @@ export async function createSermonAction(
         sermonStartSeconds: result.data.sermonStartSeconds,
         sermonEndSeconds: result.data.sermonEndSeconds,
         analyzeFullRecording: false,
+        includeWorshipMoments: result.data.includeWorshipMoments,
         sermonDate: result.data.sermonDate,
         rightsConfirmed: result.data.rightsConfirmed,
         status: "CREATED",
@@ -2026,6 +2028,8 @@ export async function generateClipSuggestionsAction(
 
   try {
     const result = await generateClipSuggestions(sermonId, { force, append });
+    const { generateWorshipMomentClips } = await import("@/server/agents/worshipMomentService");
+    const worshipResult = await generateWorshipMomentClips(sermonId, { force });
     const previewSummary = await prepareGeneratedClipPreviews({ sermonId, force });
     revalidatePath(`/sermons/${sermonId}`);
     revalidatePath(`/sermons/${sermonId}/review`);
@@ -2034,8 +2038,8 @@ export async function generateClipSuggestionsAction(
     return {
       success: true,
       message: result.reusedExistingSuggestions
-        ? `Clip suggestions already existed. Existing suggestions were reused. Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`
-        : `Generated ${result.clipCount} ${append ? "new " : ""}clip suggestions. Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`,
+        ? `Clip suggestions already existed. Existing suggestions were reused${worshipResult.clipCount > 0 ? `, including ${worshipResult.clipCount} worship` : ""}. Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`
+        : `Generated ${result.clipCount + worshipResult.clipCount} ${append ? "new " : ""}clip suggestions${worshipResult.clipCount > 0 ? `, including ${worshipResult.clipCount} worship` : ""}. Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Clip generation failed.";

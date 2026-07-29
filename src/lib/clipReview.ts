@@ -460,6 +460,10 @@ export function buildClipWarnings(clip: ReviewClipModel): string[] {
       warnings.push("Rendered video may be missing audio");
     } else if (warning === "OUTPUT_FILE_TOO_SMALL") {
       warnings.push("Rendered video file looks incomplete");
+    } else if (warning === "WORSHIP_LYRICS_REVIEW_REQUIRED") {
+      warnings.push("Review the worship lyrics before approval");
+    } else if (warning === "WORSHIP_BOUNDARY_REVIEW_REQUIRED") {
+      warnings.push("Check that the clip starts and ends on a natural musical phrase");
     }
   }
 

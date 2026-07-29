@@ -12,6 +12,7 @@ export const allowedClipTypes = [
   "funny",
   "prophetic",
   "pastoral",
+  "worship",
 ] as const;
 
 export const allowedRiskLevels = ["LOW", "MEDIUM", "HIGH"] as const;
@@ -47,6 +48,9 @@ const clipTypeAliases: Record<string, ClipType> = {
   PROPHETIC_MOMENT: "prophetic",
   PRAYER: "pastoral",
   PASTORAL_ENCOURAGEMENT: "pastoral",
+  WORSHIP: "worship",
+  WORSHIP_MOMENT: "worship",
+  PRAISE: "worship",
 };
 
 const smartClipCategoryAliases: Record<string, SmartClipCategory> = {
@@ -82,6 +86,9 @@ const smartClipCategoryAliases: Record<string, SmartClipCategory> = {
   BEST_APPLICATION_CLIP: "Best Call To Action Clip",
   PRACTICAL_APPLICATION: "Best Call To Action Clip",
   BEST_PRACTICAL_APPLICATION_CLIP: "Best Call To Action Clip",
+  WORSHIP: "Best Worship Clip",
+  WORSHIP_MOMENT: "Best Worship Clip",
+  PRAISE: "Best Worship Clip",
 };
 
 const arcTypeAliases: Record<string, ClipArcType> = {

@@ -3,6 +3,26 @@ import { describe, expect, it } from "vitest";
 import { __processSermonPipelineTestUtils } from "@/server/pipeline/processSermonPipeline";
 
 describe("process sermon pipeline review asset preparation", () => {
+  it("requires a complete sermon range before processing worship-enabled recordings", () => {
+    const hasCompleteRange = __processSermonPipelineTestUtils.hasCompleteWorshipSermonRange;
+
+    expect(hasCompleteRange({
+      includeWorshipMoments: true,
+      sermonStartSeconds: null,
+      sermonEndSeconds: null,
+    })).toBe(false);
+    expect(hasCompleteRange({
+      includeWorshipMoments: true,
+      sermonStartSeconds: 1800,
+      sermonEndSeconds: 4500,
+    })).toBe(true);
+    expect(hasCompleteRange({
+      includeWorshipMoments: false,
+      sermonStartSeconds: null,
+      sermonEndSeconds: null,
+    })).toBe(true);
+  });
+
   it("explains incomplete mobile uploads without referring to YouTube", () => {
     expect(__processSermonPipelineTestUtils.incompleteLocalUploadMessage()).toContain("Upload incomplete");
     expect(__processSermonPipelineTestUtils.incompleteLocalUploadMessage()).toContain("Re-upload the video");

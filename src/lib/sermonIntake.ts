@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   parseSermonTimestampInput,
   validateSermonSegmentRange,
+  WORSHIP_SERMON_END_REQUIRED_MESSAGE,
+  WORSHIP_SERMON_START_REQUIRED_MESSAGE,
 } from "@/lib/sermonSegment";
 
 export const MAX_UPLOADED_MEDIA_BYTES = Math.floor(2.5 * 1024 * 1024 * 1024);
@@ -21,6 +23,7 @@ export const createSermonSchema = z
     language: z.string().min(1, "Language is required."),
     sermonStartTimestamp: z.string().trim().optional().default(""),
     sermonEndTimestamp: z.string().trim().optional().default(""),
+    includeWorshipMoments: z.boolean().optional().default(false),
     sermonDate: z
       .string()
       .trim()
@@ -75,6 +78,22 @@ export const createSermonSchema = z
         code: z.ZodIssueCode.custom,
         path: ["sermonEndTimestamp"],
         message: parsedEnd.error,
+      });
+    }
+
+    if (value.includeWorshipMoments && !parsedStart.error && parsedStart.seconds === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sermonStartTimestamp"],
+        message: WORSHIP_SERMON_START_REQUIRED_MESSAGE,
+      });
+    }
+
+    if (value.includeWorshipMoments && !parsedEnd.error && parsedEnd.seconds === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sermonEndTimestamp"],
+        message: WORSHIP_SERMON_END_REQUIRED_MESSAGE,
       });
     }
 

@@ -141,7 +141,7 @@ describe("ministry moment schema", () => {
       },
       {
         momentType: "OTHER",
-        clipCategory: "Best Faith Clip",
+        clipCategory: "Best Worship Clip",
       },
       {
         momentType: "OTHER",
@@ -307,6 +307,7 @@ describe("ministry-aware clip mapping", () => {
     const scoped = __clipIntelligenceTestUtils.buildSuggestionDeleteWhere("sermon-1", "Best Prayer Clip");
     expect(scoped).toMatchObject({
       sermonId: "sermon-1",
+      contentKind: "SERMON",
       status: "SUGGESTED",
       isAiGenerated: true,
       isManuallyEdited: false,

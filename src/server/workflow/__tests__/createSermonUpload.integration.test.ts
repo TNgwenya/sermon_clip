@@ -58,6 +58,25 @@ describe("create sermon upload workflow", () => {
     }
   });
 
+  it("rejects worship discovery before saving when the sermon range is missing", async () => {
+    const formData = new FormData();
+    formData.set("youtubeUrl", "https://www.youtube.com/watch?v=worship-service");
+    formData.set("title", "Full Sunday Service");
+    formData.set("speakerName", "Pastor Test");
+    formData.set("churchName", "Test Church");
+    formData.set("language", "English");
+    formData.set("includeWorshipMoments", "on");
+    formData.set("rightsConfirmed", "on");
+
+    const result = await createSermonAction({ success: false, message: "" }, formData);
+
+    expect(result.success).toBe(false);
+    expect(result.fieldErrors?.sermonStartTimestamp).toContain("required");
+    expect(result.fieldErrors?.sermonEndTimestamp).toContain("required");
+    expect(result.createdSermonId).toBeUndefined();
+    expect(processSermonPipelineMock).not.toHaveBeenCalled();
+  });
+
   it("stores an uploaded sermon media file as the local source media", async () => {
     const videoBytes = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]);
     const formData = new FormData();

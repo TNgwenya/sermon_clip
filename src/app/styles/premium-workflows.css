@@ -1402,6 +1402,13 @@
   font-weight: 650;
 }
 
+.field-required {
+  margin-left: 0.35rem;
+  color: var(--accent, #d6a757);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
 .premium-intake-form .sermon-window-disclosure {
   margin: 0 clamp(1.25rem, 3vw, 2rem);
   border-color: var(--workflow-line);

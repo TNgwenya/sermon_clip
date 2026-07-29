@@ -32,6 +32,7 @@ export type ClipQualityRefreshSummary = {
 export type RefreshableClip = {
   id: string;
   sermonId: string;
+  contentKind?: "SERMON" | "WORSHIP";
   status: "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
   title: string;
   hook: string;
@@ -202,6 +203,7 @@ function hasEnoughClipData(clip: RefreshableClip): boolean {
 
 function toQualityInput(clip: RefreshableClip): ClipQualityCandidateInput {
   return {
+    contentKind: clip.contentKind ?? "SERMON",
     title: clip.title,
     hook: clip.hook,
     caption: clip.caption,
@@ -331,6 +333,7 @@ export async function refreshClipQualityRecords(input: {
         const { clip, visualRefresh } = entry;
         const professional = dependencies.scoreProfessionalQuality({
           ...reviewed,
+          contentKind: clip.contentKind ?? "SERMON",
           transcriptSafetyStatus: clip.transcriptSafetyStatus,
           visualReadinessScore: visualRefresh?.visualReadinessScore ?? reviewed.visualReadinessScore,
           visualConfidenceScore: visualRefresh?.visualReadinessScore ?? undefined,
@@ -394,6 +397,7 @@ export async function refreshSermonClipQuality(input: {
     select: {
       id: true,
       sermonId: true,
+      contentKind: true,
       status: true,
       title: true,
       hook: true,

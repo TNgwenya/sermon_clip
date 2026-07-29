@@ -36,6 +36,7 @@ export const SMART_CLIP_CATEGORIES = [
   "Best Sunday Promotion Clip",
   "Best Salvation Invitation Clip",
   "Best Call To Action Clip",
+  "Best Worship Clip",
 ] as const;
 
 export type SmartClipCategory = (typeof SMART_CLIP_CATEGORIES)[number];

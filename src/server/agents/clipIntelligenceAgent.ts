@@ -4,6 +4,10 @@ import { ZodError } from "zod";
 import { buildClipGenerationPreviewCheckpoint } from "@/lib/clipGenerationRetry";
 import { prisma } from "@/lib/prisma";
 import {
+  hasCompleteWorshipSermonRange,
+  WORSHIP_SERMON_RANGE_REQUIRED_MESSAGE,
+} from "@/lib/sermonSegment";
+import {
   appendJobLog,
   createProcessingJob,
   markJobAwaitingClipPreviewPreparation,
@@ -69,6 +73,7 @@ import {
   classifySermonSegment,
   deriveLikelyThoughtStartAnchors,
 } from "@/server/agents/sermonThoughtSegmentation";
+import { inferSermonWindowFromTranscript } from "@/server/agents/sermonWindowInference";
 
 export type ClipWindow = {
   windowId: string;
@@ -2855,6 +2860,7 @@ export function shouldReuseExistingSuggestions(
 export function buildSuggestionDeleteWhere(sermonId: string, targetCategory?: string, includeRejected = false) {
   return {
     sermonId,
+    contentKind: "SERMON" as const,
     status: includeRejected ? { in: REPLACEABLE_SUGGESTION_STATUSES } : "SUGGESTED" as const,
     isAiGenerated: true,
     isManuallyEdited: false,
@@ -2931,11 +2937,16 @@ export async function generateClipSuggestions(
       sermonStartSeconds: true,
       sermonEndSeconds: true,
       analyzeFullRecording: true,
+      includeWorshipMoments: true,
+      sourceDurationSeconds: true,
     },
   });
 
   if (!sermon) {
     throw new Error(`Sermon ${sermonId} was not found.`);
+  }
+  if (!hasCompleteWorshipSermonRange(sermon)) {
+    throw new Error(WORSHIP_SERMON_RANGE_REQUIRED_MESSAGE);
   }
 
   const job = await resolveClipGenerationJob(sermon.id, options?.processingJobId);
@@ -2970,12 +2981,29 @@ export async function generateClipSuggestions(
         speakerLabel: true,
       },
     });
-    const clipGenerationWindow: ClipGenerationSermonWindow = {
+    const configuredClipGenerationWindow: ClipGenerationSermonWindow = {
       sermonStartSeconds: sermon.sermonStartSeconds,
       sermonEndSeconds: sermon.sermonEndSeconds,
       analyzeFullRecording: sermon.analyzeFullRecording,
     };
+    const inferredSermonWindow = inferSermonWindowFromTranscript(allSegments, {
+      ...configuredClipGenerationWindow,
+      knownDurationSeconds: sermon.sourceDurationSeconds,
+    });
+    const clipGenerationWindow: ClipGenerationSermonWindow = inferredSermonWindow
+      ? {
+          sermonStartSeconds: inferredSermonWindow.startTimeSeconds,
+          sermonEndSeconds: inferredSermonWindow.endTimeSeconds,
+          analyzeFullRecording: false,
+        }
+      : configuredClipGenerationWindow;
     const segments = filterTranscriptSegmentsToClipGenerationWindow(allSegments, clipGenerationWindow);
+    if (inferredSermonWindow) {
+      await appendJobLog(
+        job.id,
+        `Clip discovery used the inferred preaching window ${Math.round(inferredSermonWindow.startTimeSeconds)}-${Math.round(inferredSermonWindow.endTimeSeconds)}s while retaining the full transcript for worship discovery.`,
+      );
+    }
 
     if (segments.length === 0) {
       failureCode = "TRANSCRIPT_SEGMENTS_MISSING";
@@ -3001,7 +3029,13 @@ export async function generateClipSuggestions(
     );
 
     const [momentsCount, intelligenceStatus] = await Promise.all([
-      prisma.ministryMoment.count({ where: { sermonId: sermon.id, isAiGenerated: true } }),
+      prisma.ministryMoment.count({
+        where: {
+          sermonId: sermon.id,
+          isAiGenerated: true,
+          momentType: { not: "WORSHIP_MOMENT" },
+        },
+      }),
       prisma.sermonIntelligence.findUnique({
         where: { sermonId: sermon.id },
         select: { status: true },
@@ -3043,7 +3077,11 @@ export async function generateClipSuggestions(
     });
 
     const allMinistryMoments = await prisma.ministryMoment.findMany({
-      where: { sermonId: sermon.id, isAiGenerated: true },
+      where: {
+        sermonId: sermon.id,
+        isAiGenerated: true,
+        momentType: { not: "WORSHIP_MOMENT" },
+      },
       orderBy: [{ confidenceScore: "desc" }, { startTimeSeconds: "asc" }],
       select: {
         id: true,
@@ -3068,6 +3106,7 @@ export async function generateClipSuggestions(
     const existingSuggestionCount = await prisma.clipCandidate.count({
       where: {
         sermonId: sermon.id,
+        contentKind: "SERMON",
         status: "SUGGESTED",
         isAiGenerated: true,
         isManuallyEdited: false,
@@ -3102,7 +3141,7 @@ export async function generateClipSuggestions(
 
     const existingClipRanges = appendMode
       ? await prisma.clipCandidate.findMany({
-          where: { sermonId: sermon.id },
+          where: { sermonId: sermon.id, contentKind: "SERMON" },
           select: {
             startTimeSeconds: true,
             endTimeSeconds: true,
@@ -3533,6 +3572,7 @@ export async function generateClipSuggestions(
 
           return {
             sermonId: sermon.id,
+            contentKind: "SERMON" as const,
             ministryMomentId: candidate.ministryMomentId ?? null,
             smartClipCategory: candidate.smartClipCategory,
             recommendationReason: candidate.reasonSelected,
@@ -3609,6 +3649,7 @@ export async function generateClipSuggestions(
     const savedClips = await prisma.clipCandidate.findMany({
       where: {
         sermonId: sermon.id,
+        contentKind: "SERMON",
         status: "SUGGESTED",
         isAiGenerated: true,
         isManuallyEdited: false,
