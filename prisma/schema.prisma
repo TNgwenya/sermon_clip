@@ -576,8 +576,862 @@ enum VideoSubjectTrackingSource {
   MODEL
 }
 
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum CampusStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum MembershipRole {
+  OWNER
+  ORG_ADMIN
+  CAMPUS_ADMIN
+  PASTOR_APPROVER
+  CONTENT_LEAD
+  EDITOR
+  PUBLISHER
+  ANALYST
+  VIEWER
+  EXTERNAL_CONTRACTOR
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+enum AuditActorType {
+  USER
+  SYSTEM
+  SUPPORT
+  API
+}
+
+enum OwnershipTransferStatus {
+  PENDING
+  ACCEPTED
+  CANCELLED
+  EXPIRED
+}
+
+enum EntitlementSource {
+  PLAN
+  TRIAL
+  PROMOTION
+  MANUAL
+}
+
+enum MfaFactorType {
+  TOTP
+}
+
+enum SecurityTokenPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+  ACCOUNT_RECOVERY
+}
+
+enum PublicSermonPageStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum WeekDraftStatus {
+  DRAFT
+  READY_FOR_REVIEW
+  IN_REVIEW
+  CHANGES_REQUESTED
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum WeekDraftItemFormat {
+  SHORT_FORM_VIDEO
+  QUOTE_GRAPHIC
+  SCRIPTURE_GRAPHIC
+  CAROUSEL
+  TEXT_POST
+  DEVOTIONAL
+  PRAYER
+  SERMON_RECAP
+  STORY
+  GUIDE
+  EMAIL
+  NEWSLETTER
+  BLOG
+  OTHER
+}
+
+enum WeekDraftItemStatus {
+  DRAFT
+  READY_FOR_REVIEW
+  IN_REVIEW
+  CHANGES_REQUESTED
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  SKIPPED
+  ARCHIVED
+}
+
+enum WeekDraftProvenanceType {
+  CLIP_CANDIDATE
+  CONTENT_OPPORTUNITY
+  CONTENT_ASSET
+  MANUAL
+  AI_GENERATED
+}
+
+enum CollaborationAssignmentStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum ApprovalPolicyMode {
+  ANY_APPROVER
+  ALL_REQUIRED_ROLES
+  QUORUM
+}
+
+enum ApprovalPolicyStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum ApprovalRequestStatus {
+  PENDING
+  APPROVED
+  CHANGES_REQUESTED
+  CANCELLED
+  SUPERSEDED
+}
+
+enum ApprovalDecisionType {
+  APPROVE
+  REQUEST_CHANGES
+}
+
+model Organization {
+  id                          String                          @id @default(cuid())
+  slug                        String                          @unique
+  name                        String
+  status                      OrganizationStatus              @default(ACTIVE)
+  timezone                    String                          @default("UTC")
+  defaultLanguage             String                          @default("en")
+  dataRegion                  String?
+  createdAt                   DateTime                        @default(now())
+  updatedAt                   DateTime                        @updatedAt
+  campuses                    Campus[]
+  memberships                 Membership[]
+  invitations                 Invitation[]
+  auditEvents                 AuditEvent[]
+  outgoingTransfers           OwnershipTransfer[]             @relation("OwnershipTransferOrganization")
+  entitlements                OrganizationEntitlement[]
+  usageEvents                 UsageEvent[]
+  sermons                     Sermon[]
+  brandingSettings            BrandingSettings?
+  socialAccounts              SocialAccount[]
+  socialCredentials           SocialCredential[]
+  postingDrafts               PostingDraft[]
+  scheduledPosts              ScheduledPost[]
+  contentOpportunities        ContentOpportunity[]
+  contentOpportunityRevisions ContentOpportunityRevision[]
+  contentAssets               ContentAsset[]
+  contentAssetRevisions       ContentAssetRevision[]
+  contentFunnelEvents         ContentFunnelEvent[]
+  aiInvocations               AiInvocation[]
+  aiResponseCaches            AiResponseCache[]
+  socialMetricSnapshots       SocialMetricSnapshot[]
+  performancePredictions      PostPerformancePrediction[]
+  growthRecommendations       GrowthRecommendation[]
+  growthCampaigns             GrowthCampaign[]
+  growthTrends                GrowthTrend[]
+  growthGuardrailReviews      GrowthGuardrailReview[]
+  ministryOutcomes            MinistryOutcome[]
+  weekDrafts                  WeekDraft[]
+  weekDraftItems              WeekDraftItem[]
+  weekDraftRevisions          WeekDraftItemRevision[]
+  collaborationAssignments    CollaborationAssignment[]
+  collaborationComments       CollaborationComment[]
+  collaborationMentions       CollaborationCommentMention[]
+  approvalPolicies            ApprovalPolicy[]
+  approvalPolicyRules         ApprovalPolicyRule[]
+  approvalRequests            ApprovalRequest[]
+  approvalDecisions           ApprovalDecision[]
+  userSessions                UserSession[]
+  automationSettings          OrganizationAutomationSettings?
+  publicSermonPages           SermonPublicPage[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Campus {
+  id                          String                        @id @default(cuid())
+  organizationId              String
+  slug                        String
+  name                        String
+  status                      CampusStatus                  @default(ACTIVE)
+  timezone                    String?
+  addressJson                 Json?
+  createdAt                   DateTime                      @default(now())
+  updatedAt                   DateTime                      @updatedAt
+  organization                Organization                  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  memberships                 Membership[]
+  invitations                 Invitation[]
+  auditEvents                 AuditEvent[]
+  ownershipTransfers          OwnershipTransfer[]
+  usageEvents                 UsageEvent[]
+  sermons                     Sermon[]
+  brandingSettings            BrandingSettings[]
+  socialAccounts              SocialAccount[]
+  socialCredentials           SocialCredential[]
+  postingDrafts               PostingDraft[]
+  scheduledPosts              ScheduledPost[]
+  contentOpportunities        ContentOpportunity[]
+  contentOpportunityRevisions ContentOpportunityRevision[]
+  contentAssets               ContentAsset[]
+  contentAssetRevisions       ContentAssetRevision[]
+  contentFunnelEvents         ContentFunnelEvent[]
+  aiInvocations               AiInvocation[]
+  aiResponseCaches            AiResponseCache[]
+  socialMetricSnapshots       SocialMetricSnapshot[]
+  performancePredictions      PostPerformancePrediction[]
+  growthRecommendations       GrowthRecommendation[]
+  growthCampaigns             GrowthCampaign[]
+  growthTrends                GrowthTrend[]
+  growthGuardrailReviews      GrowthGuardrailReview[]
+  ministryOutcomes            MinistryOutcome[]
+  weekDrafts                  WeekDraft[]
+  weekDraftItems              WeekDraftItem[]
+  weekDraftRevisions          WeekDraftItemRevision[]
+  collaborationAssignments    CollaborationAssignment[]
+  collaborationComments       CollaborationComment[]
+  collaborationMentions       CollaborationCommentMention[]
+  approvalPolicies            ApprovalPolicy[]
+  approvalPolicyRules         ApprovalPolicyRule[]
+  approvalRequests            ApprovalRequest[]
+  approvalDecisions           ApprovalDecision[]
+  userSessions                UserSession[]
+  publicSermonPages           SermonPublicPage[]
+
+  @@unique([organizationId, slug])
+  @@unique([id, organizationId])
+  @@index([organizationId, status])
+}
+
+model User {
+  id                              String                           @id @default(cuid())
+  email                           String                           @unique
+  normalizedEmail                 String                           @unique
+  status                          UserStatus                       @default(INVITED)
+  authProvider                    String?
+  authSubject                     String?
+  emailVerifiedAt                 DateTime?
+  lastLoginAt                     DateTime?
+  createdAt                       DateTime                         @default(now())
+  updatedAt                       DateTime                         @updatedAt
+  profile                         UserProfile?
+  memberships                     Membership[]
+  sentInvitations                 Invitation[]                     @relation("InvitationInvitedBy")
+  acceptedInvitations             Invitation[]                     @relation("InvitationAcceptedBy")
+  auditEvents                     AuditEvent[]                     @relation("AuditEventActor")
+  initiatedOwnershipTransfers     OwnershipTransfer[]              @relation("OwnershipTransferInitiatedBy")
+  outgoingOwnershipTransfers      OwnershipTransfer[]              @relation("OwnershipTransferFromUser")
+  incomingOwnershipTransfers      OwnershipTransfer[]              @relation("OwnershipTransferToUser")
+  createdWeekDrafts               WeekDraft[]                      @relation("WeekDraftCreatedBy")
+  assignedWeekDraftItems          WeekDraftItem[]                  @relation("WeekDraftItemAssignee")
+  createdWeekDraftRevisions       WeekDraftItemRevision[]          @relation("WeekDraftRevisionCreatedBy")
+  assignedCollaborationWork       CollaborationAssignment[]        @relation("CollaborationAssignmentAssignee")
+  createdCollaborationAssignments CollaborationAssignment[]        @relation("CollaborationAssignmentAssignedBy")
+  authoredCollaborationComments   CollaborationComment[]           @relation("CollaborationCommentAuthor")
+  collaborationMentions           CollaborationCommentMention[]    @relation("CollaborationMentionedUser")
+  createdApprovalPolicies         ApprovalPolicy[]                 @relation("ApprovalPolicyCreatedBy")
+  requestedApprovals              ApprovalRequest[]                @relation("ApprovalRequestedBy")
+  approvalDecisions               ApprovalDecision[]               @relation("ApprovalDecidedBy")
+  passwordCredential              PasswordCredential?
+  identities                      UserIdentity[]
+  sessions                        UserSession[]
+  mfaFactors                      MfaFactor[]
+  mfaRecoveryCodes                MfaRecoveryCode[]
+  securityTokens                  SecurityToken[]
+  confirmedAutomationSettings     OrganizationAutomationSettings[] @relation("AutomationRightsConfirmedBy")
+  createdPublicSermonPages        SermonPublicPage[]               @relation("PublicSermonPageCreatedBy")
+
+  @@unique([authProvider, authSubject])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model UserProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  displayName String
+  firstName   String?
+  lastName    String?
+  avatarUrl   String?
+  jobTitle    String?
+  phone       String?
+  locale      String   @default("en")
+  timezone    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PasswordCredential {
+  userId            String    @id
+  passwordHash      String
+  passwordChangedAt DateTime  @default(now())
+  failedAttempts    Int       @default(0)
+  lockedUntil       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([lockedUntil])
+}
+
+model UserIdentity {
+  id              String   @id @default(cuid())
+  userId          String
+  provider        String
+  subject         String
+  emailAtProvider String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+model UserSession {
+  id                String       @id @default(cuid())
+  tokenHash         String       @unique
+  userId            String
+  organizationId    String
+  campusId          String?
+  lastSeenAt        DateTime
+  idleExpiresAt     DateTime
+  absoluteExpiresAt DateTime
+  revokedAt         DateTime?
+  revocationReason  String?
+  ipAddressHash     String?
+  userAgentHash     String?
+  createdAt         DateTime     @default(now())
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campus            Campus?      @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@index([userId, revokedAt, absoluteExpiresAt])
+  @@index([organizationId, revokedAt, absoluteExpiresAt])
+  @@index([campusId, revokedAt, absoluteExpiresAt])
+  @@index([idleExpiresAt])
+}
+
+model MfaFactor {
+  id               String            @id @default(cuid())
+  userId           String
+  type             MfaFactorType     @default(TOTP)
+  label            String?
+  secretCiphertext String
+  verifiedAt       DateTime?
+  lastUsedAt       DateTime?
+  disabledAt       DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recoveryCodes    MfaRecoveryCode[]
+
+  @@unique([id, userId])
+  @@index([userId, disabledAt])
+}
+
+model MfaRecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  factorId  String
+  codeHash  String    @unique
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  factor    MfaFactor @relation(fields: [factorId, userId], references: [id, userId], onDelete: Cascade)
+
+  @@index([userId, usedAt])
+  @@index([factorId, usedAt])
+}
+
+model SecurityToken {
+  id         String               @id @default(cuid())
+  userId     String
+  purpose    SecurityTokenPurpose
+  tokenHash  String               @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime             @default(now())
+  user       User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, createdAt])
+  @@index([purpose, expiresAt])
+}
+
+model Membership {
+  id             String           @id @default(cuid())
+  organizationId String
+  campusId       String?
+  userId         String
+  role           MembershipRole
+  status         MembershipStatus @default(ACTIVE)
+  joinedAt       DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campus         Campus?          @relation(fields: [campusId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId, campusId])
+  @@index([organizationId, role, status])
+  @@index([campusId, role, status])
+  @@index([userId, status])
+  @@index([expiresAt])
+}
+
+model Invitation {
+  id               String           @id @default(cuid())
+  organizationId   String
+  campusId         String?
+  email            String
+  normalizedEmail  String
+  role             MembershipRole
+  status           InvitationStatus @default(PENDING)
+  tokenHash        String           @unique
+  invitedByUserId  String?
+  acceptedByUserId String?
+  expiresAt        DateTime
+  acceptedAt       DateTime?
+  revokedAt        DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campus           Campus?          @relation(fields: [campusId], references: [id], onDelete: Cascade)
+  invitedBy        User?            @relation("InvitationInvitedBy", fields: [invitedByUserId], references: [id], onDelete: SetNull)
+  acceptedBy       User?            @relation("InvitationAcceptedBy", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, normalizedEmail, status])
+  @@index([campusId, status])
+  @@index([expiresAt, status])
+}
+
+model AuditEvent {
+  id             String         @id @default(cuid())
+  organizationId String
+  campusId       String?
+  actorType      AuditActorType
+  actorUserId    String?
+  action         String
+  targetType     String
+  targetId       String?
+  requestId      String?
+  ipAddressHash  String?
+  userAgent      String?
+  metadataJson   Json?
+  occurredAt     DateTime       @default(now())
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus         Campus?        @relation(fields: [campusId], references: [id], onDelete: SetNull)
+  actor          User?          @relation("AuditEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, occurredAt])
+  @@index([organizationId, targetType, targetId])
+  @@index([actorUserId, occurredAt])
+  @@index([requestId])
+}
+
+model OwnershipTransfer {
+  id                String                  @id @default(cuid())
+  organizationId    String
+  campusId          String?
+  fromUserId        String
+  toUserId          String
+  initiatedByUserId String
+  status            OwnershipTransferStatus @default(PENDING)
+  tokenHash         String                  @unique
+  reason            String?
+  expiresAt         DateTime
+  acceptedAt        DateTime?
+  cancelledAt       DateTime?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  organization      Organization            @relation("OwnershipTransferOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+  campus            Campus?                 @relation(fields: [campusId], references: [id], onDelete: SetNull)
+  fromUser          User                    @relation("OwnershipTransferFromUser", fields: [fromUserId], references: [id], onDelete: Restrict)
+  toUser            User                    @relation("OwnershipTransferToUser", fields: [toUserId], references: [id], onDelete: Restrict)
+  initiatedBy       User                    @relation("OwnershipTransferInitiatedBy", fields: [initiatedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([fromUserId, status])
+  @@index([toUserId, status])
+  @@index([expiresAt, status])
+}
+
+model OrganizationEntitlement {
+  id             String            @id @default(cuid())
+  organizationId String
+  key            String
+  enabled        Boolean           @default(true)
+  limitValue     BigInt?
+  valueJson      Json?
+  source         EntitlementSource @default(PLAN)
+  effectiveAt    DateTime          @default(now())
+  expiresAt      DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key])
+  @@index([organizationId, enabled])
+  @@index([expiresAt])
+}
+
+model UsageEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  campusId       String?
+  metric         String
+  quantity       BigInt       @default(1)
+  sourceType     String?
+  sourceId       String?
+  idempotencyKey String?      @unique
+  metadataJson   Json?
+  occurredAt     DateTime     @default(now())
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus         Campus?      @relation(fields: [campusId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, metric, occurredAt])
+  @@index([campusId, metric, occurredAt])
+  @@index([sourceType, sourceId])
+}
+
+model WeekDraft {
+  id               String                    @id @default(cuid())
+  organizationId   String
+  campusId         String?
+  sermonId         String
+  title            String
+  weekStartsOn     DateTime                  @db.Date
+  timezone         String
+  status           WeekDraftStatus           @default(DRAFT)
+  version          Int                       @default(1)
+  dueAt            DateTime?
+  createdByUserId  String?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+  organization     Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus           Campus?                   @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  sermon           Sermon                    @relation(fields: [sermonId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  createdBy        User?                     @relation("WeekDraftCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  items            WeekDraftItem[]
+  assignments      CollaborationAssignment[]
+  comments         CollaborationComment[]
+  approvalRequests ApprovalRequest[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, campusId, sermonId, weekStartsOn])
+  @@index([organizationId, status, weekStartsOn])
+  @@index([campusId, status, weekStartsOn])
+  @@index([sermonId, createdAt])
+  @@index([createdByUserId, createdAt])
+  @@index([dueAt, status])
+}
+
+model WeekDraftItem {
+  id                 String                    @id @default(cuid())
+  organizationId     String
+  campusId           String?
+  weekDraftId        String
+  format             WeekDraftItemFormat
+  status             WeekDraftItemStatus       @default(DRAFT)
+  title              String
+  sortOrder          Int
+  sourceType         WeekDraftProvenanceType
+  sourceId           String?
+  sourceRevisionId   String?
+  provenanceJson     Json?
+  assigneeUserId     String?
+  dueAt              DateTime?
+  currentRevisionId  String?                   @unique
+  approvedRevisionId String?                   @unique
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+  organization       Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus             Campus?                   @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  weekDraft          WeekDraft                 @relation(fields: [weekDraftId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  assignee           User?                     @relation("WeekDraftItemAssignee", fields: [assigneeUserId], references: [id], onDelete: SetNull)
+  revisions          WeekDraftItemRevision[]   @relation("WeekDraftItemRevisionHistory")
+  currentRevision    WeekDraftItemRevision?    @relation("CurrentWeekDraftItemRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  approvedRevision   WeekDraftItemRevision?    @relation("ApprovedWeekDraftItemRevision", fields: [approvedRevisionId], references: [id], onDelete: SetNull)
+  assignments        CollaborationAssignment[]
+  comments           CollaborationComment[]
+  approvalRequests   ApprovalRequest[]
+
+  @@unique([id, organizationId])
+  @@unique([id, weekDraftId, organizationId])
+  @@unique([organizationId, weekDraftId, sortOrder])
+  @@index([organizationId, status, updatedAt])
+  @@index([campusId, status, updatedAt])
+  @@index([weekDraftId, status, sortOrder])
+  @@index([assigneeUserId, status, dueAt])
+  @@index([sourceType, sourceId])
+  @@index([currentRevisionId])
+  @@index([approvedRevisionId])
+}
+
+model WeekDraftItemRevision {
+  id                String                  @id @default(cuid())
+  organizationId    String
+  campusId          String?
+  weekDraftItemId   String
+  revisionNumber    Int
+  payloadJson       Json
+  contentHash       String
+  sourceType        WeekDraftProvenanceType
+  sourceId          String?
+  sourceRevisionId  String?
+  provenanceJson    Json?
+  createdByUserId   String?
+  createdAt         DateTime                @default(now())
+  organization      Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus            Campus?                 @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  weekDraftItem     WeekDraftItem           @relation("WeekDraftItemRevisionHistory", fields: [weekDraftItemId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  createdBy         User?                   @relation("WeekDraftRevisionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  currentForItem    WeekDraftItem?          @relation("CurrentWeekDraftItemRevision")
+  approvedForItem   WeekDraftItem?          @relation("ApprovedWeekDraftItemRevision")
+  approvalRequests  ApprovalRequest[]
+  approvalDecisions ApprovalDecision[]
+
+  @@unique([id, organizationId])
+  @@unique([id, weekDraftItemId, organizationId])
+  @@unique([weekDraftItemId, revisionNumber])
+  @@index([organizationId, createdAt])
+  @@index([campusId, createdAt])
+  @@index([weekDraftItemId, createdAt])
+  @@index([contentHash])
+}
+
+model CollaborationAssignment {
+  id               String                        @id @default(cuid())
+  organizationId   String
+  campusId         String?
+  weekDraftId      String
+  weekDraftItemId  String?
+  assigneeUserId   String
+  assignedByUserId String?
+  dueAt            DateTime?
+  status           CollaborationAssignmentStatus @default(ACTIVE)
+  completedAt      DateTime?
+  createdAt        DateTime                      @default(now())
+  updatedAt        DateTime                      @updatedAt
+  organization     Organization                  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus           Campus?                       @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  weekDraft        WeekDraft                     @relation(fields: [weekDraftId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  weekDraftItem    WeekDraftItem?                @relation(fields: [weekDraftItemId, weekDraftId, organizationId], references: [id, weekDraftId, organizationId], onDelete: Cascade)
+  assignee         User                          @relation("CollaborationAssignmentAssignee", fields: [assigneeUserId], references: [id], onDelete: Restrict)
+  assignedBy       User?                         @relation("CollaborationAssignmentAssignedBy", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, status, dueAt])
+  @@index([campusId, status, dueAt])
+  @@index([weekDraftId, status])
+  @@index([weekDraftItemId, status])
+  @@index([assigneeUserId, status, dueAt])
+}
+
+model CollaborationComment {
+  id              String                        @id @default(cuid())
+  organizationId  String
+  campusId        String?
+  weekDraftId     String
+  weekDraftItemId String?
+  authorUserId    String
+  parentCommentId String?
+  body            String
+  editedAt        DateTime?
+  deletedAt       DateTime?
+  createdAt       DateTime                      @default(now())
+  updatedAt       DateTime                      @updatedAt
+  organization    Organization                  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus          Campus?                       @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  weekDraft       WeekDraft                     @relation(fields: [weekDraftId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  weekDraftItem   WeekDraftItem?                @relation(fields: [weekDraftItemId, weekDraftId, organizationId], references: [id, weekDraftId, organizationId], onDelete: Cascade)
+  author          User                          @relation("CollaborationCommentAuthor", fields: [authorUserId], references: [id], onDelete: Restrict)
+  parentComment   CollaborationComment?         @relation("CollaborationCommentThread", fields: [parentCommentId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  replies         CollaborationComment[]        @relation("CollaborationCommentThread")
+  mentions        CollaborationCommentMention[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, createdAt])
+  @@index([campusId, createdAt])
+  @@index([weekDraftId, createdAt])
+  @@index([weekDraftItemId, createdAt])
+  @@index([authorUserId, createdAt])
+  @@index([parentCommentId, createdAt])
+}
+
+model CollaborationCommentMention {
+  organizationId  String
+  campusId        String?
+  commentId       String
+  mentionedUserId String
+  createdAt       DateTime             @default(now())
+  organization    Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus          Campus?              @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  comment         CollaborationComment @relation(fields: [commentId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  mentionedUser   User                 @relation("CollaborationMentionedUser", fields: [mentionedUserId], references: [id], onDelete: Cascade)
+
+  @@id([commentId, mentionedUserId])
+  @@index([organizationId, createdAt])
+  @@index([campusId, createdAt])
+  @@index([mentionedUserId, createdAt])
+}
+
+model ApprovalPolicy {
+  id                String               @id @default(cuid())
+  organizationId    String
+  campusId          String?
+  name              String
+  status            ApprovalPolicyStatus @default(ACTIVE)
+  mode              ApprovalPolicyMode
+  minimumApprovals  Int                  @default(1)
+  allowSelfApproval Boolean              @default(false)
+  isDefault         Boolean              @default(false)
+  createdByUserId   String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus            Campus?              @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  createdBy         User?                @relation("ApprovalPolicyCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  rules             ApprovalPolicyRule[]
+  requests          ApprovalRequest[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, campusId, name])
+  @@index([organizationId, status])
+  @@index([campusId, status])
+  @@index([createdByUserId, createdAt])
+}
+
+model ApprovalPolicyRule {
+  id               String         @id @default(cuid())
+  organizationId   String
+  campusId         String?
+  approvalPolicyId String
+  role             MembershipRole
+  minimumApprovals Int            @default(1)
+  sortOrder        Int            @default(0)
+  organization     Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus           Campus?        @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  approvalPolicy   ApprovalPolicy @relation(fields: [approvalPolicyId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([approvalPolicyId, role])
+  @@unique([organizationId, approvalPolicyId, sortOrder])
+  @@index([organizationId, role])
+  @@index([campusId, role])
+}
+
+model ApprovalRequest {
+  id                 String                @id @default(cuid())
+  organizationId     String
+  campusId           String?
+  weekDraftId        String
+  weekDraftItemId    String
+  revisionId         String
+  approvalPolicyId   String
+  requestedByUserId  String
+  status             ApprovalRequestStatus @default(PENDING)
+  policySnapshotJson Json
+  message            String?
+  resolvedAt         DateTime?
+  cancelledAt        DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  organization       Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus             Campus?               @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  weekDraft          WeekDraft             @relation(fields: [weekDraftId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  weekDraftItem      WeekDraftItem         @relation(fields: [weekDraftItemId, weekDraftId, organizationId], references: [id, weekDraftId, organizationId], onDelete: Cascade)
+  revision           WeekDraftItemRevision @relation(fields: [revisionId, weekDraftItemId, organizationId], references: [id, weekDraftItemId, organizationId], onDelete: Restrict)
+  approvalPolicy     ApprovalPolicy        @relation(fields: [approvalPolicyId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  requestedBy        User                  @relation("ApprovalRequestedBy", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  decisions          ApprovalDecision[]
+
+  @@unique([id, revisionId])
+  @@index([organizationId, status, createdAt])
+  @@index([campusId, status, createdAt])
+  @@index([weekDraftId, status])
+  @@index([weekDraftItemId, status])
+  @@index([revisionId, status])
+  @@index([approvalPolicyId, status])
+  @@index([requestedByUserId, createdAt])
+}
+
+model ApprovalDecision {
+  id                String                @id @default(cuid())
+  organizationId    String
+  campusId          String?
+  approvalRequestId String
+  revisionId        String
+  decidedByUserId   String
+  decidedAsRole     MembershipRole
+  decision          ApprovalDecisionType
+  reason            String?
+  decidedAt         DateTime              @default(now())
+  organization      Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus            Campus?               @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  approvalRequest   ApprovalRequest       @relation(fields: [approvalRequestId, revisionId], references: [id, revisionId], onDelete: Cascade)
+  revision          WeekDraftItemRevision @relation(fields: [revisionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  decidedBy         User                  @relation("ApprovalDecidedBy", fields: [decidedByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([approvalRequestId, decidedByUserId])
+  @@index([organizationId, decidedAt])
+  @@index([campusId, decidedAt])
+  @@index([revisionId, decidedAt])
+  @@index([decidedByUserId, decidedAt])
+}
+
 model Sermon {
   id                    String                   @id @default(cuid())
+  organizationId        String?                  @default("org_local_default")
+  campusId              String?
   youtubeUrl            String
   title                 String
   speakerName           String
@@ -612,10 +1466,50 @@ model Sermon {
   clipEditPlans         ClipEditPlan[]
   clipArtifacts         ClipArtifact[]
   aiInvocations         AiInvocation[]
+  weekDrafts            WeekDraft[]
+  publicPage            SermonPublicPage?
+  organization          Organization?            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus                Campus?                  @relation(fields: [campusId], references: [id], onDelete: SetNull)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, createdAt])
+  @@index([campusId, createdAt])
+}
+
+model SermonPublicPage {
+  id               String                 @id @default(cuid())
+  organizationId   String
+  campusId         String?
+  sermonId         String                 @unique
+  slug             String                 @unique
+  status           PublicSermonPageStatus @default(DRAFT)
+  title            String
+  summary          String?
+  primaryCtaLabel  String?
+  primaryCtaUrl    String?
+  createdByUserId  String?
+  publishedAt      DateTime?
+  archivedAt       DateTime?
+  viewCount        Int                    @default(0)
+  ctaClickCount    Int                    @default(0)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  organization     Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus           Campus?                @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  sermon           Sermon                 @relation(fields: [sermonId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  createdBy        User?                  @relation("PublicSermonPageCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  ministryOutcomes MinistryOutcome[]
+
+  @@unique([sermonId, organizationId])
+  @@index([organizationId, status, publishedAt])
+  @@index([campusId, status, publishedAt])
+  @@index([createdByUserId])
 }
 
 model BrandingSettings {
-  id                      String            @id @default("local")
+  id                      String            @id @default(cuid())
+  organizationId          String            @unique
+  campusId                String?
   churchName              String
   churchLogoPath          String?
   primaryBrandColor       String
@@ -625,6 +1519,37 @@ model BrandingSettings {
   defaultCaptionStyleName String
   createdAt               DateTime          @default(now())
   updatedAt               DateTime          @updatedAt
+  organization            Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campus                  Campus?           @relation(fields: [campusId], references: [id], onDelete: SetNull)
+
+  @@index([campusId])
+}
+
+model OrganizationAutomationSettings {
+  id                             String         @id @default(cuid())
+  organizationId                 String         @unique
+  youtubeSocialAccountId         String?
+  automaticYoutubeImportEnabled  Boolean        @default(false)
+  youtubeRightsConfirmedAt       DateTime?
+  youtubeRightsConfirmedByUserId String?
+  defaultSpeakerName             String?
+  defaultLanguage                String         @default("en")
+  includeWorshipMoments          Boolean        @default(false)
+  notificationEmail              String?
+  weeklyCadenceJson              Json?
+  onboardingCompletedAt          DateTime?
+  lastYoutubeScanAt              DateTime?
+  lastYoutubeImportAt            DateTime?
+  lastYoutubeVideoId             String?
+  lastError                      String?
+  createdAt                      DateTime       @default(now())
+  updatedAt                      DateTime       @updatedAt
+  organization                   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  youtubeSocialAccount           SocialAccount? @relation(fields: [youtubeSocialAccountId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  youtubeRightsConfirmedBy       User?          @relation("AutomationRightsConfirmedBy", fields: [youtubeRightsConfirmedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([youtubeSocialAccountId])
+  @@index([automaticYoutubeImportEnabled, lastYoutubeScanAt])
 }
 
 model Transcript {
@@ -974,6 +1899,8 @@ model ClipArtifact {
 
 model AiInvocation {
   id                   String             @id @default(cuid())
+  organizationId       String?            @default("org_local_default")
+  campusId             String?
   sermonId             String?
   clipCandidateId      String?
   provider             String             @default("openai")
@@ -995,6 +1922,8 @@ model AiInvocation {
   errorMessage         String?
   metadataJson         Json?
   createdAt            DateTime           @default(now())
+  organization         Organization?      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus               Campus?            @relation(fields: [campusId], references: [id], onDelete: SetNull)
   sermon               Sermon?            @relation(fields: [sermonId], references: [id], onDelete: SetNull)
   clipCandidate        ClipCandidate?     @relation(fields: [clipCandidateId], references: [id], onDelete: SetNull)
 
@@ -1004,22 +1933,30 @@ model AiInvocation {
   @@index([model])
   @@index([status])
   @@index([createdAt])
+  @@index([organizationId, createdAt])
+  @@index([campusId, createdAt])
 }
 
 model AiResponseCache {
-  id            String   @id @default(cuid())
-  requestHash   String   @unique
-  operation     String
-  model         String
-  promptVersion String?
-  responseText  String
-  expiresAt     DateTime
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id             String        @id @default(cuid())
+  organizationId String?       @default("org_local_default")
+  campusId       String?
+  requestHash    String        @unique
+  operation      String
+  model          String
+  promptVersion  String?
+  responseText   String
+  expiresAt      DateTime
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campus         Campus?       @relation(fields: [campusId], references: [id], onDelete: SetNull)
 
   @@index([operation])
   @@index([model])
   @@index([expiresAt])
+  @@index([organizationId, operation])
+  @@index([campusId, operation])
 }
 
 // ─── Sermon Intelligence Foundation ───────────────────────────────────────────
@@ -1178,6 +2115,8 @@ model MinistryMoment {
 
 model ContentOpportunity {
   id                         String                       @id @default(cuid())
+  organizationId             String?                      @default("org_local_default")
+  campusId                   String?
   sermonId                   String
   churchName                 String?
   category                   ContentOpportunityCategory
@@ -1208,6 +2147,8 @@ model ContentOpportunity {
   approvedRevisionId         String?                      @unique
   createdAt                  DateTime                     @default(now())
   updatedAt                  DateTime                     @updatedAt
+  organization               Organization?                @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus                     Campus?                      @relation(fields: [campusId], references: [id], onDelete: SetNull)
   sermon                     Sermon                       @relation(fields: [sermonId], references: [id], onDelete: Cascade)
   ministryMoment             MinistryMoment?              @relation(fields: [ministryMomentId], references: [id], onDelete: SetNull)
   relatedClip                ClipCandidate?               @relation("RelatedClipContentOpportunities", fields: [relatedClipId], references: [id], onDelete: SetNull)
@@ -1215,6 +2156,7 @@ model ContentOpportunity {
   revisions                  ContentOpportunityRevision[] @relation("OpportunityRevisionHistory")
   approvedRevision           ContentOpportunityRevision?  @relation("ApprovedOpportunityRevision", fields: [approvedRevisionId], references: [id], onDelete: SetNull)
 
+  @@unique([id, organizationId])
   @@index([sermonId])
   @@index([sermonId, category])
   @@index([sermonId, opportunityType])
@@ -1227,10 +2169,14 @@ model ContentOpportunity {
   @@index([opportunityType])
   @@index([status])
   @@index([createdAt])
+  @@index([organizationId, status, createdAt])
+  @@index([campusId, status, createdAt])
 }
 
 model ContentOpportunityRevision {
   id                         String                       @id @default(cuid())
+  organizationId             String
+  campusId                   String?
   contentOpportunityId       String
   revisionNumber             Int
   title                      String
@@ -1250,17 +2196,23 @@ model ContentOpportunityRevision {
   approvedBy                 String?
   approvedAt                 DateTime?
   createdAt                  DateTime                     @default(now())
-  opportunity                ContentOpportunity           @relation("OpportunityRevisionHistory", fields: [contentOpportunityId], references: [id], onDelete: Cascade)
+  organization               Organization                 @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus                     Campus?                      @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  opportunity                ContentOpportunity           @relation("OpportunityRevisionHistory", fields: [contentOpportunityId, organizationId], references: [id, organizationId], onDelete: Cascade)
   approvedForOpportunity     ContentOpportunity?          @relation("ApprovedOpportunityRevision")
   assetRevisions             ContentAssetRevision[]       @relation("AssetSourceOpportunityRevision")
 
   @@unique([contentOpportunityId, revisionNumber])
   @@index([contentOpportunityId, approvalState])
+  @@index([organizationId, contentOpportunityId, createdAt])
+  @@index([campusId, contentOpportunityId, createdAt])
   @@index([createdAt])
 }
 
 model ContentFunnelEvent {
   id              String                 @id @default(cuid())
+  organizationId  String?                @default("org_local_default")
+  campusId        String?
   eventType       ContentFunnelEventType
   sermonId        String?
   opportunityId   String?
@@ -1271,16 +2223,22 @@ model ContentFunnelEvent {
   durationMs      Int?
   metadataJson    Json?
   occurredAt      DateTime               @default(now())
+  organization    Organization?          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus          Campus?                @relation(fields: [campusId], references: [id], onDelete: SetNull)
 
   @@index([eventType, occurredAt])
   @@index([sermonId, occurredAt])
   @@index([opportunityId, occurredAt])
   @@index([contentAssetId, occurredAt])
   @@index([processingJobId, occurredAt])
+  @@index([organizationId, occurredAt])
+  @@index([campusId, occurredAt])
 }
 
 model ContentAsset {
   id                    String                      @id @default(cuid())
+  organizationId        String?                     @default("org_local_default")
+  campusId              String?
   sermonId              String
   contentOpportunityId  String?
   assetType             ContentAssetType
@@ -1303,6 +2261,8 @@ model ContentAsset {
   approvedRevisionId    String?                     @unique
   createdAt             DateTime                    @default(now())
   updatedAt             DateTime                    @updatedAt
+  organization          Organization?               @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus                Campus?                     @relation(fields: [campusId], references: [id], onDelete: SetNull)
   sermon                Sermon                      @relation(fields: [sermonId], references: [id], onDelete: Cascade)
   contentOpportunity    ContentOpportunity?         @relation(fields: [contentOpportunityId], references: [id], onDelete: SetNull)
   revisions             ContentAssetRevision[]      @relation("ContentAssetRevisionHistory")
@@ -1311,6 +2271,7 @@ model ContentAsset {
   files                 ContentAssetFile[]
   scheduledPostLinks    ScheduledPostContentAsset[]
 
+  @@unique([id, organizationId])
   @@index([sermonId])
   @@index([contentOpportunityId])
   @@index([currentRevisionId])
@@ -1320,10 +2281,14 @@ model ContentAsset {
   @@index([platform])
   @@index([sermonId, status])
   @@index([createdAt])
+  @@index([organizationId, status, createdAt])
+  @@index([campusId, status, createdAt])
 }
 
 model ContentAssetRevision {
   id                          String                       @id @default(cuid())
+  organizationId              String
+  campusId                    String?
   contentAssetId              String
   sourceOpportunityRevisionId String?
   revisionNumber              Int
@@ -1340,7 +2305,9 @@ model ContentAssetRevision {
   approvedAt                  DateTime?
   renderedAt                  DateTime?
   createdAt                   DateTime                     @default(now())
-  contentAsset                ContentAsset                 @relation("ContentAssetRevisionHistory", fields: [contentAssetId], references: [id], onDelete: Cascade)
+  organization                Organization                 @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus                      Campus?                      @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  contentAsset                ContentAsset                 @relation("ContentAssetRevisionHistory", fields: [contentAssetId, organizationId], references: [id, organizationId], onDelete: Cascade)
   sourceOpportunityRevision   ContentOpportunityRevision?  @relation("AssetSourceOpportunityRevision", fields: [sourceOpportunityRevisionId], references: [id], onDelete: SetNull)
   currentForAsset             ContentAsset?                @relation("CurrentContentAssetRevision")
   approvedForAsset            ContentAsset?                @relation("ApprovedContentAssetRevision")
@@ -1348,6 +2315,8 @@ model ContentAssetRevision {
 
   @@unique([contentAssetId, revisionNumber])
   @@index([contentAssetId, approvalState])
+  @@index([organizationId, contentAssetId, createdAt])
+  @@index([campusId, contentAssetId, createdAt])
   @@index([sourceOpportunityRevisionId])
   @@index([createdAt])
 }
@@ -1374,32 +2343,42 @@ model ContentAssetFile {
 }
 
 model SocialAccount {
-  id                String                 @id @default(cuid())
-  platform          PostingPlatform
-  label             String
-  handle            String?
-  status            SocialAccountStatus    @default(CONNECTED)
-  externalProvider  String?
-  externalAccountId String?
-  externalPlatform  String?
-  profileUrl        String?
-  metadataJson      Json?
-  createdAt         DateTime               @default(now())
-  updatedAt         DateTime               @updatedAt
-  credentials       SocialCredential[]
-  scheduledPosts    ScheduledPost[]
-  metricSnapshots   SocialMetricSnapshot[]
+  id                 String                           @id @default(cuid())
+  organizationId     String
+  campusId           String?
+  platform           PostingPlatform
+  label              String
+  handle             String?
+  status             SocialAccountStatus              @default(CONNECTED)
+  externalProvider   String?
+  externalAccountId  String?
+  externalPlatform   String?
+  profileUrl         String?
+  metadataJson       Json?
+  createdAt          DateTime                         @default(now())
+  updatedAt          DateTime                         @updatedAt
+  organization       Organization                     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus             Campus?                          @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  credentials        SocialCredential[]
+  scheduledPosts     ScheduledPost[]
+  metricSnapshots    SocialMetricSnapshot[]
+  automationSettings OrganizationAutomationSettings[]
 
-  @@unique([externalProvider, externalAccountId])
+  @@unique([id, organizationId])
+  @@unique([organizationId, externalProvider, externalAccountId], map: "SocialAccount_org_provider_identity_key")
   @@index([platform])
   @@index([status])
   @@index([externalProvider])
   @@index([externalAccountId])
   @@index([createdAt])
+  @@index([organizationId, platform, status])
+  @@index([campusId, platform, status])
 }
 
 model SocialCredential {
   id                     String                  @id @default(cuid())
+  organizationId         String
+  campusId               String?
   socialAccountId        String?
   provider               SocialConnectorProvider
   externalAccountId      String
@@ -1416,17 +2395,23 @@ model SocialCredential {
   lastError              String?
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
-  socialAccount          SocialAccount?          @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus                 Campus?                 @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  socialAccount          SocialAccount?          @relation(fields: [socialAccountId, organizationId], references: [id, organizationId], onDelete: Restrict)
 
-  @@unique([provider, externalAccountId])
+  @@unique([organizationId, provider, externalAccountId], map: "SocialCredential_org_provider_identity_key")
   @@index([socialAccountId])
   @@index([provider])
   @@index([status])
   @@index([lastSyncAt])
+  @@index([organizationId, provider, status])
+  @@index([campusId, provider, status])
 }
 
 model PostingDraft {
   id             String             @id @default(cuid())
+  organizationId String?            @default("org_local_default")
+  campusId       String?
   clipIdsJson    Json
   platformsJson  Json
   postingSlot    String
@@ -1434,14 +2419,20 @@ model PostingDraft {
   status         PostingDraftStatus @default(READY_FOR_MEDIA_TEAM)
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
+  organization   Organization?      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus         Campus?            @relation(fields: [campusId], references: [id], onDelete: SetNull)
   scheduledPosts ScheduledPost[]
 
   @@index([status])
   @@index([createdAt])
+  @@index([organizationId, status, createdAt])
+  @@index([campusId, status, createdAt])
 }
 
 model ScheduledPost {
   id                     String                      @id @default(cuid())
+  organizationId         String?                     @default("org_local_default")
+  campusId               String?
   postingDraftId         String?
   socialAccountId        String?
   clipIdsJson            Json
@@ -1470,6 +2461,8 @@ model ScheduledPost {
   idempotencyKey         String                      @unique
   createdAt              DateTime                    @default(now())
   updatedAt              DateTime                    @updatedAt
+  organization           Organization?               @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus                 Campus?                     @relation(fields: [campusId], references: [id], onDelete: SetNull)
   postingDraft           PostingDraft?               @relation(fields: [postingDraftId], references: [id], onDelete: SetNull)
   socialAccount          SocialAccount?              @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
   predictions            PostPerformancePrediction[]
@@ -1485,6 +2478,8 @@ model ScheduledPost {
   @@index([workerStatus])
   @@index([scheduledFor])
   @@index([createdAt])
+  @@index([organizationId, status, scheduledFor])
+  @@index([campusId, status, scheduledFor])
 }
 
 model ScheduledPostContentAsset {
@@ -1505,7 +2500,9 @@ model ScheduledPostContentAsset {
 
 model SocialMetricSnapshot {
   id                         String                 @id @default(cuid())
-  dedupeKey                  String?                @unique
+  organizationId             String
+  campusId                   String?
+  dedupeKey                  String?
   socialAccountId            String?
   platform                   String
   platformPostId             String?
@@ -1529,17 +2526,24 @@ model SocialMetricSnapshot {
   source                     GrowthMetricSource     @default(API)
   capturedAt                 DateTime               @default(now())
   createdAt                  DateTime               @default(now())
-  socialAccount              SocialAccount?         @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+  organization               Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus                     Campus?                @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  socialAccount              SocialAccount?         @relation(fields: [socialAccountId, organizationId], references: [id, organizationId], onDelete: Restrict)
   predictionResults          PostPredictionResult[]
 
+  @@unique([organizationId, dedupeKey], map: "SocialMetricSnapshot_org_dedupe_key")
   @@index([socialAccountId])
   @@index([platform])
   @@index([platformPostId])
   @@index([capturedAt])
+  @@index([organizationId, capturedAt])
+  @@index([campusId, capturedAt])
 }
 
 model PostPerformancePrediction {
   id                          String                 @id @default(cuid())
+  organizationId              String?                @default("org_local_default")
+  campusId                    String?
   scheduledPostId             String?
   clipIdsJson                 Json
   platform                    String
@@ -1553,12 +2557,16 @@ model PostPerformancePrediction {
   reasoning                   Json
   modelVersion                String                 @default("growth-system-v1")
   createdAt                   DateTime               @default(now())
+  organization                Organization?          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus                      Campus?                @relation(fields: [campusId], references: [id], onDelete: SetNull)
   scheduledPost               ScheduledPost?         @relation(fields: [scheduledPostId], references: [id], onDelete: SetNull)
   results                     PostPredictionResult[]
 
   @@index([scheduledPostId])
   @@index([platform])
   @@index([createdAt])
+  @@index([organizationId, createdAt])
+  @@index([campusId, createdAt])
 }
 
 model PostPredictionResult {
@@ -1582,6 +2590,8 @@ model PostPredictionResult {
 
 model GrowthRecommendation {
   id                 String                     @id @default(cuid())
+  organizationId     String?                    @default("org_local_default")
+  campusId           String?
   sourceClipId       String?
   sourceSermonId     String?
   recommendationType String
@@ -1594,16 +2604,22 @@ model GrowthRecommendation {
   status             GrowthRecommendationStatus @default(NEEDS_REVIEW)
   createdAt          DateTime                   @default(now())
   updatedAt          DateTime                   @updatedAt
+  organization       Organization?              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus             Campus?                    @relation(fields: [campusId], references: [id], onDelete: SetNull)
 
   @@index([sourceClipId])
   @@index([sourceSermonId])
   @@index([status])
   @@index([priority])
   @@index([createdAt])
+  @@index([organizationId, status, createdAt])
+  @@index([campusId, status, createdAt])
 }
 
 model GrowthCampaign {
   id               String                @id @default(cuid())
+  organizationId   String?               @default("org_local_default")
+  campusId         String?
   name             String
   eventName        String
   eventType        String?
@@ -1614,12 +2630,16 @@ model GrowthCampaign {
   status           GrowthCampaignStatus  @default(DRAFT)
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
+  organization     Organization?         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus           Campus?               @relation(fields: [campusId], references: [id], onDelete: SetNull)
   phases           GrowthCampaignPhase[]
   ministryOutcomes MinistryOutcome[]
 
   @@index([status])
   @@index([startsAt])
   @@index([createdAt])
+  @@index([organizationId, status, createdAt])
+  @@index([campusId, status, createdAt])
 }
 
 model GrowthCampaignPhase {
@@ -1641,25 +2661,33 @@ model GrowthCampaignPhase {
 }
 
 model GrowthTrend {
-  id           String              @id @default(cuid())
-  platform     String
-  name         String
-  trendType    String
-  decision     GrowthTrendDecision
-  ministryFit  Int
-  reason       String
-  adaptation   String
-  evidenceJson Json?
-  detectedAt   DateTime            @default(now())
-  createdAt    DateTime            @default(now())
+  id             String              @id @default(cuid())
+  organizationId String?             @default("org_local_default")
+  campusId       String?
+  platform       String
+  name           String
+  trendType      String
+  decision       GrowthTrendDecision
+  ministryFit    Int
+  reason         String
+  adaptation     String
+  evidenceJson   Json?
+  detectedAt     DateTime            @default(now())
+  createdAt      DateTime            @default(now())
+  organization   Organization?       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus         Campus?             @relation(fields: [campusId], references: [id], onDelete: SetNull)
 
   @@index([platform])
   @@index([decision])
   @@index([detectedAt])
+  @@index([organizationId, detectedAt])
+  @@index([campusId, detectedAt])
 }
 
 model GrowthGuardrailReview {
   id                String                @id @default(cuid())
+  organizationId    String?               @default("org_local_default")
+  campusId          String?
   scheduledPostId   String?
   targetType        String
   targetId          String
@@ -1668,28 +2696,41 @@ model GrowthGuardrailReview {
   suggestedRevision String?
   reviewedBy        String?
   reviewedAt        DateTime              @default(now())
+  organization      Organization?         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus            Campus?               @relation(fields: [campusId], references: [id], onDelete: SetNull)
   scheduledPost     ScheduledPost?        @relation(fields: [scheduledPostId], references: [id], onDelete: SetNull)
 
   @@index([scheduledPostId])
   @@index([targetType, targetId])
   @@index([result])
   @@index([reviewedAt])
+  @@index([organizationId, reviewedAt])
+  @@index([campusId, reviewedAt])
 }
 
 model MinistryOutcome {
-  id              String              @id @default(cuid())
-  scheduledPostId String?
-  campaignId      String?
-  outcomeType     MinistryOutcomeType
-  value           Int                 @default(1)
-  notes           String?
-  occurredAt      DateTime            @default(now())
-  createdAt       DateTime            @default(now())
-  scheduledPost   ScheduledPost?      @relation(fields: [scheduledPostId], references: [id], onDelete: SetNull)
-  campaign        GrowthCampaign?     @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  id                 String              @id @default(cuid())
+  organizationId     String?             @default("org_local_default")
+  campusId           String?
+  scheduledPostId    String?
+  campaignId         String?
+  publicSermonPageId String?
+  outcomeType        MinistryOutcomeType
+  value              Int                 @default(1)
+  notes              String?
+  occurredAt         DateTime            @default(now())
+  createdAt          DateTime            @default(now())
+  organization       Organization?       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus             Campus?             @relation(fields: [campusId], references: [id], onDelete: SetNull)
+  scheduledPost      ScheduledPost?      @relation(fields: [scheduledPostId], references: [id], onDelete: SetNull)
+  campaign           GrowthCampaign?     @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  publicSermonPage   SermonPublicPage?   @relation(fields: [publicSermonPageId], references: [id], onDelete: SetNull)
 
   @@index([scheduledPostId])
   @@index([campaignId])
+  @@index([publicSermonPageId])
   @@index([outcomeType])
   @@index([occurredAt])
+  @@index([organizationId, occurredAt])
+  @@index([campusId, occurredAt])
 }

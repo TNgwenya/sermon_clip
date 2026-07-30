@@ -1,0 +1,105 @@
+name: SermonClip release gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sermonclip-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Migrations, code, tests, build, and browser smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sermon_clip_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sermon_clip_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CI: "true"
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sermon_clip_ci
+      PLAYWRIGHT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sermon_clip_ci
+      AUTH_SECRET: ci-only-auth-secret-that-is-at-least-32-characters
+      SESSION_TOKEN_PEPPER: ci-only-session-pepper-that-is-at-least-32-characters
+      BOOTSTRAP_OWNER_PASSWORD: ci-only-bootstrap-password
+      SCHEDULER_ADMIN_PASSWORD: ci-only-browser-password
+      CONTROL_PANEL_MODE: "true"
+      ALLOW_LOCAL_ADMIN_BYPASS: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Verify Prisma formatting
+        run: |
+          npx prisma format
+          git diff --exit-code -- prisma/schema.prisma
+
+      - name: Validate and generate Prisma client
+        run: |
+          npx prisma validate
+          npx prisma generate
+
+      - name: Rehearse safe deployment
+        run: node scripts/prisma-safe-deploy.mjs
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Unit and integration tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke
+        run: npm run test:e2e
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2

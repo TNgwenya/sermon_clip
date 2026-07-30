@@ -35,9 +35,13 @@ import {
 } from "@/lib/growthPersistence";
 import { listSocialAnalyticsConnectors } from "@/lib/socialAnalyticsConnectors";
 import {
+  buildWeeklyGrowthDecision,
   canShowCalibratedForecast,
   findMeasuredBaseline,
 } from "@/app/growth/growth-display";
+import { GrowthWeekDecisions } from "@/app/growth/growth-week-decisions";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantScope } from "@/server/tenancy/scope";
 
 export const dynamic = "force-dynamic";
 
@@ -331,9 +335,15 @@ function workflowBannerMessage(input: {
   return null;
 }
 
-async function listSavedGrowthCampaigns(): Promise<SavedCampaignResult> {
+async function listSavedGrowthCampaigns(
+  scope: Readonly<{ organizationId: string; campusId?: string | null }>,
+): Promise<SavedCampaignResult> {
   try {
     const campaigns = await prisma.growthCampaign.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        ...(scope.campusId ? { campusId: scope.campusId } : {}),
+      },
       orderBy: { createdAt: "desc" },
       take: 6,
       select: {
@@ -376,6 +386,8 @@ async function safeLoad<T>(label: string, promise: Promise<T>, fallback: T): Pro
 
 export default async function GrowthPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const params = await searchParams;
+  const requestContext = await requireRequestCapability("analytics.read");
+  const scope = tenantScope(requestContext);
   const [
     clipRecords,
     accounts,
@@ -392,6 +404,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
       "Growth clips",
       prisma.clipCandidate.findMany({
         where: {
+          sermon: scope,
           OR: [
             { exportStatus: "COMPLETED" },
             { status: { in: ["APPROVED", "EXPORTED"] } },
@@ -437,11 +450,12 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
       }),
       [],
     ),
-    safeLoad("Social accounts", listSocialAccounts(), []),
-    safeLoad("Scheduled posts", listScheduledPosts(), []),
+    safeLoad("Social accounts", listSocialAccounts(scope), []),
+    safeLoad("Scheduled posts", listScheduledPosts(scope), []),
     safeLoad(
       "Recent sermon themes",
       prisma.sermon.findMany({
+        where: scope,
         orderBy: { createdAt: "desc" },
         select: {
           id: true,
@@ -467,11 +481,12 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
       }),
       [],
     ),
-    listSavedGrowthCampaigns(),
+    listSavedGrowthCampaigns(scope),
     safeLoad(
       "Connected social accounts",
       prisma.socialAccount.findMany({
         where: {
+          ...scope,
           status: "CONNECTED",
           OR: [
             { credentials: { some: { status: "CONNECTED" } } },
@@ -487,12 +502,12 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
       }),
       [],
     ),
-    listSavedGrowthRecommendations(),
-    listPredictionReports(),
-    listHistoricalPerformanceBaselines(),
-    listMinistryOutcomeReports(),
+    listSavedGrowthRecommendations(scope),
+    listPredictionReports(scope),
+    listHistoricalPerformanceBaselines(scope),
+    listMinistryOutcomeReports(scope),
   ]);
-  const connectors = await listSocialAnalyticsConnectors();
+  const connectors = await listSocialAnalyticsConnectors(scope);
 
   const clips: GrowthClipInput[] = clipRecords;
   const credentialBackedAccountIds = new Set(credentialBackedAccountRecords.map((account) => account.id));
@@ -527,6 +542,21 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
     assessTrendForMinistry("testimony story-time format"),
     assessTrendForMinistry("shock reaction rage bait"),
   ];
+  const weeklyGrowthDecision = buildWeeklyGrowthDecision({
+    recommendation: recommendations[0]
+      ? {
+          title: recommendations[0].title,
+          confidence: recommendations[0].prediction.confidence,
+          platforms: recommendations[0].platforms,
+          rationale: recommendations[0].rationale,
+        }
+      : null,
+    baselines: historicalBaselineResult.items,
+    connectedCount,
+  });
+  const weeklyGrowthDecisionHref = recommendations[0]
+    ? `/ready-to-post?clipId=${recommendations[0].sourceClipId}`
+    : "/sermons";
 
   return (
     <main className="growth-page-shell stack-lg">
@@ -563,6 +593,12 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
           <span>{workflowMessage.message}</span>
         </div>
       ) : null}
+
+      <GrowthWeekDecisions
+        decision={weeklyGrowthDecision}
+        recommendationHref={weeklyGrowthDecisionHref}
+        plannedCount={plannedCount}
+      />
 
       <section className="growth-main-grid">
         <SectionCard

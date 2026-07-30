@@ -1,0 +1,118 @@
+.decisionBoard {
+  display: grid;
+  gap: 1rem;
+  padding: clamp(1rem, 2vw, 1.4rem);
+  border: 1px solid color-mix(in srgb, var(--accent, #7867ff) 20%, var(--border, #d8dce8));
+  border-radius: 1.3rem;
+  background:
+    linear-gradient(130deg, color-mix(in srgb, var(--accent, #7867ff) 7%, transparent), transparent 52%),
+    var(--surface, #fff);
+}
+
+.header,
+.cardHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.header h2 {
+  margin: 0.15rem 0 0;
+}
+
+.eyebrow,
+.primaryDecision > span,
+.supportDecision > span {
+  margin: 0;
+  color: var(--accent-strong, #5946df);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(13rem, 0.75fr));
+  gap: 0.75rem;
+}
+
+.primaryDecision,
+.supportDecision {
+  display: grid;
+  align-content: start;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--border, #d8dce8);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--surface, #fff) 90%, #f4f5fa);
+}
+
+.primaryDecision {
+  border-color: color-mix(in srgb, var(--accent, #7867ff) 35%, var(--border, #d8dce8));
+  background: var(--surface, #fff);
+}
+
+.primaryDecision h3,
+.primaryDecision p,
+.supportDecision p {
+  margin: 0;
+}
+
+.primaryDecision small,
+.supportDecision p {
+  color: var(--muted, #667085);
+}
+
+.primaryDecision :global(.button) {
+  justify-self: start;
+  margin-top: 0.25rem;
+}
+
+.cardHeading span {
+  color: var(--accent-strong, #5946df);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cardHeading strong {
+  color: var(--muted, #667085);
+  font-size: 0.75rem;
+}
+
+@media (max-width: 900px) {
+  .cards {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .primaryDecision {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 620px) {
+  .header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .cards {
+    grid-template-columns: 1fr;
+  }
+
+  .primaryDecision {
+    grid-column: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .decisionBoard *,
+  .decisionBoard *::before,
+  .decisionBoard *::after {
+    scroll-behavior: auto;
+  }
+}

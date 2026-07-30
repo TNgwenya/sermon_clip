@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   canRunInlineMediaProcessing: vi.fn(),
   detect: vi.fn(),
   findUnique: vi.fn(),
+  requireClipResource: vi.fn(),
   stat: vi.fn(),
 }));
 
@@ -16,6 +17,10 @@ vi.mock("@/lib/prisma", () => ({
 vi.mock("@/server/agents/clipStudioAudioReviewService", () => ({
   detectClipStudioAudioSilenceEvents: mocks.detect,
 }));
+vi.mock("@/server/auth/resourceAuthorization", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/server/auth/resourceAuthorization")>(),
+  requireClipResource: mocks.requireClipResource,
+}));
 vi.mock("@/server/runtime/workerRuntime", () => ({
   canRunInlineMediaProcessing: mocks.canRunInlineMediaProcessing,
 }));
@@ -25,6 +30,11 @@ import { GET } from "./route";
 describe("clip audio silence review route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.requireClipResource.mockResolvedValue({
+      id: "clip-1",
+      organizationId: "org-1",
+      campusId: "campus-1",
+    });
     mocks.canRunInlineMediaProcessing.mockReturnValue(true);
     mocks.findUnique.mockResolvedValue({
       startTimeSeconds: 120,
@@ -55,6 +65,7 @@ describe("clip audio silence review route", () => {
       ffmpegPath: undefined,
     });
     expect(response.headers.get("Cache-Control")).toBe("private, max-age=300");
+    expect(mocks.requireClipResource).toHaveBeenCalledWith("content.read", "clip-1");
   });
 
   it("does not query media or start ffmpeg when local processing is unavailable", async () => {
@@ -66,6 +77,22 @@ describe("clip audio silence review route", () => {
     );
 
     expect(response.status).toBe(409);
+    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.stat).not.toHaveBeenCalled();
+    expect(mocks.detect).not.toHaveBeenCalled();
+  });
+
+  it("does not disclose or load clip media when tenant authorization fails", async () => {
+    const { AuthorizedResourceNotFoundError } = await import("@/server/auth/resourceAuthorization");
+    mocks.requireClipResource.mockRejectedValue(new AuthorizedResourceNotFoundError());
+
+    const response = await GET(
+      new Request("http://localhost/api/clips/clip-other/audio-silence-review"),
+      { params: Promise.resolve({ id: "clip-other" }) },
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Clip not found." });
     expect(mocks.findUnique).not.toHaveBeenCalled();
     expect(mocks.stat).not.toHaveBeenCalled();
     expect(mocks.detect).not.toHaveBeenCalled();

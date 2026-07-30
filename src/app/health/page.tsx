@@ -4,6 +4,7 @@ import path from "node:path";
 import Link from "next/link";
 
 import { prisma } from "@/lib/prisma";
+import type { TenantRequestContext } from "@/lib/tenancy/requestHeaders";
 import {
   ensureLocalStorageDirs,
   ensureSermonFolders,
@@ -18,6 +19,9 @@ import { HealthRecoveryPanel } from "@/app/health/health-recovery-panel";
 import { buildWorkspaceHealthIssueBreakdown } from "@/lib/healthRecovery";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import { getPublishingServiceHealth } from "@/lib/publishingServiceHealth";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantScope } from "@/server/tenancy/scope";
+import { getCompetitiveQualityReport } from "@/server/quality/competitiveQualityReport";
 
 export const dynamic = "force-dynamic";
 
@@ -195,7 +199,9 @@ async function runHealthChecks(): Promise<HealthCheckResult[]> {
   return checks;
 }
 
-async function getHealthThumbnailReadiness(): Promise<ClipThumbnailReadiness> {
+async function getHealthThumbnailReadiness(
+  requestContext: TenantRequestContext,
+): Promise<ClipThumbnailReadiness> {
   if (!canRunLocalMediaProcessing()) {
     return {
       preparedClipCount: 0,
@@ -206,16 +212,33 @@ async function getHealthThumbnailReadiness(): Promise<ClipThumbnailReadiness> {
     };
   }
 
-  return getClipThumbnailReadiness();
+  return getClipThumbnailReadiness(tenantScope(requestContext));
+}
+
+function qualityGateClass(status: "PASS" | "NEEDS_WORK" | "NEEDS_SAMPLE"): string {
+  if (status === "PASS") return "status-approved";
+  if (status === "NEEDS_WORK") return "risk-high";
+  return "status-pending";
 }
 
 export default async function HealthPage() {
-  const [environmentChecks, consistency, thumbnailReadiness, operationalMetrics, publishingServiceHealth] = await Promise.all([
+  const requestContext = await requireRequestCapability("organization.read");
+  const [environmentChecks, consistency, thumbnailReadiness, operationalMetrics, publishingServiceHealth, competitiveQuality] = await Promise.all([
     runHealthChecks(),
-    getDataConsistencySummary(),
-    getHealthThumbnailReadiness(),
-    getOperationalMetrics(),
+    getDataConsistencySummary(
+      requestContext.organizationId,
+      requestContext.campusId,
+    ),
+    getHealthThumbnailReadiness(requestContext),
+    getOperationalMetrics(
+      requestContext.organizationId,
+      requestContext.campusId,
+    ),
     getPublishingServiceHealth(),
+    getCompetitiveQualityReport({
+      organizationId: requestContext.organizationId,
+      campusId: requestContext.campusId,
+    }),
   ]);
   const publishingWorkerCheck: HealthCheckResult = publishingServiceHealth.status === "ONLINE"
     ? {
@@ -377,6 +400,40 @@ export default async function HealthPage() {
             <span className="muted small">Poster errors</span>
             <strong>{thumbnailReadiness.failedPosterCount}</strong>
           </article>
+        </div>
+      </section>
+
+      <section className="card stack-md" aria-labelledby="competitive-quality-title">
+        <div className="stack-xs">
+          <p className="kicker">Competitive quality gates</p>
+          <h2 id="competitive-quality-title">Prove the output, not only the interface</h2>
+          <p className="muted">
+            Measured from {competitiveQuality.clipCount} clip candidate{competitiveQuality.clipCount === 1 ? "" : "s"} created in the last {competitiveQuality.sampleWindowDays} days. Small samples stay explicitly inconclusive.
+          </p>
+        </div>
+        <div className="secondary-command-strip">
+          <article>
+            <span className="muted small">Reviewed</span>
+            <strong>{competitiveQuality.reviewedClipCount}</strong>
+          </article>
+          <article>
+            <span className="muted small">Approved</span>
+            <strong>{competitiveQuality.approvedClipCount}</strong>
+          </article>
+          {competitiveQuality.gates.map((gate) => (
+            <article key={gate.id}>
+              <span className="muted small">{gate.label}</span>
+              <strong>{gate.value === null ? "—" : `${gate.value}%`}</strong>
+              <span className={`status-pill ${qualityGateClass(gate.status)}`}>
+                {gate.status === "PASS"
+                  ? `Target ${gate.target}% met`
+                  : gate.status === "NEEDS_SAMPLE"
+                    ? "More reviewed clips needed"
+                    : `Target ${gate.target}%`}
+              </span>
+              <span className="muted small">{gate.detail}</span>
+            </article>
+          ))}
         </div>
       </section>
 

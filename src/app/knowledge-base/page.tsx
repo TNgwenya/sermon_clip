@@ -23,6 +23,7 @@ import {
   getKnowledgeBaseScopeAvailability,
   searchSermonKnowledgeBase,
 } from "@/server/workflow/knowledgeIntelligence";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 
 type SearchParams = {
   query?: string;
@@ -220,6 +221,11 @@ export default async function KnowledgeBasePage({
   searchParams: Promise<SearchParams>;
 }) {
   const filters = await searchParams;
+  const requestContext = await requireRequestCapability("analytics.read");
+  const tenant = {
+    organizationId: requestContext.organizationId,
+    campusId: requestContext.campusId,
+  };
 
   const payload = {
     query: filters.query?.trim() || undefined,
@@ -238,8 +244,11 @@ export default async function KnowledgeBasePage({
   };
 
   const [result, scopeAvailability] = await Promise.all([
-    searchSermonKnowledgeBase(payload, { take: 150 }),
-    getKnowledgeBaseScopeAvailability({ churchName: payload.churchName }),
+    searchSermonKnowledgeBase(payload, { take: 150, tenant }),
+    getKnowledgeBaseScopeAvailability({
+      churchName: payload.churchName,
+      tenant,
+    }),
   ]);
 
   const hasActiveFilters = Boolean(

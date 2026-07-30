@@ -26,6 +26,11 @@ export type GeneratedGuidePdf = {
   sizeBytes: number;
 };
 
+type GuidePdfTenantScope = Readonly<{
+  organizationId: string;
+  campusId?: string | null;
+}>;
+
 type PersistGeneratedGuidePdfInput = {
   assetId: string;
   existingFileId?: string | null;
@@ -118,10 +123,15 @@ export async function persistGeneratedGuidePdf(
 
 async function generateContentAssetGuidePdfOnce(
   assetId: string,
+  tenantScope: GuidePdfTenantScope,
   forceRegeneration = false,
 ): Promise<GeneratedGuidePdf> {
-  const asset = await prisma.contentAsset.findUnique({
-    where: { id: assetId },
+  const asset = await prisma.contentAsset.findFirst({
+    where: {
+      id: assetId,
+      organizationId: tenantScope.organizationId,
+      ...(tenantScope.campusId ? { campusId: tenantScope.campusId } : {}),
+    },
     select: {
       id: true,
       sermonId: true,
@@ -188,7 +198,10 @@ async function generateContentAssetGuidePdfOnce(
     }
   }
 
-  const branding = await getBrandingSettings();
+  const branding = await getBrandingSettings(
+    tenantScope.organizationId,
+    tenantScope.campusId ?? null,
+  );
   const outputPath = getGuidePdfGenerationOutputPath(asset.sermonId, asset.id);
   const workingDirectory = path.dirname(outputPath);
   const { stagedOutputPath } = buildGuidePdfWorkingPaths(outputPath);
@@ -225,13 +238,25 @@ async function generateContentAssetGuidePdfOnce(
 
 export function generateContentAssetGuidePdf(
   assetId: string,
-  options: { forceRegeneration?: boolean } = {},
+  options: {
+    tenantScope: GuidePdfTenantScope;
+    forceRegeneration?: boolean;
+  },
 ): Promise<GeneratedGuidePdf> {
-  const generationKey = `${assetId}:${options.forceRegeneration ? "force" : "cached"}`;
+  const generationKey = [
+    options.tenantScope.organizationId,
+    options.tenantScope.campusId ?? "organization",
+    assetId,
+    options.forceRegeneration ? "force" : "cached",
+  ].join(":");
   const activeGeneration = guidePdfGenerations.get(generationKey);
   if (activeGeneration) return activeGeneration;
 
-  const generation = generateContentAssetGuidePdfOnce(assetId, options.forceRegeneration).finally(() => {
+  const generation = generateContentAssetGuidePdfOnce(
+    assetId,
+    options.tenantScope,
+    options.forceRegeneration,
+  ).finally(() => {
     if (guidePdfGenerations.get(generationKey) === generation) {
       guidePdfGenerations.delete(generationKey);
     }

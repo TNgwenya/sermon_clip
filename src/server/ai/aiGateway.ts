@@ -2,10 +2,12 @@ import { getOpenAiClient } from "@/server/ai/openaiClient";
 import {
   buildAiRequestHash,
   recordAiInvocation,
+  resolveAiTenantScope,
   type AiInvocationUsage,
 } from "@/server/ai/aiInvocationLogger";
 import type { OpenAIReasoningEffort } from "@/server/ai/modelConfig";
 import { prisma } from "@/lib/prisma";
+import { entitlements } from "@/server/billing/entitlements";
 import type { Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import type { ChatCompletion } from "openai/resources/chat/completions";
@@ -32,6 +34,8 @@ type LoggedChatCompletionInput = {
   response_format?: JsonObjectResponseFormat;
   sermonId?: string | null;
   clipCandidateId?: string | null;
+  organizationId?: string | null;
+  campusId?: string | null;
   promptVersion?: string | null;
   metadata?: Prisma.InputJsonValue;
   missingKeyMessage?: string;
@@ -180,9 +184,17 @@ function isValidatedCacheEnabled(input: LoggedChatCompletionInput | ValidatedLog
   );
 }
 
-async function readValidatedResponseCache(requestHash: string): Promise<string | null> {
+async function readValidatedResponseCache(
+  requestHash: string,
+  organizationId: string,
+): Promise<string | null> {
   try {
-    const cached = await prisma.aiResponseCache.findUnique({ where: { requestHash } });
+    const cached = await prisma.aiResponseCache.findFirst({
+      where: {
+        requestHash,
+        organizationId,
+      },
+    });
     if (!cached) return null;
     if (cached.expiresAt <= new Date()) {
       await prisma.aiResponseCache.delete({ where: { requestHash } });
@@ -201,6 +213,8 @@ async function writeValidatedResponseCache(input: {
   model: string;
   promptVersion?: string | null;
   responseText: string;
+  organizationId: string;
+  campusId: string | null;
 }): Promise<void> {
   const ttlSeconds = resolvePositiveIntegerEnv(
     "OPENAI_VALIDATED_RESPONSE_CACHE_TTL_SECONDS",
@@ -280,8 +294,13 @@ export async function createLoggedChatCompletion<T>(
     store: false,
     stream: false,
   };
-  const requestHash = buildAiRequestHash(request);
-  const cacheEnabled = isValidatedCacheEnabled(input);
+  const rawRequestHash = buildAiRequestHash(request);
+  const tenantScope = await resolveAiTenantScope(input);
+  const requestHash = buildAiRequestHash({
+    organizationId: tenantScope?.organizationId ?? "unscoped",
+    requestHash: rawRequestHash,
+  });
+  const cacheEnabled = tenantScope !== null && isValidatedCacheEnabled(input);
 
   const activeRequest = inFlightRequests.get(requestHash);
   if (activeRequest) {
@@ -295,12 +314,16 @@ export async function createLoggedChatCompletion<T>(
     let providerRequestCount = 0;
 
     if (cacheEnabled && "validateResponse" in input) {
-      const cachedResponseText = await readValidatedResponseCache(requestHash);
+      const cachedResponseText = await readValidatedResponseCache(
+        requestHash,
+        tenantScope.organizationId,
+      );
       if (cachedResponseText !== null) {
         const cachedCompletion = cachedChatCompletion(input.model, cachedResponseText);
         try {
           const cachedResult = await input.validateResponse(cachedCompletion);
           await recordAiInvocation({
+            ...tenantScope,
             sermonId: input.sermonId,
             clipCandidateId: input.clipCandidateId,
             operation: input.operation,
@@ -325,12 +348,37 @@ export async function createLoggedChatCompletion<T>(
     }
 
     try {
+      if (tenantScope) {
+        await entitlements.assertUsageAvailable({
+          organizationId: tenantScope.organizationId,
+          entitlementKey: "ai.tokens.monthly",
+          metric: "ai.tokens",
+        });
+      }
       const client = getOpenAiClient(input.missingKeyMessage);
       response = await runWithRetry(() => {
         providerRequestCount += 1;
         return client.responses.create(request);
       });
       completion = asChatCompletion(response);
+      const invocationUsage = usageFromResponse(response);
+
+      if (tenantScope && invocationUsage.totalTokens) {
+        await entitlements.reserveUsage({
+          organizationId: tenantScope.organizationId,
+          campusId: tenantScope.campusId,
+          entitlementKey: "ai.tokens.monthly",
+          metric: "ai.tokens",
+          quantity: BigInt(invocationUsage.totalTokens),
+          idempotencyKey: `ai:${requestHash}:${response.id}`,
+          sourceType: "AiInvocation",
+          sourceId: response.id,
+          metadataJson: {
+            operation: input.operation,
+            model: input.model,
+          },
+        });
+      }
       const result = "validateResponse" in input
         ? await input.validateResponse(completion)
         : completion;
@@ -342,10 +390,13 @@ export async function createLoggedChatCompletion<T>(
           model: input.model,
           promptVersion: input.promptVersion,
           responseText: response.output_text,
+          organizationId: tenantScope.organizationId,
+          campusId: tenantScope.campusId,
         });
       }
 
       await recordAiInvocation({
+        ...(tenantScope ?? {}),
         sermonId: input.sermonId,
         clipCandidateId: input.clipCandidateId,
         operation: input.operation,
@@ -353,7 +404,7 @@ export async function createLoggedChatCompletion<T>(
         promptVersion: input.promptVersion,
         request,
         status: "SUCCEEDED",
-        usage: usageFromResponse(response),
+        usage: invocationUsage,
         providerRequestCount,
         cacheHit: false,
         latencyMs: Date.now() - startedAt,
@@ -362,6 +413,7 @@ export async function createLoggedChatCompletion<T>(
       return result;
     } catch (error) {
       await recordAiInvocation({
+        ...(tenantScope ?? {}),
         sermonId: input.sermonId,
         clipCandidateId: input.clipCandidateId,
         operation: input.operation,

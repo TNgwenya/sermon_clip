@@ -16,6 +16,15 @@ import {
   fromPrismaPostingPlatform,
   type PostingPlatform,
 } from "@/lib/postingDrafts";
+import {
+  assessDuplicatePublicationGuard,
+  buildDuplicatePublicationGuardInputs,
+  sealApprovedPreview,
+  verifyScheduledPayloadIdentity,
+  type ApprovedPreviewReceipt,
+  type DuplicatePublicationGuardInputs,
+  type DuplicatePublicationRecord,
+} from "@/server/publishing/publicationIntegrity";
 
 export type ClipPostingCompositionIdentity = {
   schemaVersion: 1;
@@ -27,6 +36,26 @@ export type ClipPostingCompositionIdentity = {
   sizeBytes: number | null;
   snapshotSha256: string | null;
   snapshotSizeBytes: number | null;
+};
+
+export type ScheduledPostPublicationGuard = Pick<
+  DuplicatePublicationGuardInputs,
+  | "approvedPreviewIdentity"
+  | "retryIdempotencyKey"
+  | "semanticDuplicateKey"
+  | "destinationPayloadKey"
+>;
+
+type StoredPublicationIntegrity = {
+  schemaVersion: 1;
+  approvedPreview: ApprovedPreviewReceipt;
+  guard: DuplicatePublicationGuardInputs;
+};
+
+type StoredCompositionReceipt = {
+  schemaVersion: 2;
+  compositionIdentities: ClipPostingCompositionIdentity[];
+  publicationIntegrity: StoredPublicationIntegrity;
 };
 
 export type ScheduledPost = {
@@ -104,6 +133,13 @@ export class ClipCompositionPublishingConflictError extends Error {
   constructor() {
     super("This clip is being published right now. Wait for the platform receipt before saving a new Studio composition.");
     this.name = "ClipCompositionPublishingConflictError";
+  }
+}
+
+export class ScheduledPostPublicationIntegrityError extends Error {
+  constructor() {
+    super("Publishing could not be confirmed because the approved preview no longer matches this claimed post.");
+    this.name = "ScheduledPostPublicationIntegrityError";
   }
 }
 
@@ -266,11 +302,19 @@ function normalizeClipPostingCompositionIdentity(value: unknown): ClipPostingCom
 export function normalizeClipPostingCompositionIdentities(
   value: unknown,
 ): ClipPostingCompositionIdentity[] | null {
-  if (!Array.isArray(value)) {
+  const source = (
+    value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>)["schemaVersion"] === 2
+  )
+    ? (value as Record<string, unknown>)["compositionIdentities"]
+    : value;
+  if (!Array.isArray(source)) {
     return null;
   }
 
-  const identities = value.map(normalizeClipPostingCompositionIdentity);
+  const identities = source.map(normalizeClipPostingCompositionIdentity);
   return identities.every((identity): identity is ClipPostingCompositionIdentity => identity !== null)
     ? identities
     : null;
@@ -430,9 +474,25 @@ async function recoverStaleScheduledPostClaimsForRead(): Promise<void> {
 export type ListScheduledPostsOptions = {
   scheduledPostId?: string | null;
   contentAssetId?: string | null;
+  organizationId?: string | null;
+  campusId?: string | null;
   take?: number;
   includeContentAssetFiles?: boolean;
 };
+
+export type ScheduledPostTenantScope = Readonly<{
+  organizationId: string;
+  campusId?: string | null;
+}>;
+
+function scheduledPostTenantWhere(scope: ScheduledPostTenantScope) {
+  return {
+    organizationId: scope.organizationId,
+    ...(scope.campusId
+      ? { OR: [{ campusId: scope.campusId }, { campusId: null }] }
+      : {}),
+  };
+}
 
 function normalizeScheduledPostListTake(value: number | undefined, hasExactId: boolean): number {
   if (hasExactId) return 1;
@@ -450,6 +510,14 @@ export async function listScheduledPosts(
   const contentAssetId = options.contentAssetId?.trim() || null;
   const posts = await prisma.scheduledPost.findMany({
     where: {
+      ...(options.organizationId
+        ? {
+            organizationId: options.organizationId,
+            ...(options.campusId
+              ? { OR: [{ campusId: options.campusId }, { campusId: null }] }
+              : {}),
+          }
+        : {}),
       ...(scheduledPostId ? { id: scheduledPostId } : {}),
       ...(contentAssetId
         ? { contentAssetLinks: { some: { contentAssetId } } }
@@ -574,13 +642,20 @@ export function isScheduledPostReschedulable(input: {
     && !input.finalPrivacyStatus;
 }
 
-async function mutationAppliedOrThrowConflict(id: string, count: number): Promise<boolean> {
+async function mutationAppliedOrThrowConflict(
+  id: string,
+  count: number,
+  tenantScope: ScheduledPostTenantScope,
+): Promise<boolean> {
   if (count > 0) {
     return true;
   }
 
-  const existing = await prisma.scheduledPost.findUnique({
-    where: { id },
+  const existing = await prisma.scheduledPost.findFirst({
+    where: {
+      id,
+      ...scheduledPostTenantWhere(tenantScope),
+    },
     select: { status: true, claimedAt: true, workerStatus: true },
   });
   if (existing && isScheduledPostMutationLocked(existing)) {
@@ -591,12 +666,14 @@ async function mutationAppliedOrThrowConflict(id: string, count: number): Promis
 }
 
 export async function updateScheduledPostStatus(input: {
+  tenantScope: ScheduledPostTenantScope;
   id: string;
   status: ManualPublishingStatus;
 }): Promise<ScheduledPost | null> {
   const updateResult = await prisma.scheduledPost.updateMany({
     where: {
       id: input.id,
+      ...scheduledPostTenantWhere(input.tenantScope),
       status: input.status === "SKIPPED"
         ? { notIn: ["POSTING", "POSTED"] }
         : { not: "POSTING" },
@@ -609,17 +686,30 @@ export async function updateScheduledPostStatus(input: {
       claimedAt: null,
     },
   });
-  if (!(await mutationAppliedOrThrowConflict(input.id, updateResult.count))) {
+  if (!(await mutationAppliedOrThrowConflict(
+    input.id,
+    updateResult.count,
+    input.tenantScope,
+  ))) {
     return null;
   }
   if (input.status === "POSTED") {
-    await markScheduledPostContentAssetsPublished({ scheduledPostId: input.id });
+    await markScheduledPostContentAssetsPublished({
+      tenantScope: input.tenantScope,
+      scheduledPostId: input.id,
+    });
   } else {
-    await reconcileScheduledPostContentAssetLifecycle({ scheduledPostId: input.id });
+    await reconcileScheduledPostContentAssetLifecycle({
+      tenantScope: input.tenantScope,
+      scheduledPostId: input.id,
+    });
   }
 
-  const post = await prisma.scheduledPost.findUnique({
-    where: { id: input.id },
+  const post = await prisma.scheduledPost.findFirst({
+    where: {
+      id: input.id,
+      ...scheduledPostTenantWhere(input.tenantScope),
+    },
     include: {
       socialAccount: {
         select: {
@@ -669,6 +759,7 @@ export async function updateScheduledPostStatus(input: {
 }
 
 export async function restoreScheduledPostStatus(input: {
+  tenantScope: ScheduledPostTenantScope;
   id: string;
   status: RestorablePublishingStatus;
   expectedCurrentStatus: "POSTED" | "SKIPPED";
@@ -676,6 +767,7 @@ export async function restoreScheduledPostStatus(input: {
   const updateResult = await prisma.scheduledPost.updateMany({
     where: {
       id: input.id,
+      ...scheduledPostTenantWhere(input.tenantScope),
       status: input.expectedCurrentStatus,
       attemptCount: 0,
       claimedAt: null,
@@ -703,10 +795,16 @@ export async function restoreScheduledPostStatus(input: {
     return null;
   }
 
-  await reconcileScheduledPostContentAssetLifecycle({ scheduledPostId: input.id });
+  await reconcileScheduledPostContentAssetLifecycle({
+    tenantScope: input.tenantScope,
+    scheduledPostId: input.id,
+  });
 
-  const post = await prisma.scheduledPost.findUnique({
-    where: { id: input.id },
+  const post = await prisma.scheduledPost.findFirst({
+    where: {
+      id: input.id,
+      ...scheduledPostTenantWhere(input.tenantScope),
+    },
     include: {
       socialAccount: {
         select: {
@@ -723,12 +821,16 @@ export async function restoreScheduledPostStatus(input: {
 }
 
 export async function updateScheduledPostSchedule(input: {
+  tenantScope: ScheduledPostTenantScope;
   id: string;
   scheduledFor: Date;
   timezone?: string | null;
 }): Promise<ScheduledPost | null> {
-  const existing = await prisma.scheduledPost.findUnique({
-    where: { id: input.id },
+  const existing = await prisma.scheduledPost.findFirst({
+    where: {
+      id: input.id,
+      ...scheduledPostTenantWhere(input.tenantScope),
+    },
     select: { id: true, automationMode: true },
   });
 
@@ -739,6 +841,7 @@ export async function updateScheduledPostSchedule(input: {
   const updateResult = await prisma.scheduledPost.updateMany({
     where: {
       id: input.id,
+      ...scheduledPostTenantWhere(input.tenantScope),
       status: { in: ["PLANNED", "READY_FOR_MEDIA_TEAM", "FAILED"] },
       claimedAt: null,
       workerStatus: { notIn: ["CLAIMED", "POSTING"] },
@@ -768,12 +871,19 @@ export async function updateScheduledPostSchedule(input: {
         : {}),
     },
   });
-  if (!(await mutationAppliedOrThrowConflict(input.id, updateResult.count))) {
+  if (!(await mutationAppliedOrThrowConflict(
+    input.id,
+    updateResult.count,
+    input.tenantScope,
+  ))) {
     return null;
   }
 
-  const post = await prisma.scheduledPost.findUnique({
-    where: { id: input.id },
+  const post = await prisma.scheduledPost.findFirst({
+    where: {
+      id: input.id,
+      ...scheduledPostTenantWhere(input.tenantScope),
+    },
     include: {
       socialAccount: {
         select: {
@@ -790,15 +900,20 @@ export async function updateScheduledPostSchedule(input: {
 }
 
 export async function deleteScheduledPost(input: {
+  tenantScope: ScheduledPostTenantScope;
   id: string;
 }): Promise<boolean> {
   const contentAssetLinks = await prisma.scheduledPostContentAsset.findMany({
-    where: { scheduledPostId: input.id },
+    where: {
+      scheduledPostId: input.id,
+      scheduledPost: scheduledPostTenantWhere(input.tenantScope),
+    },
     select: { contentAssetId: true },
   });
   const deleted = await prisma.scheduledPost.deleteMany({
     where: {
       id: input.id,
+      ...scheduledPostTenantWhere(input.tenantScope),
       status: { in: ["PLANNED", "READY_FOR_MEDIA_TEAM", "FAILED", "SKIPPED"] },
       attemptCount: 0,
       claimedAt: null,
@@ -809,9 +924,14 @@ export async function deleteScheduledPost(input: {
     },
   });
 
-  const applied = await mutationAppliedOrThrowConflict(input.id, deleted.count);
+  const applied = await mutationAppliedOrThrowConflict(
+    input.id,
+    deleted.count,
+    input.tenantScope,
+  );
   if (applied && contentAssetLinks.length > 0) {
     await reconcileScheduledPostContentAssetLifecycle({
+      tenantScope: input.tenantScope,
       contentAssetIds: contentAssetLinks.map((link) => link.contentAssetId),
     });
   }
@@ -819,6 +939,7 @@ export async function deleteScheduledPost(input: {
 }
 
 export async function postScheduledPostNow(input: {
+  tenantScope: ScheduledPostTenantScope;
   id: string;
   now?: Date;
 }): Promise<ScheduledPost | null> {
@@ -827,6 +948,7 @@ export async function postScheduledPostNow(input: {
   const updateResult = await prisma.scheduledPost.updateMany({
     where: {
       id: input.id,
+      ...scheduledPostTenantWhere(input.tenantScope),
       automationMode: "AUTOMATIC",
       status: { in: ["PLANNED", "FAILED"] },
       externalPostId: null,
@@ -851,8 +973,11 @@ export async function postScheduledPostNow(input: {
     return null;
   }
 
-  const post = await prisma.scheduledPost.findUnique({
-    where: { id: input.id },
+  const post = await prisma.scheduledPost.findFirst({
+    where: {
+      id: input.id,
+      ...scheduledPostTenantWhere(input.tenantScope),
+    },
     include: {
       socialAccount: {
         select: {
@@ -875,6 +1000,8 @@ export type AutomationUpcomingPost = ScheduledPost & {
     caption: string;
     durationSeconds: number;
     hashtags: unknown;
+    approvedAt: string;
+    approvalActorRef: string;
     localFileCandidates: string[];
     compositionIdentity: ClipPostingCompositionIdentity;
     sermon: {
@@ -965,6 +1092,8 @@ async function buildReadyAutomationPosts(
       caption: true,
       durationSeconds: true,
       hashtags: true,
+      status: true,
+      updatedAt: true,
       exportStatus: true,
       exportFreshness: true,
       exportFormat: true,
@@ -1009,7 +1138,10 @@ async function buildReadyAutomationPosts(
     },
   });
   const readyClipEntries = clips.map((clip) => {
-    if (clip.transcriptSafetyStatus === "REVIEW_REQUIRED") {
+    if (
+      clip.transcriptSafetyStatus === "REVIEW_REQUIRED"
+      || (clip.status !== "APPROVED" && clip.status !== "EXPORTED")
+    ) {
       return null;
     }
 
@@ -1047,6 +1179,8 @@ async function buildReadyAutomationPosts(
       caption: clip.caption,
       durationSeconds: clip.durationSeconds,
       hashtags: clip.hashtags,
+      approvedAt: clip.updatedAt.toISOString(),
+      approvalActorRef: `clip-status:${clip.id}:${clip.status}`,
       // The posting worker must receive one canonical final export. Supplying
       // overlay, caption-burn, or raw-render fallbacks can publish an older or
       // partially composed artifact after a Studio edit.
@@ -1135,6 +1269,318 @@ function compositionIdentityJson(
   identities: ClipPostingCompositionIdentity[],
 ): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(identities)) as Prisma.InputJsonValue;
+}
+
+function compositionReceiptJson(input: {
+  identities: ClipPostingCompositionIdentity[];
+  publicationIntegrity: StoredPublicationIntegrity;
+}): Prisma.InputJsonValue {
+  const receipt: StoredCompositionReceipt = {
+    schemaVersion: 2,
+    compositionIdentities: input.identities,
+    publicationIntegrity: input.publicationIntegrity,
+  };
+  return JSON.parse(JSON.stringify(receipt)) as Prisma.InputJsonValue;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function normalizeStoredPublicationIntegrity(
+  value: unknown,
+): StoredPublicationIntegrity | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const receipt = value as Record<string, unknown>;
+  if (receipt["schemaVersion"] !== 2) {
+    return null;
+  }
+  const rawIntegrity = receipt["publicationIntegrity"];
+  if (!rawIntegrity || typeof rawIntegrity !== "object" || Array.isArray(rawIntegrity)) {
+    return null;
+  }
+  const integrity = rawIntegrity as Partial<StoredPublicationIntegrity>;
+  if (
+    integrity.schemaVersion !== 1
+    || !integrity.approvedPreview
+    || !integrity.guard
+  ) {
+    return null;
+  }
+
+  try {
+    const rebuilt = buildDuplicatePublicationGuardInputs({
+      approvedPreview: integrity.approvedPreview,
+      scheduledPayload: {
+        ...integrity.approvedPreview.content,
+        scheduledPostId: integrity.guard.scheduledPostId,
+        approvedPreviewIdentity: integrity.approvedPreview.approvedPreviewIdentity,
+      },
+    });
+    const stableJson = (item: unknown): string => {
+      if (Array.isArray(item)) {
+        return `[${item.map(stableJson).join(",")}]`;
+      }
+      if (item && typeof item === "object") {
+        return `{${Object.entries(item as Record<string, unknown>)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, nested]) => `${JSON.stringify(key)}:${stableJson(nested)}`)
+          .join(",")}}`;
+      }
+      return JSON.stringify(item) ?? "null";
+    };
+    if (!rebuilt.ok || stableJson(rebuilt.guard) !== stableJson(integrity.guard)) {
+      return null;
+    }
+    return integrity as StoredPublicationIntegrity;
+  } catch {
+    return null;
+  }
+}
+
+function clipPublicationReceiptMatchesPost(input: {
+  post: {
+    id: string;
+    organizationId: string | null;
+    campusId: string | null;
+    socialAccountId: string | null;
+    clipIdsJson: unknown;
+    platform: PrismaPostingPlatform;
+    title: string | null;
+    caption: string | null;
+    status: PrismaScheduledPostStatus;
+    workerStatus: PrismaScheduledPostWorkerStatus;
+    workerId: string | null;
+    compositionReceiptJson: unknown;
+  };
+  workerId: string;
+}): boolean {
+  const clipIds = normalizeClipIds(input.post.clipIdsJson);
+  if (clipIds.length === 0) {
+    // Non-video publishing does not yet have a durable media checksum. Its
+    // existing approved-revision and media-preflight gates remain authoritative.
+    return true;
+  }
+  if (
+    clipIds.length !== 1
+    || input.post.status !== "POSTING"
+    || input.post.workerStatus !== "POSTING"
+    || input.post.workerId !== input.workerId
+  ) {
+    return false;
+  }
+
+  const integrity = normalizeStoredPublicationIntegrity(
+    input.post.compositionReceiptJson,
+  );
+  const identities = normalizeClipPostingCompositionIdentities(
+    input.post.compositionReceiptJson,
+  );
+  const identity = identities?.[0];
+  if (
+    !integrity
+    || identities?.length !== 1
+    || !identity
+    || !identity.snapshotSha256
+    || clipIds[0] !== identity.clipId
+  ) {
+    return false;
+  }
+
+  const approvedContent = integrity.approvedPreview.content;
+  if (
+    approvedContent.sourceType !== "CLIP"
+    || approvedContent.sourceId !== identity.clipId
+    || approvedContent.approvedRevisionId
+      !== `${identity.editPlanId}:${identity.planHash}`
+    || approvedContent.mediaObjectKey !== `clip-artifact:${identity.artifactId}`
+    || approvedContent.mediaChecksumSha256 !== identity.snapshotSha256
+  ) {
+    return false;
+  }
+
+  return verifyScheduledPayloadIdentity({
+    approvedPreview: integrity.approvedPreview,
+    scheduledPayload: {
+      ...approvedContent,
+      organizationId: input.post.organizationId ?? "",
+      campusId: input.post.campusId,
+      platform: fromPrismaPostingPlatform(input.post.platform),
+      socialAccountId: input.post.socialAccountId ?? "",
+      title: input.post.title ?? "",
+      caption: input.post.caption ?? "",
+      scheduledPostId: input.post.id,
+      approvedPreviewIdentity: integrity.approvedPreview.approvedPreviewIdentity,
+    },
+  }).status === "VERIFIED";
+}
+
+type ClipPublicationIntegrityResult =
+  | {
+      ok: true;
+      integrity: StoredPublicationIntegrity;
+      publicGuard: ScheduledPostPublicationGuard;
+    }
+  | { ok: false; reason: string };
+
+function buildClipPublicationIntegrity(input: {
+  post: AutomationScheduledPostRecord;
+  readyPost: AutomationUpcomingPost;
+  snapshotIdentities: ClipPostingCompositionIdentity[];
+}): ClipPublicationIntegrityResult {
+  if (
+    !input.post.organizationId
+    || !input.post.socialAccountId
+    || input.readyPost.clips.length !== 1
+    || input.readyPost.contentAssets?.length
+    || input.snapshotIdentities.length !== 1
+  ) {
+    return {
+      ok: false,
+      reason: "Publishing paused because this post does not have one tenant-scoped approved clip and destination account.",
+    };
+  }
+
+  const clip = input.readyPost.clips[0];
+  const identity = input.snapshotIdentities[0];
+  if (
+    !clip
+    || !identity
+    || clip.id !== identity.clipId
+    || !identity.snapshotSha256
+  ) {
+    return {
+      ok: false,
+      reason: "Publishing paused because the approved preview is not bound to the verified final media bytes.",
+    };
+  }
+
+  const content = {
+    organizationId: input.post.organizationId,
+    campusId: input.post.campusId,
+    sourceType: "CLIP" as const,
+    sourceId: clip.id,
+    approvedRevisionId: `${identity.editPlanId}:${identity.planHash}`,
+    platform: input.readyPost.platform,
+    socialAccountId: input.post.socialAccountId,
+    title: input.readyPost.title,
+    caption: input.readyPost.caption,
+    hashtags: normalizeStringArray(clip.hashtags),
+    mediaObjectKey: `clip-artifact:${identity.artifactId}`,
+    mediaChecksumSha256: identity.snapshotSha256,
+  };
+  const sealed = sealApprovedPreview({
+    approvalState: "APPROVED",
+    approvedAt: clip.approvedAt,
+    // Clip approval does not yet carry a reviewer relation, so identify the
+    // persisted approval state itself without fabricating a user identity.
+    approvedByActorRef: clip.approvalActorRef,
+    content,
+  });
+  if (!sealed.ok) {
+    return {
+      ok: false,
+      reason: `Publishing paused because the approved preview identity is incomplete (${sealed.reasons.join(", ")}).`,
+    };
+  }
+  const guarded = buildDuplicatePublicationGuardInputs({
+    approvedPreview: sealed.receipt,
+    scheduledPayload: {
+      ...content,
+      scheduledPostId: input.post.id,
+      approvedPreviewIdentity: sealed.receipt.approvedPreviewIdentity,
+    },
+  });
+  if (!guarded.ok) {
+    return {
+      ok: false,
+      reason: `Publishing paused because the scheduled payload no longer matches approval (${guarded.reasons.join(", ")}).`,
+    };
+  }
+
+  return {
+    ok: true,
+    integrity: {
+      schemaVersion: 1,
+      approvedPreview: sealed.receipt,
+      guard: guarded.guard,
+    },
+    publicGuard: {
+      approvedPreviewIdentity: guarded.guard.approvedPreviewIdentity,
+      retryIdempotencyKey: guarded.guard.retryIdempotencyKey,
+      semanticDuplicateKey: guarded.guard.semanticDuplicateKey,
+      destinationPayloadKey: guarded.guard.destinationPayloadKey,
+    },
+  };
+}
+
+function duplicateRecordStatus(
+  post: Pick<AutomationScheduledPostRecord, "status" | "externalPostId">,
+): DuplicatePublicationRecord["status"] {
+  if (post.externalPostId || post.status === "POSTED" || post.status === "PRIVATE_ONLY_UNVERIFIED") {
+    return "PUBLISHED";
+  }
+  if (post.status === "POSTING") return "PUBLISHING";
+  if (post.status === "FAILED") return "FAILED";
+  if (post.status === "SKIPPED") return "CANCELLED";
+  return "CLAIMED";
+}
+
+async function assessExistingClipPublications(input: {
+  post: AutomationScheduledPostRecord;
+  integrity: StoredPublicationIntegrity;
+}): Promise<ReturnType<typeof assessDuplicatePublicationGuard>> {
+  const candidates = await prisma.scheduledPost.findMany({
+    where: {
+      id: { not: input.post.id },
+      organizationId: input.post.organizationId,
+      campusId: input.post.campusId,
+      socialAccountId: input.post.socialAccountId,
+      platform: input.post.platform,
+      status: { in: ["PLANNED", "POSTING", "POSTED", "PRIVATE_ONLY_UNVERIFIED"] },
+      clipIdsJson: {
+        array_contains: [input.integrity.guard.sourceId],
+      },
+    },
+    select: {
+      id: true,
+      organizationId: true,
+      campusId: true,
+      status: true,
+      externalPostId: true,
+      compositionReceiptJson: true,
+    },
+    take: 20,
+  });
+
+  const records: DuplicatePublicationRecord[] = candidates.map((candidate) => {
+    const stored = normalizeStoredPublicationIntegrity(candidate.compositionReceiptJson);
+    const storedGuard = stored?.guard;
+    return {
+      organizationId: candidate.organizationId ?? "",
+      campusId: candidate.campusId,
+      scheduledPostId: candidate.id,
+      // Legacy rows have no canonical receipt. The tenant/source/destination
+      // query already identified them as possible duplicates, so fail closed
+      // by comparing them as the current payload.
+      retryIdempotencyKey: storedGuard?.retryIdempotencyKey ?? `legacy:${candidate.id}`,
+      semanticDuplicateKey: storedGuard?.semanticDuplicateKey
+        ?? input.integrity.guard.semanticDuplicateKey,
+      destinationPayloadKey: storedGuard?.destinationPayloadKey
+        ?? input.integrity.guard.destinationPayloadKey,
+      status: duplicateRecordStatus(candidate),
+      externalPostId: candidate.externalPostId,
+    };
+  });
+
+  return assessDuplicatePublicationGuard({
+    guard: input.integrity.guard,
+    records,
+  });
 }
 
 export async function listUpcomingAutomationPosts(input: {
@@ -1254,7 +1700,7 @@ export async function claimScheduledPost(input: {
 }
 
 export type ScheduledPostCompositionValidationResult =
-  | { valid: true }
+  | { valid: true; publicationGuard: ScheduledPostPublicationGuard }
   | { valid: false; released: boolean; reason: string };
 
 export async function revalidateClaimedScheduledPostComposition(input: {
@@ -1293,6 +1739,70 @@ export async function revalidateClaimedScheduledPostComposition(input: {
   );
 
   if (compositionIsCurrent) {
+    const publicationIntegrity = buildClipPublicationIntegrity({
+      post,
+      readyPost: readyPost as AutomationUpcomingPost,
+      snapshotIdentities: input.compositionIdentities,
+    });
+    if (publicationIntegrity.ok) {
+      const duplicateAssessment = await assessExistingClipPublications({
+        post,
+        integrity: publicationIntegrity.integrity,
+      });
+      if (duplicateAssessment.status === "BLOCKED") {
+        const released = await prisma.scheduledPost.updateMany({
+          where: {
+            id: input.id,
+            status: "POSTING",
+            workerId: input.workerId,
+            claimedAt: { not: null },
+          },
+          data: {
+            status: "PLANNED",
+            workerStatus: "IDLE",
+            claimedAt: null,
+            workerId: null,
+            publishError: "Publishing paused because this approved clip may already be publishing or published to the selected account.",
+            mediaObjectKey: null,
+            mediaPublicUrl: null,
+            mediaUploadedAt: null,
+            compositionReceiptJson: Prisma.DbNull,
+          },
+        });
+        return {
+          valid: false,
+          released: released.count === 1,
+          reason: "This exact approved clip may already be publishing or published to the selected account.",
+        };
+      }
+    }
+    if (!publicationIntegrity.ok) {
+      const released = await prisma.scheduledPost.updateMany({
+        where: {
+          id: input.id,
+          status: "POSTING",
+          workerId: input.workerId,
+          claimedAt: { not: null },
+        },
+        data: {
+          status: "PLANNED",
+          workerStatus: "IDLE",
+          claimedAt: null,
+          workerId: null,
+          publishError: publicationIntegrity.reason,
+          mediaObjectKey: null,
+          mediaPublicUrl: null,
+          mediaUploadedAt: null,
+          compositionReceiptJson: Prisma.DbNull,
+        },
+      });
+      return {
+        valid: false,
+        released: released.count === 1,
+        reason: publicationIntegrity.reason,
+      };
+    }
+
     const renewed = await prisma.scheduledPost.updateMany({
       where: {
         id: input.id,
@@ -1303,12 +1813,18 @@ export async function revalidateClaimedScheduledPostComposition(input: {
       data: {
         workerStatus: "POSTING",
         claimedAt: input.now ?? new Date(),
-        compositionReceiptJson: compositionIdentityJson(input.compositionIdentities),
+        compositionReceiptJson: compositionReceiptJson({
+          identities: input.compositionIdentities,
+          publicationIntegrity: publicationIntegrity.integrity,
+        }),
       },
     });
 
     return renewed.count === 1
-      ? { valid: true }
+      ? {
+          valid: true,
+          publicationGuard: publicationIntegrity.publicGuard,
+        }
       : {
           valid: false,
           released: false,
@@ -1415,6 +1931,37 @@ export async function completeScheduledPost(input: {
   mediaUploadedAt?: Date | null;
 }): Promise<ScheduledPost | null> {
   const completion = normalizeWorkerCompletionReceipt(input);
+  if (
+    input.status === "POSTED"
+    || input.status === "PRIVATE_ONLY_UNVERIFIED"
+  ) {
+    const activePost = await prisma.scheduledPost.findUnique({
+      where: { id: input.id },
+      select: {
+        id: true,
+        organizationId: true,
+        campusId: true,
+        socialAccountId: true,
+        clipIdsJson: true,
+        platform: true,
+        title: true,
+        caption: true,
+        status: true,
+        workerStatus: true,
+        workerId: true,
+        compositionReceiptJson: true,
+      },
+    });
+    if (
+      activePost?.status === "POSTING"
+      && !clipPublicationReceiptMatchesPost({
+        post: activePost,
+        workerId: input.workerId,
+      })
+    ) {
+      throw new ScheduledPostPublicationIntegrityError();
+    }
+  }
   const updateResult = await prisma.scheduledPost.updateMany({
     where: {
       id: input.id,
@@ -1498,6 +2045,7 @@ export async function completeScheduledPost(input: {
 
 export const __scheduledPostsTestUtils = {
   isSocialAuthFailure,
+  clipPublicationReceiptMatchesPost,
   ACTIVE_AUTOMATION_STATUSES,
   STALE_POSTING_CLAIM_MS,
 };

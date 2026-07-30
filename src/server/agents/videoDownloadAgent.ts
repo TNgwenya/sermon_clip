@@ -16,6 +16,11 @@ import {
 } from "@/server/agents/storage";
 import { mediaFileIsUsable } from "@/server/media/fileGuards";
 import { updateSermonStatus } from "@/server/status/sermonStatus";
+import {
+  classifyYouTubeSourceFailure,
+  looksLikeYouTubeAuthFailure,
+  looksLikeYouTubeForbiddenFailure,
+} from "@/lib/youtubeSourceFailure";
 
 type DownloadOptions = {
   force?: boolean;
@@ -182,12 +187,22 @@ async function removeTempDownloadFile(sourceVideoPath: string): Promise<void> {
 }
 
 function looksLikeHttp403(stderr: string): boolean {
-  const normalized = stderr.toLowerCase();
-  return normalized.includes("http error 403") || normalized.includes("forbidden");
+  return looksLikeYouTubeForbiddenFailure(stderr);
 }
 
 function toDownloadFailureMessage(stderr: string, code: number | null): string {
   const tail = stderr.trim().slice(-1500);
+  if (looksLikeYouTubeAuthFailure(stderr)) {
+    return [
+      `yt-dlp failed with code ${code ?? "unknown"}.`,
+      "YouTube asked the server to verify itself before providing this recording.",
+      "Upload the same recording to this sermon to continue without losing its saved details.",
+      tail,
+    ]
+      .filter((line) => line.length > 0)
+      .join(" ");
+  }
+
   if (looksLikeHttp403(stderr)) {
     return [
       `yt-dlp failed with code ${code ?? "unknown"}.`,
@@ -385,14 +400,17 @@ export async function downloadSermonVideo(
     return { sourceVideoPath, reusedExistingFile: false };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown download error.";
+    const failure = classifyYouTubeSourceFailure(message);
     await removeTempDownloadFile(sourceVideoPath);
     await markJobFailed(job.id, message, "Download failed.", {
       error,
-      code: "VIDEO_DOWNLOAD_FAILED",
+      code: failure.code,
       stage: "download",
-      retryable: true,
+      retryable: failure.retryable,
       details: {
         forceRequested: options?.force === true,
+        uploadRecoveryRecommended: failure.uploadRecoveryRecommended,
+        recoveryAction: failure.uploadRecoveryRecommended ? "UPLOAD_SOURCE" : null,
       },
     });
 
@@ -414,5 +432,7 @@ export const __videoDownloadTestUtils = {
   normalizeSourceDownloadQualityMode,
   resolveConcurrentFragments,
   looksLikeHttp403,
+  looksLikeYouTubeAuthFailure,
   toDownloadFailureMessage,
+  classifyYouTubeSourceFailure,
 };

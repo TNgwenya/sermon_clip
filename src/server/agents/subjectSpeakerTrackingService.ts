@@ -1,6 +1,7 @@
 import type { SermonSubjectKind } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import type { TenantScope } from "@/server/tenancy/scope";
 
 type TrackResult = {
   subjectCount: number;
@@ -121,9 +122,15 @@ function speakerDisplayName(label: string, sermonSpeakerName: string): string {
   return normalized;
 }
 
-export async function refreshSubjectSpeakerTracking(sermonId: string): Promise<TrackResult> {
-  const sermon = await prisma.sermon.findUnique({
-    where: { id: sermonId },
+export async function refreshSubjectSpeakerTracking(
+  sermonId: string,
+  tenantScope?: TenantScope,
+): Promise<TrackResult> {
+  const sermon = await prisma.sermon.findFirst({
+    where: {
+      id: sermonId,
+      ...(tenantScope ?? {}),
+    },
     select: {
       id: true,
       speakerName: true,
@@ -359,4 +366,3 @@ export async function refreshSubjectSpeakerTracking(sermonId: string): Promise<T
     speakerCount: speakerRows.length,
   };
 }
-

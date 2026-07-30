@@ -6,8 +6,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { CopyCaptionButton } from "@/app/ready-to-post/copy-caption-button";
+import {
+  buildPublishingBoardSnapshot,
+  buildPublishingReceipt,
+  type PublishingReceipt,
+} from "@/app/ready-to-post/publishing-board";
+import boardStyles from "@/app/ready-to-post/publishing-board.module.css";
 import { ReadyQueueActions, SchedulePostButton } from "@/app/ready-to-post/ready-queue-actions";
 import { ScheduleDraftModal, type ScheduleDraftClipSummary } from "@/app/ready-to-post/schedule-draft-modal";
+import { WeeklyPublishingBoard } from "@/app/ready-to-post/weekly-publishing-board";
 import { ClipAssetRecoveryButton } from "@/components/clip-asset-recovery-button";
 import { EmptyState } from "@/components/ui";
 import {
@@ -290,6 +297,13 @@ function getPlatformClass(platform: ScheduledPost["platform"]): string {
 
 function getPlatformUploadActionLabel(platform: ScheduledPost["platform"]): string {
   return platform === "YouTube Shorts" ? "Open YouTube Studio upload" : `Open ${platform} upload`;
+}
+
+function getReceiptToneClass(tone: PublishingReceipt["tone"]): string {
+  if (tone === "success") return boardStyles.receiptSuccess;
+  if (tone === "attention") return boardStyles.receiptAttention;
+  if (tone === "progress") return boardStyles.receiptProgress;
+  return "";
 }
 
 function getPublishingConfirmationCopy(confirmation: PublishingConfirmation): {
@@ -1047,6 +1061,19 @@ export function ReadyQueueExperience({
   const nextAttentionPost = calendarWindowPosts.find((post) => ATTENTION_CALENDAR_STATUSES.has(post.status)) ?? null;
   const plannedUploadCount = scopedScheduledPosts.filter((post) => SCHEDULED_WORK_STATUSES.has(post.status)).length;
   const attentionUploadCount = scopedScheduledPosts.filter((post) => ATTENTION_CALENDAR_STATUSES.has(post.status)).length;
+  const publishingBoardSnapshot = useMemo(() => buildPublishingBoardSnapshot({
+    clips: readyQueueClips,
+    posts: scopedScheduledPosts,
+    accounts: socialAccounts,
+    serviceHealth: publishingServiceHealth,
+    approvedWaitingCount,
+  }), [
+    approvedWaitingCount,
+    publishingServiceHealth,
+    readyQueueClips,
+    scopedScheduledPosts,
+    socialAccounts,
+  ]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -1453,6 +1480,11 @@ export function ReadyQueueExperience({
 
   return (
     <>
+      <WeeklyPublishingBoard
+        snapshot={publishingBoardSnapshot}
+        weekLabel={calendarWindowLabel}
+      />
+
       {!contentAssetFocus ? (
         <section id="ready-clips" className="publishing-desk-grid ready-master-detail premium-ready-workspace" aria-label="Publishing workspace">
         <div className="publishing-board-panel premium-ready-clip-picker">
@@ -1838,7 +1870,12 @@ export function ReadyQueueExperience({
         </section>
       ) : null}
 
-      <section id="posting-calendar" className="social-calendar-panel premium-ready-calendar premium-ready-secondary-surface" aria-label="Publishing calendar" tabIndex={-1}>
+      <section
+        id="posting-calendar"
+        className={`social-calendar-panel premium-ready-calendar premium-ready-secondary-surface ${boardStyles.calendarBoard}`}
+        aria-label="Publishing calendar"
+        tabIndex={-1}
+      >
         <div className="social-calendar-header">
           <div>
             <p className="kicker">Calendar</p>
@@ -1958,7 +1995,7 @@ export function ReadyQueueExperience({
           onCorrect={(postId, status, expectedCurrentStatus) => void correctPublishingStatus(postId, status, expectedCurrentStatus)}
         />
 
-        <div className={`social-calendar-grid ${plannerExpanded ? "is-expanded" : ""}`} aria-label="Upcoming social media posts">
+        <div className={`social-calendar-grid ${boardStyles.weekGrid} ${plannerExpanded ? "is-expanded" : ""}`} aria-label="Upcoming social media posts">
           {calendarDays.map((day) => {
             const isDayExpanded = expandedCalendarDays.has(day.key);
             const visiblePosts = selectVisibleCalendarPosts(day.posts, isDayExpanded);
@@ -1967,7 +2004,7 @@ export function ReadyQueueExperience({
             return (
               <article
               key={day.key}
-              className={`social-calendar-day ${day.isToday ? "is-today" : ""} ${day.isPast ? "is-past" : ""}`}
+              className={`social-calendar-day ${boardStyles.daySlot} ${day.isToday ? "is-today" : ""} ${day.isPast ? "is-past" : ""}`}
             >
               <div className="social-calendar-day-head">
                 <div className="social-calendar-date">
@@ -2013,6 +2050,7 @@ export function ReadyQueueExperience({
                     && !post.finalPrivacyStatus;
                   const queueActionLabel = post.status === "FAILED" ? "Retry publishing" : "Queue for publishing";
                   const queuePendingLabel = post.status === "FAILED" ? "Retrying..." : "Queuing...";
+                  const receipt = buildPublishingReceipt(post);
 
                   return (
                     <div
@@ -2045,6 +2083,10 @@ export function ReadyQueueExperience({
                             <Link href="/settings/social" className="text-link small">Review social channels</Link>
                           </div>
                         ) : null}
+                        <div className={`${boardStyles.receipt} ${getReceiptToneClass(receipt.tone)}`}>
+                          <span>{receipt.label}</span>
+                          <small>{receipt.detail}</small>
+                        </div>
                         {post.automationMode === "AUTOMATIC" ? <PublishingTechnicalDetails post={post} /> : null}
                       </div>
                       <details className="social-calendar-post-details">
@@ -2304,6 +2346,7 @@ export function ReadyQueueExperience({
                 const queueActionLabel = post.status === "FAILED" ? "Retry publishing" : "Queue for publishing";
                 const queuePendingLabel = post.status === "FAILED" ? "Retrying..." : "Queuing...";
                 const savedPrimaryCopy = post.platform === "YouTube Shorts" ? title : captionText;
+                const receipt = buildPublishingReceipt(post);
 
                 return (
                   <article key={post.id} className="manual-publishing-card">
@@ -2346,6 +2389,10 @@ export function ReadyQueueExperience({
                           {SCHEDULED_POST_STATUS_LABELS[post.status]}
                         </span>
                         <span className="status-pill">{post.clipIds.length} clip{post.clipIds.length === 1 ? "" : "s"}</span>
+                      </div>
+                      <div className={`${boardStyles.receipt} ${getReceiptToneClass(receipt.tone)}`}>
+                        <span>{receipt.label}</span>
+                        <small>{receipt.detail}</small>
                       </div>
                       <div className="posting-checklist" aria-label={`${post.platform} posting checklist`}>
                         <span className="posting-check-step is-ready">Video</span>

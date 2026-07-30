@@ -20,6 +20,9 @@ import { extractCaptionPackage } from "@/lib/clipStudio";
 import { buildCanonicalPlatformPayloads } from "@/lib/publishingPayload";
 import { checkContentAssetMediaReadiness } from "@/server/contentAssets/contentAssetMediaReadiness";
 import { createAssetRevision } from "@/server/contentRevisionService";
+import { requireSermonResource } from "@/server/auth/resourceAuthorization";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantScope } from "@/server/tenancy/scope";
 
 const platformSchema = z.enum(["TIKTOK", "INSTAGRAM", "YOUTUBE_SHORTS", "FACEBOOK"]);
 const planItemSchema = z.object({
@@ -203,6 +206,27 @@ export async function bulkScheduleWeeklyPlanAction(
     return { success: false, message: `Choose a future time for “${invalidDate.title}”.` };
   }
 
+  let authorizedSermon;
+  try {
+    authorizedSermon = await requireSermonResource(
+      "publishing.schedule",
+      parsed.data.sermonId,
+    );
+  } catch (error) {
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : "The selected sermon could not be scheduled.",
+    };
+  }
+  const ownership = {
+    organizationId: authorizedSermon.organizationId,
+    campusId: authorizedSermon.campusId,
+  };
+  const scopedOwnership = {
+    organizationId: ownership.organizationId,
+    ...(ownership.campusId ? { campusId: ownership.campusId } : {}),
+  };
+
   const contentAssetIds = items
     .filter((item) => item.sourceKind === "CONTENT_ASSET")
     .map((item) => item.sourceId);
@@ -211,12 +235,16 @@ export async function bulkScheduleWeeklyPlanAction(
     .map((item) => item.sourceId);
 
   const [sermon, assets, clips] = await Promise.all([
-    prisma.sermon.findUnique({
-      where: { id: parsed.data.sermonId },
+    prisma.sermon.findFirst({
+      where: { id: authorizedSermon.id, ...scopedOwnership },
       select: { id: true, title: true },
     }),
     prisma.contentAsset.findMany({
-      where: { id: { in: contentAssetIds }, sermonId: parsed.data.sermonId },
+      where: {
+        id: { in: contentAssetIds },
+        sermonId: authorizedSermon.id,
+        ...scopedOwnership,
+      },
       select: {
         id: true,
         status: true,
@@ -235,6 +263,9 @@ export async function bulkScheduleWeeklyPlanAction(
         },
         contentOpportunity: {
           select: {
+            organizationId: true,
+            campusId: true,
+            sermonId: true,
             opportunityType: true,
             sourceTranscriptExcerpt: true,
             relatedScripture: true,
@@ -263,7 +294,8 @@ export async function bulkScheduleWeeklyPlanAction(
     prisma.clipCandidate.findMany({
       where: {
         id: { in: clipIds },
-        sermonId: parsed.data.sermonId,
+        sermonId: authorizedSermon.id,
+        sermon: scopedOwnership,
         transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
         OR: [{ exportStatus: "COMPLETED" }, { status: "EXPORTED" }],
       },
@@ -292,6 +324,20 @@ export async function bulkScheduleWeeklyPlanAction(
     return {
       success: false,
       message: "One or more plan items are no longer approved and ready. Rebuild the weekly plan.",
+    };
+  }
+  const foreignContentReference = assets.find((asset) => (
+    asset.contentOpportunity
+    && (
+      asset.contentOpportunity.organizationId !== ownership.organizationId
+      || asset.contentOpportunity.campusId !== ownership.campusId
+      || asset.contentOpportunity.sermonId !== authorizedSermon.id
+    )
+  ));
+  if (foreignContentReference) {
+    return {
+      success: false,
+      message: `“${foreignContentReference.title}” contains a reference outside this workspace. Rebuild the weekly plan.`,
     };
   }
   const videoBriefAsset = assets.find((asset) => {
@@ -399,6 +445,7 @@ export async function bulkScheduleWeeklyPlanAction(
   const windowEnd = new Date(Math.max(...times) + 14 * 24 * 60 * 60_000);
   const nearbyPosts = await prisma.scheduledPost.findMany({
     where: {
+      ...scopedOwnership,
       scheduledFor: { gte: windowStart, lte: windowEnd },
       status: { in: ["PLANNED", "READY_FOR_MEDIA_TEAM", "POSTING", "POSTED"] },
     },
@@ -432,6 +479,8 @@ export async function bulkScheduleWeeklyPlanAction(
     const createdPostIds = await prisma.$transaction(async (tx) => {
       const draft = await tx.postingDraft.create({
         data: {
+          organizationId: ownership.organizationId,
+          campusId: ownership.campusId,
           clipIdsJson: clipIds,
           platformsJson: Array.from(new Set(items.map((item) => fromPrismaPostingPlatform(item.platform)))),
           postingSlot: `Week of ${parsed.data.weekStart}`,
@@ -478,6 +527,8 @@ export async function bulkScheduleWeeklyPlanAction(
         }
         const post = await tx.scheduledPost.create({
           data: {
+            organizationId: ownership.organizationId,
+            campusId: ownership.campusId,
             postingDraftId: draft.id,
             clipIdsJson: item.sourceKind === "CLIP" ? [item.sourceId] : [],
             platform: item.platform as PrismaPostingPlatform,
@@ -569,25 +620,65 @@ export async function recordWeeklyPlanPerformanceAction(
     return { success: false, message: "Enter at least one result before saving performance." };
   }
 
-  const post = await prisma.scheduledPost.findUnique({
-    where: { id: parsed.data.scheduledPostId },
+  let requestContext;
+  try {
+    requestContext = await requireRequestCapability("publishing.reconcile");
+  } catch (error) {
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : "This publishing result could not be recorded.",
+    };
+  }
+  const post = await prisma.scheduledPost.findFirst({
+    where: {
+      id: parsed.data.scheduledPostId,
+      ...tenantScope(requestContext),
+    },
     select: {
       id: true,
+      organizationId: true,
+      campusId: true,
       status: true,
       platform: true,
       socialAccountId: true,
+      socialAccount: {
+        select: { organizationId: true, campusId: true },
+      },
       externalPostId: true,
       publishedUrl: true,
       clipIdsJson: true,
       contentAssetLinks: {
         select: {
-          contentAsset: { select: { id: true, sermonId: true } },
+          contentAsset: {
+            select: {
+              id: true,
+              sermonId: true,
+              organizationId: true,
+              campusId: true,
+            },
+          },
         },
       },
     },
   });
   if (!post || post.status !== "POSTED") {
     return { success: false, message: "Mark this handoff as posted before recording its results." };
+  }
+  const postOrganizationId = post.organizationId ?? requestContext.organizationId;
+  if (
+    (post.socialAccount && (
+      post.socialAccount.organizationId !== postOrganizationId
+      || post.socialAccount.campusId !== post.campusId
+    ))
+    || post.contentAssetLinks.some(({ contentAsset }) => (
+      contentAsset.organizationId !== postOrganizationId
+      || contentAsset.campusId !== post.campusId
+    ))
+  ) {
+    return {
+      success: false,
+      message: "This handoff contains a resource from another workspace and cannot accept performance data.",
+    };
   }
   const clipIds = normalizeJsonStringArray(post.clipIdsJson);
   if (clipIds.length === 0 && post.contentAssetLinks.length === 0) {
@@ -596,6 +687,8 @@ export async function recordWeeklyPlanPerformanceAction(
 
   await prisma.socialMetricSnapshot.create({
     data: {
+      organizationId: postOrganizationId,
+      campusId: post.campusId,
       socialAccountId: post.socialAccountId,
       platform: fromPrismaPostingPlatform(post.platform),
       platformPostId: post.externalPostId,

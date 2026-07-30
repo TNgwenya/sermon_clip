@@ -1550,3 +1550,69 @@ input[type="radio"] {
     border: 1px solid ButtonText;
   }
 }
+
+.auth-page {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: clamp(1rem, 4vw, 3rem);
+}
+
+.auth-card {
+  width: min(100%, 31rem);
+  padding: clamp(1.25rem, 4vw, 2.25rem);
+}
+
+.auth-card h1 {
+  font-size: clamp(2rem, 7vw, 3.2rem);
+}
+
+.auth-card .field {
+  display: grid;
+  gap: 0.42rem;
+  color: var(--muted-strong);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.auth-card .field input {
+  width: 100%;
+  padding: 0.75rem 0.85rem;
+}
+
+.auth-options {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.auth-options > summary {
+  cursor: pointer;
+  padding: 0.8rem 0.9rem;
+  color: var(--muted-strong);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.auth-options[open] > div {
+  border-top: 1px solid var(--border);
+  padding: 0.9rem;
+}
+
+.auth-submit {
+  width: 100%;
+  justify-content: center;
+}
+.review-content-kind-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.review-content-kind-toggle .review-view-btn {
+  flex: 1 1 auto;
+}

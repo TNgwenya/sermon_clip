@@ -7,6 +7,8 @@ import {
 } from "@/components/ui";
 import { prisma } from "@/lib/prisma";
 import { DeleteSermonProjectButton } from "@/app/sermons/delete-sermon-project-button";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantScope } from "@/server/tenancy/scope";
 
 export const dynamic = "force-dynamic";
 
@@ -235,12 +237,14 @@ function groupByMonth(items: SermonWithStats[]): { label: string; items: SermonW
 }
 
 export default async function SermonsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
+  const requestContext = await requireRequestCapability("sermons.read");
   const filters = await searchParams;
   const query = filters.query?.trim();
   const status = isSermonStatus(filters.status) ? filters.status : undefined;
   const activeView = getLibraryView(filters.view, filters.attention);
 
   const where: Prisma.SermonWhereInput = {
+    ...tenantScope(requestContext),
     ...(status ? { status } : {}),
     ...(query
       ? {

@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import type { ClipCandidate, Prisma, ProcessingJobStatus, ProcessingJobType } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import type { TenantScope } from "@/server/tenancy/scope";
 import {
   isPastorChildPipelineFailureSuperseded,
   isStaleActiveProcessingJob,
@@ -76,8 +77,10 @@ type DiagnosticsRepository = {
   countSermons(where?: Prisma.SermonWhereInput): Promise<number>;
   countClips(where?: Prisma.ClipCandidateWhereInput): Promise<number>;
   countProcessingJobs(where?: Prisma.ProcessingJobWhereInput): Promise<number>;
-  findProcessingJobsForDiagnostics(): Promise<ProcessingJobRetryCandidate[]>;
-  findClipsForConsistency(): Promise<Array<Pick<ClipCandidate,
+  findProcessingJobsForDiagnostics(
+    where?: Prisma.ProcessingJobWhereInput,
+  ): Promise<ProcessingJobRetryCandidate[]>;
+  findClipsForConsistency(where?: Prisma.ClipCandidateWhereInput): Promise<Array<Pick<ClipCandidate,
     | "id"
     | "sermonId"
     | "status"
@@ -183,7 +186,40 @@ async function fileHasBytes(filePath: string): Promise<boolean> {
 }
 
 export function createOperationsDiagnosticsService(repository: DiagnosticsRepository) {
-  async function getOperationalMetrics(): Promise<OperationalMetrics> {
+  async function getOperationalMetrics(
+    organizationId?: string,
+    campusId?: string | null,
+  ): Promise<OperationalMetrics> {
+    const sermonTenantScope = organizationId
+      ? {
+          organizationId,
+          ...(campusId ? { campusId } : {}),
+        }
+      : null;
+    const metricsRepository: Pick<
+      DiagnosticsRepository,
+      | "countSermons"
+      | "countClips"
+      | "countProcessingJobs"
+      | "findProcessingJobsForDiagnostics"
+    > = sermonTenantScope
+      ? {
+          countSermons: (where) => repository.countSermons({
+            AND: [sermonTenantScope, where ?? {}],
+          }),
+          countClips: (where) => repository.countClips({
+            AND: [{ sermon: sermonTenantScope }, where ?? {}],
+          }),
+          countProcessingJobs: (where) => repository.countProcessingJobs({
+            AND: [{ sermon: sermonTenantScope }, where ?? {}],
+          }),
+          findProcessingJobsForDiagnostics: (where) => (
+            repository.findProcessingJobsForDiagnostics({
+              AND: [{ sermon: sermonTenantScope }, where ?? {}],
+            })
+          ),
+        }
+      : repository;
     const postingClipWhere: Prisma.ClipCandidateWhereInput = {
       status: {
         in: ["APPROVED", "EXPORTED"],
@@ -216,35 +252,35 @@ export function createOperationsDiagnosticsService(repository: DiagnosticsReposi
       outdatedOverlayCount,
       outdatedExportCount,
     ] = await Promise.all([
-      repository.countSermons({
+      metricsRepository.countSermons({
         status: {
           in: ["CLIPS_GENERATED", "REVIEWING", "EXPORTING", "EXPORTED"],
         },
       }),
-      repository.countClips(),
-      repository.countClips({ status: { in: ["APPROVED", "EXPORTED"] } }),
-      repository.countClips({ renderStatus: "COMPLETED" }),
-      repository.countClips({ captionStatus: "GENERATED" }),
-      repository.countClips({ overlayStatus: "COMPLETED" }),
-      repository.countClips({ exportStatus: "COMPLETED" }),
-      repository.findProcessingJobsForDiagnostics(),
-      repository.countClips({ ...postingClipWhere, renderStatus: "FAILED" }),
-      repository.countClips({ ...postingClipWhere, exportStatus: "FAILED" }),
-      repository.countClips({ ...postingClipWhere, captionStatus: "FAILED" }),
-      repository.countClips({ ...postingClipWhere, captionBurnStatus: "FAILED" }),
-      repository.countClips({ ...postingClipWhere, overlayStatus: "FAILED" }),
-      repository.countProcessingJobs({ status: "RUNNING" }),
-      repository.countClips({ renderStatus: "RENDERING" }),
-      repository.countClips({ exportStatus: "EXPORTING" }),
-      repository.countClips({ captionStatus: "GENERATING" }),
-      repository.countClips({ captionBurnStatus: "BURNING" }),
-      repository.countClips({ overlayStatus: "RENDERING" }),
-      repository.countClips({ status: "SUGGESTED" }),
-      repository.countClips({ ...postingClipWhere, renderFreshness: { in: ["OUTDATED", "NEEDS_REGENERATION"] } }),
-      repository.countClips({ ...postingClipWhere, captionFreshness: { in: ["OUTDATED", "NEEDS_REGENERATION"] } }),
-      repository.countClips({ ...postingClipWhere, captionBurnFreshness: { in: ["OUTDATED", "NEEDS_REGENERATION"] } }),
-      repository.countClips({ ...postingClipWhere, overlayFreshness: { in: ["OUTDATED", "NEEDS_REGENERATION"] } }),
-      repository.countClips({ ...postingClipWhere, exportFreshness: { in: ["OUTDATED", "NEEDS_REGENERATION"] } }),
+      metricsRepository.countClips(),
+      metricsRepository.countClips({ status: { in: ["APPROVED", "EXPORTED"] } }),
+      metricsRepository.countClips({ renderStatus: "COMPLETED" }),
+      metricsRepository.countClips({ captionStatus: "GENERATED" }),
+      metricsRepository.countClips({ overlayStatus: "COMPLETED" }),
+      metricsRepository.countClips({ exportStatus: "COMPLETED" }),
+      metricsRepository.findProcessingJobsForDiagnostics(),
+      metricsRepository.countClips({ ...postingClipWhere, renderStatus: "FAILED" }),
+      metricsRepository.countClips({ ...postingClipWhere, exportStatus: "FAILED" }),
+      metricsRepository.countClips({ ...postingClipWhere, captionStatus: "FAILED" }),
+      metricsRepository.countClips({ ...postingClipWhere, captionBurnStatus: "FAILED" }),
+      metricsRepository.countClips({ ...postingClipWhere, overlayStatus: "FAILED" }),
+      metricsRepository.countProcessingJobs({ status: "RUNNING" }),
+      metricsRepository.countClips({ renderStatus: "RENDERING" }),
+      metricsRepository.countClips({ exportStatus: "EXPORTING" }),
+      metricsRepository.countClips({ captionStatus: "GENERATING" }),
+      metricsRepository.countClips({ captionBurnStatus: "BURNING" }),
+      metricsRepository.countClips({ overlayStatus: "RENDERING" }),
+      metricsRepository.countClips({ status: "SUGGESTED" }),
+      metricsRepository.countClips({ ...postingClipWhere, renderFreshness: { in: ["OUTDATED", "NEEDS_REGENERATION"] } }),
+      metricsRepository.countClips({ ...postingClipWhere, captionFreshness: { in: ["OUTDATED", "NEEDS_REGENERATION"] } }),
+      metricsRepository.countClips({ ...postingClipWhere, captionBurnFreshness: { in: ["OUTDATED", "NEEDS_REGENERATION"] } }),
+      metricsRepository.countClips({ ...postingClipWhere, overlayFreshness: { in: ["OUTDATED", "NEEDS_REGENERATION"] } }),
+      metricsRepository.countClips({ ...postingClipWhere, exportFreshness: { in: ["OUTDATED", "NEEDS_REGENERATION"] } }),
     ]);
 
     const failedJobCount = countUnresolvedFailedProcessingJobs(processingJobs);
@@ -342,7 +378,10 @@ export function createOperationsDiagnosticsService(repository: DiagnosticsReposi
     ];
   }
 
-  async function getDataConsistencySummary(): Promise<DataConsistencySummary> {
+  async function getDataConsistencySummary(
+    organizationId?: string,
+    campusId?: string | null,
+  ): Promise<DataConsistencySummary> {
     const issues: string[] = [];
     const issueDetails: DataConsistencyIssueDetail[] = [];
     const draftIssues: string[] = [];
@@ -351,7 +390,16 @@ export function createOperationsDiagnosticsService(repository: DiagnosticsReposi
     const affectedSermonIds = new Set<string>();
     const affectedDraftClipIds = new Set<string>();
     const affectedDraftSermonIds = new Set<string>();
-    const clips = await repository.findClipsForConsistency();
+    const clips = await repository.findClipsForConsistency(
+      organizationId
+        ? {
+            sermon: {
+              organizationId,
+              ...(campusId ? { campusId } : {}),
+            },
+          }
+        : undefined,
+    );
 
     function addIssue(clip: typeof clips[number], input: {
       issue: string;
@@ -502,8 +550,12 @@ function addRepairMessage(messages: string[], clipId: string, assetLabel: string
   messages.push(`Clip ${clipId}: marked missing or empty ${assetLabel} for regeneration.`);
 }
 
-export async function repairMissingLocalAssetReferences(limit = 200): Promise<LocalAssetRepairSummary> {
+export async function repairMissingLocalAssetReferences(
+  limit = 200,
+  tenantScope?: TenantScope,
+): Promise<LocalAssetRepairSummary> {
   const clips = await prisma.clipCandidate.findMany({
+    where: tenantScope ? { sermon: tenantScope } : undefined,
     take: limit,
     orderBy: { updatedAt: "desc" },
     select: {
@@ -612,8 +664,9 @@ const prismaRepository: DiagnosticsRepository = {
   countProcessingJobs(where) {
     return prisma.processingJob.count({ where });
   },
-  findProcessingJobsForDiagnostics() {
+  findProcessingJobsForDiagnostics(where) {
     return prisma.processingJob.findMany({
+      where,
       select: {
         id: true,
         sermonId: true,
@@ -625,8 +678,9 @@ const prismaRepository: DiagnosticsRepository = {
       },
     });
   },
-  findClipsForConsistency() {
+  findClipsForConsistency(where) {
     return prisma.clipCandidate.findMany({
+      where,
       select: {
         id: true,
         sermonId: true,
@@ -654,8 +708,11 @@ const prismaRepository: DiagnosticsRepository = {
 
 const operationsDiagnostics = createOperationsDiagnosticsService(prismaRepository);
 
-export async function getOperationalMetrics(): Promise<OperationalMetrics> {
-  return operationsDiagnostics.getOperationalMetrics();
+export async function getOperationalMetrics(
+  organizationId?: string,
+  campusId?: string | null,
+): Promise<OperationalMetrics> {
+  return operationsDiagnostics.getOperationalMetrics(organizationId, campusId);
 }
 
 export async function getReadinessChecklist(): Promise<ReadinessChecklistItem[]> {
@@ -663,8 +720,14 @@ export async function getReadinessChecklist(): Promise<ReadinessChecklistItem[]>
   return operationsDiagnostics.getReadinessChecklist(metrics);
 }
 
-export async function getDataConsistencySummary(): Promise<DataConsistencySummary> {
-  return operationsDiagnostics.getDataConsistencySummary();
+export async function getDataConsistencySummary(
+  organizationId?: string,
+  campusId?: string | null,
+): Promise<DataConsistencySummary> {
+  return operationsDiagnostics.getDataConsistencySummary(
+    organizationId,
+    campusId,
+  );
 }
 
 export const __operationsDiagnosticsTestUtils = {

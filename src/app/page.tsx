@@ -16,6 +16,8 @@ import {
 } from "@/lib/clipPreview";
 import { prisma } from "@/lib/prisma";
 import { formatSecondsForPastorView } from "@/lib/sermonSegment";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantScope } from "@/server/tenancy/scope";
 import { getOperationalMetrics } from "@/server/workflow/operationsDiagnostics";
 
 type SermonStatus =
@@ -180,13 +182,16 @@ function shortHookLine(value: string | null | undefined): string | null {
 }
 
 export default async function Home({ searchParams }: { searchParams: Promise<SearchParams> }) {
+  const requestContext = await requireRequestCapability("sermons.read");
   const filters = await searchParams;
   const query = filters.query?.trim();
 
   const [sermons, metrics] = await Promise.all([
     prisma.sermon.findMany({
-      where: query
-        ? {
+      where: {
+        ...tenantScope(requestContext),
+        ...(query
+          ? {
             OR: [
               { title: { contains: query } },
               { speakerName: { contains: query } },
@@ -195,7 +200,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
               { intelligence: { centralTheme: { contains: query } } },
             ],
           }
-        : undefined,
+          : {}),
+      },
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
@@ -250,7 +256,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
       },
       take: 24,
     }) as Promise<SermonListItem[]>,
-    getOperationalMetrics(),
+    getOperationalMetrics(
+      requestContext.organizationId,
+      requestContext.campusId,
+    ),
   ]);
 
   const allClips = sermons.flatMap((sermon) => sermon.clipCandidates.map((clip) => ({ ...clip, sermon })));

@@ -7,6 +7,12 @@ import { z } from "zod";
 import { Prisma, type ProcessingJobType } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import {
+  requireClipResource,
+  requireSermonResource,
+} from "@/server/auth/resourceAuthorization";
+import { tenantResourceScope } from "@/server/tenancy/scope";
 import {
   HARD_MAX_DURATION_SECONDS,
   HARD_MIN_DURATION_SECONDS,
@@ -1361,8 +1367,11 @@ export async function deleteSermonProjectAction(input: {
     return { success: false, message: "Missing sermon id for deletion." };
   }
 
-  const sermon = await prisma.sermon.findUnique({
-    where: { id: sermonId },
+  const requestContext = await requireRequestCapability("sermons.delete", {
+    resource: { kind: "SERMON", id: sermonId },
+  });
+  const sermon = await prisma.sermon.findFirst({
+    where: tenantResourceScope(requestContext, sermonId),
     select: {
       id: true,
       title: true,
@@ -1453,9 +1462,11 @@ export async function deleteSermonProjectAction(input: {
     if (clipIds.length > 0) {
       [drafts, scheduledPosts, predictions] = await Promise.all([
         prisma.postingDraft.findMany({
+          where: { organizationId: requestContext.organizationId },
           select: { id: true, clipIdsJson: true },
         }),
         prisma.scheduledPost.findMany({
+          where: { organizationId: requestContext.organizationId },
           select: {
             id: true,
             clipIdsJson: true,
@@ -1467,6 +1478,7 @@ export async function deleteSermonProjectAction(input: {
           },
         }),
         prisma.postPerformancePrediction.findMany({
+          where: { organizationId: requestContext.organizationId },
           select: { id: true, clipIdsJson: true },
         }),
       ]);
@@ -1516,6 +1528,7 @@ export async function deleteSermonProjectAction(input: {
 
       const growthResult = await tx.growthRecommendation.deleteMany({
         where: {
+          organizationId: requestContext.organizationId,
           OR: [
             { sourceSermonId: sermon.id },
             ...(clipIds.length > 0 ? [{ sourceClipId: { in: clipIds } }] : []),
@@ -1526,6 +1539,21 @@ export async function deleteSermonProjectAction(input: {
 
       await tx.sermon.delete({
         where: { id: sermon.id },
+      });
+      await tx.auditEvent.create({
+        data: {
+          organizationId: requestContext.organizationId,
+          campusId: requestContext.campusId,
+          actorType: "USER",
+          actorUserId: requestContext.actorId,
+          action: "sermon.deleted",
+          targetType: "Sermon",
+          targetId: sermon.id,
+          metadataJson: {
+            title: sermon.title,
+            deletedClipCount: clipIds.length,
+          },
+        },
       });
     });
 
@@ -1617,6 +1645,7 @@ export async function createSermonAction(
   _prevState: CreateSermonFormState,
   formData: FormData,
 ): Promise<CreateSermonFormState> {
+  const requestContext = await requireRequestCapability("sermons.create");
   const uploadedMedia = formData.get("sermonVideoFile");
   const hasUploadedMedia = isUploadedMediaFile(uploadedMedia);
   const uploadedMediaName = hasUploadedMedia ? uploadedMedia.name : "sermon-media";
@@ -1690,25 +1719,45 @@ export async function createSermonAction(
   }
 
   try {
-    const sermon = await prisma.sermon.create({
-      data: {
-        youtubeUrl: result.data.youtubeUrl || buildLocalUploadSourceUrl(uploadedMediaName),
-        title: result.data.title,
-        speakerName: result.data.speakerName,
-        churchName: result.data.churchName,
-        language: result.data.language,
-        sermonStartSeconds: result.data.sermonStartSeconds,
-        sermonEndSeconds: result.data.sermonEndSeconds,
-        analyzeFullRecording: false,
-        includeWorshipMoments: result.data.includeWorshipMoments,
-        sermonDate: result.data.sermonDate,
-        rightsConfirmed: result.data.rightsConfirmed,
-        status: "CREATED",
-      },
-      select: {
-        id: true,
-        title: true,
-      },
+    const sermon = await prisma.$transaction(async (tx) => {
+      const createdSermon = await tx.sermon.create({
+        data: {
+          organizationId: requestContext.organizationId,
+          campusId: requestContext.campusId,
+          youtubeUrl: result.data.youtubeUrl || buildLocalUploadSourceUrl(uploadedMediaName),
+          title: result.data.title,
+          speakerName: result.data.speakerName,
+          churchName: result.data.churchName,
+          language: result.data.language,
+          sermonStartSeconds: result.data.sermonStartSeconds,
+          sermonEndSeconds: result.data.sermonEndSeconds,
+          analyzeFullRecording: false,
+          includeWorshipMoments: result.data.includeWorshipMoments,
+          sermonDate: result.data.sermonDate,
+          rightsConfirmed: result.data.rightsConfirmed,
+          status: "CREATED",
+        },
+        select: {
+          id: true,
+          title: true,
+        },
+      });
+      await tx.auditEvent.create({
+        data: {
+          organizationId: requestContext.organizationId,
+          campusId: requestContext.campusId,
+          actorType: "USER",
+          actorUserId: requestContext.actorId,
+          action: "sermon.created",
+          targetType: "Sermon",
+          targetId: createdSermon.id,
+          metadataJson: {
+            title: createdSermon.title,
+            source: hasUploadedMedia ? "upload" : "youtube",
+          },
+        },
+      });
+      return createdSermon;
     });
 
     if (!canRunLocalMediaProcessing()) {
@@ -2236,12 +2285,23 @@ export async function retryFailedProcessingJobById(input: {
     };
   }
 
+  const authorizedSermon = await requireSermonResource(
+    "sermons.update",
+    sermonId,
+  );
+  const sermonTenantWhere = {
+    organizationId: authorizedSermon.organizationId,
+    ...(authorizedSermon.campusId
+      ? { campusId: authorizedSermon.campusId }
+      : {}),
+  };
   const [job, activeJobs] = await Promise.all([
     prisma.processingJob.findFirst({
       where: {
         id: jobId,
         sermonId,
         status: { in: ["FAILED", "PENDING", "RUNNING"] },
+        sermon: sermonTenantWhere,
       },
       select: {
         id: true,
@@ -2257,6 +2317,7 @@ export async function retryFailedProcessingJobById(input: {
       where: {
         sermonId,
         status: { in: ["PENDING", "RUNNING"] },
+        sermon: sermonTenantWhere,
       },
       select: {
         id: true,
@@ -5924,10 +5985,25 @@ export async function renderClipStudioExportsAction(input: {
 
   const sermon = await prisma.sermon.findUnique({
     where: { id: clip.sermonId },
-    select: { title: true, speakerName: true, churchName: true },
+    select: {
+      organizationId: true,
+      title: true,
+      speakerName: true,
+      churchName: true,
+    },
   });
 
-  const globalBranding = await getBrandingSettings().catch(() => null);
+  if (!sermon?.organizationId) {
+    return {
+      success: false,
+      message: "The sermon workspace could not be resolved for this export.",
+      results: [],
+    };
+  }
+
+  const globalBranding = await getBrandingSettings(
+    sermon.organizationId,
+  ).catch(() => null);
   const brandingConfig = resolveBrandingConfig(clip.captionData);
   if (clip.status !== "APPROVED" && clip.status !== "EXPORTED") {
     return {
@@ -7069,8 +7145,20 @@ export async function regenerateClipOutdatedAssetsAction(clipId: string): Promis
     return { success: false, message: "Missing clip id for asset regeneration." };
   }
 
-  const clip = await prisma.clipCandidate.findUnique({
-    where: { id: normalizedClipId },
+  const authorizedClip = await requireClipResource(
+    "content.update",
+    normalizedClipId,
+  );
+  const clip = await prisma.clipCandidate.findFirst({
+    where: {
+      id: normalizedClipId,
+      sermon: {
+        organizationId: authorizedClip.organizationId,
+        ...(authorizedClip.campusId
+          ? { campusId: authorizedClip.campusId }
+          : {}),
+      },
+    },
     select: {
       id: true,
       sermonId: true,

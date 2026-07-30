@@ -4,7 +4,13 @@ import type { PostingPlatform, Prisma, SocialConnectorProvider } from "@prisma/c
 
 import { prisma } from "@/lib/prisma";
 
+export type SocialTenantScope = Readonly<{
+  organizationId: string;
+  campusId: string | null;
+}>;
+
 type StoredCredentialInput = {
+  tenantScope: SocialTenantScope;
   provider: SocialConnectorProvider;
   externalAccountId: string;
   accountName?: string | null;
@@ -24,6 +30,8 @@ type StoredCredentialInput = {
 
 export type DecryptedSocialCredential = {
   id: string;
+  organizationId: string;
+  campusId: string | null;
   socialAccountId: string | null;
   provider: SocialConnectorProvider;
   externalAccountId: string;
@@ -53,27 +61,51 @@ function encryptionKey(): Buffer {
   return crypto.createHash("sha256").update(encryptionSecret()).digest();
 }
 
-export function encryptToken(value: string): string {
+type SocialTokenContext = Readonly<{
+  organizationId: string;
+  provider: SocialConnectorProvider;
+  externalAccountId: string;
+}>;
+
+function tokenAdditionalData(context: SocialTokenContext): Buffer {
+  return Buffer.from([
+    "sermonclip-social-oauth-token",
+    context.organizationId,
+    context.provider,
+    context.externalAccountId,
+  ].join("\u001f"), "utf8");
+}
+
+export function encryptToken(value: string, context?: SocialTokenContext): string {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv);
+  if (context) {
+    cipher.setAAD(tokenAdditionalData(context));
+  }
   const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
 
   return [
-    "v1",
+    context ? "v2" : "v1",
     iv.toString("base64url"),
     tag.toString("base64url"),
     encrypted.toString("base64url"),
   ].join(":");
 }
 
-export function decryptToken(value: string): string {
+export function decryptToken(value: string, context?: SocialTokenContext): string {
   const [version, iv, tag, encrypted] = value.split(":");
-  if (version !== "v1" || !iv || !tag || !encrypted) {
+  if ((version !== "v1" && version !== "v2") || !iv || !tag || !encrypted) {
     throw new Error("Unsupported encrypted token format.");
+  }
+  if (version === "v2" && !context) {
+    throw new Error("Tenant context is required to decrypt this social token.");
   }
 
   const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(iv, "base64url"));
+  if (version === "v2" && context) {
+    decipher.setAAD(tokenAdditionalData(context));
+  }
   decipher.setAuthTag(Buffer.from(tag, "base64url"));
 
   return Buffer.concat([
@@ -86,23 +118,52 @@ function socialAccountExternalProvider(provider: SocialConnectorProvider): strin
   return provider.toLowerCase();
 }
 
+function scopeOwnsCampus(
+  scope: SocialTenantScope,
+  campusId: string | null,
+): boolean {
+  return scope.campusId === null
+    ? true
+    : campusId === null || campusId === scope.campusId;
+}
+
+function tenantVisibilityWhere(scope: SocialTenantScope) {
+  return {
+    organizationId: scope.organizationId,
+    ...(scope.campusId
+      ? { OR: [{ campusId: scope.campusId }, { campusId: null }] }
+      : {}),
+  };
+}
+
 async function upsertSocialAccount(
   input: NonNullable<StoredCredentialInput["socialAccount"]>,
   identity: { provider: SocialConnectorProvider; externalAccountId: string },
   existingSocialAccountId: string | null,
+  scope: SocialTenantScope,
 ): Promise<string> {
   const externalProvider = socialAccountExternalProvider(identity.provider);
   const existing = await prisma.socialAccount.findFirst({
     where: {
+      organizationId: scope.organizationId,
       externalProvider,
       externalAccountId: identity.externalAccountId,
     },
-    select: { id: true },
+    select: { id: true, campusId: true },
   });
 
   if (existing) {
+    if (!scopeOwnsCampus(scope, existing.campusId)) {
+      throw new Error("This social account is already connected to a different campus in the organization.");
+    }
     await prisma.socialAccount.update({
-      where: { id: existing.id },
+      where: {
+        organizationId_externalProvider_externalAccountId: {
+          organizationId: scope.organizationId,
+          externalProvider,
+          externalAccountId: identity.externalAccountId,
+        },
+      },
       data: {
         platform: input.platform,
         label: input.label,
@@ -120,15 +181,20 @@ async function upsertSocialAccount(
       where: { id: existingSocialAccountId },
       select: {
         id: true,
+        organizationId: true,
+        campusId: true,
         externalProvider: true,
         externalAccountId: true,
         credentials: { select: { provider: true, externalAccountId: true } },
       },
     });
-    const identityMatches = linkedAccount
+    const accountIsInScope = linkedAccount
+      && linkedAccount.organizationId === scope.organizationId
+      && scopeOwnsCampus(scope, linkedAccount.campusId);
+    const identityMatches = accountIsInScope
       && linkedAccount.externalProvider === externalProvider
       && linkedAccount.externalAccountId === identity.externalAccountId;
-    const canAdoptIdentity = linkedAccount
+    const canAdoptIdentity = accountIsInScope
       && !linkedAccount.externalProvider
       && !linkedAccount.externalAccountId
       && linkedAccount.credentials.every((credential) => (
@@ -155,6 +221,8 @@ async function upsertSocialAccount(
   try {
     created = await prisma.socialAccount.create({
       data: {
+        organizationId: scope.organizationId,
+        campusId: scope.campusId,
         platform: input.platform,
         label: input.label,
         handle: input.handle?.trim() || null,
@@ -167,10 +235,14 @@ async function upsertSocialAccount(
   } catch (error) {
     if (!error || typeof error !== "object" || !("code" in error) || error.code !== "P2002") throw error;
     const concurrentlyCreated = await prisma.socialAccount.findFirst({
-      where: { externalProvider, externalAccountId: identity.externalAccountId },
-      select: { id: true },
+      where: {
+        organizationId: scope.organizationId,
+        externalProvider,
+        externalAccountId: identity.externalAccountId,
+      },
+      select: { id: true, campusId: true },
     });
-    if (!concurrentlyCreated) throw error;
+    if (!concurrentlyCreated || !scopeOwnsCampus(scope, concurrentlyCreated.campusId)) throw error;
     created = concurrentlyCreated;
   }
 
@@ -178,9 +250,15 @@ async function upsertSocialAccount(
 }
 
 export async function upsertSocialCredential(input: StoredCredentialInput): Promise<void> {
+  const tokenContext: SocialTokenContext = {
+    organizationId: input.tenantScope.organizationId,
+    provider: input.provider,
+    externalAccountId: input.externalAccountId,
+  };
   const existing = await prisma.socialCredential.findUnique({
     where: {
-      provider_externalAccountId: {
+      organizationId_provider_externalAccountId: {
+        organizationId: input.tenantScope.organizationId,
         provider: input.provider,
         externalAccountId: input.externalAccountId,
       },
@@ -188,30 +266,37 @@ export async function upsertSocialCredential(input: StoredCredentialInput): Prom
     select: {
       refreshTokenCiphertext: true,
       socialAccountId: true,
+      campusId: true,
     },
   });
+  if (existing && !scopeOwnsCampus(input.tenantScope, existing.campusId)) {
+    throw new Error("This provider identity is already connected to a different campus in the organization.");
+  }
   const socialAccountId = input.socialAccount
     ? await upsertSocialAccount(input.socialAccount, {
         provider: input.provider,
         externalAccountId: input.externalAccountId,
-      }, existing?.socialAccountId ?? null)
+      }, existing?.socialAccountId ?? null, input.tenantScope)
     : existing?.socialAccountId ?? null;
 
   await prisma.socialCredential.upsert({
     where: {
-      provider_externalAccountId: {
+      organizationId_provider_externalAccountId: {
+        organizationId: input.tenantScope.organizationId,
         provider: input.provider,
         externalAccountId: input.externalAccountId,
       },
     },
     create: {
+      organizationId: input.tenantScope.organizationId,
+      campusId: input.tenantScope.campusId,
       socialAccountId,
       provider: input.provider,
       externalAccountId: input.externalAccountId,
       accountName: input.accountName ?? input.socialAccount?.label ?? null,
       handle: input.handle ?? input.socialAccount?.handle ?? null,
-      accessTokenCiphertext: encryptToken(input.accessToken),
-      refreshTokenCiphertext: input.refreshToken ? encryptToken(input.refreshToken) : null,
+      accessTokenCiphertext: encryptToken(input.accessToken, tokenContext),
+      refreshTokenCiphertext: input.refreshToken ? encryptToken(input.refreshToken, tokenContext) : null,
       tokenType: input.tokenType ?? null,
       scopesJson: input.scopes === undefined ? undefined : input.scopes as Prisma.InputJsonValue,
       metadataJson: input.metadata,
@@ -223,8 +308,8 @@ export async function upsertSocialCredential(input: StoredCredentialInput): Prom
       socialAccountId,
       accountName: input.accountName ?? input.socialAccount?.label ?? null,
       handle: input.handle ?? input.socialAccount?.handle ?? null,
-      accessTokenCiphertext: encryptToken(input.accessToken),
-      refreshTokenCiphertext: input.refreshToken ? encryptToken(input.refreshToken) : existing?.refreshTokenCiphertext ?? null,
+      accessTokenCiphertext: encryptToken(input.accessToken, tokenContext),
+      refreshTokenCiphertext: input.refreshToken ? encryptToken(input.refreshToken, tokenContext) : existing?.refreshTokenCiphertext ?? null,
       tokenType: input.tokenType ?? null,
       scopesJson: input.scopes === undefined ? undefined : input.scopes as Prisma.InputJsonValue,
       metadataJson: input.metadata,
@@ -235,10 +320,19 @@ export async function upsertSocialCredential(input: StoredCredentialInput): Prom
   });
 }
 
-export async function listConnectorCredentialSummaries(): Promise<Record<SocialConnectorProvider, number>> {
+export async function listConnectorCredentialSummaries(
+  scope: Readonly<{ organizationId: string; campusId?: string | null }>,
+): Promise<Record<SocialConnectorProvider, number>> {
+  const normalizedScope: SocialTenantScope = {
+    organizationId: scope.organizationId,
+    campusId: scope.campusId ?? null,
+  };
   const rows = await prisma.socialCredential.groupBy({
     by: ["provider"],
-    where: { status: "CONNECTED" },
+    where: {
+      status: "CONNECTED",
+      ...tenantVisibilityWhere(normalizedScope),
+    },
     _count: { provider: true },
   });
 
@@ -248,45 +342,68 @@ export async function listConnectorCredentialSummaries(): Promise<Record<SocialC
   }), {} as Record<SocialConnectorProvider, number>);
 }
 
-export async function getConnectedCredentials(provider: SocialConnectorProvider): Promise<DecryptedSocialCredential[]> {
+export async function getConnectedCredentials(
+  provider: SocialConnectorProvider,
+  scope: SocialTenantScope,
+): Promise<DecryptedSocialCredential[]> {
   const credentials = await prisma.socialCredential.findMany({
     where: {
       provider,
       status: "CONNECTED",
+      ...tenantVisibilityWhere(scope),
     },
     orderBy: { updatedAt: "desc" },
   });
 
-  return credentials.map((credential) => ({
-    id: credential.id,
-    socialAccountId: credential.socialAccountId,
-    provider: credential.provider,
-    externalAccountId: credential.externalAccountId,
-    accountName: credential.accountName,
-    handle: credential.handle,
-    accessToken: decryptToken(credential.accessTokenCiphertext),
-    refreshToken: credential.refreshTokenCiphertext ? decryptToken(credential.refreshTokenCiphertext) : null,
-    tokenType: credential.tokenType,
-    scopes: credential.scopesJson,
-    metadata: credential.metadataJson,
-    expiresAt: credential.expiresAt,
-  }));
+  return credentials.map((credential) => {
+    const tokenContext: SocialTokenContext = {
+      organizationId: credential.organizationId,
+      provider: credential.provider,
+      externalAccountId: credential.externalAccountId,
+    };
+    return {
+      id: credential.id,
+      organizationId: credential.organizationId,
+      campusId: credential.campusId,
+      socialAccountId: credential.socialAccountId,
+      provider: credential.provider,
+      externalAccountId: credential.externalAccountId,
+      accountName: credential.accountName,
+      handle: credential.handle,
+      accessToken: decryptToken(credential.accessTokenCiphertext, tokenContext),
+      refreshToken: credential.refreshTokenCiphertext ? decryptToken(credential.refreshTokenCiphertext, tokenContext) : null,
+      tokenType: credential.tokenType,
+      scopes: credential.scopesJson,
+      metadata: credential.metadataJson,
+      expiresAt: credential.expiresAt,
+    };
+  });
 }
 
-export async function markCredentialSyncSuccess(id: string): Promise<void> {
-  await prisma.socialCredential.update({
-    where: { id },
+export async function markCredentialSyncSuccess(
+  id: string,
+  scope: SocialTenantScope,
+): Promise<void> {
+  const result = await prisma.socialCredential.updateMany({
+    where: { id, ...tenantVisibilityWhere(scope) },
     data: {
       lastSyncAt: new Date(),
       lastError: null,
       status: "CONNECTED",
     },
   });
+  if (result.count !== 1) {
+    throw new Error("The social credential is not available in this tenant.");
+  }
 }
 
-export async function markCredentialSyncError(id: string, error: unknown): Promise<void> {
-  await prisma.socialCredential.update({
-    where: { id },
+export async function markCredentialSyncError(
+  id: string,
+  error: unknown,
+  scope: SocialTenantScope,
+): Promise<void> {
+  await prisma.socialCredential.updateMany({
+    where: { id, ...tenantVisibilityWhere(scope) },
     data: {
       lastError: error instanceof Error ? error.message : String(error),
       status: "ERROR",

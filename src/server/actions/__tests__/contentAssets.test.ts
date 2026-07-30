@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   getBrandingSettings: vi.fn(),
   readBrandingArtworkLogoDataUrl: vi.fn(),
   renderApprovedNonVideoAssets: vi.fn(),
+  requireSermonResource: vi.fn(),
+  requireContentAssetResource: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
@@ -67,6 +69,10 @@ vi.mock("@/server/contentRevisionService", () => ({
 vi.mock("@/server/contentAssets/contentAssetMediaReadiness", () => ({
   checkContentAssetMediaReadiness: mocks.checkContentAssetMediaReadiness,
 }));
+vi.mock("@/server/auth/resourceAuthorization", () => ({
+  requireSermonResource: mocks.requireSermonResource,
+  requireContentAssetResource: mocks.requireContentAssetResource,
+}));
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     contentAsset: {
@@ -79,7 +85,7 @@ vi.mock("@/lib/prisma", () => ({
       findFirst: mocks.contentOpportunityFindFirst,
     },
     socialAccount: {
-      findUnique: mocks.socialAccountFindUnique,
+      findFirst: mocks.socialAccountFindUnique,
     },
     scheduledPostContentAsset: {
       findFirst: mocks.duplicateFindFirst,
@@ -130,6 +136,9 @@ function readyAsset(sourceTranscriptExcerpt: string | null) {
       metadataJson: { overflowDetected: false },
     }],
     contentOpportunity: {
+      organizationId: "org-1",
+      campusId: "campus-1",
+      sermonId: "sermon-1",
       sourceTranscriptExcerpt,
       approvedRevisionId: "opportunity-revision-1",
       relatedScripture: null,
@@ -154,6 +163,16 @@ function automaticInput() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.requireSermonResource.mockResolvedValue({
+    id: "sermon-1",
+    organizationId: "org-1",
+    campusId: "campus-1",
+  });
+  mocks.requireContentAssetResource.mockResolvedValue({
+    id: "asset-1",
+    organizationId: "org-1",
+    campusId: "campus-1",
+  });
   mocks.socialAccountFindUnique.mockResolvedValue({
     id: "account-1",
     platform: "INSTAGRAM",
@@ -236,11 +255,28 @@ beforeEach(() => {
 });
 
 describe("content asset automatic scheduling", () => {
+  it("denies a cross-organization asset before loading or mutating publishing data", async () => {
+    mocks.requireContentAssetResource.mockRejectedValueOnce(
+      new Error("The requested resource was not found."),
+    );
+
+    const result = await scheduleContentAssetAction(automaticInput());
+
+    expect(result).toMatchObject({ success: false });
+    expect(mocks.contentAssetFindUnique).not.toHaveBeenCalled();
+    expect(mocks.contentAssetFindFirst).not.toHaveBeenCalled();
+    expect(mocks.scheduledPostCreate).not.toHaveBeenCalled();
+    expect(mocks.uploadContentAssetFileToR2).not.toHaveBeenCalled();
+  });
+
   it("blocks a legacy text asset that came from a video clip brief", async () => {
-    mocks.contentAssetFindUnique.mockResolvedValue({
+    mocks.contentAssetFindFirst.mockResolvedValue({
       ...readyAsset("Faithful steps matter."),
       assetType: "TEXT_POST",
       contentOpportunity: {
+        organizationId: "org-1",
+        campusId: "campus-1",
+        sermonId: "sermon-1",
         opportunityType: "REEL_HOOK",
         sourceTranscriptExcerpt: "Faithful steps matter.",
         approvedRevisionId: "opportunity-revision-1",
@@ -261,7 +297,7 @@ describe("content asset automatic scheduling", () => {
   });
 
   it("blocks a Design Studio save-only asset until it is rerendered", async () => {
-    mocks.contentAssetFindUnique.mockResolvedValue({
+    mocks.contentAssetFindFirst.mockResolvedValue({
       ...readyAsset("Faithful steps matter."),
       status: "PREPARED",
     });
@@ -283,7 +319,7 @@ describe("content asset automatic scheduling", () => {
       fontFamily: "Arial",
       logoDataUrl: null,
     });
-    mocks.contentAssetFindUnique.mockResolvedValue({
+    mocks.contentAssetFindFirst.mockResolvedValue({
       ...readyAsset("Faithful steps matter."),
       metadataJson: {
         designStudio: {
@@ -303,7 +339,7 @@ describe("content asset automatic scheduling", () => {
   });
 
   it("does not upload when grounding preflight is blocked", async () => {
-    mocks.contentAssetFindUnique.mockResolvedValue(readyAsset(null));
+    mocks.contentAssetFindFirst.mockResolvedValue(readyAsset(null));
 
     const result = await scheduleContentAssetAction(automaticInput());
 
@@ -314,7 +350,7 @@ describe("content asset automatic scheduling", () => {
   });
 
   it("checks semantic duplicates before uploading public media", async () => {
-    mocks.contentAssetFindUnique.mockResolvedValue(readyAsset("Faithful steps matter."));
+    mocks.contentAssetFindFirst.mockResolvedValue(readyAsset("Faithful steps matter."));
     mocks.duplicateFindFirst.mockResolvedValue({
       scheduledPost: { scheduledFor: new Date("2099-07-20T09:00:00.000Z") },
     });
@@ -327,7 +363,7 @@ describe("content asset automatic scheduling", () => {
   });
 
   it("does not schedule when the selected media row has no readable bytes", async () => {
-    mocks.contentAssetFindUnique.mockResolvedValue(readyAsset("Faithful steps matter."));
+    mocks.contentAssetFindFirst.mockResolvedValue(readyAsset("Faithful steps matter."));
     mocks.checkContentAssetMediaReadiness.mockResolvedValue({
       status: "BLOCKED",
       reason: "PUBLISHING_FILE_UNAVAILABLE",
@@ -344,7 +380,7 @@ describe("content asset automatic scheduling", () => {
   });
 
   it("does not upload or queue when the publishing service is offline", async () => {
-    mocks.contentAssetFindUnique.mockResolvedValue(readyAsset("Faithful steps matter."));
+    mocks.contentAssetFindFirst.mockResolvedValue(readyAsset("Faithful steps matter."));
     mocks.getPublishingServiceHealth.mockResolvedValue({
       status: "NOT_SEEN",
       dryRun: false,
@@ -360,7 +396,7 @@ describe("content asset automatic scheduling", () => {
   });
 
   it("uploads only after early gates, reruns strict preflight, and creates a deterministic automatic post", async () => {
-    mocks.contentAssetFindUnique.mockResolvedValue(readyAsset("Faithful steps matter."));
+    mocks.contentAssetFindFirst.mockResolvedValue(readyAsset("Faithful steps matter."));
 
     const result = await scheduleContentAssetAction(automaticInput());
 

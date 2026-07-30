@@ -24,6 +24,14 @@ import {
 import { prisma } from "@/lib/prisma";
 import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
 import { resolveOpenAIChatModel, resolveOpenAIReasoningEffort } from "@/server/ai/modelConfig";
+import { getBrandingSettings } from "@/server/branding/settings";
+import { AuthorizationError } from "@/server/auth/authorization";
+import {
+  AuthorizedResourceNotFoundError,
+  ResourceAuthenticationRequiredError,
+  requireContentOpportunityResource,
+  requireSermonResource,
+} from "@/server/auth/resourceAuthorization";
 
 const guidedRewriteInputSchema = z.object({
   sermonId: z.string().trim().min(1),
@@ -100,11 +108,30 @@ export async function requestGuidedContentRewriteAction(
   }
 
   try {
+    const [authorizedSermon, authorizedOpportunity] = await Promise.all([
+      requireSermonResource("sermons.read", parsed.data.sermonId),
+      requireContentOpportunityResource("content.update", parsed.data.opportunityId),
+    ]);
+    if (
+      authorizedSermon.organizationId !== authorizedOpportunity.organizationId
+      || authorizedSermon.campusId !== authorizedOpportunity.campusId
+    ) {
+      throw new AuthorizedResourceNotFoundError();
+    }
+    const tenantWhere = {
+      organizationId: authorizedOpportunity.organizationId,
+      ...(authorizedOpportunity.campusId
+        ? { campusId: authorizedOpportunity.campusId }
+        : {}),
+    };
+
     const [opportunity, branding] = await Promise.all([
       prisma.contentOpportunity.findFirst({
         where: {
           id: parsed.data.opportunityId,
           sermonId: parsed.data.sermonId,
+          ...tenantWhere,
+          sermon: tenantWhere,
         },
         select: {
           id: true,
@@ -161,16 +188,10 @@ export async function requestGuidedContentRewriteAction(
           },
         },
       }),
-      prisma.brandingSettings.findUnique({
-        where: { id: "local" },
-        select: {
-          churchName: true,
-          primaryBrandColor: true,
-          secondaryBrandColor: true,
-          defaultFontFamily: true,
-          defaultCaptionStyleName: true,
-        },
-      }),
+      getBrandingSettings(
+        authorizedOpportunity.organizationId,
+        authorizedOpportunity.campusId,
+      ),
     ]);
 
     if (!opportunity) {
@@ -257,6 +278,8 @@ export async function requestGuidedContentRewriteAction(
       temperature: 0.2,
       response_format: { type: "json_object" },
       sermonId: parsed.data.sermonId,
+      organizationId: authorizedOpportunity.organizationId,
+      campusId: authorizedOpportunity.campusId,
       promptVersion: "content-guided-rewrite-v1",
       metadata: {
         opportunityId: opportunity.id,
@@ -293,6 +316,16 @@ export async function requestGuidedContentRewriteAction(
       suggestion,
     };
   } catch (error) {
+    if (
+      error instanceof AuthorizationError
+      || error instanceof AuthorizedResourceNotFoundError
+      || error instanceof ResourceAuthenticationRequiredError
+    ) {
+      return {
+        success: false,
+        message: "This content idea is unavailable or you do not have permission to rewrite it.",
+      };
+    }
     if (error instanceof GuidedRewriteValidationError) {
       return { success: false, message: error.message };
     }

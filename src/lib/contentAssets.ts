@@ -11,6 +11,20 @@ import { prisma } from "@/lib/prisma";
 export type ContentAssetType = PrismaContentAssetType;
 export type ContentAssetStatus = PrismaContentAssetStatus;
 
+export type ContentAssetTenantScope = Readonly<{
+  organizationId: string;
+  campusId?: string | null;
+}>;
+
+function contentAssetTenantWhere(scope?: ContentAssetTenantScope) {
+  return scope
+    ? {
+        organizationId: scope.organizationId,
+        ...(scope.campusId ? { campusId: scope.campusId } : {}),
+      }
+    : {};
+}
+
 export const CONTENT_ASSET_TYPES: ContentAssetType[] = [
   "QUOTE_GRAPHIC",
   "SCRIPTURE_GRAPHIC",
@@ -386,6 +400,7 @@ function toContentAssetRecord(asset: StoredContentAsset): ContentAssetRecord {
 }
 
 export async function createContentAsset(input: {
+  tenantScope?: ContentAssetTenantScope;
   sermonId: string;
   contentOpportunityId?: string | null;
   assetType: ContentAssetType;
@@ -414,9 +429,30 @@ export async function createContentAsset(input: {
     );
   }
 
+  const files = (input.files ?? []).map(normalizeFileInput);
+  const sermon = await prisma.sermon.findFirst({
+    where: {
+      id: sermonId,
+      ...contentAssetTenantWhere(input.tenantScope),
+    },
+    select: {
+      id: true,
+      organizationId: true,
+      campusId: true,
+    },
+  });
+  if (!sermon?.organizationId) {
+    throw new ContentAssetValidationError("The source sermon could not be found in this workspace.");
+  }
+
   if (contentOpportunityId) {
-    const opportunity = await prisma.contentOpportunity.findUnique({
-      where: { id: contentOpportunityId },
+    const opportunity = await prisma.contentOpportunity.findFirst({
+      where: {
+        id: contentOpportunityId,
+        sermonId,
+        organizationId: sermon.organizationId,
+        campusId: sermon.campusId,
+      },
       select: { sermonId: true },
     });
     if (!opportunity || opportunity.sermonId !== sermonId) {
@@ -426,10 +462,11 @@ export async function createContentAsset(input: {
     }
   }
 
-  const files = (input.files ?? []).map(normalizeFileInput);
   const lifecycle = initialLifecycleTimestamps(status, now);
   const created = await prisma.contentAsset.create({
     data: {
+      organizationId: sermon.organizationId,
+      campusId: sermon.campusId,
       sermonId,
       contentOpportunityId,
       assetType: input.assetType,
@@ -450,15 +487,19 @@ export async function createContentAsset(input: {
   return toContentAssetRecord(created);
 }
 
-export async function getContentAsset(id: string): Promise<ContentAssetRecord | null> {
-  const asset = await prisma.contentAsset.findUnique({
-    where: { id },
+export async function getContentAsset(
+  id: string,
+  tenantScope?: ContentAssetTenantScope,
+): Promise<ContentAssetRecord | null> {
+  const asset = await prisma.contentAsset.findFirst({
+    where: { id, ...contentAssetTenantWhere(tenantScope) },
     include: { files: true },
   });
   return asset ? toContentAssetRecord(asset) : null;
 }
 
 export async function listContentAssets(input: {
+  tenantScope?: ContentAssetTenantScope;
   sermonId?: string;
   status?: ContentAssetStatus;
   assetType?: ContentAssetType;
@@ -467,6 +508,7 @@ export async function listContentAssets(input: {
 } = {}): Promise<ContentAssetRecord[]> {
   const assets = await prisma.contentAsset.findMany({
     where: {
+      ...contentAssetTenantWhere(input.tenantScope),
       sermonId: input.sermonId,
       status: input.status,
       assetType: input.assetType,
@@ -480,12 +522,13 @@ export async function listContentAssets(input: {
 }
 
 export async function transitionContentAssetStatus(input: {
+  tenantScope?: ContentAssetTenantScope;
   id: string;
   status: ContentAssetStatus;
   now?: Date;
 }): Promise<ContentAssetRecord | null> {
-  const current = await prisma.contentAsset.findUnique({
-    where: { id: input.id },
+  const current = await prisma.contentAsset.findFirst({
+    where: { id: input.id, ...contentAssetTenantWhere(input.tenantScope) },
     select: { status: true },
   });
   if (!current) return null;
@@ -497,7 +540,11 @@ export async function transitionContentAssetStatus(input: {
   });
   if (current.status !== input.status) {
     const updated = await prisma.contentAsset.updateMany({
-      where: { id: input.id, status: current.status },
+      where: {
+        id: input.id,
+        status: current.status,
+        ...contentAssetTenantWhere(input.tenantScope),
+      },
       data,
     });
     if (updated.count === 0) {
@@ -507,10 +554,11 @@ export async function transitionContentAssetStatus(input: {
     }
   }
 
-  return getContentAsset(input.id);
+  return getContentAsset(input.id, input.tenantScope);
 }
 
 export async function attachContentAssetsToScheduledPost(input: {
+  tenantScope?: ContentAssetTenantScope;
   scheduledPostId: string;
   contentAssetIds: string[];
   now?: Date;
@@ -524,18 +572,31 @@ export async function attachContentAssetsToScheduledPost(input: {
   }
 
   await prisma.$transaction(async (tx) => {
-    const [scheduledPost, assets] = await Promise.all([
-      tx.scheduledPost.findUnique({
-        where: { id: scheduledPostId },
-        select: { id: true, platform: true },
-      }),
-      tx.contentAsset.findMany({
-        where: { id: { in: contentAssetIds } },
-        select: { id: true, platform: true, status: true },
-      }),
-    ]);
+    const scheduledPost = await tx.scheduledPost.findFirst({
+      where: {
+        id: scheduledPostId,
+        ...contentAssetTenantWhere(input.tenantScope),
+      },
+      select: {
+        id: true,
+        organizationId: true,
+        campusId: true,
+        platform: true,
+      },
+    });
 
     if (!scheduledPost) throw new ContentAssetValidationError("The scheduled post no longer exists.");
+    if (!scheduledPost.organizationId) {
+      throw new ContentAssetValidationError("The scheduled post is missing tenant ownership.");
+    }
+    const assets = await tx.contentAsset.findMany({
+      where: {
+        id: { in: contentAssetIds },
+        organizationId: scheduledPost.organizationId,
+        campusId: scheduledPost.campusId,
+      },
+      select: { id: true, platform: true, status: true },
+    });
     if (assets.length !== contentAssetIds.length) {
       throw new ContentAssetValidationError("One or more selected content assets no longer exist.");
     }
@@ -561,7 +622,12 @@ export async function attachContentAssetsToScheduledPost(input: {
       })
     )));
     await tx.contentAsset.updateMany({
-      where: { id: { in: contentAssetIds }, status: "READY" },
+      where: {
+        id: { in: contentAssetIds },
+        organizationId: scheduledPost.organizationId,
+        campusId: scheduledPost.campusId,
+        status: "READY",
+      },
       data: { status: "SCHEDULED", scheduledAt: now, publishedAt: null, archivedAt: null },
     });
   });
@@ -571,9 +637,18 @@ export async function attachContentAssetsToScheduledPost(input: {
 
 export async function listScheduledPostContentAssets(
   scheduledPostId: string,
+  tenantScope?: ContentAssetTenantScope,
 ): Promise<ContentAssetRecord[]> {
   const links = await prisma.scheduledPostContentAsset.findMany({
-    where: { scheduledPostId },
+    where: {
+      scheduledPostId,
+      ...(tenantScope
+        ? {
+            scheduledPost: contentAssetTenantWhere(tenantScope),
+            contentAsset: contentAssetTenantWhere(tenantScope),
+          }
+        : {}),
+    },
     include: { contentAsset: { include: { files: true } } },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
@@ -581,18 +656,38 @@ export async function listScheduledPostContentAssets(
 }
 
 export async function markScheduledPostContentAssetsPublished(input: {
+  tenantScope?: ContentAssetTenantScope;
   scheduledPostId: string;
   now?: Date;
 }): Promise<number> {
+  const scheduledPost = await prisma.scheduledPost.findFirst({
+    where: {
+      id: input.scheduledPostId,
+      ...contentAssetTenantWhere(input.tenantScope),
+    },
+    select: { organizationId: true, campusId: true },
+  });
+  if (!scheduledPost?.organizationId) return 0;
   const links = await prisma.scheduledPostContentAsset.findMany({
-    where: { scheduledPostId: input.scheduledPostId },
+    where: {
+      scheduledPostId: input.scheduledPostId,
+      contentAsset: {
+        organizationId: scheduledPost.organizationId,
+        campusId: scheduledPost.campusId,
+      },
+    },
     select: { contentAssetId: true },
   });
   const contentAssetIds = links.map((link) => link.contentAssetId);
   if (contentAssetIds.length === 0) return 0;
 
   const result = await prisma.contentAsset.updateMany({
-    where: { id: { in: contentAssetIds }, status: { in: ["READY", "SCHEDULED"] } },
+    where: {
+      id: { in: contentAssetIds },
+      organizationId: scheduledPost.organizationId,
+      campusId: scheduledPost.campusId,
+      status: { in: ["READY", "SCHEDULED"] },
+    },
     data: {
       status: "PUBLISHED",
       publishedAt: input.now ?? new Date(),
@@ -607,14 +702,34 @@ export async function markScheduledPostContentAssetsPublished(input: {
  * Archived assets are intentionally immutable and are never reopened here.
  */
 export async function reconcileScheduledPostContentAssetLifecycle(input: {
+  tenantScope?: ContentAssetTenantScope;
   scheduledPostId?: string;
   contentAssetIds?: string[];
   now?: Date;
 }): Promise<number> {
+  const scheduledPost = input.scheduledPostId
+    ? await prisma.scheduledPost.findFirst({
+        where: {
+          id: input.scheduledPostId,
+          ...contentAssetTenantWhere(input.tenantScope),
+        },
+        select: { organizationId: true, campusId: true },
+      })
+    : null;
+  if (input.scheduledPostId && !scheduledPost?.organizationId) return 0;
+  const effectiveScope = scheduledPost?.organizationId
+    ? {
+        organizationId: scheduledPost.organizationId,
+        campusId: scheduledPost.campusId,
+      }
+    : input.tenantScope;
   const requestedIds = normalizeContentAssetIds(input.contentAssetIds ?? []);
   const linkedIds = input.scheduledPostId
     ? (await prisma.scheduledPostContentAsset.findMany({
-        where: { scheduledPostId: input.scheduledPostId },
+        where: {
+          scheduledPostId: input.scheduledPostId,
+          ...(effectiveScope ? { contentAsset: contentAssetTenantWhere(effectiveScope) } : {}),
+        },
         select: { contentAssetId: true },
       })).map((link) => link.contentAssetId)
     : [];
@@ -623,11 +738,23 @@ export async function reconcileScheduledPostContentAssetLifecycle(input: {
 
   const [assets, links] = await Promise.all([
     prisma.contentAsset.findMany({
-      where: { id: { in: contentAssetIds }, status: { not: "ARCHIVED" } },
+      where: {
+        id: { in: contentAssetIds },
+        ...contentAssetTenantWhere(effectiveScope),
+        status: { not: "ARCHIVED" },
+      },
       select: { id: true, readyAt: true, publishedAt: true },
     }),
     prisma.scheduledPostContentAsset.findMany({
-      where: { contentAssetId: { in: contentAssetIds } },
+      where: {
+        contentAssetId: { in: contentAssetIds },
+        ...(effectiveScope
+          ? {
+              contentAsset: contentAssetTenantWhere(effectiveScope),
+              scheduledPost: contentAssetTenantWhere(effectiveScope),
+            }
+          : {}),
+      },
       select: {
         contentAssetId: true,
         scheduledPost: { select: { status: true, scheduledFor: true } },

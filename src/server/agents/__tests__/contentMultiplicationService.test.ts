@@ -34,6 +34,18 @@ vi.mock("@/server/ai/modelConfig", () => ({
   resolveOpenAIReasoningEffort: () => "medium",
 }));
 
+vi.mock("@/server/weekDraft/assembler", () => ({
+  AutomaticWeekDraftError: class AutomaticWeekDraftError extends Error {
+    constructor(readonly code: string, message: string) {
+      super(message);
+    }
+  },
+  assembleWeekDraftAfterContentCompletion: vi.fn(async () => ({
+    status: "WAITING_FOR_SOURCES",
+    draft: null,
+  })),
+}));
+
 import {
   contentOpportunityResponseSchema,
   contentOpportunitySchema,
@@ -91,6 +103,8 @@ function sermonSummaryOpportunity(
 function generationSermonFixture() {
   return {
     id: "sermon-1",
+    organizationId: "org-1",
+    campusId: "campus-1",
     title: "Faith in the Storm",
     speakerName: "Pastor Test",
     churchName: "Test Church",
@@ -133,6 +147,8 @@ function qualityContextFixture() {
   const sermon = generationSermonFixture();
   return {
     id: sermon.id,
+    organizationId: sermon.organizationId,
+    campusId: sermon.campusId,
     title: sermon.title,
     speakerName: sermon.speakerName,
     churchName: sermon.churchName,
@@ -775,6 +791,13 @@ describe("content opportunity generation quality loop", () => {
       data: Array<Record<string, unknown>>;
     };
     expect(createInput.data).toHaveLength(2);
+    expect(createInput.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        organizationId: "org-1",
+        campusId: "campus-1",
+        sermonId: "sermon-1",
+      }),
+    ]));
     expect(createInput.data.every((item) => Boolean(item.structuredContentJson))).toBe(true);
     expect(createInput.data.map((item) => item.sourceTranscriptSegmentIds)).toEqual([
       ["segment-1"],

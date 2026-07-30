@@ -95,6 +95,10 @@ export async function exchangeThreadsLongLivedToken(input: {
 }
 
 export async function storeThreadsCredential(input: {
+  tenantScope: {
+    organizationId: string;
+    campusId: string | null;
+  };
   accessToken: string;
   externalAccountId: string;
   expiresAt: Date | null;
@@ -118,6 +122,7 @@ export async function storeThreadsCredential(input: {
   }
 
   await upsertSocialCredential({
+    tenantScope: input.tenantScope,
     provider: "THREADS",
     externalAccountId: payload.id ?? input.externalAccountId,
     accountName: payload.name ?? payload.username ?? "Threads profile",

@@ -7,6 +7,7 @@ import {
   StatCard,
 } from "@/components/ui";
 import { getIntelligenceDashboardData } from "@/server/workflow/knowledgeIntelligence";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 
 type SearchParams = {
   churchName?: string;
@@ -100,8 +101,13 @@ export default async function IntelligenceDashboardPage({
   searchParams: Promise<SearchParams>;
 }) {
   const filters = await searchParams;
+  const requestContext = await requireRequestCapability("analytics.read");
   const dashboard = await getIntelligenceDashboardData({
     churchName: filters.churchName,
+    tenant: {
+      organizationId: requestContext.organizationId,
+      campusId: requestContext.campusId,
+    },
   });
   const hasChurchFilter = Boolean(filters.churchName?.trim());
   const hasProcessedSermons = dashboard.totals.sermonsProcessed > 0;

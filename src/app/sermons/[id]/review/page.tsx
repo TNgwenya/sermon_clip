@@ -5,6 +5,8 @@ import { Suspense } from "react";
 import { prisma } from "@/lib/prisma";
 import { hasPreviewMetadata, resolveFreshRemotePreviewUrl } from "@/lib/clipPreview";
 import { ReviewExperience } from "@/app/sermons/[id]/review/review-experience";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantResourceScope } from "@/server/tenancy/scope";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import { extractTranscriptReviewEvidence } from "@/lib/transcriptReviewGuidance";
 
@@ -154,11 +156,20 @@ function SermonReviewLoading() {
   );
 }
 
-async function SermonReviewContent({ id }: { id: string }) {
+async function SermonReviewContent({
+  id,
+  requestContext,
+}: {
+  id: string;
+  requestContext: {
+    organizationId: string;
+    campusId: string | null;
+  };
+}) {
   const localMediaAvailable = canRunLocalMediaProcessing();
 
-  const sermon: ReviewPageData | null = await prisma.sermon.findUnique({
-    where: { id },
+  const sermon: ReviewPageData | null = await prisma.sermon.findFirst({
+    where: tenantResourceScope(requestContext, id),
     select: {
       id: true,
       title: true,
@@ -300,10 +311,16 @@ async function SermonReviewContent({ id }: { id: string }) {
 
 export default async function SermonReviewPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const requestContext = await requireRequestCapability("sermons.read", {
+    resource: { kind: "SERMON", id },
+  });
 
   return (
     <Suspense fallback={<SermonReviewLoading />}>
-      <SermonReviewContent id={id} />
+      <SermonReviewContent
+        id={id}
+        requestContext={requestContext}
+      />
     </Suspense>
   );
 }

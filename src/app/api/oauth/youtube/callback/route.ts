@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { buildOAuthRedirectUriFromRequest, oauthFailureReason } from "@/lib/socialAnalyticsConnectors";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import { upsertSocialCredential } from "@/server/integrations/socialCredentials";
 import { clearOAuthStateCookie, validateOAuthCallbackState } from "@/server/integrations/oauthState";
 import {
@@ -33,7 +34,14 @@ export async function GET(request: Request): Promise<NextResponse> {
   const error = url.searchParams.get("error");
   const state = url.searchParams.get("state");
 
-  if (!validateOAuthCallbackState(request, "youtube", state)) {
+  let requestContext: Awaited<ReturnType<typeof requireRequestCapability>>;
+  try {
+    requestContext = await requireRequestCapability("channels.connect");
+  } catch {
+    return redirectToSettings(request, { oauth: "failed", provider: "youtube", reason: "unauthorized" });
+  }
+
+  if (!validateOAuthCallbackState(request, "youtube", state, requestContext)) {
     return redirectToSettings(request, { oauth: "failed", provider: "youtube", reason: "invalid_oauth_state" });
   }
 
@@ -55,6 +63,10 @@ export async function GET(request: Request): Promise<NextResponse> {
     const channel = await fetchYouTubeChannelIdentity(tokenSet.accessToken);
 
     await upsertSocialCredential({
+      tenantScope: {
+        organizationId: requestContext.organizationId,
+        campusId: requestContext.campusId,
+      },
       provider: "YOUTUBE",
       externalAccountId: channel.id,
       accountName: channel.title,

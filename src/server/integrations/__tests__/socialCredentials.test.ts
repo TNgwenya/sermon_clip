@@ -20,4 +20,20 @@ describe("social credential encryption", () => {
     expect(encrypted).not.toContain("refresh-token-value");
     expect(decryptToken(encrypted)).toBe("refresh-token-value");
   });
+
+  it("binds persisted tokens to their organization and immutable provider identity", () => {
+    process.env.OAUTH_TOKEN_ENCRYPTION_KEY = "test-oauth-token-encryption-key";
+    const context = {
+      organizationId: "org-church-1",
+      provider: "YOUTUBE" as const,
+      externalAccountId: "channel-1",
+    };
+    const encrypted = encryptToken("access-token-value", context);
+
+    expect(decryptToken(encrypted, context)).toBe("access-token-value");
+    expect(() => decryptToken(encrypted, {
+      ...context,
+      organizationId: "org-other",
+    })).toThrow();
+  });
 });

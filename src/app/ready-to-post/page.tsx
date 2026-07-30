@@ -23,6 +23,8 @@ import { normalizeContentHashtags } from "@/lib/contentPublishing";
 import { isEditoriallyPostReady } from "@/app/ready-to-post/readiness-display";
 import { supportsManualContentHandoffWithoutMedia } from "@/lib/contentPublishingPreflight";
 import { hasApprovedAssetPublishingRevision } from "@/lib/contentWorkflowUi";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantScope } from "@/server/tenancy/scope";
 
 export const dynamic = "force-dynamic";
 
@@ -114,13 +116,23 @@ function ReadyToPostLoading() {
 }
 
 async function ReadyToPostContent({ params }: { params: SearchParams }) {
+  const requestContext = await requireRequestCapability("publishing.read");
+  const persistenceScope = {
+    organizationId: requestContext.organizationId,
+    campusId: requestContext.campusId,
+  };
   const controlPanelMode = process.env.VERCEL === "1" || process.env.CONTROL_PANEL_MODE === "true";
   const sermonId = params.sermonId?.trim() || null;
   const clipId = params.clipId?.trim() || null;
   const contentAssetId = params.contentAssetId?.trim() || null;
   const scheduledPostId = params.scheduledPostId?.trim() || null;
   const focusedScheduledPosts = scheduledPostId
-    ? await listScheduledPosts({ scheduledPostId, contentAssetId, includeContentAssetFiles: false })
+    ? await listScheduledPosts({
+        scheduledPostId,
+        contentAssetId,
+        includeContentAssetFiles: false,
+        ...persistenceScope,
+      })
     : null;
   const focusedScheduledPost = focusedScheduledPosts?.[0] ?? null;
   const scheduledPostClipIds = focusedScheduledPost?.clipIds ?? [];
@@ -129,6 +141,7 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
   const scheduledPostOnlyFocus = Boolean(scheduledPostId && !sermonId && !clipId && !contentAssetId);
   const focusedPublishingItem = contentAssetOnlyFocus || scheduledPostOnlyFocus;
   const scopeWhere: Prisma.ClipCandidateWhereInput = {
+    sermon: tenantScope(requestContext),
     ...(sermonId ? { sermonId } : {}),
     ...(clipId
       ? { id: clipId }
@@ -261,6 +274,17 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
       }),
       prisma.socialAccount.findMany({
       where: {
+        organizationId: requestContext.organizationId,
+        ...(requestContext.campusId
+          ? {
+              AND: [{
+                OR: [
+                  { campusId: requestContext.campusId },
+                  { campusId: null },
+                ],
+              }],
+            }
+          : {}),
         status: "CONNECTED",
         OR: [
           {
@@ -332,9 +356,10 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
       }),
       prisma.contentAsset.findMany({
       where: contentAssetId
-        ? { id: contentAssetId }
+        ? { id: contentAssetId, ...tenantScope(requestContext) }
         : scheduledPostOnlyFocus
           ? {
+              ...tenantScope(requestContext),
               id: {
                 in: scheduledPostContentAssetIds.length > 0
                   ? scheduledPostContentAssetIds
@@ -342,6 +367,7 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
               },
             }
         : {
+            ...tenantScope(requestContext),
             status: { in: ["PREPARED", "READY", "SCHEDULED", "PUBLISHED"] },
             ...(sermonId ? { sermonId } : {}),
           },
@@ -402,16 +428,20 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
       },
       }),
     ]),
-    focusedPublishingItem ? Promise.resolve([]) : listPostingDrafts(),
-    focusedPublishingItem ? Promise.resolve([]) : listPostingPackageHistory(),
-    focusedPublishingItem ? Promise.resolve([]) : listSocialAccounts(),
+    focusedPublishingItem ? Promise.resolve([]) : listPostingDrafts(persistenceScope),
+    focusedPublishingItem ? Promise.resolve([]) : listPostingPackageHistory(persistenceScope),
+    focusedPublishingItem ? Promise.resolve([]) : listSocialAccounts(persistenceScope),
     focusedScheduledPosts
       ? Promise.resolve(focusedScheduledPosts)
-      : listScheduledPosts({ contentAssetId, includeContentAssetFiles: false }),
+      : listScheduledPosts({
+          contentAssetId,
+          includeContentAssetFiles: false,
+          ...persistenceScope,
+        }),
     getPublishingServiceHealth(),
     sermonId
-      ? prisma.sermon.findUnique({
-          where: { id: sermonId },
+      ? prisma.sermon.findFirst({
+          where: { id: sermonId, ...tenantScope(requestContext) },
           select: { title: true },
         })
       : Promise.resolve(null),
@@ -420,6 +450,7 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
           where: {
             id: clipId,
             ...(sermonId ? { sermonId } : {}),
+            sermon: tenantScope(requestContext),
           },
           select: {
             id: true,

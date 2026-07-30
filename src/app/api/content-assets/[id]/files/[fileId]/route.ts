@@ -5,6 +5,8 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { getSermonStoragePath } from "@/server/agents/storage";
+import { requireContentAssetResource } from "@/server/auth/resourceAuthorization";
+import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 
 function isPathInside(parentPath: string, childPath: string): boolean {
   const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
@@ -16,6 +18,17 @@ export async function GET(
   context: { params: Promise<{ id: string; fileId: string }> },
 ): Promise<NextResponse> {
   const { id, fileId } = await context.params;
+  try {
+    await requireContentAssetResource("content.read", id);
+  } catch (error) {
+    const response = resourceAuthorizationErrorResponse(
+      error,
+      "This production file is not available.",
+    );
+    if (response) return response;
+    throw error;
+  }
+
   const file = await prisma.contentAssetFile.findFirst({
     where: { id: fileId, contentAssetId: id },
     select: {

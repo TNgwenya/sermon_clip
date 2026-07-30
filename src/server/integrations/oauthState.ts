@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 import type { NextResponse } from "next/server";
 
@@ -7,8 +7,15 @@ import type { OAuthProvider } from "@/lib/socialAnalyticsConnectors";
 export const OAUTH_STATE_TTL_SECONDS = 10 * 60;
 
 const OAUTH_STATE_FUTURE_SKEW_SECONDS = 60;
-const OAUTH_STATE_VERSION = "v1";
+const OAUTH_STATE_VERSION = "v2";
 const OAUTH_STATE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const OAUTH_SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+export type OAuthTenantBinding = Readonly<{
+  organizationId: string;
+  campusId: string | null;
+  actorId: string;
+}>;
 
 type OAuthStateCookie = {
   name: string;
@@ -34,6 +41,38 @@ function secureCookies(): boolean {
   return process.env.NODE_ENV === "production";
 }
 
+function stateSecret(): string {
+  const secret = process.env.AUTH_SECRET?.trim()
+    || process.env.NEXTAUTH_SECRET?.trim()
+    || process.env.OAUTH_TOKEN_ENCRYPTION_KEY?.trim();
+  if (!secret) {
+    throw new Error("AUTH_SECRET is required before starting social OAuth.");
+  }
+  return secret;
+}
+
+function encodeBindingPart(value: string | null): string {
+  return value === null ? "~" : Buffer.from(value, "utf8").toString("base64url");
+}
+
+function oauthStateSignature(
+  provider: OAuthProvider,
+  issuedAt: number,
+  state: string,
+  binding: OAuthTenantBinding,
+): string {
+  return createHmac("sha256", stateSecret())
+    .update([
+      provider,
+      String(issuedAt),
+      state,
+      binding.organizationId,
+      binding.campusId ?? "",
+      binding.actorId,
+    ].join("\u001f"))
+    .digest("base64url");
+}
+
 function readCookie(request: Request, name: string): string | null {
   const cookieHeader = request.headers.get("cookie");
   if (!cookieHeader) return null;
@@ -55,6 +94,7 @@ function readCookie(request: Request, name: string): string | null {
 
 export function createOAuthState(
   provider: OAuthProvider,
+  binding: OAuthTenantBinding,
   now: number = Date.now(),
 ): { state: string; cookie: OAuthStateCookie } {
   const state = randomBytes(32).toString("base64url");
@@ -64,7 +104,15 @@ export function createOAuthState(
     state,
     cookie: {
       name: cookieName(provider),
-      value: `${OAUTH_STATE_VERSION}.${issuedAt}.${state}`,
+      value: [
+        OAUTH_STATE_VERSION,
+        issuedAt,
+        state,
+        encodeBindingPart(binding.organizationId),
+        encodeBindingPart(binding.campusId),
+        encodeBindingPart(binding.actorId),
+        oauthStateSignature(provider, issuedAt, state, binding),
+      ].join("."),
       options: {
         httpOnly: true,
         sameSite: "lax",
@@ -97,6 +145,7 @@ export function validateOAuthCallbackState(
   request: Request,
   provider: OAuthProvider,
   receivedState: string | null,
+  binding: OAuthTenantBinding,
   now: number = Date.now(),
 ): boolean {
   if (!receivedState || !OAUTH_STATE_PATTERN.test(receivedState)) return false;
@@ -104,8 +153,22 @@ export function validateOAuthCallbackState(
   const stored = readCookie(request, cookieName(provider));
   if (!stored) return false;
 
-  const [version, issuedAtValue, expectedState, ...extra] = stored.split(".");
-  if (version !== OAUTH_STATE_VERSION || extra.length > 0 || !OAUTH_STATE_PATTERN.test(expectedState ?? "")) {
+  const [
+    version,
+    issuedAtValue,
+    expectedState,
+    organizationPart,
+    campusPart,
+    actorPart,
+    signature,
+    ...extra
+  ] = stored.split(".");
+  if (
+    version !== OAUTH_STATE_VERSION
+    || extra.length > 0
+    || !OAUTH_STATE_PATTERN.test(expectedState ?? "")
+    || !OAUTH_SIGNATURE_PATTERN.test(signature ?? "")
+  ) {
     return false;
   }
 
@@ -118,5 +181,23 @@ export function validateOAuthCallbackState(
 
   const expected = Buffer.from(expectedState, "utf8");
   const received = Buffer.from(receivedState, "utf8");
-  return expected.length === received.length && timingSafeEqual(expected, received);
+  if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
+    return false;
+  }
+
+  if (
+    organizationPart !== encodeBindingPart(binding.organizationId)
+    || campusPart !== encodeBindingPart(binding.campusId)
+    || actorPart !== encodeBindingPart(binding.actorId)
+  ) {
+    return false;
+  }
+
+  const expectedSignature = Buffer.from(
+    oauthStateSignature(provider, issuedAt, expectedState, binding),
+    "utf8",
+  );
+  const receivedSignature = Buffer.from(signature, "utf8");
+  return expectedSignature.length === receivedSignature.length
+    && timingSafeEqual(expectedSignature, receivedSignature);
 }

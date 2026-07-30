@@ -2,6 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 
+import type { BrandingSettingsActionState } from "@/lib/brandingSettings";
+import type { TenantRequestContext } from "@/lib/tenancy/requestHeaders";
+import { AuthorizationError } from "@/server/auth/authorization";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import {
   brandingSettingsSchema,
   getBrandingSettings,
@@ -13,26 +17,26 @@ import {
   shouldInvalidateOverlayForBrandingChange,
 } from "@/server/regeneration/dependencies";
 
-export type BrandingSettingsActionState = {
-  success: boolean;
-  message: string;
-  savedChurchLogoPath?: string | null;
-  fieldErrors?: {
-    churchName?: string;
-    churchLogoPath?: string;
-    churchLogoFile?: string;
-    primaryBrandColor?: string;
-    secondaryBrandColor?: string;
-    defaultFontFamily?: string;
-    watermarkPosition?: string;
-    defaultCaptionStyleName?: string;
-  };
-};
+export type { BrandingSettingsActionState } from "@/lib/brandingSettings";
 
 export async function saveBrandingSettingsAction(
   _prevState: BrandingSettingsActionState,
   formData: FormData,
 ): Promise<BrandingSettingsActionState> {
+  let requestContext: TenantRequestContext;
+  try {
+    requestContext = await requireRequestCapability("brand.manage", {
+      campusId: null,
+    });
+  } catch (error) {
+    return {
+      success: false,
+      message: error instanceof AuthorizationError
+        ? "You have view-only access to this Brand Kit."
+        : "Brand Kit permissions could not be verified. Try again.",
+    };
+  }
+
   const logoUpload = getLogoUpload(formData);
   const shouldRemoveLogo = formData.get("removeLogo") === "1";
   let churchLogoPath = shouldRemoveLogo ? "" : String(formData.get("churchLogoPath") ?? "").trim();
@@ -82,8 +86,11 @@ export async function saveBrandingSettingsAction(
   }
 
   try {
-    const previous = await getBrandingSettings();
-    await saveBrandingSettings(parsed.data);
+    const previous = await getBrandingSettings(requestContext.organizationId);
+    await saveBrandingSettings(
+      parsed.data,
+      requestContext.organizationId,
+    );
 
     const brandingChanged = shouldInvalidateOverlayForBrandingChange(
       {
@@ -113,6 +120,7 @@ export async function saveBrandingSettingsAction(
         {
           captionStyleChanged:
             previous.defaultCaptionStyleName !== parsed.data.defaultCaptionStyleName,
+          organizationId: requestContext.organizationId,
         },
       );
     }

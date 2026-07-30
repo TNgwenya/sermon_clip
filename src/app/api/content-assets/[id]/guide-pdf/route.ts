@@ -7,6 +7,8 @@ import {
   generateContentAssetGuidePdf,
   type GeneratedGuidePdf,
 } from "@/server/contentAssets/guidePdfService";
+import { requireContentAssetResource } from "@/server/auth/resourceAuthorization";
+import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 
 async function readGeneratedGuide(guide: GeneratedGuidePdf): Promise<Buffer | null> {
   const durableData = guide.publicUrl
@@ -21,12 +23,31 @@ export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const { id } = await context.params;
+  let resource;
   try {
-    const { id } = await context.params;
-    let guide = await generateContentAssetGuidePdf(id);
+    resource = await requireContentAssetResource("content.export", id);
+  } catch (error) {
+    const response = resourceAuthorizationErrorResponse(
+      error,
+      "This ministry-guide PDF is not available.",
+    );
+    if (response) return response;
+    throw error;
+  }
+  const tenantScope = {
+    organizationId: resource.organizationId,
+    campusId: resource.campusId,
+  };
+
+  try {
+    let guide = await generateContentAssetGuidePdf(id, { tenantScope });
     let data = await readGeneratedGuide(guide);
     if (!data && guide.publicUrl) {
-      guide = await generateContentAssetGuidePdf(id, { forceRegeneration: true });
+      guide = await generateContentAssetGuidePdf(id, {
+        tenantScope,
+        forceRegeneration: true,
+      });
       data = await readGeneratedGuide(guide);
     }
     if (!data) throw new Error("The generated guide PDF is unavailable.");

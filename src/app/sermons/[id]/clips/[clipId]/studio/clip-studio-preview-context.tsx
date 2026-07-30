@@ -68,13 +68,20 @@ export type ClipStudioPreviewSeekRequest = {
   timeDomain: "cleaned" | "source";
 };
 
+export type ClipStudioPlaybackAction = "play" | "pause" | "toggle";
+
+export type ClipStudioPreviewPlaybackRequest = {
+  action: ClipStudioPlaybackAction;
+  requestId: number;
+};
+
 type ClipStudioPreviewContextValue = {
   exportSettings: ExportSettings;
   brandingConfig: ClipBrandingConfig;
   editPreview: ClipStudioEditPreview;
   previewClock: ClipStudioPreviewClock;
   seekRequest: ClipStudioPreviewSeekRequest | null;
-  playbackRequest: { requestId: number } | null;
+  playbackRequest: ClipStudioPreviewPlaybackRequest | null;
   churchName: string;
   sermonTitle: string;
   preacherName: string;
@@ -88,7 +95,7 @@ type ClipStudioPreviewContextValue = {
   updatePreviewClock: (clock: ClipStudioPreviewClock) => void;
   seekPreviewTo: (seconds: number) => void;
   seekSourcePreviewTo: (seconds: number) => void;
-  requestPreviewPlayback: () => void;
+  requestPreviewPlayback: (action?: ClipStudioPlaybackAction) => void;
 };
 
 const ClipStudioPreviewContext = createContext<ClipStudioPreviewContextValue | null>(null);
@@ -296,7 +303,7 @@ export function ClipStudioPreviewProvider({
     isPlaying: false,
   });
   const [seekRequest, setSeekRequest] = useState<ClipStudioPreviewSeekRequest | null>(null);
-  const [playbackRequest, setPlaybackRequest] = useState<{ requestId: number } | null>(null);
+  const [playbackRequest, setPlaybackRequest] = useState<ClipStudioPreviewPlaybackRequest | null>(null);
   const currentCompositionKey = useMemo(
     () => buildCompositionKey({ exportSettings, brandingConfig, editPreview }),
     [brandingConfig, editPreview, exportSettings],
@@ -429,15 +436,22 @@ export function ClipStudioPreviewProvider({
       return;
     }
 
+    const safeSeconds = Math.max(0, seconds);
     setSeekRequest((current) => ({
-      seconds: Math.max(0, seconds),
+      seconds: safeSeconds,
       requestId: (current?.requestId ?? 0) + 1,
       timeDomain: "source",
     }));
+    setPreviewClock((current) => (
+      Math.abs(current.sourceCurrentSeconds - safeSeconds) < 0.001
+        ? current
+        : { ...current, sourceCurrentSeconds: safeSeconds }
+    ));
   }, []);
 
-  const requestPreviewPlayback = useCallback(() => {
+  const requestPreviewPlayback = useCallback((action: ClipStudioPlaybackAction = "play") => {
     setPlaybackRequest((current) => ({
+      action,
       requestId: (current?.requestId ?? 0) + 1,
     }));
   }, []);

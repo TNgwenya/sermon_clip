@@ -41,6 +41,11 @@ import {
   createOpportunityRevision,
 } from "@/server/contentRevisionService";
 import { recordContentFunnelEvent } from "@/server/contentFunnelTelemetry";
+import {
+  requireContentAssetResource,
+  requireSermonResource,
+  type AuthorizedResource,
+} from "@/server/auth/resourceAuthorization";
 
 const contentPublishingPlatformSchema = z.enum(["TIKTOK", "INSTAGRAM", "YOUTUBE_SHORTS", "FACEBOOK"]);
 const contentAssetTypeSchema = z.enum(CONTENT_ASSET_TYPES);
@@ -152,9 +157,24 @@ export async function prepareContentOpportunityForPublishingAction(
   }
 
   try {
+    const sermon = await requireSermonResource(
+      parsed.data.assetId ? "content.update" : "content.create",
+      parsed.data.sermonId,
+    );
+    if (parsed.data.assetId) {
+      await requireContentAssetResource("content.update", parsed.data.assetId);
+    }
+    const tenantWhere = {
+      organizationId: sermon.organizationId,
+      ...(sermon.campusId ? { campusId: sermon.campusId } : {}),
+    };
     const requestedAsset = parsed.data.assetId
       ? await prisma.contentAsset.findFirst({
-          where: { id: parsed.data.assetId, sermonId: parsed.data.sermonId },
+          where: {
+            id: parsed.data.assetId,
+            sermonId: sermon.id,
+            ...tenantWhere,
+          },
           select: {
             id: true,
             status: true,
@@ -183,7 +203,11 @@ export async function prepareContentOpportunityForPublishingAction(
     const opportunityId = parsed.data.opportunityId ?? requestedAsset?.contentOpportunityId ?? null;
     const opportunity = opportunityId
       ? await prisma.contentOpportunity.findFirst({
-          where: { id: opportunityId, sermonId: parsed.data.sermonId },
+          where: {
+            id: opportunityId,
+            sermonId: sermon.id,
+            ...tenantWhere,
+          },
           select: {
             id: true,
             opportunityType: true,
@@ -222,6 +246,15 @@ export async function prepareContentOpportunityForPublishingAction(
 
     if (opportunityId && !opportunity) {
       return { success: false, message: "The approved publishing idea could not be found." };
+    }
+    if (
+      opportunity?.relatedClip
+      && opportunity.relatedClip.sermonId !== sermon.id
+    ) {
+      return {
+        success: false,
+        message: "The publishing idea references a clip outside this sermon and cannot be prepared.",
+      };
     }
 
     const requestedMetadata = asMetadataRecord(requestedAsset?.metadataJson);
@@ -266,7 +299,9 @@ export async function prepareContentOpportunityForPublishingAction(
       ? await prisma.contentAsset.findFirst({
           where: {
             contentOpportunityId: opportunity.id,
+            sermonId: sermon.id,
             status: { not: "ARCHIVED" },
+            ...tenantWhere,
           },
           orderBy: { updatedAt: "desc" },
           select: {
@@ -353,7 +388,9 @@ export async function prepareContentOpportunityForPublishingAction(
         : {}),
     };
     const data = {
-      sermonId: parsed.data.sermonId,
+      organizationId: sermon.organizationId,
+      campusId: sermon.campusId,
+      sermonId: sermon.id,
       contentOpportunityId: opportunity?.id ?? existingAsset?.contentOpportunityId ?? null,
       assetType,
       status,
@@ -458,7 +495,7 @@ export async function prepareContentOpportunityForPublishingAction(
       return savedAsset;
     });
 
-    revalidateContentPublishingPaths(parsed.data.sermonId, contentAsset.id);
+    revalidateContentPublishingPaths(sermon.id, contentAsset.id);
     return {
       success: true,
       message: shouldInvalidateArtwork
@@ -492,19 +529,30 @@ function normalizedCredentialScopes(value: unknown): Set<string> {
 async function validateAutomaticMetaAccount(input: {
   socialAccountId: string | undefined;
   platform: "INSTAGRAM" | "FACEBOOK" | "TIKTOK" | "YOUTUBE_SHORTS";
+  organizationId: string;
+  campusId: string | null;
 }): Promise<{ id: string } | null> {
   if (input.platform !== "INSTAGRAM" && input.platform !== "FACEBOOK") return null;
   if (!input.socialAccountId) return null;
   const provider = input.platform === "INSTAGRAM" ? "META_INSTAGRAM" : "META_FACEBOOK";
   const requiredScope = input.platform === "INSTAGRAM" ? "instagram_content_publish" : "pages_manage_posts";
-  const account = await prisma.socialAccount.findUnique({
-    where: { id: input.socialAccountId },
+  const account = await prisma.socialAccount.findFirst({
+    where: {
+      id: input.socialAccountId,
+      organizationId: input.organizationId,
+      campusId: input.campusId,
+    },
     select: {
       id: true,
       platform: true,
       status: true,
       credentials: {
-        where: { provider, status: "CONNECTED" },
+        where: {
+          organizationId: input.organizationId,
+          campusId: input.campusId,
+          provider,
+          status: "CONNECTED",
+        },
         orderBy: { updatedAt: "desc" },
         take: 1,
         select: {
@@ -600,6 +648,7 @@ async function prepareAutomaticContentAssetMedia(input: {
 
 async function scheduleContentAssetInternal(
   input: ContentAssetScheduleInput,
+  authorizedAsset: AuthorizedResource,
 ): Promise<ContentAssetActionResult> {
   const parsed = scheduleSchema.safeParse(input);
   if (!parsed.success) {
@@ -621,8 +670,15 @@ async function scheduleContentAssetInternal(
   }
 
   try {
-    const asset = await prisma.contentAsset.findUnique({
-      where: { id: parsed.data.assetId },
+    const tenantWhere = {
+      organizationId: authorizedAsset.organizationId,
+      ...(authorizedAsset.campusId ? { campusId: authorizedAsset.campusId } : {}),
+    };
+    const asset = await prisma.contentAsset.findFirst({
+      where: {
+        id: parsed.data.assetId,
+        ...tenantWhere,
+      },
       select: {
         id: true,
         sermonId: true,
@@ -662,6 +718,9 @@ async function scheduleContentAssetInternal(
         },
         contentOpportunity: {
           select: {
+            organizationId: true,
+            campusId: true,
+            sermonId: true,
             opportunityType: true,
             sourceTranscriptExcerpt: true,
             approvedRevisionId: true,
@@ -685,6 +744,23 @@ async function scheduleContentAssetInternal(
     });
     if (!asset || !["READY", "SCHEDULED"].includes(asset.status)) {
       return { success: false, message: "Finish rendering this approved content before placing it on the calendar." };
+    }
+    if (
+      asset.contentOpportunity
+      && (
+        asset.contentOpportunity.organizationId !== authorizedAsset.organizationId
+        || asset.contentOpportunity.campusId !== authorizedAsset.campusId
+        || asset.contentOpportunity.sermonId !== asset.sermonId
+        || (
+          asset.contentOpportunity.relatedClip
+          && asset.contentOpportunity.relatedClip.sermonId !== asset.sermonId
+        )
+      )
+    ) {
+      return {
+        success: false,
+        message: "This content asset contains a reference outside its workspace and cannot be scheduled.",
+      };
     }
     const assetMetadata = asMetadataRecord(asset.metadataJson);
     const sourceOpportunityType = asset.contentOpportunity?.opportunityType
@@ -725,7 +801,10 @@ async function scheduleContentAssetInternal(
     }
     const approvedBrandFingerprint = readArtworkBrandFingerprint(assetMetadata);
     if (isDesignableContentAssetType(asset.assetType) && approvedBrandFingerprint) {
-      const branding = await getBrandingSettings();
+      const branding = await getBrandingSettings(
+        authorizedAsset.organizationId,
+        authorizedAsset.campusId,
+      );
       const logoDataUrl = await readBrandingArtworkLogoDataUrl(branding.churchLogoPath);
       const currentBrandFingerprint = createArtworkBrandFingerprint({
         churchName: branding.churchName,
@@ -750,6 +829,8 @@ async function scheduleContentAssetInternal(
       ? await validateAutomaticMetaAccount({
           socialAccountId: parsed.data.socialAccountId,
           platform: parsed.data.platform,
+          organizationId: authorizedAsset.organizationId,
+          campusId: authorizedAsset.campusId,
         })
       : null;
     if (automatic && !metaAccount) {
@@ -825,6 +906,7 @@ async function scheduleContentAssetInternal(
       where: {
         contentAssetId: asset.id,
         scheduledPost: {
+          ...tenantWhere,
           platform: parsed.data.platform,
           status: { in: ["PLANNED", "READY_FOR_MEDIA_TEAM", "POSTING", "POSTED"] },
           scheduledFor: { gte: duplicateWindowStart, lte: duplicateWindowEnd },
@@ -933,6 +1015,8 @@ async function scheduleContentAssetInternal(
       const post = await tx.scheduledPost.create({
         data: {
           clipIdsJson: [],
+          organizationId: authorizedAsset.organizationId,
+          campusId: authorizedAsset.campusId,
           platform: parsed.data.platform,
           socialAccountId: automatic ? metaAccount?.id : null,
           postingSlot,
@@ -1012,26 +1096,56 @@ export async function scheduleContentAssetAction(
   input: ContentAssetScheduleInput,
 ): Promise<ContentAssetActionResult> {
   const startedAt = Date.now();
-  const result = await scheduleContentAssetInternal(input);
   const parsedInput = scheduleSchema.safeParse(input);
-  const rawInput = input as unknown;
-  const rawAssetId = rawInput && typeof rawInput === "object" && "assetId" in rawInput
-    ? (rawInput as { assetId?: unknown }).assetId
-    : null;
-  const assetId = parsedInput.success ? parsedInput.data.assetId : String(rawAssetId ?? "").trim();
-  const asset = assetId
-    ? await prisma.contentAsset.findUnique({
-        where: { id: assetId },
+  if (!parsedInput.success) {
+    return {
+      success: false,
+      message: `The handoff could not be scheduled: ${parsedInput.error.issues.map((issue) => issue.message).join(", ")}`,
+    };
+  }
+  const assetId = parsedInput.data.assetId;
+  let authorizedAsset: AuthorizedResource;
+  try {
+    authorizedAsset = await requireContentAssetResource(
+      "publishing.schedule",
+      assetId,
+    );
+  } catch (error) {
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : "This content asset could not be scheduled.",
+    };
+  }
+  const result = await scheduleContentAssetInternal(input, authorizedAsset);
+  let asset: {
+    id: string;
+    sermonId: string;
+    contentOpportunityId: string | null;
+    assetType: string;
+  } | null = null;
+  if (assetId) {
+    try {
+      asset = await prisma.contentAsset.findFirst({
+        where: {
+          id: assetId,
+          organizationId: authorizedAsset.organizationId,
+          ...(authorizedAsset.campusId ? { campusId: authorizedAsset.campusId } : {}),
+        },
         select: {
           id: true,
           sermonId: true,
           contentOpportunityId: true,
           assetType: true,
         },
-      }).catch(() => null)
-    : null;
+      });
+    } catch {
+      // Funnel telemetry is best effort and must never change scheduling.
+    }
+  }
   await recordContentFunnelEvent({
     eventType: result.success ? "SCHEDULE_SUCCEEDED" : "SCHEDULE_FAILED",
+    organizationId: authorizedAsset.organizationId,
+    campusId: authorizedAsset.campusId,
     sermonId: asset?.sermonId,
     opportunityId: asset?.contentOpportunityId,
     contentAssetId: asset?.id ?? (assetId || null),
@@ -1042,8 +1156,8 @@ export async function scheduleContentAssetAction(
     durationMs: Date.now() - startedAt,
     metadata: {
       assetType: asset?.assetType,
-      platform: parsedInput.success ? parsedInput.data.platform : null,
-      automationMode: parsedInput.success ? parsedInput.data.automationMode : undefined,
+      platform: parsedInput.data.platform,
+      automationMode: parsedInput.data.automationMode,
       ...(!result.success ? { failureCode: classifyContentScheduleFailure(result.message) } : {}),
     },
   });

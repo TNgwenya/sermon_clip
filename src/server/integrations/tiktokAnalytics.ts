@@ -134,6 +134,10 @@ export async function refreshTikTokAccessToken(input: {
 }
 
 export async function storeTikTokCredential(input: {
+  tenantScope: {
+    organizationId: string;
+    campusId: string | null;
+  };
   accessToken: string;
   refreshToken: string | null;
   externalAccountId: string;
@@ -152,6 +156,7 @@ export async function storeTikTokCredential(input: {
 
   const user = payload.data?.user;
   await upsertSocialCredential({
+    tenantScope: input.tenantScope,
     provider: "TIKTOK",
     externalAccountId: user?.open_id ?? input.externalAccountId,
     accountName: user?.display_name ?? user?.username ?? "TikTok account",

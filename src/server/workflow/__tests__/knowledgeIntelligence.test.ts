@@ -3,6 +3,20 @@ import { describe, expect, it } from "vitest";
 import { __knowledgeIntelligenceTestUtils } from "../knowledgeIntelligence";
 
 describe("knowledge base where builder", () => {
+  it("builds an exact organization and selected-campus boundary", () => {
+    expect(__knowledgeIntelligenceTestUtils.sermonTenantWhere({
+      organizationId: "org-a",
+      campusId: "campus-a",
+    })).toEqual({
+      organizationId: "org-a",
+      campusId: "campus-a",
+    });
+    expect(__knowledgeIntelligenceTestUtils.sermonTenantWhere({
+      organizationId: "org-a",
+      campusId: null,
+    })).toEqual({ organizationId: "org-a" });
+  });
+
   it("builds searchable where clause with scripture/topic/moment/content filters", () => {
     const where = __knowledgeIntelligenceTestUtils.buildKnowledgeBaseWhere({
       query: "prayer",

@@ -151,4 +151,18 @@ describe("videoDownloadAgent helpers", () => {
     expect(message).toContain("HTTP 403");
     expect(message).toContain("browser cookies");
   });
+
+  it("classifies YouTube bot verification as an upload-recoverable failure", () => {
+    const stderr = "ERROR: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies.";
+    const classification = __videoDownloadTestUtils.classifyYouTubeSourceFailure(stderr);
+    const message = __videoDownloadTestUtils.toDownloadFailureMessage(stderr, 1);
+
+    expect(__videoDownloadTestUtils.looksLikeYouTubeAuthFailure(stderr)).toBe(true);
+    expect(classification).toEqual({
+      code: "YOUTUBE_AUTH_REQUIRED",
+      retryable: false,
+      uploadRecoveryRecommended: true,
+    });
+    expect(message).toContain("Upload the same recording to this sermon");
+  });
 });

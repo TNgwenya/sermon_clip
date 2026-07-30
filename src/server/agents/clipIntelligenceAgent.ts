@@ -74,6 +74,7 @@ import {
   deriveLikelyThoughtStartAnchors,
 } from "@/server/agents/sermonThoughtSegmentation";
 import { inferSermonWindowFromTranscript } from "@/server/agents/sermonWindowInference";
+import type { TenantScope } from "@/server/tenancy/scope";
 
 export type ClipWindow = {
   windowId: string;
@@ -103,10 +104,13 @@ type GenerateClipOptions = {
   responseOverride?: string;
   repairResponseOverride?: string;
   processingJobId?: string;
+  tenantScope?: TenantScope;
 };
 
 type SermonContext = {
   id: string;
+  organizationId: string | null;
+  campusId: string | null;
   title: string;
   speakerName: string;
   churchName: string;
@@ -2583,6 +2587,8 @@ async function callClipModel(
       rawResponse = await createLoggedChatCompletion({
         operation: "clip_selection",
         sermonId: sermon.id,
+        organizationId: sermon.organizationId,
+        campusId: sermon.campusId,
         model,
         reasoningEffort,
         response_format: { type: "json_object" },
@@ -2632,6 +2638,8 @@ async function callClipModel(
       const repairCompletion = await createLoggedChatCompletion({
         operation: "clip_selection_repair",
         sermonId: sermon.id,
+        organizationId: sermon.organizationId,
+        campusId: sermon.campusId,
         model,
         reasoningEffort,
         response_format: { type: "json_object" },
@@ -2926,10 +2934,15 @@ export async function generateClipSuggestions(
   sermonId: string,
   options?: GenerateClipOptions,
 ): Promise<{ clipCount: number; reusedExistingSuggestions: boolean }> {
-  const sermon = await prisma.sermon.findUnique({
-    where: { id: sermonId },
+  const sermon = await prisma.sermon.findFirst({
+    where: {
+      id: sermonId,
+      ...(options?.tenantScope ?? {}),
+    },
     select: {
       id: true,
+      organizationId: true,
+      campusId: true,
       title: true,
       speakerName: true,
       churchName: true,
@@ -3043,7 +3056,9 @@ export async function generateClipSuggestions(
     ]);
     if (momentsCount === 0 && intelligenceStatus?.status !== "COMPLETED") {
       try {
-        const momentResult = await generateMinistryMoments(sermon.id);
+        const momentResult = await generateMinistryMoments(sermon.id, {
+          tenantScope: options?.tenantScope,
+        });
         await appendJobLog(job.id, `Ministry moments ${momentResult.reusedExistingMoments ? "reused" : "refreshed"}: ${momentResult.momentCount}.`);
       } catch (momentError) {
         const momentMessage = momentError instanceof Error ? momentError.message : "Unknown ministry moment error.";
@@ -3202,6 +3217,8 @@ export async function generateClipSuggestions(
 
     const sermonContext: SermonContext = {
       id: sermon.id,
+      organizationId: sermon.organizationId,
+      campusId: sermon.campusId,
       title: sermon.title,
       speakerName: sermon.speakerName,
       churchName: sermon.churchName,

@@ -12,6 +12,8 @@ export type AiInvocationUsage = {
 };
 
 export type RecordAiInvocationInput = {
+  organizationId?: string | null;
+  campusId?: string | null;
   sermonId?: string | null;
   clipCandidateId?: string | null;
   provider?: string;
@@ -29,6 +31,64 @@ export type RecordAiInvocationInput = {
   errorMessage?: string | null;
   metadata?: Prisma.InputJsonValue | null;
 };
+
+export type AiTenantScope = Readonly<{
+  organizationId: string;
+  campusId: string | null;
+}>;
+
+export async function resolveAiTenantScope(input: Readonly<{
+  organizationId?: string | null;
+  campusId?: string | null;
+  sermonId?: string | null;
+  clipCandidateId?: string | null;
+}>): Promise<AiTenantScope | null> {
+  const explicitOrganizationId = input.organizationId?.trim() || null;
+  if (explicitOrganizationId) {
+    return {
+      organizationId: explicitOrganizationId,
+      campusId: input.campusId?.trim() || null,
+    };
+  }
+
+  if (input.sermonId) {
+    const sermon = await prisma.sermon.findUnique({
+      where: { id: input.sermonId },
+      select: {
+        organizationId: true,
+        campusId: true,
+      },
+    });
+    return sermon?.organizationId
+      ? {
+          organizationId: sermon.organizationId,
+          campusId: sermon.campusId,
+        }
+      : null;
+  }
+
+  if (input.clipCandidateId) {
+    const clip = await prisma.clipCandidate.findUnique({
+      where: { id: input.clipCandidateId },
+      select: {
+        sermon: {
+          select: {
+            organizationId: true,
+            campusId: true,
+          },
+        },
+      },
+    });
+    return clip?.sermon.organizationId
+      ? {
+          organizationId: clip.sermon.organizationId,
+          campusId: clip.sermon.campusId,
+        }
+      : null;
+  }
+
+  return null;
+}
 
 function normalizeTokenCount(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
@@ -101,8 +161,11 @@ export function buildAiRequestHash(value: unknown): string {
 
 export async function recordAiInvocation(input: RecordAiInvocationInput): Promise<void> {
   try {
+    const tenantScope = await resolveAiTenantScope(input);
     await prisma.aiInvocation.create({
       data: {
+        organizationId: tenantScope?.organizationId ?? null,
+        campusId: tenantScope?.campusId ?? null,
         sermonId: input.sermonId ?? null,
         clipCandidateId: input.clipCandidateId ?? null,
         provider: input.provider ?? "openai",

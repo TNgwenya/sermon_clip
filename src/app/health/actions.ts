@@ -4,11 +4,13 @@ import { revalidatePath } from "next/cache";
 
 import { buildPostingClipAssetRecoveryWhere } from "@/lib/healthRecovery";
 import { prisma } from "@/lib/prisma";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import {
   repairMissingLocalAssetReferences,
   selectUnresolvedFailedProcessingJobRetries,
 } from "@/server/workflow/operationsDiagnostics";
 import { canRunInlineMediaProcessing } from "@/server/runtime/workerRuntime";
+import { tenantScope } from "@/server/tenancy/scope";
 
 export type HealthActionResult = {
   success: boolean;
@@ -47,11 +49,15 @@ function revalidateHealthRecoveryPaths(): void {
 }
 
 export async function prepareMissingPostersAction(): Promise<HealthActionResult> {
+  const requestContext = await requireRequestCapability("content.update");
   if (!canRunInlineMediaProcessing()) {
     return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
   }
 
-  const result = await backfillClipThumbnails({ limit: 50 });
+  const result = await backfillClipThumbnails({
+    limit: 50,
+    tenantScope: tenantScope(requestContext),
+  });
   revalidateHealthRecoveryPaths();
 
   return {
@@ -64,11 +70,15 @@ export async function prepareMissingPostersAction(): Promise<HealthActionResult>
 }
 
 export async function repairLocalLibraryAction(): Promise<HealthActionResult> {
+  const requestContext = await requireRequestCapability("content.update");
   if (!canRunInlineMediaProcessing()) {
     return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
   }
 
-  const result = await repairMissingLocalAssetReferences();
+  const result = await repairMissingLocalAssetReferences(
+    200,
+    tenantScope(requestContext),
+  );
   revalidateHealthRecoveryPaths();
 
   return {
@@ -81,12 +91,18 @@ export async function repairLocalLibraryAction(): Promise<HealthActionResult> {
 }
 
 export async function rebuildPriorityLibraryAssetsAction(): Promise<HealthActionResult> {
+  const requestContext = await requireRequestCapability("content.update");
   if (!canRunInlineMediaProcessing()) {
     return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
   }
 
   const clips = await prisma.clipCandidate.findMany({
-    where: buildPostingClipAssetRecoveryWhere(),
+    where: {
+      AND: [
+        buildPostingClipAssetRecoveryWhere(),
+        { sermon: tenantScope(requestContext) },
+      ],
+    },
     select: {
       id: true,
       title: true,
@@ -130,11 +146,15 @@ export async function rebuildPriorityLibraryAssetsAction(): Promise<HealthAction
 }
 
 export async function retryLatestFailedProcessingJobsAction(): Promise<HealthActionResult> {
+  const requestContext = await requireRequestCapability("sermons.update");
   if (!canRunInlineMediaProcessing()) {
     return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
   }
 
   const jobs = await prisma.processingJob.findMany({
+    where: {
+      sermon: tenantScope(requestContext),
+    },
     select: {
       id: true,
       sermonId: true,
@@ -190,14 +210,22 @@ export async function retryLatestFailedProcessingJobsAction(): Promise<HealthAct
 }
 
 export async function repairAndRebuildLibraryAction(): Promise<HealthActionResult> {
+  const requestContext = await requireRequestCapability("content.update");
+  await requireRequestCapability("sermons.update");
   if (!canRunInlineMediaProcessing()) {
     return { success: false, message: LOCAL_WORKER_ONLY_MESSAGE };
   }
 
-  const repair = await repairMissingLocalAssetReferences();
+  const repair = await repairMissingLocalAssetReferences(
+    200,
+    tenantScope(requestContext),
+  );
   const retries = await retryLatestFailedProcessingJobsAction();
   const rebuild = await rebuildPriorityLibraryAssetsAction();
-  const posters = await backfillClipThumbnails({ limit: 50 });
+  const posters = await backfillClipThumbnails({
+    limit: 50,
+    tenantScope: tenantScope(requestContext),
+  });
   revalidateHealthRecoveryPaths();
 
   const messages = [

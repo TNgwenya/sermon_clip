@@ -6,6 +6,18 @@ export type PersistenceResult<T> = {
   items: T[];
 };
 
+export type GrowthPersistenceTenantScope = Readonly<{
+  organizationId: string;
+  campusId?: string | null;
+}>;
+
+function growthTenantWhere(scope: GrowthPersistenceTenantScope) {
+  return {
+    organizationId: scope.organizationId,
+    ...(scope.campusId ? { campusId: scope.campusId } : {}),
+  };
+}
+
 export type SavedGrowthRecommendation = {
   id: string;
   title: string;
@@ -93,9 +105,12 @@ export function calculatePercentError(actual: number | null, low: number, high: 
   return Number((((actual - midpoint) / midpoint) * 100).toFixed(1));
 }
 
-export async function listSavedGrowthRecommendations(): Promise<PersistenceResult<SavedGrowthRecommendation>> {
+export async function listSavedGrowthRecommendations(
+  scope: GrowthPersistenceTenantScope,
+): Promise<PersistenceResult<SavedGrowthRecommendation>> {
   try {
     const recommendations = await prisma.growthRecommendation.findMany({
+      where: growthTenantWhere(scope),
       orderBy: [{ status: "asc" }, { priority: "desc" }, { createdAt: "desc" }],
       take: 8,
       select: {
@@ -111,6 +126,7 @@ export async function listSavedGrowthRecommendations(): Promise<PersistenceResul
     });
     const guardrails = await prisma.growthGuardrailReview.findMany({
       where: {
+        ...growthTenantWhere(scope),
         targetType: "GrowthRecommendation",
         targetId: { in: recommendations.map((item) => item.id) },
       },
@@ -170,9 +186,12 @@ export function historicalMetricIdentity(snapshot: {
   return socialMetricDedupeKey(snapshot);
 }
 
-export async function listHistoricalPerformanceBaselines(): Promise<PersistenceResult<HistoricalPerformanceBaseline>> {
+export async function listHistoricalPerformanceBaselines(
+  scope: GrowthPersistenceTenantScope,
+): Promise<PersistenceResult<HistoricalPerformanceBaseline>> {
   try {
     const snapshots = await prisma.socialMetricSnapshot.findMany({
+      where: growthTenantWhere(scope),
       orderBy: { capturedAt: "desc" },
       take: 250,
       select: {
@@ -221,9 +240,12 @@ export async function listHistoricalPerformanceBaselines(): Promise<PersistenceR
   }
 }
 
-export async function listMinistryOutcomeReports(): Promise<PersistenceResult<MinistryOutcomeReport>> {
+export async function listMinistryOutcomeReports(
+  scope: GrowthPersistenceTenantScope,
+): Promise<PersistenceResult<MinistryOutcomeReport>> {
   try {
     const outcomes = await prisma.ministryOutcome.findMany({
+      where: growthTenantWhere(scope),
       orderBy: { occurredAt: "desc" },
       take: 10,
       select: {
@@ -264,9 +286,12 @@ export async function listMinistryOutcomeReports(): Promise<PersistenceResult<Mi
   }
 }
 
-export async function listPredictionReports(): Promise<PersistenceResult<PredictionReport>> {
+export async function listPredictionReports(
+  scope: GrowthPersistenceTenantScope,
+): Promise<PersistenceResult<PredictionReport>> {
   try {
     const predictions = await prisma.postPerformancePrediction.findMany({
+      where: growthTenantWhere(scope),
       orderBy: { createdAt: "desc" },
       take: 8,
       include: {

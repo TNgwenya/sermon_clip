@@ -1194,11 +1194,29 @@ export function ClipStudioLivePreview({
     }
 
     const playbackTimer = window.setTimeout(() => {
+      const video = videoRef.current;
+      if (!video) {
+        return;
+      }
+
+      if (playbackRequest.action === "pause") {
+        video.pause();
+        setPlaybackState("paused");
+        setPlaybackNotice(null);
+        updatePreviewSeconds();
+        return;
+      }
+
+      if (playbackRequest.action === "toggle") {
+        togglePreviewPlayback();
+        return;
+      }
+
       void startPreviewPlayback();
     }, 0);
 
     return () => window.clearTimeout(playbackTimer);
-  }, [playbackRequest, startPreviewPlayback]);
+  }, [playbackRequest, startPreviewPlayback, togglePreviewPlayback, updatePreviewSeconds]);
 
   const scrubPreview = useCallback((seconds: number) => {
     const durationSeconds = previewDurationSeconds ?? 0;

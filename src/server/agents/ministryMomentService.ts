@@ -13,9 +13,11 @@ import {
   applyInferredSermonWindowToSegments,
   inferSermonWindowFromTranscript,
 } from "@/server/agents/sermonWindowInference";
+import type { TenantScope } from "@/server/tenancy/scope";
 
 export type MinistryMomentOptions = {
   force?: boolean;
+  tenantScope?: TenantScope;
 };
 
 export type MinistryMomentResult = {
@@ -25,6 +27,8 @@ export type MinistryMomentResult = {
 
 type SermonContext = {
   id: string;
+  organizationId: string | null;
+  campusId: string | null;
   title: string;
   speakerName: string;
   churchName: string;
@@ -244,11 +248,19 @@ export function buildMinistryMomentCreateInput(
   };
 }
 
-async function loadContext(sermonId: string): Promise<SermonContextPayload | null> {
-  const sermon = await prisma.sermon.findUnique({
-    where: { id: sermonId },
+async function loadContext(
+  sermonId: string,
+  tenantScope?: TenantScope,
+): Promise<SermonContextPayload | null> {
+  const sermon = await prisma.sermon.findFirst({
+    where: {
+      id: sermonId,
+      ...(tenantScope ?? {}),
+    },
     select: {
       id: true,
+      organizationId: true,
+      campusId: true,
       title: true,
       speakerName: true,
       churchName: true,
@@ -305,6 +317,8 @@ async function loadContext(sermonId: string): Promise<SermonContextPayload | nul
 
   return {
     id: sermon.id,
+    organizationId: sermon.organizationId,
+    campusId: sermon.campusId,
     title: sermon.title,
     speakerName: sermon.speakerName,
     churchName: sermon.churchName,
@@ -340,6 +354,8 @@ async function parseMomentResponse(
   return createLoggedChatCompletion({
     operation: "ministry_moment_detection",
     sermonId: context.id,
+    organizationId: context.organizationId,
+    campusId: context.campusId,
     model,
     reasoningEffort,
     temperature: 0.2,
@@ -402,7 +418,7 @@ export async function generateMinistryMoments(
   sermonId: string,
   options?: MinistryMomentOptions,
 ): Promise<MinistryMomentResult> {
-  const context = await loadContext(sermonId);
+  const context = await loadContext(sermonId, options?.tenantScope);
   if (!context) {
     throw new Error(`Sermon ${sermonId} was not found.`);
   }
@@ -431,8 +447,11 @@ export async function generateMinistryMoments(
   return { momentCount: moments.length, reusedExistingMoments: false };
 }
 
-export async function regenerateMinistryMoments(sermonId: string): Promise<MinistryMomentResult> {
-  return generateMinistryMoments(sermonId, { force: true });
+export async function regenerateMinistryMoments(
+  sermonId: string,
+  tenantScope?: TenantScope,
+): Promise<MinistryMomentResult> {
+  return generateMinistryMoments(sermonId, { force: true, tenantScope });
 }
 
 export const __ministryMomentTestUtils = {

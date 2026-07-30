@@ -71,6 +71,38 @@ class StaleClaimedCompositionError extends Error {
   }
 }
 
+type ValidatedPublicationGuard = {
+  approvedPreviewIdentity: string;
+  retryIdempotencyKey: string;
+  semanticDuplicateKey: string;
+  destinationPayloadKey: string;
+};
+
+function normalizePublicationGuard(value: unknown): ValidatedPublicationGuard | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const fields = [
+    "approvedPreviewIdentity",
+    "retryIdempotencyKey",
+    "semanticDuplicateKey",
+    "destinationPayloadKey",
+  ] as const;
+  if (!fields.every((field) => (
+    typeof record[field] === "string"
+    && /^[a-f0-9]{64}$/u.test(record[field])
+  ))) {
+    return null;
+  }
+  return {
+    approvedPreviewIdentity: record["approvedPreviewIdentity"] as string,
+    retryIdempotencyKey: record["retryIdempotencyKey"] as string,
+    semanticDuplicateKey: record["semanticDuplicateKey"] as string,
+    destinationPayloadKey: record["destinationPayloadKey"] as string,
+  };
+}
+
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   if (apiToken) {
@@ -253,7 +285,7 @@ function postingCompositionIdentities(
 async function revalidateClaimedPostComposition(
   post: AutomationPost,
   snapshot: { clipId: string; sha256: string; sizeBytes: number },
-): Promise<void> {
+): Promise<ValidatedPublicationGuard> {
   const response = await apiFetch(`/api/automation/scheduled-posts/${post.id}/validate-composition`, {
     method: "POST",
     body: JSON.stringify({
@@ -263,7 +295,15 @@ async function revalidateClaimedPostComposition(
   });
   const data = await response.json().catch(() => null);
   if (response.ok) {
-    return;
+    const publicationGuard = normalizePublicationGuard(data?.publicationGuard);
+    if (!publicationGuard) {
+      throw new Error("Composition validation did not return a verified approved-preview publication guard.");
+    }
+    // Every downstream connector already derives its provider request identity
+    // from this field. Replace the scheduling key only after the server binds
+    // the exact approved copy and observed media bytes.
+    post.idempotencyKey = publicationGuard.retryIdempotencyKey;
+    return publicationGuard;
   }
   if (response.status === 409) {
     throw new StaleClaimedCompositionError(
@@ -752,6 +792,7 @@ async function main(): Promise<void> {
 export const __postingWorkerTestUtils = {
   claimPost,
   isClaimedAutomationPost,
+  normalizePublicationGuard,
   postingCompositionIdentities,
   revalidateClaimedPostComposition,
 };

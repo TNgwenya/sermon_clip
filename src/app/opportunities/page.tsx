@@ -18,10 +18,13 @@ import { buildContentContractPresentation } from "@/lib/contentWorkflowUi";
 import { OpportunitiesExperience } from "@/app/opportunities/opportunities-experience";
 import { ContentGenerationStatus } from "@/app/opportunities/content-generation-status";
 import { buildContentOpportunityJobStatusView } from "@/lib/contentOpportunityJobs";
+import type { TenantRequestContext } from "@/lib/tenancy/requestHeaders";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import {
   CONTENT_OPPORTUNITY_TYPES,
   CONTENT_OPPORTUNITY_TYPE_LABELS,
 } from "@/server/ai/contentOpportunitySchema";
+import { tenantScope } from "@/server/tenancy/scope";
 
 type SearchParams = {
   sermonId?: string;
@@ -37,12 +40,16 @@ type SearchParams = {
 const STATUSES = ["DRAFT", "NEEDS_REVIEW", "APPROVED", "REJECTED", "USED", "ARCHIVED"] as const;
 const CATEGORIES = ["SOCIAL", "DEVOTIONAL", "DISCIPLESHIP", "PROMOTION", "WRITTEN", "ENGAGEMENT", "RECAP"] as const;
 
-function findRecentContentOpportunityGenerationJob(sermonId: string) {
+function findRecentContentOpportunityGenerationJob(
+  sermonId: string,
+  requestContext: TenantRequestContext,
+) {
   const recentWindowStart = new Date(Date.now() - 12 * 60 * 60_000);
 
   return prisma.processingJob.findFirst({
     where: {
       sermonId,
+      sermon: tenantScope(requestContext),
       type: "GENERATE_CONTENT_OPPORTUNITIES",
       createdAt: { gte: recentWindowStart },
     },
@@ -122,10 +129,12 @@ async function OpportunityResults({
   filters,
   activeSermonId,
   activeSermonTitle,
+  requestContext,
 }: {
   filters: SearchParams;
   activeSermonId: string | null;
   activeSermonTitle: string | null;
+  requestContext: TenantRequestContext;
 }) {
   const category = asCategory(filters.category);
   const status = asStatus(filters.status);
@@ -136,6 +145,7 @@ async function OpportunityResults({
 
   const where: Prisma.ContentOpportunityWhereInput = {
     AND: [
+      tenantScope(requestContext),
       { sermonId: scopedSermonId },
       category ? { category } : {},
       opportunityType ? { opportunityType } : {},
@@ -232,13 +242,17 @@ async function OpportunityResults({
       take: 150,
     }),
     prisma.ministryMoment.findMany({
-      where: { sermonId: scopedSermonId },
+      where: {
+        sermonId: scopedSermonId,
+        sermon: tenantScope(requestContext),
+      },
       select: { momentType: true },
       distinct: ["momentType"],
       take: 100,
     }),
     prisma.contentAsset.findMany({
       where: {
+        ...tenantScope(requestContext),
         status: { not: "ARCHIVED" },
         sermonId: scopedSermonId,
         contentOpportunityId: { not: null },
@@ -268,13 +282,16 @@ async function OpportunityResults({
       take: 150,
     }),
     prisma.sermonTopicTag.findMany({
-      where: { sermonId: scopedSermonId },
+      where: {
+        sermonId: scopedSermonId,
+        sermon: tenantScope(requestContext),
+      },
       select: { topic: true },
       distinct: ["topic"],
       orderBy: { topic: "asc" },
       take: 100,
     }),
-    findRecentContentOpportunityGenerationJob(scopedSermonId),
+    findRecentContentOpportunityGenerationJob(scopedSermonId, requestContext),
   ]);
 
   const normalized = opportunities.map((item) => {
@@ -464,8 +481,15 @@ function OpportunityWorkspaceLoading() {
   );
 }
 
-async function OpportunityWorkspace({ filters }: { filters: SearchParams }) {
+async function OpportunityWorkspace({
+  filters,
+  requestContext,
+}: {
+  filters: SearchParams;
+  requestContext: TenantRequestContext;
+}) {
   const sermons = await prisma.sermon.findMany({
+    where: tenantScope(requestContext),
     select: { id: true, title: true },
     orderBy: { createdAt: "desc" },
     take: 100,
@@ -510,6 +534,7 @@ async function OpportunityWorkspace({ filters }: { filters: SearchParams }) {
           filters={filters}
           activeSermonId={activeSermonId}
           activeSermonTitle={activeSermonTitle}
+          requestContext={requestContext}
         />
       </Suspense>
     </>
@@ -522,6 +547,7 @@ export default async function OpportunitiesPage({
   searchParams: Promise<SearchParams>;
 }) {
   const filters = await searchParams;
+  const requestContext = await requireRequestCapability("content.read");
 
   return (
     <main className="secondary-media-shell stack-lg">
@@ -533,7 +559,7 @@ export default async function OpportunitiesPage({
       />
 
       <Suspense fallback={<OpportunityWorkspaceLoading />}>
-        <OpportunityWorkspace filters={filters} />
+        <OpportunityWorkspace filters={filters} requestContext={requestContext} />
       </Suspense>
     </main>
   );

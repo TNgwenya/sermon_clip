@@ -7,6 +7,7 @@ import {
   type PostingPlatform,
 } from "@/lib/postingDrafts";
 import { runPublishingPreflight } from "@/lib/publishingPreflightServer";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 
 function normalizeSelectedAccountIds(
   value: unknown,
@@ -30,6 +31,7 @@ function normalizeSelectedAccountIds(
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
+  const requestContext = await requireRequestCapability("publishing.read");
   const body = await request.json().catch(() => null);
   const clipIds = normalizeClipIds(body?.clipIds);
   const platforms = normalizePostingPlatforms(body?.platforms);
@@ -45,6 +47,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     automationMode,
     platforms,
     selectedAccountIdsByPlatform,
+    tenantScope: {
+      organizationId: requestContext.organizationId,
+      campusId: requestContext.campusId,
+    },
     controlPanelMode: process.env.VERCEL === "1" || process.env.CONTROL_PANEL_MODE === "true",
   });
 

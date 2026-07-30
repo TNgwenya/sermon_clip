@@ -7,6 +7,15 @@ import { prisma } from "@/lib/prisma";
 import { deleteSermonProjectAction } from "@/server/actions/sermons";
 import { getClipOutputPath, getLegacySermonStoragePath } from "@/server/agents/storage";
 
+vi.mock("next/headers", () => ({
+  headers: async () => new Headers({
+    "x-sermonclip-organization-id": "org_local_default",
+    "x-sermonclip-campus-id": "campus_local_default",
+    "x-sermonclip-actor-id": "user_local_bootstrap",
+    "x-sermonclip-authentication": "local-development",
+  }),
+}));
+
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
 }));
@@ -37,6 +46,7 @@ describe("delete sermon project action", () => {
       const sermonId = createdSermonIds.pop();
       if (sermonId) {
         await prisma.sermon.deleteMany({ where: { id: sermonId } });
+        await prisma.auditEvent.deleteMany({ where: { targetId: sermonId } });
       }
     }
 
@@ -66,6 +76,8 @@ describe("delete sermon project action", () => {
     await prisma.sermon.create({
       data: {
         id: sermonId,
+        organizationId: "org_local_default",
+        campusId: "campus_local_default",
         youtubeUrl: `local-delete-test://${sermonId}`,
         title,
         speakerName: "Readiness Test",
@@ -167,6 +179,14 @@ describe("delete sermon project action", () => {
     await expect(prisma.clipCandidate.count({ where: { sermonId } })).resolves.toBe(0);
     await expect(prisma.transcript.findUnique({ where: { sermonId } })).resolves.toBeNull();
     await expect(prisma.transcriptSegment.count({ where: { sermonId } })).resolves.toBe(0);
+    await expect(prisma.auditEvent.findFirst({
+      where: {
+        organizationId: "org_local_default",
+        action: "sermon.deleted",
+        targetId: sermonId,
+      },
+      select: { actorUserId: true },
+    })).resolves.toEqual({ actorUserId: "user_local_bootstrap" });
     await expect(readFile(renderedPath)).rejects.toThrow();
   }, 20_000);
 });

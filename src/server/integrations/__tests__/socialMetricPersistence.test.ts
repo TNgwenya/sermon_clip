@@ -14,6 +14,11 @@ vi.mock("@/lib/prisma", () => ({
 
 import { upsertSocialMetricSnapshots } from "@/server/integrations/socialMetricPersistence";
 
+const tenantScope = {
+  organizationId: "org-church-1",
+  campusId: "campus-main",
+} as const;
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.transaction.mockImplementation((operations: Promise<unknown>[]) => Promise.all(operations));
@@ -29,7 +34,7 @@ describe("social metric persistence", () => {
       views: 100,
       source: "API",
       capturedAt: new Date("2026-07-16T08:00:00.000Z"),
-    }]);
+    }], tenantScope);
     await upsertSocialMetricSnapshots([{
       dedupeKey: "api:tiktok:account-1:post-1:2026-07-16",
       platform: "TikTok",
@@ -37,12 +42,22 @@ describe("social metric persistence", () => {
       views: 150,
       source: "API",
       capturedAt: new Date("2026-07-16T18:00:00.000Z"),
-    }]);
+    }], tenantScope);
 
     expect(mocks.upsert).toHaveBeenNthCalledWith(2, {
-      where: { dedupeKey: "api:tiktok:account-1:post-1:2026-07-16" },
-      create: expect.objectContaining({ views: 150 }),
+      where: {
+        organizationId_dedupeKey: {
+          organizationId: tenantScope.organizationId,
+          dedupeKey: "api:tiktok:account-1:post-1:2026-07-16",
+        },
+      },
+      create: expect.objectContaining({
+        organizationId: tenantScope.organizationId,
+        campusId: tenantScope.campusId,
+        views: 150,
+      }),
       update: expect.objectContaining({
+        campusId: tenantScope.campusId,
         views: 150,
         capturedAt: new Date("2026-07-16T18:00:00.000Z"),
       }),
@@ -52,7 +67,7 @@ describe("social metric persistence", () => {
   });
 
   it("does not open a transaction for an empty provider response", async () => {
-    await expect(upsertSocialMetricSnapshots([])).resolves.toBe(0);
+    await expect(upsertSocialMetricSnapshots([], tenantScope)).resolves.toBe(0);
     expect(mocks.transaction).not.toHaveBeenCalled();
   });
 });

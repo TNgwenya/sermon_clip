@@ -65,8 +65,13 @@ const pollIntervalMs = positiveNumber(process.env.MEDIA_WORKER_POLL_SECONDS, 15)
 const heartbeatIntervalMs = positiveNumber(process.env.MEDIA_WORKER_HEARTBEAT_SECONDS, 30) * 1000;
 const staleJobMs = positiveNumber(process.env.MEDIA_WORKER_STALE_JOB_MINUTES, 60) * 60 * 1000;
 const maxWorkerAttempts = Math.max(1, Math.floor(positiveNumber(process.env.MEDIA_WORKER_MAX_ATTEMPTS, 2)));
+const youtubeIntakeIntervalMs = positiveNumber(
+  process.env.YOUTUBE_AUTOMATION_SCAN_SECONDS,
+  5 * 60,
+) * 1000;
 const logger = createWorkerLogger("media");
 let processing = false;
+let scanningYoutube = false;
 
 const SERMON_STAGE_ORDER = [
   "CREATED",
@@ -598,6 +603,30 @@ async function processNextJob(): Promise<void> {
   }
 }
 
+async function scanAutomaticYoutubeIntake(): Promise<void> {
+  if (scanningYoutube || process.env.YOUTUBE_AUTOMATION_WORKER_ENABLED === "false") {
+    return;
+  }
+  scanningYoutube = true;
+  try {
+    const { runAutomaticYoutubeIntakeSweep } = await import(
+      "../src/server/integrations/youtubeAutomaticIntake"
+    );
+    const result = await runAutomaticYoutubeIntakeSweep();
+    if (result.checked > 0 || result.failed > 0) {
+      logger.info("YouTube automatic intake scan completed", {
+        checked: result.checked,
+        imported: result.imported,
+        failed: result.failed,
+      });
+    }
+  } catch (error) {
+    logger.warn("YouTube automatic intake scan failed", errorFields(error));
+  } finally {
+    scanningYoutube = false;
+  }
+}
+
 async function main(): Promise<void> {
   logger.banner("media worker started", {
     workerId,
@@ -605,12 +634,17 @@ async function main(): Promise<void> {
     heartbeatEvery: `${heartbeatIntervalMs / 1000}s`,
     staleAfter: `${staleJobMs / 60_000}m`,
     maxAttempts: maxWorkerAttempts,
+    youtubeIntakeEvery: `${youtubeIntakeIntervalMs / 1000}s`,
   });
 
+  await scanAutomaticYoutubeIntake();
   await processNextJob();
   setInterval(() => {
     void processNextJob();
   }, pollIntervalMs);
+  setInterval(() => {
+    void scanAutomaticYoutubeIntake();
+  }, youtubeIntakeIntervalMs);
 }
 
 process.on("SIGINT", () => {

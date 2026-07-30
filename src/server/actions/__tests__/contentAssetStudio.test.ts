@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const prismaMock = vi.hoisted(() => ({
   contentAsset: {
     findUnique: vi.fn(),
+    findFirst: vi.fn(),
     update: vi.fn(),
   },
   $transaction: vi.fn(),
@@ -23,6 +24,7 @@ const persistenceMock = vi.hoisted(() => vi.fn((file: { name: string; order: num
 })));
 const revalidatePathMock = vi.hoisted(() => vi.fn());
 const artworkLogoMock = vi.hoisted(() => vi.fn().mockResolvedValue("data:image/png;base64,TESTLOGO"));
+const requireContentAssetResourceMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/prisma", () => ({ prisma: prismaMock }));
 vi.mock("next/cache", () => ({ revalidatePath: revalidatePathMock }));
@@ -44,6 +46,9 @@ vi.mock("@/server/contentAssets/nonVideoAssetRenderer", () => ({
 }));
 vi.mock("@/server/contentRevisionService", () => ({
   createAssetRevision: revisionMock,
+}));
+vi.mock("@/server/auth/resourceAuthorization", () => ({
+  requireContentAssetResource: requireContentAssetResourceMock,
 }));
 
 import { saveContentAssetDesignAction } from "@/server/actions/contentAssetStudio";
@@ -71,6 +76,24 @@ const coverTextOverrides = {
 
 describe("content asset Design Studio actions", () => {
   beforeEach(() => {
+    requireContentAssetResourceMock.mockResolvedValue({
+      id: "asset-1",
+      organizationId: "org-1",
+      campusId: "campus-1",
+    });
+    prismaMock.contentAsset.findFirst.mockImplementation(async (...args) => {
+      const asset = await prismaMock.contentAsset.findUnique(...args);
+      if (!asset?.contentOpportunity) return asset;
+      return {
+        ...asset,
+        contentOpportunity: {
+          organizationId: "org-1",
+          campusId: "campus-1",
+          sermonId: "sermon-1",
+          ...asset.contentOpportunity,
+        },
+      };
+    });
     revisionMock.mockResolvedValue({ id: "asset-revision-1", revisionNumber: 1 });
     prismaMock.$transaction.mockImplementation(async (callback: (tx: unknown) => unknown) => callback({
       contentAsset: { update: prismaMock.contentAsset.update },
@@ -79,6 +102,25 @@ describe("content asset Design Studio actions", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("denies a cross-organization asset before Design Studio loads or writes it", async () => {
+    requireContentAssetResourceMock.mockRejectedValueOnce(
+      new Error("The requested resource was not found."),
+    );
+
+    const result = await saveContentAssetDesignAction({
+      assetId: "asset-other-org",
+      title: "Hidden design",
+      templateId: "quote-emphasis",
+      bodyContent: "Hidden copy",
+      slides: [],
+      rerender: false,
+    });
+
+    expect(result).toMatchObject({ success: false });
+    expect(prismaMock.contentAsset.findFirst).not.toHaveBeenCalled();
+    expect(prismaMock.contentAsset.update).not.toHaveBeenCalled();
   });
 
   it("persists ordered carousel copy and marks saved-only artwork for rerender", async () => {

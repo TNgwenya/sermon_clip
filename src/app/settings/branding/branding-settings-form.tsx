@@ -5,15 +5,17 @@ import type { CSSProperties, ChangeEvent, ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 
 import {
-  saveBrandingSettingsAction,
+  watermarkPositions,
   type BrandingSettingsActionState,
-} from "@/server/actions/branding";
-import { watermarkPositions, type BrandingSettingsRecord } from "@/server/branding/settings";
+  type BrandingSettingsValues,
+} from "@/lib/brandingSettings";
 import { CAPTION_STYLE_PRESETS, resolveCaptionStylePreset } from "@/lib/captionStylePresets";
+import { saveBrandingSettingsAction } from "@/server/actions/branding";
 
 type BrandingSettingsFormProps = {
-  settings: BrandingSettingsRecord;
+  settings: BrandingSettingsValues;
   helperPayload: unknown;
+  canManage: boolean;
 };
 
 const initialState: BrandingSettingsActionState = {
@@ -33,11 +35,11 @@ const APPROVED_FONT_OPTIONS = [
 
 const BRAND_COLOR_PRESETS = ["#0F766E", "#1D4ED8", "#FACC15", "#DC2626", "#111827", "#F8FAFC"];
 
-function SaveButton() {
+function SaveButton({ disabled = false }: { disabled?: boolean }) {
   const { pending } = useFormStatus();
 
   return (
-    <button className="button primary" type="submit" disabled={pending}>
+    <button className="button primary" type="submit" disabled={disabled || pending}>
       {pending ? "Saving..." : "Save Brand Kit"}
     </button>
   );
@@ -155,7 +157,11 @@ function renderCaptionSample(text: string, emphasisWords: string[]): ReactNode {
   });
 }
 
-export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettingsFormProps) {
+export function BrandingSettingsForm({
+  settings,
+  helperPayload,
+  canManage,
+}: BrandingSettingsFormProps) {
   const [state, action] = useActionState(saveBrandingSettingsAction, initialState);
   const logoInputRef = useRef<HTMLInputElement>(null);
   const [churchName, setChurchName] = useState(settings.churchName);
@@ -225,6 +231,15 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
   return (
     <form action={action} className="brand-kit-workspace">
       <section className="card brand-kit-controls stack-md">
+        {!canManage ? (
+          <p className="info-banner" role="status">
+            You have view-only access. Ask an organization owner or administrator to update this Brand Kit.
+          </p>
+        ) : null}
+        <fieldset
+          disabled={!canManage}
+          style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}
+        >
         <div className="section-heading-row brand-controls-heading">
           <div>
             <p className="kicker">Identity</p>
@@ -232,7 +247,7 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
           </div>
           <div className="brand-controls-heading-actions">
             <span className="status-pill">Used for new prepared clips</span>
-            <SaveButton />
+            <SaveButton disabled={!canManage} />
           </div>
         </div>
 
@@ -470,8 +485,9 @@ export function BrandingSettingsForm({ settings, helperPayload }: BrandingSettin
             <p className="muted small">Applied when approved clips are prepared for Ready-to-post.</p>
             <p className="brand-save-title">Saving may mark existing overlays as outdated.</p>
           </div>
-          <SaveButton />
+          <SaveButton disabled={!canManage} />
         </div>
+        </fieldset>
 
         {state.message ? (
           <p className={state.success ? "success-banner" : "error-banner"} role="status" aria-live="polite">

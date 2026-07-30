@@ -5,6 +5,8 @@ import { notFound } from "next/navigation";
 
 import { prisma } from "@/lib/prisma";
 import { StatusBadge } from "@/components/ui";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantResourceScope, tenantScope } from "@/server/tenancy/scope";
 import { DEFAULT_CAPTION_STYLE_PRESET_ID } from "@/lib/captionStylePresets";
 import {
   extractCaptionPackage,
@@ -66,6 +68,7 @@ import {
   type ClipBrollSuggestion,
 } from "@/lib/clipBrollSuggestions";
 import { STUDIO_BOUNDARY_CONTEXT_SECONDS } from "@/lib/clipStudioBoundaryTiming";
+import pageStyles from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-page.module.css";
 
 type ClipStudioPageParams = {
   params: Promise<{ id: string; clipId: string }>;
@@ -165,11 +168,14 @@ function extractFramingDecisionSummary(captionData: unknown): string | null {
 
 export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   const { id: sermonId, clipId } = await params;
+  const requestContext = await requireRequestCapability("content.read", {
+    resource: { kind: "SERMON", id: sermonId },
+  });
   const localMediaAvailable = canRunLocalMediaProcessing();
 
   const [sermon, clip] = await Promise.all([
-    prisma.sermon.findUnique({
-    where: { id: sermonId },
+    prisma.sermon.findFirst({
+    where: tenantResourceScope(requestContext, sermonId),
     select: {
       id: true,
       title: true,
@@ -198,8 +204,12 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       },
     },
     }),
-    prisma.clipCandidate.findUnique({
-      where: { id: clipId },
+    prisma.clipCandidate.findFirst({
+      where: {
+        id: clipId,
+        sermonId,
+        sermon: tenantScope(requestContext),
+      },
       select: {
       id: true,
       sermonId: true,
@@ -334,7 +344,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       where: { sermonId },
       select: { wordTimings: true },
     }),
-    getBrandingSettings().catch(() => null),
+    getBrandingSettings(requestContext.organizationId).catch(() => null),
     getActiveResolvedFramingPlan(clip.id),
   ]);
 
@@ -617,6 +627,20 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   const latestExportRecords = exportHistoryWithFileState;
   const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
   const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
+  const previewCanvasState = hasPreview || sourceVideoPreviewAvailable
+    ? "Media connected"
+    : upstreamPreparing
+      ? "Preparing media"
+      : renderStatus === "FAILED"
+        ? "Preview failed"
+        : "Preview unavailable";
+  const previewCanvasTone = hasPreview || sourceVideoPreviewAvailable
+    ? "ready"
+    : upstreamPreparing
+      ? "working"
+      : renderStatus === "FAILED"
+        ? "error"
+        : "empty";
   const studioMediaIssues = [
     clip.renderError ? { label: "Render", message: clip.renderError } : null,
     clip.captionGenerationError ? { label: "Captions", message: clip.captionGenerationError } : null,
@@ -635,47 +659,58 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       preacherName={sermon.speakerName}
       logoSrc={logoSrc}
     >
-      <main className="container clip-studio-shell stack-md">
-        <header className="clip-studio-topbar" aria-labelledby="clip-studio-title">
-          <div className="clip-studio-topbar-row">
-            <div className="clip-studio-title-block">
+      <main className={`container clip-studio-shell stack-md ${pageStyles.shell}`}>
+        <header className={`clip-studio-topbar ${pageStyles.projectHeader}`} aria-labelledby="clip-studio-title">
+          <div className={`clip-studio-topbar-row ${pageStyles.headerRow}`}>
+            <div className={`clip-studio-title-block ${pageStyles.titleBlock}`}>
               <div className="clip-studio-title-copy stack-sm">
+                <nav className={pageStyles.projectBreadcrumb} aria-label="Clip Studio breadcrumb">
+                  <Link href={`/sermons/${sermonId}`}>Sermon</Link>
+                  <span aria-hidden="true">/</span>
+                  <span>Clip Studio</span>
+                </nav>
                 <h1 id="clip-studio-title">{clip.title}</h1>
                 <p className="muted clip-studio-topbar-subtitle">
-                  {sermon.title}
+                  {sermon.title}{sermon.speakerName ? ` · ${sermon.speakerName}` : ""}
                 </p>
-              </div>
-
-              <div className="clip-studio-primary-status" aria-label="Current clip status">
-                <StatusBadge tone={clipStatusTone(clipStatus)}>
-                  {formatClipStatusLabel(clipStatus, {
-                    isManuallyEdited: clip.isManuallyEdited,
-                    renderStatus,
-                  })}
-                </StatusBadge>
-              </div>
-
-              <details className="clip-studio-status-details">
-                <summary>
-                  <span>{clip.boundaryQuality === "GOOD" ? "Timing ready" : "Review timing"}</span>
-                </summary>
-                <div className="clip-studio-status-row">
-                  <StatusBadge
-                    tone={
-                      clip.boundaryQuality === "GOOD"
-                        ? "success"
-                        : clip.boundaryQuality === "NEEDS_REVIEW"
-                          ? "warning"
-                          : "danger"
-                    }
-                  >
-                    {clip.boundaryQuality.replace("_", " ")}
-                  </StatusBadge>
-                  {clip.contextWarning ? <StatusBadge tone="warning">Needs context</StatusBadge> : null}
-                  {transcriptReviewRequired ? <StatusBadge tone="warning">Transcript review needed</StatusBadge> : null}
-                  {transcriptReviewed ? <StatusBadge tone="success">Transcript reviewed</StatusBadge> : null}
+                <div className={pageStyles.projectMeta} aria-label="Project details">
+                  <span>{timing.durationLabel}</span>
+                  <span>{FORMAT_LABELS[exportSettings.primaryFormat]}</span>
+                  <span className={pageStyles.projectStatus} aria-label="Current clip status">
+                    <StatusBadge tone={clipStatusTone(clipStatus)}>
+                      {formatClipStatusLabel(clipStatus, {
+                        isManuallyEdited: clip.isManuallyEdited,
+                        renderStatus,
+                      })}
+                    </StatusBadge>
+                  </span>
+                  <span className={pageStyles.liveProjectCue}>
+                    <span aria-hidden="true" />
+                    Preview updates live
+                  </span>
+                  <details className={`clip-studio-status-details ${pageStyles.qualityDetails}`}>
+                    <summary>
+                      <span>{clip.boundaryQuality === "GOOD" ? "Timing ready" : "Review timing"}</span>
+                    </summary>
+                    <div className="clip-studio-status-row">
+                      <StatusBadge
+                        tone={
+                          clip.boundaryQuality === "GOOD"
+                            ? "success"
+                            : clip.boundaryQuality === "NEEDS_REVIEW"
+                              ? "warning"
+                              : "danger"
+                        }
+                      >
+                        {clip.boundaryQuality.replace("_", " ")}
+                      </StatusBadge>
+                      {clip.contextWarning ? <StatusBadge tone="warning">Needs context</StatusBadge> : null}
+                      {transcriptReviewRequired ? <StatusBadge tone="warning">Transcript review needed</StatusBadge> : null}
+                      {transcriptReviewed ? <StatusBadge tone="success">Transcript reviewed</StatusBadge> : null}
+                    </div>
+                  </details>
                 </div>
-              </details>
+              </div>
 
               {transcriptReviewRequired ? (
                 <p className="warning-banner">
@@ -684,10 +719,10 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
               ) : null}
             </div>
 
-            <div className="clip-studio-topbar-actions" aria-label="Clip Studio navigation and preparation">
+            <div className={`clip-studio-topbar-actions ${pageStyles.headerActions}`} aria-label="Clip Studio navigation and preparation">
               <div className="clip-studio-context-actions">
                 <Link href={`/sermons/${sermonId}`} className="button tertiary">
-                  Back to sermon
+                  <span aria-hidden="true">←</span> Sermon
                 </Link>
                 <Link href={`/sermons/${sermonId}/review`} className="button tertiary">
                   Review moments
@@ -705,7 +740,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
           </div>
         </header>
 
-        <div className="clip-studio-layout">
+        <div className={`clip-studio-layout ${pageStyles.workspaceGrid}`}>
           <ClipStudioTranscriptPanel
             transcriptSegments={studioTranscriptSegments}
             clipStartSeconds={clip.startTimeSeconds}
@@ -720,7 +755,19 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             transcriptReviewHref={`/sermons/${sermonId}/review#clip-${clip.id}`}
           />
 
-          <aside className="clip-studio-preview-column stack-md">
+          <aside className={`clip-studio-preview-column stack-md ${pageStyles.previewColumn}`}>
+            <div className={pageStyles.viewportChrome} aria-label="Preview canvas status">
+              <div>
+                <span className={pageStyles.canvasMark} aria-hidden="true" />
+                <strong>Canvas</strong>
+              </div>
+              <div>
+                <span>{FORMAT_LABELS[exportSettings.primaryFormat]}</span>
+                <span className={pageStyles.canvasState} data-state={previewCanvasTone}>
+                  {previewCanvasState}
+                </span>
+              </div>
+            </div>
             <ClipStudioLivePreview
               hasPreview={hasPreview}
               previewSrc={previewSrc}
@@ -754,7 +801,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             ) : null}
           </aside>
 
-          <div className="clip-studio-main-column stack-md">
+          <div className={`clip-studio-main-column stack-md ${pageStyles.inspectorColumn}`}>
             <ClipStudioWorkbenchTabs
             edit={
               <ClipStudioEditor

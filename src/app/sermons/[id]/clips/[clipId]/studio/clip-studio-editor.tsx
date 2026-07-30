@@ -150,24 +150,18 @@ type EditorWorkspace = "captions" | "copy" | "layers" | "audio" | "review";
 
 const QUICK_CLIP_LENGTH_SECONDS = [30, 45, 60, 90];
 const EMPTY_AUDIO_SILENCE_EVENTS: SpeechCleanupAudioSilenceEvent[] = [];
-const CURATED_CAPTION_STYLE_PRESET_IDS = new Set([
-  "clean-lower",
-  "bold-sermon",
-  "creator-highlight",
-  "minimal-church",
-  "scripture-focus",
-  "youth-social",
-]);
 const EDITOR_WORKSPACES: Array<{
   id: EditorWorkspace;
   label: string;
   description: string;
+  icon: string;
+  shortcut?: string;
 }> = [
-  { id: "captions", label: "Captions", description: "Style, words and timing" },
-  { id: "copy", label: "Post copy", description: "Caption and hashtags" },
-  { id: "layers", label: "Hook & cards", description: "Opening and emphasis" },
-  { id: "audio", label: "Audio", description: "Pacing cleanup" },
-  { id: "review", label: "Final check", description: "Readiness before export" },
+  { id: "captions", label: "Captions", description: "Style, words and timing", icon: "CC", shortcut: "C" },
+  { id: "copy", label: "Post copy", description: "Caption and hashtags", icon: "#" },
+  { id: "layers", label: "Hook & cards", description: "Opening and emphasis", icon: "✦", shortcut: "H" },
+  { id: "audio", label: "Audio", description: "Pacing cleanup", icon: "W", shortcut: "A" },
+  { id: "review", label: "Final check", description: "Readiness before export", icon: "✓" },
 ];
 const BROLL_TONE_OPTIONS: Array<{ value: BrollCardTone; label: string }> = [
   { value: "quote", label: "Quote" },
@@ -572,7 +566,6 @@ export function ClipStudioEditor({
   const [hashtags, setHashtags] = useState(() => hashtagsToEditorInput(initialHashtags));
   const [applyCaptionsToClip, setApplyCaptionsToClip] = useState(initialApplyCaptionsToClip);
   const [captionStylePresetId, setCaptionStylePresetId] = useState(initialCaptionStylePresetId);
-  const [showAllCaptionStyles, setShowAllCaptionStyles] = useState(false);
   const [captionPosition, setCaptionPosition] = useState<CaptionPosition>(initialCaptionPosition);
   const [captionAppearance, setCaptionAppearance] = useState<CaptionAppearanceSettings>(initialCaptionAppearance);
   const [captionDesign, setCaptionDesign] = useState<CaptionDesignSettingsV1>(initialCaptionDesign);
@@ -609,23 +602,15 @@ export function ClipStudioEditor({
   const [lastSegmentId, setLastSegmentId] = useState(initialLastSegmentId);
   const [focusedSegmentId, setFocusedSegmentId] = useState(initialFirstSegmentId);
   const resolvedCaptionStyleId = captionStylePresetId || brandCaptionStylePresetId;
+  const brandCaptionStyle = useMemo(
+    () => resolveCaptionStylePreset(brandCaptionStylePresetId),
+    [brandCaptionStylePresetId],
+  );
   const resolvedCaptionStyle = useMemo(() => resolveCaptionStylePreset(resolvedCaptionStyleId), [resolvedCaptionStyleId]);
   const captionContrast = useMemo(
     () => assessCaptionDesignContrast(captionDesign),
     [captionDesign],
   );
-  const visibleCaptionStylePresets = useMemo(() => {
-    if (showAllCaptionStyles) {
-      return CAPTION_STYLE_PRESETS;
-    }
-
-    const curated = CAPTION_STYLE_PRESETS.filter((preset) => CURATED_CAPTION_STYLE_PRESET_IDS.has(preset.id));
-    if (curated.some((preset) => preset.id === resolvedCaptionStyle.id)) {
-      return curated;
-    }
-
-    return [...curated, resolvedCaptionStyle];
-  }, [resolvedCaptionStyle, showAllCaptionStyles]);
 
   useEffect(() => {
     if (!audioSilenceReviewUrl || initialAudioSilenceAnalyzed) {
@@ -2093,6 +2078,38 @@ export function ClipStudioEditor({
         return;
       }
 
+      if (detail.command === "split-caption-at-seconds") {
+        const splitSeconds = Number(detail.seconds);
+        const clipDurationSeconds = timingPreview.durationSeconds;
+        if (!Number.isFinite(splitSeconds) || clipDurationSeconds === null) {
+          setStatusSuccess(false);
+          setStatusMessage("Move the playhead inside a caption before splitting it.");
+          return;
+        }
+
+        const cueIndex = captionCues.findIndex((cue) => (
+          splitSeconds > cue.startSeconds + 0.08
+          && splitSeconds < cue.endSeconds - 0.08
+          && countWords(cue.text) >= 2
+        ));
+        if (cueIndex < 0) {
+          setStatusSuccess(false);
+          setStatusMessage("Move the playhead inside a caption with at least two words.");
+          return;
+        }
+
+        applyCaptionCueEdit(
+          splitEditableCaptionCue({
+            cues: captionCues,
+            cueIndex,
+            splitSeconds,
+            clipDurationSeconds,
+          }),
+          `Caption ${cueIndex + 1} split at the playhead.`,
+        );
+        return;
+      }
+
       if (!detail.segmentId) {
         return;
       }
@@ -3085,7 +3102,7 @@ export function ClipStudioEditor({
   ]);
 
   return (
-    <section className="stack-lg">
+    <section className={`stack-lg ${styles.editorSurface}`}>
       <div hidden>
       <SectionCard title="Timing" description="Adjust the clip boundaries before rendering.">
         <div className="actions-row">
@@ -3394,7 +3411,27 @@ export function ClipStudioEditor({
       </SectionCard>
       </div>
 
-      <nav className={styles.workspaceNav} aria-label="Caption Studio tasks">
+      <section className={styles.quickFinishSummary} aria-labelledby="clip-quick-finish-heading">
+        <div>
+          <p className="kicker">Quick Finish</p>
+          <h3 id="clip-quick-finish-heading">{creatorReview.label}</h3>
+          <p className="muted small">
+            Work left to right: polish the spoken words, add only the layers that help, then run the final check.
+          </p>
+        </div>
+        <div className={styles.quickFinishReadiness} aria-label="Quick Finish readiness">
+          <span>
+            <strong>{creatorReview.summary[0]?.ready ?? 0}/{creatorReview.summary[0]?.total ?? 0}</strong>
+            required
+          </span>
+          <span>
+            <strong>{creatorReview.summary[1]?.ready ?? 0}/{creatorReview.summary[1]?.total ?? 0}</strong>
+            recommended
+          </span>
+        </div>
+      </section>
+
+      <nav className={styles.workspaceNav} aria-label="Edit tools">
         {EDITOR_WORKSPACES.map((workspace) => (
           <button
             key={workspace.id}
@@ -3404,10 +3441,25 @@ export function ClipStudioEditor({
             aria-label={`${workspace.label}: ${workspace.description}`}
             onClick={() => setActiveWorkspace(workspace.id)}
           >
-            <strong>{workspace.label}</strong>
+            <span className={styles.workspaceIcon} aria-hidden="true">{workspace.icon}</span>
+            <span className={styles.workspaceCopy}>
+              <strong>{workspace.label}</strong>
+              <span>{workspace.description}</span>
+            </span>
+            {workspace.shortcut ? (
+              <kbd className={styles.workspaceShortcut} aria-hidden="true">Alt {workspace.shortcut}</kbd>
+            ) : null}
           </button>
         ))}
       </nav>
+
+      <div className={styles.workspaceHeading}>
+        <div>
+          <p className="kicker">Now editing</p>
+          <h3>{EDITOR_WORKSPACES.find((workspace) => workspace.id === activeWorkspace)?.label}</h3>
+        </div>
+        <span>{EDITOR_WORKSPACES.find((workspace) => workspace.id === activeWorkspace)?.description}</span>
+      </div>
 
       <div hidden={activeWorkspace !== "review"}>
       <SectionCard title="Final check" className="clip-studio-creator-review">
@@ -4072,46 +4124,50 @@ export function ClipStudioEditor({
                   <p className="kicker">Start with a strong design</p>
                   <h4 id="caption-preset-heading">Choose a style</h4>
                 </div>
-                <span className="muted small">
-                  {showAllCaptionStyles ? `${CAPTION_STYLE_PRESETS.length} styles` : "Recommended"}
-                </span>
+                <span className="muted small">{CAPTION_STYLE_PRESETS.length} styles</span>
               </div>
-              <div className="clip-studio-caption-style-grid">
+              <div
+                className={styles.presetScroller}
+                role="group"
+                aria-label="Caption style choices"
+              >
                 <button
                   type="button"
                   aria-pressed={captionStylePresetId === ""}
-                  className={captionStylePresetId === "" ? "clip-studio-caption-style-option is-active" : "clip-studio-caption-style-option"}
+                  className={`${styles.presetCard} ${captionStylePresetId === "" ? styles.presetCardActive : ""}`}
                   onClick={() => applyCaptionStylePreset("")}
-                  disabled={isPending}
+                  disabled={isPending || !applyCaptionsToClip}
                 >
-                  <strong>Brand Kit default</strong>
-                  <span>{resolveCaptionStylePreset(brandCaptionStylePresetId).name}</span>
-                  <span>{resolveCaptionStylePreset(brandCaptionStylePresetId).bestFor}</span>
+                  <span className={`${styles.presetPreview} clip-studio-caption-style-preview ${brandCaptionStyle.className}`}>
+                    {brandCaptionStyle.sampleText}
+                  </span>
+                  <span className={styles.presetCardCopy}>
+                    <strong>Brand Kit default</strong>
+                    <small>{brandCaptionStyle.name}</small>
+                  </span>
                 </button>
-                {visibleCaptionStylePresets.map((preset) => (
+                {CAPTION_STYLE_PRESETS.map((preset) => (
                   <button
                     key={preset.id}
                     type="button"
                     aria-pressed={captionStylePresetId === preset.id}
-                    className={captionStylePresetId === preset.id ? "clip-studio-caption-style-option is-active" : "clip-studio-caption-style-option"}
+                    className={`${styles.presetCard} ${captionStylePresetId === preset.id ? styles.presetCardActive : ""}`}
                     onClick={() => applyCaptionStylePreset(preset.id)}
-                    disabled={isPending}
+                    disabled={isPending || !applyCaptionsToClip}
                   >
-                    <span className={`clip-studio-caption-style-preview ${preset.className}`}>{preset.sampleText}</span>
-                    <strong>{preset.name}</strong>
-                    <span>{preset.motion}</span>
-                    <span>{preset.bestFor}</span>
+                    <span className={`${styles.presetPreview} clip-studio-caption-style-preview ${preset.className}`}>
+                      {preset.sampleText}
+                    </span>
+                    <span className={styles.presetCardCopy}>
+                      <strong>{preset.name}</strong>
+                      <small>{preset.bestFor}</small>
+                    </span>
                   </button>
                 ))}
               </div>
-              <button
-                type="button"
-                className="button tertiary"
-                onClick={() => setShowAllCaptionStyles((current) => !current)}
-                disabled={isPending}
-              >
-                {showAllCaptionStyles ? "Show recommended styles" : `Explore all ${CAPTION_STYLE_PRESETS.length} styles`}
-              </button>
+              <p className={styles.presetScrollHint}>
+                Scroll sideways to preview every style. Selection updates the canvas immediately.
+              </p>
             </section>
 
             <div className={`clip-studio-selected-style ${styles.selectedStyle}`}>
@@ -5246,7 +5302,7 @@ export function ClipStudioEditor({
       </details>
       </div>
 
-      <div className="clip-studio-save-strip">
+      <div className={`clip-studio-save-strip ${styles.saveStrip}`}>
         <div className="clip-studio-history-actions" aria-label="Draft history controls">
           <button
             type="button"
@@ -5274,7 +5330,23 @@ export function ClipStudioEditor({
           <p className={statusSuccess ? "success-banner" : "error-banner"} role="status" aria-live="polite">
             {statusMessage}
           </p>
-        ) : null}
+        ) : (
+          <p className={styles.previewSyncStatus} role="status" aria-live="polite">
+            <span aria-hidden="true" />
+            Draft ready · preview is in sync
+          </p>
+        )}
+
+        <details className={styles.shortcutHelp}>
+          <summary>Shortcuts</summary>
+          <div>
+            <span><kbd>⌘ Z</kbd> Undo</span>
+            <span><kbd>⌘ ⇧ Z</kbd> Redo</span>
+            <span><kbd>Alt K</kbd> Play or pause</span>
+            <span><kbd>Alt [</kbd> Set start</span>
+            <span><kbd>Alt ]</kbd> Set end</span>
+          </div>
+        </details>
       </div>
     </section>
   );

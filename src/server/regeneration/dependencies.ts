@@ -1,6 +1,7 @@
 import type { AssetFreshness, ClipCandidate, ClipStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { DEFAULT_ORGANIZATION_ID } from "@/lib/tenancy/requestHeaders";
 import { extractCaptionStyleSource } from "@/lib/clipStudio";
 
 export type RegenerationStage =
@@ -345,11 +346,16 @@ export async function invalidateAfterExportSettingChange(clipId: string, reason:
 
 export async function invalidateAfterBrandingChange(
   reason: string,
-  options?: { captionStyleChanged?: boolean },
+  options?: {
+    captionStyleChanged?: boolean;
+    organizationId?: string;
+  },
 ): Promise<number> {
+  const organizationId = options?.organizationId ?? DEFAULT_ORGANIZATION_ID;
   const result = await prisma.clipCandidate.updateMany({
     where: {
       status: { in: ["APPROVED", "EXPORTED"] },
+      sermon: { organizationId },
     },
     data: {
       // Branding edits affect pastor/church overlays.
@@ -373,6 +379,7 @@ export async function invalidateAfterBrandingChange(
       where: {
         status: { in: ["APPROVED", "EXPORTED"] },
         captionBurnStatus: "COMPLETED",
+        sermon: { organizationId },
       },
       select: {
         id: true,

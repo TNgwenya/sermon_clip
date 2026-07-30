@@ -15,6 +15,8 @@ import { hasApprovedAssetPublishingRevision } from "@/lib/contentWorkflowUi";
 import { prisma } from "@/lib/prisma";
 import { deriveSermonPointKey, nextMondayDateInput, type WeeklyPlanCandidate } from "@/lib/weeklyPlan";
 import { WeeklyPlanBuilder } from "@/app/weekly-plan/weekly-plan-builder";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantScope } from "@/server/tenancy/scope";
 import styles from "./weekly-plan.module.css";
 
 export const dynamic = "force-dynamic";
@@ -41,10 +43,13 @@ export default async function WeeklyPlanPage({
   searchParams: Promise<WeeklyPlanSearchParams>;
 }) {
   const params = await searchParams;
+  const requestContext = await requireRequestCapability("calendar.read");
+  const scope = tenantScope(requestContext);
   const loadedAt = new Date();
   const [sermonRecords, scheduledRecords, postedRecords, metricRecords] = await Promise.all([
     prisma.sermon.findMany({
       where: {
+        ...scope,
         OR: [
           { contentAssets: { some: { status: { in: ["READY", "SCHEDULED"] } } } },
           {
@@ -127,13 +132,14 @@ export default async function WeeklyPlanPage({
     }),
     prisma.scheduledPost.findMany({
       where: {
+        ...scope,
         status: { in: ["PLANNED", "READY_FOR_MEDIA_TEAM", "POSTING", "POSTED"] },
       },
       select: { clipIdsJson: true, platform: true, scheduledFor: true, status: true },
       take: 500,
     }),
     prisma.scheduledPost.findMany({
-      where: { status: "POSTED" },
+      where: { ...scope, status: "POSTED" },
       orderBy: { scheduledFor: "desc" },
       take: 200,
       select: {
@@ -162,6 +168,7 @@ export default async function WeeklyPlanPage({
       },
     }),
     prisma.socialMetricSnapshot.findMany({
+      where: scope,
       orderBy: { capturedAt: "desc" },
       take: 500,
       select: {
@@ -272,7 +279,10 @@ export default async function WeeklyPlanPage({
   const performanceClipIds = Array.from(new Set(postedRecords.flatMap((post) => jsonStringArray(post.clipIdsJson))));
   const performanceClipRecords = performanceClipIds.length > 0
     ? await prisma.clipCandidate.findMany({
-        where: { id: { in: performanceClipIds } },
+        where: {
+          id: { in: performanceClipIds },
+          sermon: scope,
+        },
         select: {
           id: true,
           title: true,

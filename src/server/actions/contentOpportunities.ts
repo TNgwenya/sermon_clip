@@ -17,6 +17,7 @@ import {
 } from "@/lib/contentOpportunityJobs";
 import { createOpportunityRevision } from "@/server/contentRevisionService";
 import { recordContentFunnelEvent } from "@/server/contentFunnelTelemetry";
+import { requireSermonResource } from "@/server/auth/resourceAuthorization";
 import {
   detectProductionCopyIssues,
   extractQuoteTextFromContent,
@@ -238,8 +239,9 @@ export async function generateContentOpportunitiesAction(
   }
 
   try {
-    const result = await submitContentOpportunityGeneration(sermonId, { mode: "GENERATE" });
-    revalidateOpportunityPaths(sermonId);
+    const sermon = await requireSermonResource("content.create", sermonId.trim());
+    const result = await submitContentOpportunityGeneration(sermon.id, { mode: "GENERATE" });
+    revalidateOpportunityPaths(sermon.id);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown generation error.";
@@ -261,13 +263,14 @@ export async function generateContentPackAction(
   }
 
   try {
-    const result = await submitContentOpportunityGeneration(sermonId, {
+    const sermon = await requireSermonResource("content.create", sermonId.trim());
+    const result = await submitContentOpportunityGeneration(sermon.id, {
       mode: "CONTENT_PACK",
       presetId: preset.id,
       quantities: preset.quantities,
       replaceDefaultQuantities: true,
     });
-    revalidateOpportunityPaths(sermonId);
+    revalidateOpportunityPaths(sermon.id);
     return {
       ...result,
       message: `${preset.label}: ${result.message}`,
@@ -286,8 +289,9 @@ export async function regenerateContentOpportunitiesAction(
   }
 
   try {
-    const result = await submitContentOpportunityGeneration(sermonId, { mode: "REGENERATE" });
-    revalidateOpportunityPaths(sermonId);
+    const sermon = await requireSermonResource("content.create", sermonId.trim());
+    const result = await submitContentOpportunityGeneration(sermon.id, { mode: "REGENERATE" });
+    revalidateOpportunityPaths(sermon.id);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown regeneration error.";
@@ -309,12 +313,13 @@ export async function regenerateContentOpportunityTypeAction(
   }
 
   try {
-    const result = await submitContentOpportunityGeneration(sermonId, {
+    const sermon = await requireSermonResource("content.create", sermonId.trim());
+    const result = await submitContentOpportunityGeneration(sermon.id, {
       mode: "REGENERATE_TYPE",
       targetType: parsedType.data,
     });
 
-    revalidateOpportunityPaths(sermonId);
+    revalidateOpportunityPaths(sermon.id);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown regeneration error.";
@@ -337,8 +342,19 @@ export async function updateContentOpportunityStatusAction(
   }
 
   try {
+    const sermon = await requireSermonResource(
+      parsedStatus.data === "APPROVED" || parsedStatus.data === "REJECTED"
+        ? "approvals.decide"
+        : "content.update",
+      sermonId.trim(),
+    );
     const current = await prisma.contentOpportunity.findFirst({
-      where: { id: opportunityId, sermonId },
+      where: {
+        id: opportunityId.trim(),
+        sermonId: sermon.id,
+        organizationId: sermon.organizationId,
+        ...(sermon.campusId ? { campusId: sermon.campusId } : {}),
+      },
       select: {
         id: true,
         status: true,
@@ -381,7 +397,7 @@ export async function updateContentOpportunityStatusAction(
     if (parsedStatus.data === "APPROVED") {
       if (current.opportunityType === "QUOTE_GRAPHIC") {
         const transcriptSegments = await prisma.transcriptSegment.findMany({
-          where: { sermonId },
+          where: { sermonId: sermon.id },
           orderBy: [
             { startTimeSeconds: "asc" },
             { endTimeSeconds: "asc" },
@@ -513,7 +529,9 @@ export async function updateContentOpportunityStatusAction(
     if (parsedStatus.data === "APPROVED") {
       await recordContentFunnelEvent({
         eventType: "APPROVED",
-        sermonId,
+        organizationId: sermon.organizationId,
+        campusId: sermon.campusId,
+        sermonId: sermon.id,
         opportunityId: current.id,
         dedupeKey: approvedRevisionId
           ? `content-approved:${approvedRevisionId}`
@@ -526,7 +544,7 @@ export async function updateContentOpportunityStatusAction(
       });
     }
 
-    revalidateOpportunityPaths(sermonId);
+    revalidateOpportunityPaths(sermon.id);
     return { success: true, message: `Opportunity marked as ${parsedStatus.data}.` };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Status update failed.";
@@ -544,10 +562,13 @@ export async function updateContentOpportunityContentAction(
   }
 
   try {
+    const sermon = await requireSermonResource("content.update", parsed.data.sermonId);
     const existing = await prisma.contentOpportunity.findFirst({
       where: {
         id: parsed.data.opportunityId,
-        sermonId: parsed.data.sermonId,
+        sermonId: sermon.id,
+        organizationId: sermon.organizationId,
+        ...(sermon.campusId ? { campusId: sermon.campusId } : {}),
       },
       select: {
         id: true,
@@ -629,7 +650,9 @@ export async function updateContentOpportunityContentAction(
 
     await recordContentFunnelEvent({
       eventType: "EDITED",
-      sermonId: parsed.data.sermonId,
+      organizationId: sermon.organizationId,
+      campusId: sermon.campusId,
+      sermonId: sermon.id,
       opportunityId: existing.id,
       dedupeKey: editedRevisionId
         ? `content-edited:${editedRevisionId}`
@@ -643,7 +666,9 @@ export async function updateContentOpportunityContentAction(
     if (existing.status === "APPROVED" || existing.status === "USED") {
       await recordContentFunnelEvent({
         eventType: "REAPPROVAL_REQUIRED",
-        sermonId: parsed.data.sermonId,
+        organizationId: sermon.organizationId,
+        campusId: sermon.campusId,
+        sermonId: sermon.id,
         opportunityId: existing.id,
         dedupeKey: editedRevisionId
           ? `content-reapproval-required:${editedRevisionId}`
@@ -656,7 +681,7 @@ export async function updateContentOpportunityContentAction(
       });
     }
 
-    revalidateOpportunityPaths(parsed.data.sermonId);
+    revalidateOpportunityPaths(sermon.id);
     return { success: true, message: "Opportunity content updated." };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Content update failed.";
@@ -669,17 +694,29 @@ export async function recordContentOpportunityPreviewAction(
   opportunityId: string,
 ): Promise<{ success: boolean }> {
   if (!sermonId?.trim() || !opportunityId?.trim()) return { success: false };
-  const opportunity = await prisma.contentOpportunity.findFirst({
-    where: { id: opportunityId, sermonId },
-    select: { id: true, opportunityType: true },
-  });
-  if (!opportunity) return { success: false };
-  await recordContentFunnelEvent({
-    eventType: "PREVIEWED",
-    sermonId,
-    opportunityId,
-    dedupeKey: `content-previewed:${opportunityId}`,
-    metadata: { opportunityType: opportunity.opportunityType },
-  });
-  return { success: true };
+  try {
+    const sermon = await requireSermonResource("content.read", sermonId.trim());
+    const opportunity = await prisma.contentOpportunity.findFirst({
+      where: {
+        id: opportunityId.trim(),
+        sermonId: sermon.id,
+        organizationId: sermon.organizationId,
+        ...(sermon.campusId ? { campusId: sermon.campusId } : {}),
+      },
+      select: { id: true, opportunityType: true },
+    });
+    if (!opportunity) return { success: false };
+    await recordContentFunnelEvent({
+      eventType: "PREVIEWED",
+      organizationId: sermon.organizationId,
+      campusId: sermon.campusId,
+      sermonId: sermon.id,
+      opportunityId: opportunity.id,
+      dedupeKey: `content-previewed:${opportunity.id}`,
+      metadata: { opportunityType: opportunity.opportunityType },
+    });
+    return { success: true };
+  } catch {
+    return { success: false };
+  }
 }

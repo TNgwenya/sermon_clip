@@ -15,6 +15,8 @@ import { slugifyExportName } from "@/lib/exportNaming";
 import { prisma } from "@/lib/prisma";
 import { createZipArchive } from "@/lib/zipArchive";
 import { getSermonStoragePath } from "@/server/agents/storage";
+import { requireContentAssetResource } from "@/server/auth/resourceAuthorization";
+import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 import {
   isTrustedContentAssetPublicUrl,
   readContentAssetPublicFile,
@@ -99,6 +101,17 @@ export async function GET(
   const format = normalizeFormat(rawFormat);
   if (!format) {
     return NextResponse.json({ error: "Choose a supported handoff format." }, { status: 404 });
+  }
+
+  try {
+    await requireContentAssetResource("content.export", id);
+  } catch (error) {
+    const response = resourceAuthorizationErrorResponse(
+      error,
+      "This approved content asset is not available for handoff.",
+    );
+    if (response) return response;
+    throw error;
   }
 
   const asset = await loadHandoffAsset(id);

@@ -3,6 +3,8 @@ import { stat } from "node:fs/promises";
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
+import { requireSermonResource } from "@/server/auth/resourceAuthorization";
+import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 import { videoFileResponse } from "@/server/http/videoFileResponse";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
@@ -24,6 +26,14 @@ export async function GET(
 
   if (!sermonId) {
     return NextResponse.json({ error: "Sermon id is required." }, { status: 400 });
+  }
+
+  try {
+    await requireSermonResource("sermons.read", sermonId);
+  } catch (error) {
+    const response = resourceAuthorizationErrorResponse(error, "Sermon not found.");
+    if (response) return response;
+    throw error;
   }
 
   if (!canRunLocalMediaProcessing()) {

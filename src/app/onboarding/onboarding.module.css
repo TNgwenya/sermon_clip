@@ -1,0 +1,499 @@
+.shell {
+  max-width: 1180px;
+  padding-bottom: 88px;
+}
+
+.hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(250px, 0.34fr);
+  gap: clamp(28px, 5vw, 72px);
+  align-items: end;
+  overflow: hidden;
+  padding: clamp(30px, 6vw, 68px);
+  border: 1px solid rgba(139, 126, 255, 0.22);
+  border-radius: 32px;
+  background:
+    radial-gradient(circle at 82% 5%, rgba(117, 101, 255, 0.29), transparent 36%),
+    radial-gradient(circle at 4% 100%, rgba(52, 204, 157, 0.13), transparent 34%),
+    linear-gradient(138deg, #1a1c30 0%, #0d0f1c 72%);
+  box-shadow: 0 34px 90px rgba(2, 5, 18, 0.4);
+}
+
+.hero::after {
+  position: absolute;
+  right: -62px;
+  bottom: -92px;
+  width: 220px;
+  height: 220px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 56px;
+  content: "";
+  transform: rotate(26deg);
+}
+
+.heroCopy {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: start;
+  gap: 16px;
+}
+
+.backLink {
+  color: #aeb4c8;
+  font-size: 0.82rem;
+  text-decoration: none;
+}
+
+.backLink:hover {
+  color: #fff;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #9f95ff;
+  font-size: 0.71rem;
+  font-weight: 790;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.hero h1 {
+  max-width: 720px;
+  margin: 0;
+  color: #fff;
+  font-size: clamp(2.5rem, 6vw, 5.2rem);
+  line-height: 0.94;
+  letter-spacing: -0.062em;
+}
+
+.heroCopy > p:not(.eyebrow) {
+  max-width: 650px;
+  margin: 0;
+  color: #b7bdcf;
+  font-size: clamp(0.98rem, 1.4vw, 1.1rem);
+  line-height: 1.68;
+}
+
+.heroButton,
+.primaryButton,
+.secondaryButton {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 11px 17px;
+  border-radius: 12px;
+  font-size: 0.84rem;
+  font-weight: 780;
+  text-decoration: none;
+}
+
+.heroButton,
+.primaryButton {
+  border: 1px solid #9184ff;
+  color: #fff;
+  background: linear-gradient(135deg, #8273ff, #5e50da);
+  box-shadow: 0 12px 30px rgba(83, 69, 204, 0.26);
+}
+
+.secondaryButton {
+  border: 1px solid rgba(142, 149, 179, 0.3);
+  color: #d9dcea;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.progressCard {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 24px;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.052);
+  backdrop-filter: blur(18px);
+}
+
+.progressRing {
+  position: relative;
+  display: grid;
+  width: 112px;
+  height: 112px;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(#8f82ff var(--activation-progress), rgba(255, 255, 255, 0.09) 0);
+}
+
+.progressRing::before {
+  position: absolute;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  background: #171928;
+  content: "";
+}
+
+.progressRing span {
+  position: relative;
+  color: #fff;
+  font-size: 1.3rem;
+  font-weight: 820;
+}
+
+.progressCard > div:last-child {
+  display: grid;
+  gap: 5px;
+}
+
+.progressCard strong {
+  color: #fff;
+}
+
+.progressCard div > span {
+  color: #9fa5b9;
+  font-size: 0.77rem;
+  line-height: 1.45;
+}
+
+.checklistSection,
+.identityCard,
+.intakeCard {
+  padding: clamp(24px, 4vw, 40px);
+  border: 1px solid rgba(137, 143, 171, 0.18);
+  border-radius: 26px;
+  background: rgba(19, 21, 34, 0.86);
+  box-shadow: 0 22px 60px rgba(3, 6, 19, 0.2);
+}
+
+.sectionHeading,
+.identityHeading {
+  display: flex;
+  gap: 24px;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.sectionHeading > div,
+.identityHeading > div {
+  display: grid;
+  gap: 8px;
+}
+
+.sectionHeading h2,
+.identityHeading h2,
+.intakeCard h2 {
+  margin: 0;
+  color: #f7f8fd;
+  font-size: clamp(1.5rem, 3vw, 2.1rem);
+  letter-spacing: -0.035em;
+}
+
+.sectionHeading > p,
+.identityHeading div > p:last-child,
+.intakeCard div > p:last-child {
+  max-width: 590px;
+  margin: 0;
+  color: #9fa6ba;
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
+
+.stepGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stepGrid li {
+  display: grid;
+  min-height: 238px;
+  align-content: space-between;
+  gap: 20px;
+  padding: 18px;
+  border: 1px solid rgba(137, 143, 171, 0.2);
+  border-radius: 18px;
+  background: #11131f;
+}
+
+.stepGrid .stepComplete {
+  border-color: rgba(61, 200, 150, 0.25);
+  background: linear-gradient(160deg, rgba(36, 141, 105, 0.09), #11131f 50%);
+}
+
+.stepTopline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.stepNumber {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid rgba(143, 130, 255, 0.31);
+  border-radius: 10px;
+  color: #b8afff;
+  background: rgba(127, 108, 255, 0.1);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.stepComplete .stepNumber {
+  border-color: rgba(61, 200, 150, 0.3);
+  color: #9be3c4;
+  background: rgba(35, 158, 112, 0.11);
+}
+
+.status {
+  color: #d2b776;
+  font-size: 0.68rem;
+  font-weight: 760;
+}
+
+.stepComplete .status {
+  color: #91d7ba;
+}
+
+.stepCopy {
+  display: grid;
+  gap: 8px;
+}
+
+.stepCopy h3 {
+  margin: 0;
+  color: #f0f2fa;
+  font-size: 1rem;
+}
+
+.stepCopy p {
+  margin: 0;
+  color: #9299ad;
+  font-size: 0.79rem;
+  line-height: 1.55;
+}
+
+.stepGrid a {
+  color: #bcb4ff;
+  font-size: 0.77rem;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.workspaceBadge {
+  padding: 7px 12px;
+  border: 1px solid rgba(143, 131, 255, 0.25);
+  border-radius: 999px;
+  color: #c2baff;
+  background: rgba(112, 94, 235, 0.09);
+  font-size: 0.75rem;
+}
+
+.identityForm {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.field {
+  display: grid;
+  gap: 7px;
+}
+
+.field > span {
+  color: #c4c8d7;
+  font-size: 0.76rem;
+  font-weight: 730;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid rgba(137, 143, 171, 0.27);
+  border-radius: 11px;
+  outline: none;
+  color: #f5f6fc;
+  background: #0e101b;
+  font: inherit;
+}
+
+.field input:focus,
+.field select:focus {
+  border-color: #9588ff;
+  box-shadow: 0 0 0 3px rgba(130, 112, 255, 0.14);
+}
+
+.field input:disabled,
+.field select:disabled {
+  color: #9298ab;
+  cursor: not-allowed;
+}
+
+.field > small {
+  color: #8f96a9;
+  font-size: 0.71rem;
+  line-height: 1.45;
+}
+
+.field > span small {
+  color: #8f96a9;
+  font-weight: 600;
+}
+
+.fullField {
+  grid-column: 1 / -1;
+}
+
+.formFooter {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.formFooter > span,
+.formFooter p {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.primaryButton {
+  border: 1px solid #9184ff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.primaryButton:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.successMessage {
+  color: #9be3c4;
+}
+
+.errorMessage,
+.fieldError {
+  color: #ffabb5;
+}
+
+.intakeCard {
+  display: flex;
+  gap: 30px;
+  align-items: center;
+  justify-content: space-between;
+  background:
+    radial-gradient(circle at 95% 20%, rgba(105, 89, 235, 0.14), transparent 32%),
+    rgba(19, 21, 34, 0.86);
+}
+
+.intakeCard > div:first-child {
+  display: grid;
+  gap: 9px;
+}
+
+.intakeActions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 980px) {
+  .stepGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .identityForm {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .field:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .fullField {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 720px) {
+  .hero {
+    grid-template-columns: 1fr;
+    border-radius: 24px;
+  }
+
+  .progressCard {
+    grid-template-columns: auto 1fr;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .progressRing {
+    width: 84px;
+    height: 84px;
+  }
+
+  .progressRing::before {
+    width: 66px;
+    height: 66px;
+  }
+
+  .sectionHeading,
+  .identityHeading,
+  .intakeCard {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .stepGrid,
+  .identityForm {
+    grid-template-columns: 1fr;
+  }
+
+  .field:first-child {
+    grid-column: auto;
+  }
+
+  .fullField {
+    grid-column: auto;
+  }
+
+  .stepGrid li {
+    min-height: 210px;
+  }
+
+  .intakeActions,
+  .intakeActions a {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heroButton,
+  .primaryButton,
+  .secondaryButton {
+    scroll-behavior: auto;
+  }
+}

@@ -13,6 +13,8 @@ import { recordPostingPackage } from "@/lib/postingPackages";
 import { createZipArchive } from "@/lib/zipArchive";
 import { resolveReadyMedia } from "@/lib/readyMedia";
 import { extractCaptionPackage } from "@/lib/clipStudio";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantScope } from "@/server/tenancy/scope";
 
 function parseClipIds(value: string | null): string[] {
   if (!value || value === "all") {
@@ -30,12 +32,14 @@ function parseClipIds(value: string | null): string[] {
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
+  const requestContext = await requireRequestCapability("content.export");
   const url = new URL(request.url);
   const selectedClipIds = parseClipIds(url.searchParams.get("clipIds"));
 
   const clips = await prisma.clipCandidate.findMany({
     where: {
       ...(selectedClipIds.length > 0 ? { id: { in: selectedClipIds } } : {}),
+      sermon: tenantScope(requestContext),
       transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
       OR: [
         { exportStatus: "COMPLETED" },
@@ -210,6 +214,8 @@ export async function GET(request: Request): Promise<NextResponse> {
   const fileName = `${sermonName}-posting-package.zip`;
 
   await recordPostingPackage({
+    organizationId: requestContext.organizationId,
+    campusId: requestContext.campusId,
     clipIds: clips.map((clip) => clip.id),
     clipTitles: clips.map((clip) => clip.title),
     sermonTitle: clips[0]?.sermon.title ?? "Sermon clips",

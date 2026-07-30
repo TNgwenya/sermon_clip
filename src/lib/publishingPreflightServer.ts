@@ -26,10 +26,26 @@ export async function runPublishingPreflight(input: {
   automationMode: PostingAutomationMode;
   selectedAccountIdsByPlatform?: Partial<Record<PostingPlatform, string[]>>;
   controlPanelMode?: boolean;
+  tenantScope?: {
+    organizationId: string;
+    campusId: string | null;
+  };
 }): Promise<PublishingPreflightPacket> {
   const [clipRecords, accountRecords, serviceHealth] = await Promise.all([
     prisma.clipCandidate.findMany({
-      where: { id: { in: input.clipIds } },
+      where: {
+        id: { in: input.clipIds },
+        ...(input.tenantScope
+          ? {
+              sermon: {
+                organizationId: input.tenantScope.organizationId,
+                ...(input.tenantScope.campusId
+                  ? { campusId: input.tenantScope.campusId }
+                  : {}),
+              },
+            }
+          : {}),
+      },
       select: {
         id: true,
         title: true,
@@ -47,7 +63,22 @@ export async function runPublishingPreflight(input: {
       },
     }),
     prisma.socialAccount.findMany({
-      where: { platform: { in: input.platforms.map(toDatabasePlatform) } },
+      where: {
+        platform: { in: input.platforms.map(toDatabasePlatform) },
+        ...(input.tenantScope
+          ? {
+              organizationId: input.tenantScope.organizationId,
+              ...(input.tenantScope.campusId
+                ? {
+                    OR: [
+                      { campusId: input.tenantScope.campusId },
+                      { campusId: null },
+                    ],
+                  }
+                : {}),
+            }
+          : {}),
+      },
       select: {
         id: true,
         platform: true,

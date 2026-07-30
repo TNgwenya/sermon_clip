@@ -1,6 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  count: vi.fn(),
+  findMany: vi.fn(),
+}));
+
+vi.mock("@/lib/prisma", () => ({
+  prisma: {
+    clipCandidate: {
+      count: mocks.count,
+      findMany: mocks.findMany,
+    },
+  },
+}));
 
 import {
+  getClipThumbnailReadiness,
   getDefaultThumbnailWebpPath,
   getStoredOrDefaultThumbnailPath,
   getVersionedClipThumbnailPaths,
@@ -9,6 +24,12 @@ import { buildCoverFrameSource } from "@/lib/clipCoverFrame";
 import { getClipThumbnailPath, getClipThumbnailWebpPath } from "@/server/agents/storage";
 
 describe("clip thumbnail service", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.count.mockResolvedValue(0);
+    mocks.findMany.mockResolvedValue([]);
+  });
+
   it("uses a stored thumbnail path when one is available", () => {
     expect(
       getStoredOrDefaultThumbnailPath({
@@ -61,5 +82,29 @@ describe("clip thumbnail service", () => {
     expect(first.webpPath).toMatch(/\.webp$/);
     expect(changedTime.thumbnailPath).not.toBe(first.thumbnailPath);
     expect(changedSource.thumbnailPath).not.toBe(first.thumbnailPath);
+  });
+
+  it("scopes every readiness query to the requested organization and campus", async () => {
+    await getClipThumbnailReadiness({
+      organizationId: "org-a",
+      campusId: "campus-a",
+    });
+
+    for (const [call] of mocks.count.mock.calls) {
+      expect(call.where).toMatchObject({
+        sermon: {
+          organizationId: "org-a",
+          campusId: "campus-a",
+        },
+      });
+    }
+    expect(mocks.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        sermon: {
+          organizationId: "org-a",
+          campusId: "campus-a",
+        },
+      }),
+    }));
   });
 });

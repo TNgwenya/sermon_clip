@@ -1,9 +1,19 @@
-# Sermon Clip Agent MVP
+# SermonClip
 
 ## What this app does
-Sermon Clip Agent MVP is a local-first workflow for turning a sermon video into short clip candidates that a human can review, approve, export, and subtitle.
+SermonClip is a church content operating system that turns one sermon into a
+tenant-isolated, pastor-reviewed week of mixed-format content.
+
+See the [major-upgrade implementation status](./docs/sermonclip-major-upgrade-implementation-status.md)
+for the current phased delivery and production gates.
 
 It supports:
+- Secure users, sessions, church workspaces, campuses, roles, invitations, and
+  team offboarding
+- Automatic Week Drafts containing a configurable 5–7 total pieces across at
+  least three formats when the sermon has enough safe source material
+- One-card pastor approval, accountable team handover, assignments, comments,
+  mentions, and approval policies
 - Sermon record creation
 - Local media storage setup
 - Video download from YouTube with yt-dlp
@@ -13,10 +23,11 @@ It supports:
 - Human review (approve/reject/edit)
 - Export of approved clips only
 - Subtitle generation and subtitle burn-in for exported clips
-- One-click pre-review processing (download, extract, transcribe, generate clips)
+- Approval-gated, idempotent publishing and evidence-bound growth learning
 
-## What this MVP does not do yet
-- Multi-user authentication, church workspaces, or role-based access control
+## What still requires production-program work
+- Defense-in-depth database row-level security, managed private object storage,
+  managed queues, backup/restore drills, and enterprise identity
 - Unattended publishing unless a reviewed platform account, required public media staging, and a live posting worker are all configured
 - Payments or subscriptions
 - Automatic approval of clips
@@ -65,11 +76,17 @@ OPENAI_TRANSCRIPTION_RETRY_BASE_DELAY_MS=2000
 DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require
 # Pooled Neon connection used by the running app and workers.
 DATABASE_POOL_URL=postgresql://USER:PASSWORD@POOLER_HOST/DB?sslmode=require
+# Required for encrypted secrets, MFA, recovery codes, and secure sessions.
+AUTH_SECRET=generate_at_least_32_random_characters
+# Optional separate session-token HMAC secret; AUTH_SECRET is the fallback.
+SESSION_TOKEN_PEPPER=generate_at_least_32_random_characters
+# Optional one-time deploy input used to claim/reset the bootstrap owner.
+BOOTSTRAP_OWNER_PASSWORD=use_a_unique_password_manager_generated_password
 
-The browser smoke suite deliberately uses an isolated local PostgreSQL database instead of the app's configured database. Create `sermon_clip_codex_test`, apply the current schema, and run the suite with:
+The browser smoke suite deliberately uses an isolated local PostgreSQL database instead of the app's configured database. Create `sermon_clip_codex_test`, apply migrations and required bootstrap data through the safe deploy path, and run the suite with:
 
 ```bash
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sermon_clip_codex_test npx prisma db push
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sermon_clip_codex_test node scripts/prisma-safe-deploy.mjs
 npm run test:e2e
 ```
 
@@ -98,8 +115,13 @@ MEDIA_WORKER_POLL_SECONDS=15
 MEDIA_WORKER_HEARTBEAT_SECONDS=30
 MEDIA_WORKER_STALE_JOB_MINUTES=60
 MEDIA_WORKER_MAX_ATTEMPTS=2
+YOUTUBE_AUTOMATION_WORKER_ENABLED=true
+YOUTUBE_AUTOMATION_SCAN_SECONDS=300
+YOUTUBE_AUTOMATION_MIN_DURATION_SECONDS=600
 CONTENT_OPPORTUNITY_GENERATION_EXECUTION=QUEUED
-SCHEDULER_ADMIN_PASSWORD=single_user_dashboard_password
+# Local development and browser-smoke compatibility only. Production ignores
+# shared Basic authentication and requires a secure per-user session.
+SCHEDULER_ADMIN_PASSWORD=local_browser_smoke_password
 CONTROL_PANEL_MODE=true
 YOUTUBE_CLIENT_ID=your_google_oauth_client_id
 YOUTUBE_CLIENT_SECRET=your_google_oauth_client_secret
@@ -121,6 +143,14 @@ POSTING_WORKER_DRY_RUN=true
 `OPENAI_TRANSCRIPTION_MODEL` stays on `whisper-1` to provide word timestamps. The higher-accuracy `gpt-4o-transcribe` pass now defaults to `auto` and runs only when timing, confidence, or language evidence indicates that Whisper wording needs help. Diarization defaults off; set `OPENAI_TRANSCRIPTION_DIARIZATION_ENABLED=true` when speaker labels are required. `OPENAI_TRANSCRIPTION_GLOSSARY` accepts comma-, semicolon-, or newline-separated names, scripture terms, places, and local-language spellings. The older FFmpeg speech-enhancement retry is disabled by default because production samples consistently performed worse; it can be re-enabled explicitly for controlled evaluation.
 Text AI calls go through the shared Responses API gateway. Clip selection and sermon intelligence default to `gpt-5.6-terra` with `medium` reasoning; routine structured extraction and review tasks default to `gpt-5.6-luna` with `low` reasoning. Use `OPENAI_CHAT_MODEL` and `OPENAI_REASONING_EFFORT` as global overrides, or the task-specific variables for measured exceptions. Validated structured results are cached by model, prompt version, options, and input hash; duplicate in-flight requests are coalesced. `OPENAI_CLIP_SELECTION_MAX_WINDOWS` limits premium semantic review after deterministic pre-ranking while preserving remaining windows for local coverage top-up. AI calls record provider attempt counts, cache hits, cached input tokens, reasoning tokens, audio duration, latency, and estimated text cost; raw prompts are not stored.
 `MEDIA_WORKER_HEARTBEAT_SECONDS`, `MEDIA_WORKER_STALE_JOB_MINUTES`, and `MEDIA_WORKER_MAX_ATTEMPTS` control media job leases. A stale `RUNNING` job can be reclaimed by another local worker, then marked failed after the configured claim limit.
+The same persistent media worker checks opted-in YouTube channels every five
+minutes by default. Automatic intake remains disabled until an administrator
+connects the exact channel, confirms the church owns or may process its
+content, and enables the setting. The scanner reads only public uploads
+published after that consent, ignores short videos below
+`YOUTUBE_AUTOMATION_MIN_DURATION_SECONDS`, creates at most one new tenant-bound
+sermon per organization per scan, and queues normal `PROCESS_SERMON` work. Set
+`YOUTUBE_AUTOMATION_WORKER_ENABLED=false` as an emergency stop.
 Content idea generation is also claimed by `npm run worker:media` as a durable `GENERATE_CONTENT_OPPORTUNITIES` job. Keep `CONTENT_OPPORTUNITY_GENERATION_EXECUTION=QUEUED` in production; `INLINE` is an explicit local fallback for environments that cannot run the worker.
 `POSTING_WORKER_DRY_RUN` defaults to true unless explicitly set to `false`, so the worker can be tested without posting.
 Social Settings OAuth links use the current app host for callback URLs. Register the exact local and live callback URLs with each provider, for example `http://localhost:3000/api/oauth/youtube/callback` and `https://your-vercel-app.vercel.app/api/oauth/youtube/callback`. Keep `WORKER_API_BASE_URL` pointed at the app the worker should poll; it does not need to match the OAuth callback host.
@@ -135,7 +165,7 @@ brew install ffmpeg
 brew install yt-dlp
 npx prisma generate
 npx prisma generate
-npx prisma db push
+node scripts/prisma-safe-deploy.mjs
 
 ## Run instructions
 
@@ -275,6 +305,9 @@ Useful worker settings:
 - `MEDIA_WORKER_HEARTBEAT_SECONDS`: defaults to `30`.
 - `MEDIA_WORKER_STALE_JOB_MINUTES`: defaults to `60`.
 - `MEDIA_WORKER_MAX_ATTEMPTS`: defaults to `2`.
+- `YOUTUBE_AUTOMATION_SCAN_SECONDS`: defaults to `300`.
+- `YOUTUBE_AUTOMATION_MIN_DURATION_SECONDS`: defaults to `600`, preventing ordinary Shorts and brief announcements from being treated as sermons.
+- `YOUTUBE_AUTOMATION_WORKER_ENABLED`: set to `false` to pause all automatic channel scans without removing a church's consent settings.
 - `CONTENT_OPPORTUNITY_GENERATION_EXECUTION`: defaults to durable queued generation; use `INLINE` only as an explicit local fallback.
 - `POSTING_WORKER_SYNC_SECONDS`: defaults to `60`.
 - `POSTING_WORKER_DUE_CHECK_SECONDS`: defaults to `30`.
@@ -293,9 +326,24 @@ Useful worker settings:
 Automatic YouTube Shorts, Zernio-backed TikTok, and Facebook video posts can upload from Mac-local files. A selected account is authoritative, so Sermon Clip never falls back to another account's token. TikTok Direct Post code is retained behind `TIKTOK_DIRECT_POST_EXPERIMENTAL=true` for controlled development only; use Zernio or a reviewed manual handoff in production until the required TikTok review experience is complete. Approved generated images can also publish directly to Facebook Pages or professional Instagram accounts: Sermon Clip renders JPEG publishing variants, stages them at the configured public R2 URL, validates the connected Meta permission and live worker, and then publishes a single image or ordered carousel. Facebook remains unpublished by default until `FACEBOOK_DEFAULT_PUBLISHED=true` is deliberately enabled.
 After connecting YouTube in Social Settings, stored OAuth credentials are preferred. `YOUTUBE_REFRESH_TOKEN` is only a legacy fallback; remove or replace it if Google reports that the token was expired or revoked.
 
-The generated-content desk also includes a reusable Design Studio, an operational mixed-content weekly planner at `/weekly-plan`, WhatsApp/Story/HTML-email handoff packs, and branded ministry-guide PDFs. Weekly-plan bulk scheduling remains a reviewed manual handoff by design.
+The primary weekly workflow is the tenant-scoped Week Draft at `/week-drafts`: one sermon produces a configurable mixed-format review week without changing the number of clip candidates generated by the existing clip engine. Advanced Studio, the reusable Design Studio, `/weekly-plan`, WhatsApp/Story/HTML-email handoff packs, and branded ministry-guide PDFs remain available for specialist and manual workflows.
 
-For Neon/Vercel setup, create the Neon database and set both connection URLs in Vercel and locally: keep `DATABASE_URL` on Neon's direct endpoint for migrations, and set `DATABASE_POOL_URL` to the matching `-pooler` endpoint for the running app and workers. If `DATABASE_POOL_URL` is absent, the runtime safely falls back to `DATABASE_URL`. Vercel uses `npm run deploy:build`, which safely baselines an empty database from the current PostgreSQL schema and uses `prisma migrate deploy` for databases that already have migration history. The migration preflight retries transient Neon connection and cold-start failures with bounded exponential backoff; authentication, schema, and migration errors still fail immediately, and an unreachable database never causes migrations to be skipped. The defaults can be tuned with `PRISMA_DEPLOY_MAX_ATTEMPTS`, `PRISMA_DEPLOY_RETRY_BASE_DELAY_MS`, and `PRISMA_DEPLOY_RETRY_MAX_DELAY_MS`. To copy existing local SQLite rows into Neon, run:
+Password recovery uses the existing one-time `SecurityToken` store. Configure
+`AUTH_TRANSACTIONAL_WEBHOOK_URL` and a minimum 24-character
+`AUTH_TRANSACTIONAL_WEBHOOK_SECRET` to deliver a `password_reset` JSON message
+through the church's transactional-email service. The endpoint and
+`NEXT_PUBLIC_APP_URL` must use HTTPS in production so reset links cannot be
+derived from an untrusted request host. Tokens expire after 30 minutes, are stored only as keyed hashes,
+are revoked if delivery fails, and revoke every active user session after a
+successful password change.
+
+Workspace Readiness now includes competitive output gates for playable
+previews, quality coverage, pastor keeper rate, render success, context safety,
+and visual readiness. Gates stay marked as needing more evidence until their
+minimum real-world sample is available; the product never turns a tiny pilot
+sample into a performance claim.
+
+For Neon/Vercel setup, create the Neon database and set both connection URLs in Vercel and locally: keep `DATABASE_URL` on Neon's direct endpoint for migrations, and set `DATABASE_POOL_URL` to the matching `-pooler` endpoint for the running app and workers. If `DATABASE_POOL_URL` is absent, the runtime safely falls back to `DATABASE_URL`. Set a strong `AUTH_SECRET`; optionally set `SESSION_TOKEN_PEPPER` separately. During the first secure-identity deployment, `BOOTSTRAP_OWNER_PASSWORD` creates or rotates the bootstrap owner's scrypt credential without printing it. Remove that variable after the owner can sign in. Vercel uses `npm run deploy:build`, which safely baselines an empty database from the current PostgreSQL schema, restores migration-only approval constraints and partial indexes, and uses `prisma migrate deploy` for databases that already have migration history. The migration preflight retries transient Neon connection and cold-start failures with bounded exponential backoff; authentication, schema, and migration errors still fail immediately, and an unreachable database never causes migrations to be skipped. The defaults can be tuned with `PRISMA_DEPLOY_MAX_ATTEMPTS`, `PRISMA_DEPLOY_RETRY_BASE_DELAY_MS`, and `PRISMA_DEPLOY_RETRY_MAX_DELAY_MS`. To copy existing local SQLite rows into Neon, run:
 
 ```bash
 SQLITE_DATABASE_PATH=prisma/dev.db npm run import:sqlite-to-postgres
@@ -454,7 +502,7 @@ Use http://localhost:3000/health to quickly validate local dependencies and envi
 - Very short sermons can fail clip generation if transcript windows are too short for clip constraints.
 - Subtitle burn-in relies on local FFmpeg capabilities and fallback rendering behavior.
 - Media and posting queues require their respective Mac workers to remain online; some interactive actions still run in the web process.
-- The current access gate is intended for a single trusted workspace, not isolated multi-church tenancy.
+- Multi-church production remains pilot-gated until the isolation, restore, and worker-failure exercises in the implementation status are complete.
 
 ## Safety and rights reminder
 - This app is local-first.

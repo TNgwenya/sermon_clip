@@ -191,7 +191,10 @@ describe("regeneration dependency tracking", () => {
     await expect(invalidateAfterBrandingChange("branding changed")).resolves.toBe(2);
 
     expect(prismaMocks.updateMany).toHaveBeenCalledWith({
-      where: { status: { in: ["APPROVED", "EXPORTED"] } },
+      where: {
+        status: { in: ["APPROVED", "EXPORTED"] },
+        sermon: { organizationId: "org_local_default" },
+      },
       data: expect.objectContaining({
         overlayStatus: "NOT_RENDERED",
         exportStatus: "NOT_EXPORTED",

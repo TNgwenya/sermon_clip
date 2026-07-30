@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPastorProcessingFailurePresentation,
   pastorFriendlyError,
+  readProcessingFailureCode,
   summarizeTranscriptFailureDiagnostics,
 } from "@/lib/pastorFriendlyErrors";
 
@@ -13,6 +14,26 @@ describe("pastorFriendlyError", () => {
 
   it("summarizes missing media failures", () => {
     expect(pastorFriendlyError("Rendered clip file does not exist.")).toContain("could not find the video file");
+  });
+
+  it("offers an in-place upload when YouTube requires server verification", () => {
+    const presentation = buildPastorProcessingFailurePresentation({
+      message: "yt-dlp failed. Sign in to confirm you're not a bot. Use --cookies-from-browser or --cookies.",
+      failureCode: "YOUTUBE_AUTH_REQUIRED",
+    });
+
+    expect(presentation.kind).toBe("YOUTUBE_SOURCE_UNAVAILABLE");
+    expect(presentation.title).toBe("Upload the recording to continue");
+    expect(presentation.summary).toContain("sermon timing");
+    expect(presentation.guidance).toContain("continue from media preparation");
+  });
+
+  it("reads a structured processing failure code safely", () => {
+    expect(readProcessingFailureCode({
+      failure: { code: "YOUTUBE_AUTH_REQUIRED" },
+    })).toBe("YOUTUBE_AUTH_REQUIRED");
+    expect(readProcessingFailureCode({ failure: null })).toBeNull();
+    expect(readProcessingFailureCode(null)).toBeNull();
   });
 
   it("explains the clip-volume safety gate with the actual floor and target", () => {

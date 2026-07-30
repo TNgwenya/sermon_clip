@@ -1,8 +1,53 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { __weeklyPlanActionTestUtils } from "@/server/actions/weeklyPlan";
+const requireSermonResourceMock = vi.hoisted(() => vi.fn());
+const sermonFindFirstMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/server/auth/resourceAuthorization", () => ({
+  requireSermonResource: requireSermonResourceMock,
+}));
+vi.mock("@/server/auth/requestAuthorization", () => ({
+  requireRequestCapability: vi.fn(),
+}));
+vi.mock("@/lib/prisma", () => ({
+  prisma: {
+    sermon: { findFirst: sermonFindFirstMock },
+  },
+}));
+
+import {
+  __weeklyPlanActionTestUtils,
+  bulkScheduleWeeklyPlanAction,
+} from "@/server/actions/weeklyPlan";
 
 describe("weekly plan scheduling safeguards", () => {
+  it("denies a cross-organization sermon before loading any weekly-plan sources", async () => {
+    requireSermonResourceMock.mockRejectedValueOnce(
+      new Error("The requested resource was not found."),
+    );
+
+    const result = await bulkScheduleWeeklyPlanAction({
+      sermonId: "sermon-other-org",
+      weekStart: "2099-07-20",
+      timezone: "Africa/Johannesburg",
+      objective: "REACH",
+      items: [{
+        sourceId: "clip-other-org",
+        sourceKind: "CLIP",
+        sermonId: "sermon-other-org",
+        title: "Hidden clip",
+        caption: "Hidden caption",
+        contentType: "CLIP",
+        pointKey: "hidden-point",
+        platform: "INSTAGRAM",
+        scheduledFor: "2099-07-20T10:00:00.000Z",
+      }],
+    });
+
+    expect(result).toMatchObject({ success: false });
+    expect(sermonFindFirstMock).not.toHaveBeenCalled();
+  });
+
   it("uses one platform-ready format instead of counting duplicate PNG and JPEG variants", () => {
     const files = [
       { mimeType: "image/png", width: 1080, height: 1350, sizeBytes: BigInt(100), metadataJson: { variant: "PORTRAIT" } },

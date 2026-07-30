@@ -1,7 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { StatusBadge } from "@/components/ui";
 import type { EditableCaptionCue } from "@/lib/clipStudioEditing";
@@ -56,6 +65,10 @@ const QUICK_CLIP_LENGTH_SECONDS = [30, 45, 60, 90];
 const MIN_CLEANUP_CUT_SECONDS = 0.2;
 const CLEANUP_CUT_GAP_SECONDS = 0.05;
 const MIN_VISUAL_LAYER_SECONDS = 1;
+const MIN_TIMELINE_ZOOM = 1;
+const MAX_TIMELINE_ZOOM = 4;
+const TIMELINE_ZOOM_STEP = 0.25;
+const TIMELINE_SNAP_THRESHOLD_SECONDS = 0.3;
 
 type CleanupCutDragMode = "move" | "start" | "end";
 type VisualLayerDragMode = CleanupCutDragMode;
@@ -108,6 +121,28 @@ type TimelineLayerRow = {
   segments: TimelineLayerSegment[];
 };
 
+type TimelineRulerTick = {
+  id: string;
+  label: string | null;
+  leftPercent: number;
+  seconds: number;
+};
+
+function TimelineLockIcon({ locked }: { locked: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+      <rect x="3.25" y="7" width="9.5" height="7" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d={locked ? "M5.25 7V5a2.75 2.75 0 0 1 5.5 0v2" : "M5.25 7V5a2.75 2.75 0 0 1 5.32-1"}
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
 function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, value));
 }
@@ -118,6 +153,78 @@ function clampSeconds(value: number, min: number, max: number): number {
 
 function markerPercent(seconds: number, start: number, duration: number): number {
   return clampPercent(((seconds - start) / duration) * 100);
+}
+
+function normalizeTimelineZoom(value: number): number {
+  if (!Number.isFinite(value)) {
+    return MIN_TIMELINE_ZOOM;
+  }
+
+  const stepped = Math.round(value / TIMELINE_ZOOM_STEP) * TIMELINE_ZOOM_STEP;
+  return Number(clampSeconds(stepped, MIN_TIMELINE_ZOOM, MAX_TIMELINE_ZOOM).toFixed(2));
+}
+
+function formatTimelineTimecode(seconds: number): string {
+  const safeSeconds = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainder = safeSeconds - minutes * 60;
+  return `${String(minutes).padStart(2, "0")}:${remainder.toFixed(1).padStart(4, "0")}`;
+}
+
+function buildTimelineRulerTicks({
+  timelineStart,
+  timelineEnd,
+  zoom,
+}: {
+  timelineStart: number;
+  timelineEnd: number;
+  zoom: number;
+}): TimelineRulerTick[] {
+  const duration = timelineEnd - timelineStart;
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return [];
+  }
+
+  const intervalCount = Math.max(10, Math.round(10 * normalizeTimelineZoom(zoom)));
+  return Array.from({ length: intervalCount + 1 }, (_, index) => {
+    const seconds = timelineStart + (duration * index) / intervalCount;
+    const showLabel = index % 2 === 0 || index === intervalCount;
+    return {
+      id: `tick-${index}-${seconds.toFixed(3)}`,
+      label: showLabel ? formatTimelineTimecode(seconds) : null,
+      leftPercent: (index / intervalCount) * 100,
+      seconds: Number(seconds.toFixed(3)),
+    };
+  });
+}
+
+function snapTimelineSeconds({
+  seconds,
+  candidates,
+  thresholdSeconds = TIMELINE_SNAP_THRESHOLD_SECONDS,
+}: {
+  seconds: number;
+  candidates: number[];
+  thresholdSeconds?: number;
+}): number {
+  if (!Number.isFinite(seconds) || !Number.isFinite(thresholdSeconds) || thresholdSeconds < 0) {
+    return seconds;
+  }
+
+  let nearest = seconds;
+  let nearestDistance = thresholdSeconds + Number.EPSILON;
+  for (const candidate of candidates) {
+    if (!Number.isFinite(candidate)) {
+      continue;
+    }
+    const distance = Math.abs(candidate - seconds);
+    if (distance < nearestDistance) {
+      nearest = candidate;
+      nearestDistance = distance;
+    }
+  }
+
+  return Number(nearest.toFixed(3));
 }
 
 function resolveTimelinePointerSeconds({
@@ -365,6 +472,7 @@ function isTranscriptSegmentCurrent(
 }
 
 type TranscriptSegmentClipStatus = "included" | "partial" | "outside";
+type TranscriptFilter = "all" | "clip" | "outside";
 
 function resolveTranscriptSegmentClipStatus(
   segment: TranscriptSegment,
@@ -397,6 +505,99 @@ function transcriptSegmentClipStatusLabel(status: TranscriptSegmentClipStatus): 
     case "outside":
       return "Outside clip";
   }
+}
+
+function filterTranscriptSegments({
+  segments,
+  query,
+  filter,
+  clipStartSeconds,
+  clipEndSeconds,
+}: {
+  segments: TranscriptSegment[];
+  query: string;
+  filter: TranscriptFilter;
+  clipStartSeconds: number;
+  clipEndSeconds: number;
+}): TranscriptSegment[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+
+  return segments.filter((segment) => {
+    const status = resolveTranscriptSegmentClipStatus(segment, clipStartSeconds, clipEndSeconds);
+    const matchesFilter = filter === "all"
+      || (filter === "clip" && status !== "outside")
+      || (filter === "outside" && status === "outside");
+    const matchesQuery = !normalizedQuery
+      || segment.text.toLocaleLowerCase().includes(normalizedQuery);
+    return matchesFilter && matchesQuery;
+  });
+}
+
+function resolveAdjacentTranscriptSegmentId({
+  segments,
+  currentSegmentId,
+  direction,
+}: {
+  segments: TranscriptSegment[];
+  currentSegmentId: string | null;
+  direction: "first" | "last" | "next" | "previous";
+}): string | null {
+  if (segments.length === 0) {
+    return null;
+  }
+
+  if (direction === "first") {
+    return segments[0]?.id ?? null;
+  }
+
+  if (direction === "last") {
+    return segments.at(-1)?.id ?? null;
+  }
+
+  const currentIndex = Math.max(0, segments.findIndex((segment) => segment.id === currentSegmentId));
+  const nextIndex = direction === "next"
+    ? Math.min(segments.length - 1, currentIndex + 1)
+    : Math.max(0, currentIndex - 1);
+  return segments[nextIndex]?.id ?? null;
+}
+
+function HighlightedTranscriptText({ text, query }: { text: string; query: string }) {
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) {
+    return text;
+  }
+
+  const lowerText = text.toLocaleLowerCase();
+  const lowerQuery = normalizedQuery.toLocaleLowerCase();
+  const parts: Array<{ text: string; match: boolean }> = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const matchIndex = lowerText.indexOf(lowerQuery, cursor);
+    if (matchIndex === -1) {
+      parts.push({ text: text.slice(cursor), match: false });
+      break;
+    }
+
+    if (matchIndex > cursor) {
+      parts.push({ text: text.slice(cursor, matchIndex), match: false });
+    }
+    parts.push({
+      text: text.slice(matchIndex, matchIndex + normalizedQuery.length),
+      match: true,
+    });
+    cursor = matchIndex + normalizedQuery.length;
+  }
+
+  return (
+    <>
+      {parts.map((part, index) => (
+        part.match
+          ? <mark key={`${part.text}-${index}`}>{part.text}</mark>
+          : <span key={`${part.text}-${index}`}>{part.text}</span>
+      ))}
+    </>
+  );
 }
 
 function getInitialFocusedSegmentId(
@@ -479,9 +680,6 @@ function useClipStudioTranscriptState({
   clipDurationSeconds,
   captionCues,
   speechCleanup,
-  momentType,
-  momentTitle,
-  smartClipCategory,
 }: ClipStudioTranscriptPanelProps) {
   const {
     editPreview,
@@ -544,12 +742,6 @@ function useClipStudioTranscriptState({
     return ids;
   }, [activeClipEndSeconds, activeClipStartSeconds, transcriptSegments]);
 
-  const tags = [
-    momentType ? momentType.replace(/_/g, " ").toLowerCase() : null,
-    smartClipCategory,
-    momentTitle,
-  ].filter((tag): tag is string => Boolean(tag && tag.trim()));
-
   function seekToAbsolute(seconds: number) {
     seekSourcePreviewTo(Math.max(0, seconds - activeClipStartSeconds));
   }
@@ -573,7 +765,6 @@ function useClipStudioTranscriptState({
     selectedSegmentIds,
     selectedStartPercent,
     selectedWidthPercent,
-    tags,
     timelineDuration,
     timelineEnd,
     timelineStart,
@@ -590,10 +781,14 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
   } = props;
   const focusedLineRef = useRef<HTMLButtonElement | null>(null);
   const transcriptListRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const transcriptLineRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const [focusedSegmentId, setFocusedSegmentId] = useState(() =>
     getInitialFocusedSegmentId(transcriptSegments, clipStartSeconds, clipEndSeconds),
   );
   const [followPlayback, setFollowPlayback] = useState(true);
+  const [transcriptQuery, setTranscriptQuery] = useState("");
+  const [transcriptFilter, setTranscriptFilter] = useState<TranscriptFilter>("all");
   const {
     absolutePlayheadSeconds,
     activeClipEndSeconds,
@@ -604,7 +799,6 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     requestPreviewPlayback,
     seekToAbsolute,
     selectedSegmentIds,
-    tags,
   } = useClipStudioTranscriptState(props);
   const currentSegment = useMemo(
     () =>
@@ -628,6 +822,23 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
       null,
     [currentSegment, focusedSegmentId, followPlayback, previewClock.isPlaying, selectedSegmentIds, transcriptSegments],
   );
+  const visibleTranscriptSegments = useMemo(
+    () => filterTranscriptSegments({
+      segments: transcriptSegments,
+      query: transcriptQuery,
+      filter: transcriptFilter,
+      clipStartSeconds: activeClipStartSeconds,
+      clipEndSeconds: activeClipEndSeconds,
+    }),
+    [
+      activeClipEndSeconds,
+      activeClipStartSeconds,
+      transcriptFilter,
+      transcriptQuery,
+      transcriptSegments,
+    ],
+  );
+  const includedTranscriptCount = selectedSegmentIds.size;
 
   useEffect(() => {
     const list = transcriptListRef.current;
@@ -661,6 +872,59 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
       seekToAbsolute,
       requestPreviewPlayback,
     });
+  }
+
+  function focusTranscriptLine(segmentId: string) {
+    const segment = visibleTranscriptSegments.find((candidate) => candidate.id === segmentId);
+    if (!segment) {
+      return;
+    }
+
+    focusSegment(segment);
+    window.requestAnimationFrame(() => transcriptLineRefs.current.get(segment.id)?.focus());
+  }
+
+  function handleTranscriptListKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    const currentSegmentId = target.closest<HTMLButtonElement>("[data-transcript-segment-id]")
+      ?.dataset.transcriptSegmentId ?? focusedSegment?.id ?? null;
+    const direction = event.key === "ArrowDown"
+      ? "next"
+      : event.key === "ArrowUp"
+        ? "previous"
+        : event.key === "Home"
+          ? "first"
+          : event.key === "End"
+            ? "last"
+            : null;
+
+    if (!direction) {
+      return;
+    }
+
+    const nextSegmentId = resolveAdjacentTranscriptSegmentId({
+      segments: visibleTranscriptSegments,
+      currentSegmentId,
+      direction,
+    });
+    if (!nextSegmentId) {
+      return;
+    }
+
+    event.preventDefault();
+    setFollowPlayback(false);
+    focusTranscriptLine(nextSegmentId);
+  }
+
+  function handleTranscriptPanelKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    const target = event.target as HTMLElement;
+    if (
+      event.key === "/"
+      && !target.closest("input, textarea, select, [contenteditable='true']")
+    ) {
+      event.preventDefault();
+      searchInputRef.current?.focus();
+    }
   }
 
   function dispatchTranscriptCommand(command: ClipStudioTranscriptCommand, segment?: TranscriptSegment) {
@@ -706,9 +970,74 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
       aria-label="Spoken transcript and clip boundaries"
       data-testid="clip-studio-transcript-panel"
       tabIndex={-1}
+      onKeyDown={handleTranscriptPanelKeyDown}
     >
-      <div className="section-heading-row">
-        <h2>Transcript</h2>
+      <div className="clip-studio-transcript-head">
+        <div>
+          <h2>Transcript</h2>
+          <p>
+            {includedTranscriptCount} of {transcriptSegments.length} lines in clip
+          </p>
+        </div>
+        <label className="clip-studio-transcript-follow">
+          <input
+            type="checkbox"
+            checked={followPlayback}
+            onChange={(event) => setFollowPlayback(event.target.checked)}
+          />
+          <span>Follow playback</span>
+        </label>
+      </div>
+
+      <label className="clip-studio-transcript-search">
+        <span className="sr-only">Search transcript</span>
+        <span aria-hidden="true">⌕</span>
+        <input
+          ref={searchInputRef}
+          type="search"
+          value={transcriptQuery}
+          onChange={(event) => setTranscriptQuery(event.target.value)}
+          placeholder="Find a word or phrase"
+          aria-keyshortcuts="/"
+        />
+        <kbd>/</kbd>
+      </label>
+
+      <div className="clip-studio-transcript-filter-row">
+        <div className="clip-studio-transcript-filters" aria-label="Filter transcript lines">
+          {([
+            ["all", "All"],
+            ["clip", "In clip"],
+            ["outside", "Outside"],
+          ] as const).map(([filter, label]) => (
+            <button
+              key={filter}
+              type="button"
+              aria-pressed={transcriptFilter === filter}
+              onClick={() => setTranscriptFilter(filter)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <span role="status" aria-live="polite">
+          {visibleTranscriptSegments.length} {visibleTranscriptSegments.length === 1 ? "result" : "results"}
+        </span>
+      </div>
+
+      <div className="clip-studio-transcript-range" aria-label="Current clip range">
+        <article>
+          <span>In</span>
+          <strong>{formatSecondsForPastorView(activeClipStartSeconds)}</strong>
+        </article>
+        <article>
+          <span>Out</span>
+          <strong>{formatSecondsForPastorView(activeClipEndSeconds)}</strong>
+        </article>
+        <article>
+          <span>Length</span>
+          <strong>{formatSecondsForPastorView(durationSeconds)}</strong>
+        </article>
       </div>
 
       {focusedSegment ? (
@@ -718,160 +1047,107 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
           aria-live="polite"
         >
           <div className="clip-studio-transcript-active-heading">
-            <h3>Selected line</h3>
+            <div>
+              <span className="clip-studio-transcript-active-label">Selected line</span>
+              <strong className="clip-studio-transcript-active-time">
+                {formatSecondsForPastorView(focusedSegment.startTimeSeconds)}
+                <span aria-hidden="true"> → </span>
+                <span className="sr-only"> to </span>
+                {formatSecondsForPastorView(focusedSegment.endTimeSeconds)}
+              </strong>
+            </div>
             <div className="actions-row">
               {typeof focusedSegment.confidence === "number" && focusedSegment.confidence < 0.78 ? (
-                <span className="status-pill quality-needs-editing">Check wording</span>
+                <span className="status-pill quality-needs-editing">
+                  <span aria-hidden="true">Check</span>
+                  <span className="sr-only">Check wording</span>
+                </span>
               ) : null}
-              <span className={`status-pill ${focusedClipStatus === "outside" ? "quality-needs-editing" : "quality-good"}`}>
-                {focusedClipStatusLabel}
-              </span>
+              {focusedClipStatus !== "included" ? (
+                <span className={`status-pill ${focusedClipStatus === "outside" ? "quality-needs-editing" : "quality-good"}`}>
+                  <span aria-hidden="true">
+                    {focusedClipStatus === "partial" ? "Partial" : "Outside"}
+                  </span>
+                  <span className="sr-only">{focusedClipStatusLabel}</span>
+                </span>
+              ) : null}
             </div>
           </div>
-          <div>
-            <strong>
-              {formatSecondsForPastorView(focusedSegment.startTimeSeconds)} - {formatSecondsForPastorView(focusedSegment.endTimeSeconds)}
-            </strong>
-            <p className="clip-studio-transcript-spoken-line">{focusedSegment.text}</p>
-            <p className="muted small">
-              Start and end trim the recording. Caption corrections change text only.
-            </p>
-          </div>
+          <p className="clip-studio-transcript-spoken-line">{focusedSegment.text}</p>
           <div className="clip-studio-transcript-actions" aria-label="Transcript line actions">
             <button
               type="button"
               className="button primary"
               onClick={() => previewSegment(focusedSegment)}
+              aria-label="Play selected transcript line"
             >
-              Preview selected line
+              <span aria-hidden="true">▶</span> Play
             </button>
             <button
               type="button"
               className="button secondary"
               onClick={() => dispatchTranscriptCommand("set-start", focusedSegment)}
+              aria-label={`Set clip start to ${formatSecondsForPastorView(focusedSegment.startTimeSeconds)}`}
             >
-              Set start to {formatSecondsForPastorView(focusedSegment.startTimeSeconds)}
+              Set In
             </button>
             <button
               type="button"
               className="button secondary"
               onClick={() => dispatchTranscriptCommand("set-end", focusedSegment)}
+              aria-label={`Set clip end to ${formatSecondsForPastorView(focusedSegment.endTimeSeconds)}`}
             >
-              Set end to {formatSecondsForPastorView(focusedSegment.endTimeSeconds)}
+              Set Out
+            </button>
+            <button
+              type="button"
+              className="button secondary"
+              onClick={openCaptionWordingEditor}
+              disabled={wordingCorrectionLocked}
+              aria-describedby={wordingCorrectionLocked ? "clip-studio-wording-requirement" : undefined}
+              aria-label={editPreview.applyCaptionsToClip ? "Edit caption words" : "Enable captions to edit"}
+            >
+              Captions
             </button>
           </div>
-          <div className="clip-studio-transcript-correction" aria-label="Transcript wording and review">
-            <div>
-              <strong>Caption wording</strong>
-              <p className="muted small">
-                {wordingCorrectionLocked
-                  ? "This line is outside the clip. Set a start or end boundary that includes it before editing its on-screen words."
-                  : editPreview.applyCaptionsToClip
-                    ? "Open the matching caption lines to correct spelling or wording without changing the spoken audio."
-                    : "Captions are off. Turn them on to correct the words that will appear on screen."}
-              </p>
-            </div>
-            <div className="clip-studio-transcript-correction-actions">
-              <button
-                type="button"
-                className="button secondary"
-                onClick={openCaptionWordingEditor}
-                disabled={wordingCorrectionLocked}
-                aria-describedby={wordingCorrectionLocked ? "clip-studio-wording-requirement" : undefined}
-              >
-                {editPreview.applyCaptionsToClip ? "Edit caption words" : "Enable captions to edit"}
-              </button>
-              <Link href={transcriptReviewHref} className="button tertiary">
-                Review transcript
-              </Link>
-            </div>
-            {wordingCorrectionLocked ? (
-              <p id="clip-studio-wording-requirement" className="muted small">
-                Requirement: include this spoken line in the clip first.
-              </p>
-            ) : null}
+          <div className="clip-studio-transcript-active-footer">
+            <span>
+              {wordingCorrectionLocked
+                ? "Include this line before editing its on-screen words."
+                : editPreview.applyCaptionsToClip
+                  ? "Caption edits change on-screen text only—not the spoken audio."
+                  : "Captions are off. Enable them to correct on-screen words."}
+            </span>
+            <Link
+              href={transcriptReviewHref}
+              aria-label={transcriptReviewRequired
+                ? "Review and confirm spoken words before export"
+                : "Review transcript text"}
+            >
+              {transcriptReviewRequired ? "Review required" : "Review text"}
+            </Link>
           </div>
-          {transcriptReviewRequired ? (
-            <div className="clip-studio-transcript-review-required" role="status">
-              <div>
-                <strong>Spoken transcript review required before final video</strong>
-                <p>
-                  Preparing is locked until a reviewer confirms the spoken wording. Caption edits here do not complete that review.
-                </p>
-              </div>
-              <Link href={transcriptReviewHref} className="button secondary">
-                Review and confirm wording
-              </Link>
-            </div>
+          {wordingCorrectionLocked ? (
+            <p id="clip-studio-wording-requirement" className="sr-only">
+              Requirement: include this spoken line in the clip first.
+            </p>
           ) : null}
-          <div className="clip-studio-transcript-actions compact" aria-label="Transcript timing actions">
-            <button
-              type="button"
-              className="button secondary"
-              onClick={() => dispatchTranscriptCommand("snap-to-sentence")}
-            >
-              Snap to sentence
-            </button>
-            <button
-              type="button"
-              className="button secondary"
-              onClick={() => dispatchTranscriptCommand("reset-ai")}
-            >
-              Reset to AI
-            </button>
-          </div>
         </div>
       ) : null}
 
-      <p className="muted small">
-        Select a line to preview or edit its timing.
-      </p>
-
-      <div className="clip-studio-ministry-tags" aria-label="Spoken transcript guide">
-        <span aria-label="In clip: highlighted green">In clip</span>
-        <span aria-label="Playing now: highlighted yellow">Playing</span>
-        <span aria-label="Selected row: white outline">Selected</span>
-      </div>
-
-      <label className="muted small">
-        <input
-          type="checkbox"
-          checked={followPlayback}
-          onChange={(event) => setFollowPlayback(event.target.checked)}
-        />{" "}
-        Follow playback
-      </label>
-
-      <div className="clip-studio-transcript-range">
-        <article>
-          <span className="kicker">In</span>
-          <strong>{formatSecondsForPastorView(activeClipStartSeconds)}</strong>
-        </article>
-        <article>
-          <span className="kicker">Out</span>
-          <strong>{formatSecondsForPastorView(activeClipEndSeconds)}</strong>
-        </article>
-        <article>
-          <span className="kicker">Length</span>
-          <strong>{formatSecondsForPastorView(durationSeconds)}</strong>
-        </article>
-      </div>
-
-      {tags.length > 0 ? (
-        <div className="clip-studio-ministry-tags" aria-label="Sermon moment tags">
-          {tags.slice(0, 5).map((tag) => (
-            <span key={tag}>{tag}</span>
-          ))}
-        </div>
-      ) : null}
-
-      <div ref={transcriptListRef} className="clip-studio-transcript-list" aria-label="Spoken transcript lines">
+      <div
+        ref={transcriptListRef}
+        className="clip-studio-transcript-list"
+        aria-label="Spoken transcript lines"
+        onKeyDown={handleTranscriptListKeyDown}
+      >
         {transcriptSegments.length > 0 ? (
-          transcriptSegments.map((segment, index) => {
+          visibleTranscriptSegments.length > 0 ? visibleTranscriptSegments.map((segment) => {
+            const sourceIndex = transcriptSegments.findIndex((candidate) => candidate.id === segment.id);
             const isSelected = selectedSegmentIds.has(segment.id);
             const isCurrent = isTranscriptSegmentCurrent(
               segment,
-              index,
+              sourceIndex,
               transcriptSegments,
               absolutePlayheadSeconds,
             );
@@ -882,19 +1158,26 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
             );
             const clipStatusLabel = transcriptSegmentClipStatusLabel(clipStatus);
 
-            const displayText = segment.text;
-
             return (
               <button
                 key={segment.id}
                 type="button"
-                aria-label={`Select and play spoken transcript line at ${formatSecondsForPastorView(segment.startTimeSeconds)}: ${displayText}. ${clipStatusLabel}.`}
+                aria-label={`Select and play spoken transcript line at ${formatSecondsForPastorView(segment.startTimeSeconds)}: ${segment.text}. ${clipStatusLabel}.`}
                 aria-current={isCurrent ? "true" : undefined}
                 aria-pressed={focusedSegment?.id === segment.id}
                 data-testid="clip-studio-transcript-line"
                 data-transcript-segment-id={segment.id}
                 data-clip-status={clipStatus}
-                ref={focusedSegment?.id === segment.id ? focusedLineRef : undefined}
+                ref={(node) => {
+                  if (node) {
+                    transcriptLineRefs.current.set(segment.id, node);
+                  } else {
+                    transcriptLineRefs.current.delete(segment.id);
+                  }
+                  if (focusedSegment?.id === segment.id) {
+                    focusedLineRef.current = node;
+                  }
+                }}
                 className={[
                   "clip-studio-transcript-line",
                   isSelected ? "is-selected" : "",
@@ -903,17 +1186,49 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
                 ].filter(Boolean).join(" ")}
                 onClick={() => previewSegment(segment)}
               >
-                <span>{formatSecondsForPastorView(segment.startTimeSeconds)}</span>
-                <strong>{displayText}</strong>
+                <span className="clip-studio-transcript-line-time">
+                  {isCurrent ? <i aria-hidden="true" /> : null}
+                  {formatSecondsForPastorView(segment.startTimeSeconds)}
+                </span>
+                <strong>
+                  <HighlightedTranscriptText text={segment.text} query={transcriptQuery} />
+                </strong>
                 <small className="clip-studio-transcript-line-action">
-                  {focusedSegment?.id === segment.id ? "Selected" : "Select & play"}
+                  {focusedSegment?.id === segment.id ? "Selected" : "Play"}
                 </small>
               </button>
             );
-          })
+          }) : (
+            <div className="clip-studio-transcript-empty">
+              <strong>No matching lines</strong>
+              <span>Try another phrase or show all transcript lines.</span>
+              <button
+                type="button"
+                className="button tertiary"
+                onClick={() => {
+                  setTranscriptQuery("");
+                  setTranscriptFilter("all");
+                }}
+              >
+                Clear filters
+              </button>
+            </div>
+          )
         ) : (
           <p className="muted">Transcript lines are not available for this clip yet.</p>
         )}
+      </div>
+
+      <div className="clip-studio-transcript-utility-row">
+        <span>↑↓ navigate · Enter plays · / searches</span>
+        <div>
+          <button type="button" onClick={() => dispatchTranscriptCommand("snap-to-sentence")}>
+            Snap to sentence
+          </button>
+          <button type="button" onClick={() => dispatchTranscriptCommand("reset-ai")}>
+            Reset AI
+          </button>
+        </div>
       </div>
     </aside>
   );
@@ -929,9 +1244,14 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
   const [cleanupCutDrag, setCleanupCutDrag] = useState<CleanupCutDragState | null>(null);
   const [selectedBrollCardId, setSelectedBrollCardId] = useState<string | null>(null);
   const [visualLayerDrag, setVisualLayerDrag] = useState<VisualLayerDragState | null>(null);
+  const [timelineZoom, setTimelineZoom] = useState(MIN_TIMELINE_ZOOM);
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [lockedTrackIds, setLockedTrackIds] = useState<Set<string>>(() => new Set());
+  const [collapsedTrackIds, setCollapsedTrackIds] = useState<Set<string>>(() => new Set());
   const cleanupCutDragMovedRef = useRef(false);
   const visualLayerDragMovedRef = useRef(false);
   const visualLayerDragRangeRef = useRef<{ startSeconds: number; durationSeconds: number } | null>(null);
+  const timelineScrollRef = useRef<HTMLDivElement>(null);
   const {
     absolutePlayheadSeconds,
     activeClipEndSeconds,
@@ -1122,9 +1442,251 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
     timelineDuration,
     timelineStart,
   ]);
+  const timelineRulerTicks = useMemo(
+    () => buildTimelineRulerTicks({ timelineStart, timelineEnd, zoom: timelineZoom }),
+    [timelineEnd, timelineStart, timelineZoom],
+  );
+  const timelineSnapCandidates = useMemo(() => {
+    const candidates = [
+      timelineStart,
+      timelineEnd,
+      activeClipStartSeconds,
+      activeClipEndSeconds,
+      ...transcriptSegments.flatMap((segment) => [segment.startTimeSeconds, segment.endTimeSeconds]),
+      ...activeCaptionCues.flatMap((cue) => [
+        activeClipStartSeconds + cue.startSeconds,
+        activeClipStartSeconds + cue.endSeconds,
+      ]),
+      ...editableCleanupCuts.flatMap((cut) => [
+        activeClipStartSeconds + cut.startSeconds,
+        activeClipStartSeconds + cut.endSeconds,
+      ]),
+      ...(editPreview.brollLayer.enabled
+        ? editPreview.brollLayer.cards
+            .filter((card) => card.enabled)
+            .flatMap((card) => [
+              activeClipStartSeconds + card.startSeconds,
+              activeClipStartSeconds + card.startSeconds + card.durationSeconds,
+            ])
+        : []),
+      ...(editPreview.hookOverlay.enabled
+        ? [
+            activeClipStartSeconds + editPreview.hookOverlay.startSeconds,
+            activeClipStartSeconds + editPreview.hookOverlay.startSeconds + editPreview.hookOverlay.durationSeconds,
+          ]
+        : []),
+    ];
+
+    return [...new Set(
+      candidates
+        .filter((seconds) => Number.isFinite(seconds) && seconds >= timelineStart && seconds <= timelineEnd)
+        .map((seconds) => Number(seconds.toFixed(3))),
+    )].sort((left, right) => left - right);
+  }, [
+    activeCaptionCues,
+    activeClipEndSeconds,
+    activeClipStartSeconds,
+    editPreview.brollLayer.cards,
+    editPreview.brollLayer.enabled,
+    editPreview.hookOverlay.durationSeconds,
+    editPreview.hookOverlay.enabled,
+    editPreview.hookOverlay.startSeconds,
+    editableCleanupCuts,
+    timelineEnd,
+    timelineStart,
+    transcriptSegments,
+  ]);
+  const activeCaptionAtPlayhead = activeCaptionCues.find((cue) => (
+    playheadRelativeSeconds > cue.startSeconds + 0.08
+    && playheadRelativeSeconds < cue.endSeconds - 0.08
+    && cue.text.trim().split(/\s+/).filter(Boolean).length >= 2
+  ));
 
   function setQuickDuration(lengthSeconds: number) {
     window.dispatchEvent(new CustomEvent("clip-studio-set-duration", { detail: { lengthSeconds } }));
+  }
+
+  function toggleTrackState(
+    setter: typeof setLockedTrackIds,
+    trackId: string,
+  ) {
+    setter((current) => {
+      const next = new Set(current);
+      if (next.has(trackId)) {
+        next.delete(trackId);
+      } else {
+        next.add(trackId);
+      }
+      return next;
+    });
+  }
+
+  function adjustTimelineZoom(delta: number) {
+    setTimelineZoom((current) => normalizeTimelineZoom(current + delta));
+  }
+
+  function fitTimeline() {
+    setTimelineZoom(MIN_TIMELINE_ZOOM);
+    timelineScrollRef.current?.scrollTo({ left: 0, behavior: "smooth" });
+  }
+
+  const resolveSnappedAbsoluteSeconds = useCallback((seconds: number): number => {
+    if (!snapEnabled) {
+      return seconds;
+    }
+
+    return snapTimelineSeconds({
+      seconds,
+      candidates: timelineSnapCandidates,
+      thresholdSeconds: TIMELINE_SNAP_THRESHOLD_SECONDS / Math.sqrt(timelineZoom),
+    });
+  }, [snapEnabled, timelineSnapCandidates, timelineZoom]);
+
+  const snapVisualLayerRange = useCallback((
+    range: { startSeconds: number; durationSeconds: number },
+    mode: VisualLayerDragMode,
+    maximumDurationSeconds: number,
+  ): { startSeconds: number; durationSeconds: number } => {
+    if (!snapEnabled) {
+      return range;
+    }
+
+    const rangeEndSeconds = range.startSeconds + range.durationSeconds;
+    if (mode === "move") {
+      const snappedStart = resolveSnappedAbsoluteSeconds(activeClipStartSeconds + range.startSeconds) - activeClipStartSeconds;
+      return {
+        startSeconds: Number(clampSeconds(snappedStart, 0, Math.max(0, durationSeconds - range.durationSeconds)).toFixed(2)),
+        durationSeconds: range.durationSeconds,
+      };
+    }
+
+    if (mode === "start") {
+      const snappedStart = resolveSnappedAbsoluteSeconds(activeClipStartSeconds + range.startSeconds) - activeClipStartSeconds;
+      const startSeconds = clampSeconds(
+        snappedStart,
+        Math.max(0, rangeEndSeconds - maximumDurationSeconds),
+        rangeEndSeconds - MIN_VISUAL_LAYER_SECONDS,
+      );
+      return {
+        startSeconds: Number(startSeconds.toFixed(2)),
+        durationSeconds: Number((rangeEndSeconds - startSeconds).toFixed(2)),
+      };
+    }
+
+    const snappedEnd = resolveSnappedAbsoluteSeconds(activeClipStartSeconds + rangeEndSeconds) - activeClipStartSeconds;
+    const endSeconds = clampSeconds(
+      snappedEnd,
+      range.startSeconds + MIN_VISUAL_LAYER_SECONDS,
+      Math.min(durationSeconds, range.startSeconds + maximumDurationSeconds),
+    );
+    return {
+      startSeconds: range.startSeconds,
+      durationSeconds: Number((endSeconds - range.startSeconds).toFixed(2)),
+    };
+  }, [activeClipStartSeconds, durationSeconds, resolveSnappedAbsoluteSeconds, snapEnabled]);
+
+  const snapCleanupCutRange = useCallback((
+    range: { startSeconds: number; endSeconds: number },
+    mode: CleanupCutDragMode,
+  ): { startSeconds: number; endSeconds: number } => {
+    if (!snapEnabled) {
+      return range;
+    }
+
+    if (mode === "end") {
+      const snappedEnd = resolveSnappedAbsoluteSeconds(activeClipStartSeconds + range.endSeconds) - activeClipStartSeconds;
+      return {
+        startSeconds: range.startSeconds,
+        endSeconds: Number(clampSeconds(
+          snappedEnd,
+          range.startSeconds + MIN_CLEANUP_CUT_SECONDS,
+          durationSeconds,
+        ).toFixed(3)),
+      };
+    }
+
+    const snappedStart = resolveSnappedAbsoluteSeconds(activeClipStartSeconds + range.startSeconds) - activeClipStartSeconds;
+    if (mode === "start") {
+      return {
+        startSeconds: Number(clampSeconds(
+          snappedStart,
+          0,
+          range.endSeconds - MIN_CLEANUP_CUT_SECONDS,
+        ).toFixed(3)),
+        endSeconds: range.endSeconds,
+      };
+    }
+
+    const duration = range.endSeconds - range.startSeconds;
+    const startSeconds = clampSeconds(snappedStart, 0, Math.max(0, durationSeconds - duration));
+    return {
+      startSeconds: Number(startSeconds.toFixed(3)),
+      endSeconds: Number((startSeconds + duration).toFixed(3)),
+    };
+  }, [activeClipStartSeconds, durationSeconds, resolveSnappedAbsoluteSeconds, snapEnabled]);
+
+  function splitCaptionAtPlayhead() {
+    if (!activeCaptionAtPlayhead) {
+      return;
+    }
+
+    window.dispatchEvent(
+      new CustomEvent(CLIP_STUDIO_TRANSCRIPT_COMMAND_EVENT, {
+        detail: {
+          command: "split-caption-at-seconds",
+          seconds: playheadRelativeSeconds,
+        },
+      }),
+    );
+  }
+
+  function handleTimelineKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const target = event.target;
+    if (
+      target instanceof HTMLInputElement
+      || target instanceof HTMLTextAreaElement
+      || target instanceof HTMLSelectElement
+      || (target instanceof HTMLElement && target.closest("button"))
+    ) {
+      return;
+    }
+
+    if (event.key === " ") {
+      event.preventDefault();
+      requestPreviewPlayback("toggle");
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      seekToAbsolute(timelineStart);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      seekToAbsolute(timelineEnd);
+      return;
+    }
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault();
+      const direction = event.key === "ArrowLeft" ? -1 : 1;
+      const step = event.shiftKey ? 1 : 0.1;
+      seekToAbsolute(clampSeconds(absolutePlayheadSeconds + direction * step, timelineStart, timelineEnd));
+      return;
+    }
+    if (event.key === "=" || event.key === "+") {
+      event.preventDefault();
+      adjustTimelineZoom(TIMELINE_ZOOM_STEP);
+      return;
+    }
+    if (event.key === "-") {
+      event.preventDefault();
+      adjustTimelineZoom(-TIMELINE_ZOOM_STEP);
+      return;
+    }
+    if (event.key === "0") {
+      event.preventDefault();
+      fitTimeline();
+    }
   }
 
   function dispatchLayerCommand(
@@ -1270,7 +1832,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
       return;
     }
 
-    seekToAbsolute(seconds);
+    seekToAbsolute(resolveSnappedAbsoluteSeconds(seconds));
   }
 
   function dispatchCleanupEdit(detail: ClipStudioSpeechCleanupEditDetail) {
@@ -1473,11 +2035,18 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
       const proposedEndSeconds = activeDrag.mode === "start"
         ? activeDrag.originEndSeconds
         : activeDrag.originEndSeconds + deltaSeconds;
-      const nextRange = constrainCleanupCutRange({
+      const constrainedRange = constrainCleanupCutRange({
         cut,
         mode: activeDrag.mode,
         proposedStartSeconds,
         proposedEndSeconds,
+      });
+      const snappedRange = snapCleanupCutRange(constrainedRange, activeDrag.mode);
+      const nextRange = constrainCleanupCutRange({
+        cut,
+        mode: activeDrag.mode,
+        proposedStartSeconds: snappedRange.startSeconds,
+        proposedEndSeconds: snappedRange.endSeconds,
       });
 
       dispatchCleanupEdit({
@@ -1503,7 +2072,13 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [cleanupCutDrag, constrainCleanupCutRange, editableCleanupCuts, timelineDuration]);
+  }, [
+    cleanupCutDrag,
+    constrainCleanupCutRange,
+    editableCleanupCuts,
+    snapCleanupCutRange,
+    timelineDuration,
+  ]);
 
   function startVisualLayerDrag(
     event: PointerEvent<HTMLElement>,
@@ -1586,7 +2161,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
 
       event.preventDefault();
       visualLayerDragMovedRef.current = true;
-      const nextRange = resolveVisualLayerTimingDrag({
+      const nextRange = snapVisualLayerRange(resolveVisualLayerTimingDrag({
         mode: activeDrag.mode,
         originStartSeconds: activeDrag.originStartSeconds,
         originDurationSeconds: activeDrag.originDurationSeconds,
@@ -1595,7 +2170,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
         timelineDuration,
         clipDurationSeconds: durationSeconds,
         maximumDurationSeconds: activeDrag.maximumDurationSeconds,
-      });
+      }), activeDrag.mode, activeDrag.maximumDurationSeconds);
       visualLayerDragRangeRef.current = nextRange;
       window.dispatchEvent(
         new CustomEvent(CLIP_STUDIO_LAYER_COMMAND_EVENT, {
@@ -1640,7 +2215,14 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [activeClipStartSeconds, durationSeconds, seekToAbsolute, timelineDuration, visualLayerDrag]);
+  }, [
+    activeClipStartSeconds,
+    durationSeconds,
+    seekToAbsolute,
+    snapVisualLayerRange,
+    timelineDuration,
+    visualLayerDrag,
+  ]);
 
   return (
     <section className="card clip-studio-bottom-timeline stack-sm" aria-label="Clip timeline">
@@ -1652,6 +2234,105 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
         <div className="clip-studio-edit-deck-meta">
           <StatusBadge tone={durationTone}>{durationLabel}</StatusBadge>
           <span>{cleanupTimelineLabel}</span>
+        </div>
+      </div>
+
+      <div className="clip-studio-timeline-toolbar" role="toolbar" aria-label="Timeline transport and editing tools">
+        <div className="clip-studio-timeline-transport">
+          <button
+            type="button"
+            className="clip-studio-timeline-play-button"
+            onClick={() => requestPreviewPlayback("toggle")}
+            aria-label={previewClock.isPlaying ? "Pause timeline preview" : "Play timeline preview"}
+            title="Play or pause (Space)"
+          >
+            <span aria-hidden="true">{previewClock.isPlaying ? "Ⅱ" : "▶"}</span>
+            {previewClock.isPlaying ? "Pause" : "Play"}
+          </button>
+          <output
+            className="clip-studio-timeline-timecode"
+            aria-label={`Playhead ${formatTimelineTimecode(absolutePlayheadSeconds)} of ${formatTimelineTimecode(timelineEnd)}`}
+          >
+            <strong>{formatTimelineTimecode(absolutePlayheadSeconds)}</strong>
+            <span>/ {formatTimelineTimecode(timelineEnd)}</span>
+          </output>
+        </div>
+
+        <div className="clip-studio-timeline-edit-tools">
+          <button
+            type="button"
+            className="clip-studio-timeline-tool"
+            aria-pressed={snapEnabled}
+            onClick={() => setSnapEnabled((enabled) => !enabled)}
+            title="Snap the playhead and draggable edges to nearby transcript and layer boundaries"
+          >
+            Snap {snapEnabled ? "on" : "off"}
+          </button>
+          <button
+            type="button"
+            className="clip-studio-timeline-tool"
+            onClick={splitCaptionAtPlayhead}
+            disabled={!activeCaptionAtPlayhead}
+            title={activeCaptionAtPlayhead
+              ? "Split the active caption at the playhead"
+              : "Move the playhead inside a caption with at least two words"}
+          >
+            Split caption
+          </button>
+          <button
+            type="button"
+            className="clip-studio-timeline-tool"
+            aria-pressed={advancedCleanupOpen}
+            onClick={() => setAdvancedCleanupOpen((open) => !open)}
+            title="Unlock pacing-cut handles for precise editing"
+          >
+            Fine edit {advancedCleanupOpen ? "on" : "off"}
+          </button>
+        </div>
+
+        <div className="clip-studio-timeline-zoom" aria-label="Timeline zoom controls">
+          <button
+            type="button"
+            className="clip-studio-timeline-icon-button"
+            onClick={() => adjustTimelineZoom(-TIMELINE_ZOOM_STEP)}
+            disabled={timelineZoom <= MIN_TIMELINE_ZOOM}
+            aria-label="Zoom timeline out"
+            title="Zoom out (-)"
+          >
+            −
+          </button>
+          <label>
+            <span className="sr-only">Timeline zoom</span>
+            <input
+              type="range"
+              min={MIN_TIMELINE_ZOOM}
+              max={MAX_TIMELINE_ZOOM}
+              step={TIMELINE_ZOOM_STEP}
+              value={timelineZoom}
+              onChange={(event) => setTimelineZoom(normalizeTimelineZoom(event.currentTarget.valueAsNumber))}
+              aria-valuetext={`${Math.round(timelineZoom * 100)} percent`}
+            />
+          </label>
+          <button
+            type="button"
+            className="clip-studio-timeline-icon-button"
+            onClick={() => adjustTimelineZoom(TIMELINE_ZOOM_STEP)}
+            disabled={timelineZoom >= MAX_TIMELINE_ZOOM}
+            aria-label="Zoom timeline in"
+            title="Zoom in (+)"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className="clip-studio-timeline-tool is-fit"
+            onClick={fitTimeline}
+            disabled={timelineZoom === MIN_TIMELINE_ZOOM}
+            title="Fit the whole timeline (0)"
+          >
+            Fit
+          </button>
+          <span>{Math.round(timelineZoom * 100)}%</span>
         </div>
       </div>
 
@@ -1714,7 +2395,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
       <p id="clip-studio-timeline-draft-help" className="muted small clip-studio-timeline-draft-help">
         Click to seek. Drag either white Clip range edge to include more of the original sermon.
         {" "}Up to {STUDIO_BOUNDARY_CONTEXT_SECONDS} seconds of nearby context is loaded on each side.
-        {" "}Timing stays draft-only until saved.
+        {" "}Timing stays draft-only until saved. Focus the timeline for Space, arrow-key nudging, Home/End, and +/- zoom.
       </p>
 
       <div className="clip-studio-transcript-range" aria-label="Precise clip timing">
@@ -1856,42 +2537,72 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
               Add cut at playhead
             </button>
           ) : null}
-          <button
-            type="button"
-            className="button tertiary"
-            onClick={() => setAdvancedCleanupOpen((open) => !open)}
-            aria-pressed={advancedCleanupOpen}
-          >
-            {advancedCleanupOpen ? "Lock fine edit" : "Fine edit timeline"}
-          </button>
         </div>
       </div>
 
       <div
+        ref={timelineScrollRef}
         className="clip-studio-unified-timeline-scroll"
         aria-label="Shared editing timeline"
+        aria-describedby="clip-studio-timeline-draft-help"
         tabIndex={0}
+        onKeyDown={handleTimelineKeyDown}
       >
-        <div className="clip-studio-layer-stack clip-studio-unified-timeline">
+        <div
+          className="clip-studio-layer-stack clip-studio-unified-timeline"
+          style={{ minWidth: "36rem", width: `${timelineZoom * 100}%` }}
+        >
+          <div className="clip-studio-timeline-ruler-row" style={{ gridRow: 1 }}>
+            <div className="clip-studio-layer-label is-ruler-label">
+              <strong>Time</strong>
+              <span>Source</span>
+            </div>
+            <div className="clip-studio-timeline-ruler" aria-hidden="true">
+              {timelineRulerTicks.map((tick) => (
+                <span
+                  key={tick.id}
+                  className={tick.label ? "is-major" : "is-minor"}
+                  style={{ left: `${tick.leftPercent}%` }}
+                >
+                  {tick.label ? <small>{tick.label}</small> : null}
+                </span>
+              ))}
+            </div>
+            <span className="clip-studio-layer-action-spacer" aria-hidden="true" />
+          </div>
           {timelineLayerRows.map((row, rowIndex) => (
             <div
               key={row.id}
               className={[
                 "clip-studio-layer-row",
                 row.enabled ? "is-enabled" : "is-disabled",
+                lockedTrackIds.has(row.id) ? "is-locked" : "",
+                collapsedTrackIds.has(row.id) ? "is-collapsed" : "",
               ].join(" ")}
-              style={{ gridRow: rowIndex + 1 }}
+              style={{ gridRow: rowIndex + 2 }}
             >
               <div className="clip-studio-layer-label">
-                <strong>{row.label}</strong>
-                <span>{row.status}</span>
+                <div>
+                  <strong>{row.label}</strong>
+                  <span>{row.status}</span>
+                </div>
+                <button
+                  type="button"
+                  className="clip-studio-track-icon-button"
+                  aria-label={`${collapsedTrackIds.has(row.id) ? "Expand" : "Collapse"} ${row.label} track`}
+                  aria-pressed={collapsedTrackIds.has(row.id)}
+                  title={`${collapsedTrackIds.has(row.id) ? "Expand" : "Collapse"} ${row.label} track`}
+                  onClick={() => toggleTrackState(setCollapsedTrackIds, row.id)}
+                >
+                  <span aria-hidden="true">{collapsedTrackIds.has(row.id) ? "›" : "⌄"}</span>
+                </button>
               </div>
               <div
                 className="clip-studio-layer-track"
                 aria-label={`${row.label} layer timeline`}
                 onClick={seekFromTimelineTrack}
               >
-                {row.segments.length > 0 ? (
+                {!collapsedTrackIds.has(row.id) && row.segments.length > 0 ? (
                   row.segments.map((segment) => {
                     const isBrollSegment = Boolean(segment.cardId);
                     const isHookSegment = segment.hookOverlay === true;
@@ -1908,8 +2619,8 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                         className={[
                           "clip-studio-layer-segment",
                           `is-${segment.tone}`,
-                          isVisualTimingSegment ? "is-draggable is-resizable" : "",
-                          isPacingSegment ? "is-pacing-cut is-draggable is-resizable" : "",
+                          isVisualTimingSegment && !lockedTrackIds.has(row.id) ? "is-draggable is-resizable" : "",
+                          isPacingSegment && !lockedTrackIds.has(row.id) ? "is-pacing-cut is-draggable is-resizable" : "",
                           isSelectedBrollSegment ? "is-selected" : "",
                         ].filter(Boolean).join(" ")}
                         data-cleanup-cut-id={cleanupCut?.id}
@@ -1941,6 +2652,9 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                               : undefined
                         }
                         onPointerDown={(event) => {
+                          if (lockedTrackIds.has(row.id)) {
+                            return;
+                          }
                           if (segment.cardId) {
                             startVisualLayerDrag(event, {
                               target: "broll",
@@ -1975,7 +2689,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                           });
                         }}
                       >
-                        {cleanupCut || isVisualTimingSegment ? (
+                        {(cleanupCut || isVisualTimingSegment) && !lockedTrackIds.has(row.id) ? (
                           <span
                             className="clip-studio-timeline-cut-resize is-start"
                             aria-hidden="true"
@@ -1993,7 +2707,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                           />
                         ) : null}
                         <span>{segment.label}</span>
-                        {cleanupCut || isVisualTimingSegment ? (
+                        {(cleanupCut || isVisualTimingSegment) && !lockedTrackIds.has(row.id) ? (
                           <span
                             className="clip-studio-timeline-cut-resize is-end"
                             aria-hidden="true"
@@ -2017,30 +2731,48 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                   <span className="clip-studio-layer-empty" aria-hidden="true" />
                 )}
               </div>
-              <button
-                type="button"
-                className="button secondary"
-                onClick={() => {
-                  if (row.action === "review-pauses") {
-                    setCleanupReviewOpen((open) => !open);
-                    return;
-                  }
+              <div className="clip-studio-layer-actions">
+                <button
+                  type="button"
+                  className="clip-studio-track-icon-button"
+                  aria-label={`${lockedTrackIds.has(row.id) ? "Unlock" : "Lock"} ${row.label} track`}
+                  aria-pressed={lockedTrackIds.has(row.id)}
+                  title={`${lockedTrackIds.has(row.id) ? "Unlock" : "Lock"} ${row.label} track`}
+                  onClick={() => toggleTrackState(setLockedTrackIds, row.id)}
+                >
+                  <TimelineLockIcon locked={lockedTrackIds.has(row.id)} />
+                </button>
+                <button
+                  type="button"
+                  className="button secondary"
+                  disabled={lockedTrackIds.has(row.id) && row.action !== "review-pauses"}
+                  onClick={() => {
+                    if (row.action === "review-pauses") {
+                      setCleanupReviewOpen((open) => !open);
+                      return;
+                    }
 
-                  dispatchLayerCommand(row.action);
-                }}
-              >
-                {row.actionLabel}
-              </button>
+                    dispatchLayerCommand(row.action);
+                  }}
+                >
+                  {row.actionLabel}
+                </button>
+              </div>
             </div>
           ))}
 
           <div
-            className="clip-studio-layer-row is-enabled"
-            style={{ gridRow: timelineLayerRows.length + 1 }}
+            className={[
+              "clip-studio-layer-row is-enabled",
+              lockedTrackIds.has("clip-range") ? "is-locked" : "",
+            ].join(" ")}
+            style={{ gridRow: timelineLayerRows.length + 2 }}
           >
             <div className="clip-studio-layer-label">
-              <strong>Clip range</strong>
-              <span>Start and end</span>
+              <div>
+                <strong>Clip range</strong>
+                <span>Start and end</span>
+              </div>
             </div>
             <div
               className="clip-studio-timeline-track clip-studio-timeline-track-interactive"
@@ -2078,12 +2810,16 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                     style={{ left: `${left}%`, width: `${width}%` }}
                     title={title}
                     onPointerDown={(event) => {
-                      if (advancedCleanupOpen) {
+                      if (advancedCleanupOpen && !lockedTrackIds.has("clip-range")) {
                         startCleanupCutDrag(event, range, "move");
                       }
                     }}
                     onClick={(event) => {
                       event.stopPropagation();
+                      if (lockedTrackIds.has("clip-range")) {
+                        seekToAbsolute(cutStart);
+                        return;
+                      }
                       if (cleanupCutDragMovedRef.current) {
                         cleanupCutDragMovedRef.current = false;
                         return;
@@ -2093,7 +2829,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                       toggleCleanupCut(range);
                     }}
                   >
-                    {advancedCleanupOpen ? (
+                    {advancedCleanupOpen && !lockedTrackIds.has("clip-range") ? (
                       <span
                         className="clip-studio-timeline-cut-resize is-start"
                         aria-hidden="true"
@@ -2101,7 +2837,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                       />
                     ) : null}
                     <span className="clip-studio-timeline-cut-label">{range.enabled ? "" : "Kept"}</span>
-                    {advancedCleanupOpen ? (
+                    {advancedCleanupOpen && !lockedTrackIds.has("clip-range") ? (
                       <span
                         className="clip-studio-timeline-cut-resize is-end"
                         aria-hidden="true"
@@ -2120,6 +2856,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                 max={timelineEnd}
                 step={0.1}
                 value={activeClipStartSeconds}
+                disabled={lockedTrackIds.has("clip-range")}
                 onChange={(event) => updateTimelineBoundary("set-start-seconds", Number(event.target.value))}
                 aria-label="Clip start handle. Drag left to include earlier sermon context."
                 aria-describedby="clip-studio-timeline-draft-help"
@@ -2131,20 +2868,32 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                 max={timelineEnd}
                 step={0.1}
                 value={activeClipEndSeconds}
+                disabled={lockedTrackIds.has("clip-range")}
                 onChange={(event) => updateTimelineBoundary("set-end-seconds", Number(event.target.value))}
                 aria-label="Clip end handle. Drag right to include later sermon context."
                 aria-describedby="clip-studio-timeline-draft-help"
               />
             </div>
-            <span className="clip-studio-layer-action-spacer" aria-hidden="true" />
+            <div className="clip-studio-layer-actions">
+              <button
+                type="button"
+                className="clip-studio-track-icon-button"
+                aria-label={`${lockedTrackIds.has("clip-range") ? "Unlock" : "Lock"} Clip range track`}
+                aria-pressed={lockedTrackIds.has("clip-range")}
+                title={`${lockedTrackIds.has("clip-range") ? "Unlock" : "Lock"} Clip range track`}
+                onClick={() => toggleTrackState(setLockedTrackIds, "clip-range")}
+              >
+                <TimelineLockIcon locked={lockedTrackIds.has("clip-range")} />
+              </button>
+            </div>
           </div>
 
           <div
             className="clip-studio-layer-row is-enabled"
-            style={{ gridRow: timelineLayerRows.length + 2 }}
+            style={{ gridRow: timelineLayerRows.length + 3 }}
           >
             <div className="clip-studio-layer-label">
-              <strong>Spoken</strong>
+              <strong>Speech map</strong>
               <span>{transcriptSegments.length} line{transcriptSegments.length === 1 ? "" : "s"}</span>
             </div>
             <div
@@ -2156,20 +2905,27 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
                 const left = markerPercent(segment.startTimeSeconds, timelineStart, timelineDuration);
                 const right = markerPercent(segment.endTimeSeconds, timelineStart, timelineDuration);
                 const isSelected = selectedSegmentIds.has(segment.id);
+                const wordCount = segment.text.trim().split(/\s+/).filter(Boolean).length;
+                const densityInsetRem = Number((0.18 + (1 - Math.min(1, 0.28 + wordCount / 18)) * 0.5).toFixed(2));
 
                 return (
                   <button
                     key={segment.id}
                     type="button"
                     className={isSelected ? "clip-studio-transcript-block is-selected" : "clip-studio-transcript-block"}
-                    style={{ left: `${left}%`, width: `${Math.max(0.65, right - left)}%` }}
+                    style={{
+                      left: `${left}%`,
+                      width: `${Math.max(0.65, right - left)}%`,
+                      top: `${densityInsetRem}rem`,
+                      bottom: `${densityInsetRem}rem`,
+                    }}
                     onClick={(event) => {
                       event.stopPropagation();
                       seekToAbsolute(segment.startTimeSeconds);
                       requestPreviewPlayback();
                     }}
                     aria-label={`Preview spoken line ${index + 1} at ${formatSecondsForPastorView(segment.startTimeSeconds)}`}
-                    title={segment.text}
+                    title={`${segment.text} · speech activity`}
                   >
                     <span>{index + 1}</span>
                   </button>
@@ -2181,7 +2937,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
 
           <span
             className="clip-studio-shared-playhead"
-            style={{ gridRow: `1 / span ${timelineLayerRows.length + 2}` }}
+            style={{ gridRow: `1 / span ${timelineLayerRows.length + 3}` }}
             aria-hidden="true"
           >
             <span style={{ left: `${playheadPercent}%` }} />
@@ -2434,10 +3190,16 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
 export const __clipStudioTranscriptPanelTestUtils = {
   activateTranscriptSegment,
   previewTimelineLayerSegment,
+  buildTimelineRulerTicks,
+  filterTranscriptSegments,
+  formatTimelineTimecode,
+  normalizeTimelineZoom,
   removeCleanupMarkerAriaLabel,
+  resolveAdjacentTranscriptSegmentId,
   resolveBrollCardStartSeconds,
   resolveVisualLayerTimingDrag,
   resolveTimelinePointerSeconds,
   resolveTranscriptSegmentClipStatus,
   resolveTimelineBoundarySeconds,
+  snapTimelineSeconds,
 };

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { buildOAuthRedirectUriFromRequest, oauthFailureReason } from "@/lib/socialAnalyticsConnectors";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import {
   exchangeTikTokAuthorizationCode,
   storeTikTokCredential,
@@ -32,7 +33,14 @@ export async function GET(request: Request): Promise<NextResponse> {
   const error = url.searchParams.get("error");
   const state = url.searchParams.get("state");
 
-  if (!validateOAuthCallbackState(request, "tiktok", state)) {
+  let requestContext: Awaited<ReturnType<typeof requireRequestCapability>>;
+  try {
+    requestContext = await requireRequestCapability("channels.connect");
+  } catch {
+    return redirectToSettings(request, { oauth: "failed", provider: "tiktok", reason: "unauthorized" });
+  }
+
+  if (!validateOAuthCallbackState(request, "tiktok", state, requestContext)) {
     return redirectToSettings(request, { oauth: "failed", provider: "tiktok", reason: "invalid_oauth_state" });
   }
 
@@ -51,7 +59,13 @@ export async function GET(request: Request): Promise<NextResponse> {
       redirectUri: buildOAuthRedirectUriFromRequest("tiktok", request.url),
       code,
     });
-    await storeTikTokCredential(tokenSet);
+    await storeTikTokCredential({
+      ...tokenSet,
+      tenantScope: {
+        organizationId: requestContext.organizationId,
+        campusId: requestContext.campusId,
+      },
+    });
   } catch (callbackError) {
     console.warn("TikTok OAuth callback failed.", callbackError);
     return redirectToSettings(request, { oauth: "failed", provider: "tiktok", reason: oauthFailureReason(callbackError) });

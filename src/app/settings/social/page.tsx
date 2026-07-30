@@ -7,6 +7,7 @@ import {
   buildRequestBaseUrl,
   listSocialAnalyticsConnectors,
 } from "@/lib/socialAnalyticsConnectors";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,8 @@ function oauthFailureMessage(provider: string | undefined, reason: string | unde
       return `${label} OAuth token exchange failed. Check the server log for the provider error, then retry Connect.`;
     case "invalid_oauth_state":
       return `${label} connection expired or could not be verified. Start Connect again from this page.`;
+    case "unauthorized":
+      return `Your current role or church workspace no longer permits connecting ${label}. Ask an administrator to restore channel access.`;
     default:
       return `${label} OAuth failed: ${reason ?? "unknown error"}.`;
   }
@@ -107,6 +110,7 @@ function oauthBanner(params: SearchParams): { tone: "success" | "warning"; title
 }
 
 export default async function SocialSettingsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
+  const requestContext = await requireRequestCapability("channels.read");
   const params = await searchParams;
   const requestBaseUrl = buildRequestBaseUrl(await headers());
   const redirectUris = {
@@ -115,7 +119,10 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
     tiktok: buildOAuthRedirectUri("tiktok", requestBaseUrl),
     threads: buildOAuthRedirectUri("threads", requestBaseUrl),
   };
-  const connectors = await listSocialAnalyticsConnectors();
+  const connectors = await listSocialAnalyticsConnectors({
+    organizationId: requestContext.organizationId,
+    campusId: requestContext.campusId,
+  });
   const youtubeClientId = process.env.YOUTUBE_CLIENT_ID?.trim();
   const metaAppId = process.env.META_APP_ID?.trim();
   const tiktokClientKey = process.env.TIKTOK_CLIENT_KEY?.trim();

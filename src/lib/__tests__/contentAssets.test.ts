@@ -1,16 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const txMock = vi.hoisted(() => ({
-  scheduledPost: { findUnique: vi.fn() },
+  scheduledPost: { findFirst: vi.fn() },
   contentAsset: { findMany: vi.fn(), updateMany: vi.fn() },
   scheduledPostContentAsset: { upsert: vi.fn() },
 }));
 
 const prismaMock = vi.hoisted(() => ({
   $transaction: vi.fn(),
-  contentOpportunity: { findUnique: vi.fn() },
+  sermon: { findFirst: vi.fn() },
+  scheduledPost: { findFirst: vi.fn() },
+  contentOpportunity: { findFirst: vi.fn() },
   contentAsset: {
     create: vi.fn(),
+    findFirst: vi.fn(),
     findUnique: vi.fn(),
     findMany: vi.fn(),
     updateMany: vi.fn(),
@@ -137,7 +140,12 @@ describe("content asset persistence", () => {
   });
 
   it("rejects an opportunity from another sermon", async () => {
-    prismaMock.contentOpportunity.findUnique.mockResolvedValue({ sermonId: "sermon-2" });
+    prismaMock.sermon.findFirst.mockResolvedValue({
+      id: "sermon-1",
+      organizationId: "org-1",
+      campusId: "campus-1",
+    });
+    prismaMock.contentOpportunity.findFirst.mockResolvedValue({ sermonId: "sermon-2" });
 
     await expect(createContentAsset({
       sermonId: "sermon-1",
@@ -149,7 +157,12 @@ describe("content asset persistence", () => {
 
   it("attaches ordered ready assets without changing clip storage", async () => {
     prismaMock.$transaction.mockImplementation(async (callback: (tx: typeof txMock) => Promise<unknown>) => callback(txMock));
-    txMock.scheduledPost.findUnique.mockResolvedValue({ id: "post-1", platform: "INSTAGRAM" });
+    txMock.scheduledPost.findFirst.mockResolvedValue({
+      id: "post-1",
+      organizationId: "org-1",
+      campusId: "campus-1",
+      platform: "INSTAGRAM",
+    });
     txMock.contentAsset.findMany.mockResolvedValue([
       { id: "asset-1", platform: "INSTAGRAM", status: "READY" },
       { id: "asset-2", platform: null, status: "READY" },
@@ -173,14 +186,24 @@ describe("content asset persistence", () => {
       create: { scheduledPostId: "post-1", contentAssetId: "asset-2", sortOrder: 1 },
     }));
     expect(txMock.contentAsset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: { in: ["asset-1", "asset-2"] }, status: "READY" },
+      where: expect.objectContaining({
+        id: { in: ["asset-1", "asset-2"] },
+        organizationId: "org-1",
+        campusId: "campus-1",
+        status: "READY",
+      }),
       data: expect.objectContaining({ status: "SCHEDULED" }),
     }));
   });
 
   it("rejects assets prepared for a different platform", async () => {
     prismaMock.$transaction.mockImplementation(async (callback: (tx: typeof txMock) => Promise<unknown>) => callback(txMock));
-    txMock.scheduledPost.findUnique.mockResolvedValue({ id: "post-1", platform: "FACEBOOK" });
+    txMock.scheduledPost.findFirst.mockResolvedValue({
+      id: "post-1",
+      organizationId: "org-1",
+      campusId: "campus-1",
+      platform: "FACEBOOK",
+    });
     txMock.contentAsset.findMany.mockResolvedValue([
       { id: "asset-1", platform: "INSTAGRAM", status: "READY" },
     ]);
@@ -192,6 +215,10 @@ describe("content asset persistence", () => {
   });
 
   it("marks only scheduled linked assets as published", async () => {
+    prismaMock.scheduledPost.findFirst.mockResolvedValue({
+      organizationId: "org-1",
+      campusId: "campus-1",
+    });
     prismaMock.scheduledPostContentAsset.findMany.mockResolvedValue([
       { contentAssetId: "asset-1" },
       { contentAssetId: "asset-2" },
@@ -205,7 +232,12 @@ describe("content asset persistence", () => {
     })).resolves.toBe(2);
 
     expect(prismaMock.contentAsset.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: ["asset-1", "asset-2"] }, status: { in: ["READY", "SCHEDULED"] } },
+      where: {
+        id: { in: ["asset-1", "asset-2"] },
+        organizationId: "org-1",
+        campusId: "campus-1",
+        status: { in: ["READY", "SCHEDULED"] },
+      },
       data: { status: "PUBLISHED", publishedAt: now, archivedAt: null },
     });
   });

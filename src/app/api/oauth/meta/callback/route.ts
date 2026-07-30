@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { buildOAuthRedirectUriFromRequest, getMetaOAuthScopes, oauthFailureReason } from "@/lib/socialAnalyticsConnectors";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import {
   exchangeMetaAuthorizationCode,
   exchangeMetaLongLivedToken,
@@ -33,7 +34,14 @@ export async function GET(request: Request): Promise<NextResponse> {
   const error = url.searchParams.get("error");
   const state = url.searchParams.get("state");
 
-  if (!validateOAuthCallbackState(request, "meta", state)) {
+  let requestContext: Awaited<ReturnType<typeof requireRequestCapability>>;
+  try {
+    requestContext = await requireRequestCapability("channels.connect");
+  } catch {
+    return redirectToSettings(request, { oauth: "failed", provider: "meta", reason: "unauthorized" });
+  }
+
+  if (!validateOAuthCallbackState(request, "meta", state, requestContext)) {
     return redirectToSettings(request, { oauth: "failed", provider: "meta", reason: "invalid_oauth_state" });
   }
 
@@ -60,6 +68,10 @@ export async function GET(request: Request): Promise<NextResponse> {
       accessToken: shortLived.accessToken,
     });
     const stored = await storeMetaPageCredentials({
+      tenantScope: {
+        organizationId: requestContext.organizationId,
+        campusId: requestContext.campusId,
+      },
       accessToken: longLived.accessToken,
       tokenType: longLived.tokenType ?? shortLived.tokenType,
       expiresAt: longLived.expiresAt ?? shortLived.expiresAt,

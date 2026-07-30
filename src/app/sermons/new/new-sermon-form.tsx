@@ -30,6 +30,7 @@ import {
   createSermonAction,
   type CreateSermonFormState,
 } from "@/server/actions/sermons";
+import styles from "./new-sermon.module.css";
 
 const initialCreateSermonState: CreateSermonFormState = {
   success: false,
@@ -175,9 +176,17 @@ function UploadProgressTheater({
 export function NewSermonForm({
   initialYoutubeUrl = "",
   canUploadMedia = true,
+  defaults,
 }: {
   initialYoutubeUrl?: string;
   canUploadMedia?: boolean;
+  defaults: {
+    title: string;
+    speakerName: string;
+    churchName: string;
+    language: string;
+    sermonDate: string;
+  };
 }) {
   const [state, formAction] = useActionState(createSermonAction, initialCreateSermonState);
   const router = useRouter();
@@ -429,6 +438,16 @@ export function NewSermonForm({
         }}
       >
         <UploadProgressTheater sourceMode={sourceMode} selectedFileName={selectedFile?.name ?? null} isUploadSubmitting={isUploadSubmitting} uploadProgressPercent={uploadProgressPercent} />
+        <div className={styles.quickStartNote} role="note">
+          <span aria-hidden="true">01</span>
+          <div>
+            <strong>Start with the recording</strong>
+            <p>
+              Your saved church, preacher, language, and today’s date are already
+              filled in below. Review them only when this sermon is different.
+            </p>
+          </div>
+        </div>
         <section className="intake-form-section stack-md" aria-labelledby="sermon-source-heading">
           <div className="intake-section-heading">
             <span className="intake-section-number">01</span>
@@ -547,47 +566,55 @@ export function NewSermonForm({
           </div>
         </section>
 
-        <section className="intake-form-section stack-md" aria-labelledby="sermon-details-heading">
-          <div className="intake-section-heading">
-            <span className="intake-section-number">02</span>
-            <div>
-              <h2 id="sermon-details-heading">Add the sermon details</h2>
-              <p className="muted">These details keep your library and exported posts easy to recognize.</p>
-            </div>
-          </div>
+        <details className={`${styles.detailsDisclosure} intake-form-section`} open={Boolean(
+          displayState.fieldErrors?.title
+            || displayState.fieldErrors?.speakerName
+            || displayState.fieldErrors?.churchName
+            || displayState.fieldErrors?.language
+            || displayState.fieldErrors?.sermonDate,
+        ) || undefined}>
+          <summary>
+            <span>
+              <span className="kicker">Already filled in</span>
+              <strong id="sermon-details-heading">Review sermon details</strong>
+            </span>
+            <span className={styles.summaryValue}>{defaults.churchName} · {defaults.speakerName || "Add preacher"}</span>
+          </summary>
 
-          <div className="stack-sm">
-            <label htmlFor="title">Sermon title</label>
-            <input id="title" name="title" type="text" required placeholder="Hope in hard times" />
+          <div className={`${styles.detailsBody} stack-md`}>
+            <div className="stack-sm">
+              <label htmlFor="title">Sermon title</label>
+              <input id="title" name="title" type="text" required defaultValue={defaults.title} placeholder="Hope in hard times" />
               {displayState.fieldErrors?.title ? <p className="field-error">{displayState.fieldErrors.title}</p> : null}
+            </div>
+
+            <div className="review-edit-grid upload-meta-grid">
+              <div className="stack-sm">
+                <label htmlFor="speakerName">Preacher</label>
+                <input id="speakerName" name="speakerName" type="text" required defaultValue={defaults.speakerName} placeholder="Pastor Jane Doe" />
+                {displayState.fieldErrors?.speakerName ? <p className="field-error">{displayState.fieldErrors.speakerName}</p> : null}
+              </div>
+
+              <div className="stack-sm">
+                <label htmlFor="churchName">Church</label>
+                <input id="churchName" name="churchName" type="text" required defaultValue={defaults.churchName} placeholder="Grace Community Church" />
+                {displayState.fieldErrors?.churchName ? <p className="field-error">{displayState.fieldErrors.churchName}</p> : null}
+              </div>
+
+              <div className="stack-sm">
+                <label htmlFor="language">Sermon language</label>
+                <input id="language" name="language" type="text" required defaultValue={defaults.language} placeholder="English" />
+                {displayState.fieldErrors?.language ? <p className="field-error">{displayState.fieldErrors.language}</p> : null}
+              </div>
+
+              <div className="stack-sm">
+                <label htmlFor="sermonDate">Date preached <span className="field-optional">Optional</span></label>
+                <input id="sermonDate" name="sermonDate" type="date" defaultValue={defaults.sermonDate} />
+                {displayState.fieldErrors?.sermonDate ? <p className="field-error">{displayState.fieldErrors.sermonDate}</p> : null}
+              </div>
+            </div>
           </div>
-
-          <div className="review-edit-grid upload-meta-grid">
-            <div className="stack-sm">
-              <label htmlFor="speakerName">Preacher</label>
-              <input id="speakerName" name="speakerName" type="text" required placeholder="Pastor Jane Doe" />
-              {displayState.fieldErrors?.speakerName ? <p className="field-error">{displayState.fieldErrors.speakerName}</p> : null}
-            </div>
-
-            <div className="stack-sm">
-              <label htmlFor="churchName">Church</label>
-              <input id="churchName" name="churchName" type="text" required placeholder="Grace Community Church" />
-              {displayState.fieldErrors?.churchName ? <p className="field-error">{displayState.fieldErrors.churchName}</p> : null}
-            </div>
-
-            <div className="stack-sm">
-              <label htmlFor="language">Sermon language</label>
-              <input id="language" name="language" type="text" required placeholder="English" />
-              {displayState.fieldErrors?.language ? <p className="field-error">{displayState.fieldErrors.language}</p> : null}
-            </div>
-
-            <div className="stack-sm">
-              <label htmlFor="sermonDate">Date preached <span className="field-optional">Optional</span></label>
-              <input id="sermonDate" name="sermonDate" type="date" />
-              {displayState.fieldErrors?.sermonDate ? <p className="field-error">{displayState.fieldErrors.sermonDate}</p> : null}
-            </div>
-          </div>
-        </section>
+        </details>
 
         <details
           className="sermon-window-panel sermon-window-disclosure"
@@ -671,7 +698,10 @@ export function NewSermonForm({
             isUploadSubmitting={isUploadSubmitting}
             uploadProgressPercent={uploadProgressPercent}
           />
-          <p className="muted small">Analysis begins after your sermon is saved. You can leave while it works.</p>
+          <p className="muted small">
+            After the source is accepted, analysis continues in the background.
+            Return to the dashboard for completion status; email alerts are not active yet.
+          </p>
         </div>
 
         <details className="upload-import-options">

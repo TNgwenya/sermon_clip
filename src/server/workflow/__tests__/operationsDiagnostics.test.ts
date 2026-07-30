@@ -221,6 +221,88 @@ describe("operations diagnostics", () => {
     expect(metrics.pendingActions).toBe(9);
   });
 
+  it("scopes every dashboard metric query to one organization", async () => {
+    const sermonWheres: unknown[] = [];
+    const clipWheres: unknown[] = [];
+    const processingWheres: unknown[] = [];
+    const service = __operationsDiagnosticsTestUtils.createOperationsDiagnosticsService({
+      countSermons: async (where) => {
+        sermonWheres.push(where);
+        return 0;
+      },
+      countClips: async (where) => {
+        clipWheres.push(where);
+        return 0;
+      },
+      countProcessingJobs: async (where) => {
+        processingWheres.push(where);
+        return 0;
+      },
+      findProcessingJobsForDiagnostics: async (where) => {
+        processingWheres.push(where);
+        return [];
+      },
+      findClipsForConsistency: async () => [],
+    });
+
+    await service.getOperationalMetrics("org_one");
+
+    expect(sermonWheres).not.toHaveLength(0);
+    expect(clipWheres).not.toHaveLength(0);
+    expect(processingWheres).not.toHaveLength(0);
+    for (const where of sermonWheres) {
+      expect((where as { AND: unknown[] }).AND[0]).toEqual({
+        organizationId: "org_one",
+      });
+    }
+    for (const where of [...clipWheres, ...processingWheres]) {
+      expect((where as { AND: unknown[] }).AND[0]).toEqual({
+        sermon: { organizationId: "org_one" },
+      });
+    }
+  });
+
+  it("adds the selected campus to every dashboard metric query", async () => {
+    const sermonWheres: unknown[] = [];
+    const relatedWheres: unknown[] = [];
+    const service = __operationsDiagnosticsTestUtils.createOperationsDiagnosticsService({
+      countSermons: async (where) => {
+        sermonWheres.push(where);
+        return 0;
+      },
+      countClips: async (where) => {
+        relatedWheres.push(where);
+        return 0;
+      },
+      countProcessingJobs: async (where) => {
+        relatedWheres.push(where);
+        return 0;
+      },
+      findProcessingJobsForDiagnostics: async (where) => {
+        relatedWheres.push(where);
+        return [];
+      },
+      findClipsForConsistency: async () => [],
+    });
+
+    await service.getOperationalMetrics("org_one", "campus_one");
+
+    for (const where of sermonWheres) {
+      expect((where as { AND: unknown[] }).AND[0]).toEqual({
+        organizationId: "org_one",
+        campusId: "campus_one",
+      });
+    }
+    for (const where of relatedWheres) {
+      expect((where as { AND: unknown[] }).AND[0]).toEqual({
+        sermon: {
+          organizationId: "org_one",
+          campusId: "campus_one",
+        },
+      });
+    }
+  });
+
   it("counts only unresolved latest failed processing jobs", () => {
     const unresolvedCount = __operationsDiagnosticsTestUtils.countUnresolvedFailedProcessingJobs([
       {

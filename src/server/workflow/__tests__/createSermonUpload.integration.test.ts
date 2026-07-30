@@ -10,6 +10,15 @@ import { prisma } from "@/lib/prisma";
 import { createSermonAction } from "@/server/actions/sermons";
 import { getSermonStoragePath } from "@/server/agents/storage";
 
+vi.mock("next/headers", () => ({
+  headers: async () => new Headers({
+    "x-sermonclip-organization-id": "org_local_default",
+    "x-sermonclip-campus-id": "campus_local_default",
+    "x-sermonclip-actor-id": "user_local_bootstrap",
+    "x-sermonclip-authentication": "local-development",
+  }),
+}));
+
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
 }));
@@ -54,6 +63,7 @@ describe("create sermon upload workflow", () => {
       }
 
       await prisma.sermon.deleteMany({ where: { id: sermonId } });
+      await prisma.auditEvent.deleteMany({ where: { targetId: sermonId } });
       await rm(getSermonStoragePath(sermonId), { recursive: true, force: true });
     }
   });
@@ -129,6 +139,14 @@ describe("create sermon upload workflow", () => {
     expect(sermon.sourceVideoPath).toContain("/source/source.mp4");
     expect(sermon.audioPath).toContain("/audio/audio.mp3");
     expect(sermon.transcriptJsonPath).toContain("/transcript/transcript.json");
+    await expect(prisma.auditEvent.findFirst({
+      where: {
+        organizationId: "org_local_default",
+        action: "sermon.created",
+        targetId: result.createdSermonId!,
+      },
+      select: { actorUserId: true },
+    })).resolves.toEqual({ actorUserId: "user_local_bootstrap" });
     await expect(readFile(sermon.sourceVideoPath!)).resolves.toEqual(Buffer.from(videoBytes));
   }, 20_000);
 

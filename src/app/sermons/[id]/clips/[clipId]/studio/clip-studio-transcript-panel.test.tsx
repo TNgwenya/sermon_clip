@@ -78,28 +78,80 @@ const panelProps = {
 };
 
 describe("Clip Studio transcript and timing controls", () => {
-  it("makes playable transcript rows and selected-line actions explicit", () => {
+  it("renders a searchable transcript navigator with compact selected-line actions", () => {
     const markup = renderToStaticMarkup(<ClipStudioTranscriptPanel {...panelProps} />);
 
     expect(markup).toContain(">Transcript</h2>");
+    expect(markup).toContain("2 of 2 lines in clip");
+    expect(markup).toContain("Search transcript");
+    expect(markup).toContain("Find a word or phrase");
+    expect(markup).toContain('aria-keyshortcuts="/"');
+    expect(markup).toContain('aria-label="Filter transcript lines"');
+    expect(markup).toContain(">In clip</button>");
+    expect(markup).toContain(">Outside</button>");
+    expect(markup).toContain("2 results");
     expect(markup).toContain("Selected line");
     expect(markup.match(/Check wording/g)).toHaveLength(1);
-    expect(markup).toContain("Select a line to preview or edit its timing.");
-    expect(markup).not.toContain("Choose what stays");
-    expect(markup).not.toContain("Choose an action");
-    expect(markup).toContain("In clip: highlighted green");
     expect(markup).toContain("Follow playback");
-    expect(markup).toContain("Start and end trim the recording");
-    expect(markup).toContain("Caption corrections change text only");
+    expect(markup).toContain("Caption edits change on-screen text only—not the spoken audio.");
     expect(markup).toContain('type="checkbox" checked=""');
-    expect(markup).toContain("Preview selected line");
-    expect(markup).toContain("Set start to 0:10");
-    expect(markup).toContain("Set end to 0:12");
-    expect(markup).toContain("Edit caption words");
-    expect(markup).toContain("Review transcript");
+    expect(markup).toContain('aria-label="Play selected transcript line"');
+    expect(markup).toContain('aria-label="Set clip start to 0:10"');
+    expect(markup).toContain('aria-label="Set clip end to 0:12"');
+    expect(markup).toContain('aria-label="Edit caption words"');
+    expect(markup).toContain("Review text");
     expect(markup).toContain('href="/sermons/sermon-1/review#clip-clip-1"');
     expect(markup).toMatch(/aria-pressed="true"[^>]*data-transcript-segment-id="line-1"/);
-    expect(markup).toContain("Select &amp; play");
+    expect(markup).toContain("↑↓ navigate · Enter plays · / searches");
+    expect(markup).toContain("Snap to sentence");
+    expect(markup).toContain("Reset AI");
+  });
+
+  it("filters transcript lines by spoken words and clip inclusion", () => {
+    const segments = [
+      ...panelProps.transcriptSegments,
+      { id: "outside", startTimeSeconds: 41, endTimeSeconds: 43, text: "A closing prayer" },
+    ];
+
+    expect(__clipStudioTranscriptPanelTestUtils.filterTranscriptSegments({
+      segments,
+      query: "GRACE",
+      filter: "all",
+      clipStartSeconds: 10,
+      clipEndSeconds: 40,
+    }).map((segment) => segment.id)).toEqual(["line-1"]);
+    expect(__clipStudioTranscriptPanelTestUtils.filterTranscriptSegments({
+      segments,
+      query: "",
+      filter: "clip",
+      clipStartSeconds: 10,
+      clipEndSeconds: 40,
+    }).map((segment) => segment.id)).toEqual(["line-1", "line-2"]);
+    expect(__clipStudioTranscriptPanelTestUtils.filterTranscriptSegments({
+      segments,
+      query: "",
+      filter: "outside",
+      clipStartSeconds: 10,
+      clipEndSeconds: 40,
+    }).map((segment) => segment.id)).toEqual(["outside"]);
+  });
+
+  it("resolves bounded transcript keyboard navigation", () => {
+    expect(__clipStudioTranscriptPanelTestUtils.resolveAdjacentTranscriptSegmentId({
+      segments: panelProps.transcriptSegments,
+      currentSegmentId: "line-1",
+      direction: "next",
+    })).toBe("line-2");
+    expect(__clipStudioTranscriptPanelTestUtils.resolveAdjacentTranscriptSegmentId({
+      segments: panelProps.transcriptSegments,
+      currentSegmentId: "line-2",
+      direction: "next",
+    })).toBe("line-2");
+    expect(__clipStudioTranscriptPanelTestUtils.resolveAdjacentTranscriptSegmentId({
+      segments: panelProps.transcriptSegments,
+      currentSegmentId: "line-2",
+      direction: "first",
+    })).toBe("line-1");
   });
 
   it("seeks and requests playback when a spoken transcript line is previewed", () => {
@@ -160,11 +212,9 @@ describe("Clip Studio transcript and timing controls", () => {
     );
 
     expect(markup).toContain("Captions are off");
-    expect(markup).toContain("Enable captions to edit");
-    expect(markup).toContain("Spoken transcript review required before final video");
-    expect(markup).toContain("Preparing is locked until a reviewer confirms the spoken wording");
-    expect(markup).toContain("Caption edits here do not complete that review");
-    expect(markup).toContain("Review and confirm wording");
+    expect(markup).toContain("Enable captions");
+    expect(markup).toContain("Review required");
+    expect(markup).toContain('aria-label="Review and confirm spoken words before export"');
 
     previewState.editPreview.applyCaptionsToClip = true;
   });
@@ -179,7 +229,7 @@ describe("Clip Studio transcript and timing controls", () => {
       />,
     );
 
-    expect(markup).toContain("This line is outside the clip");
+    expect(markup).toContain("Include this line before editing its on-screen words");
     expect(markup).toContain("Requirement: include this spoken line in the clip first");
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*aria-describedby="clip-studio-wording-requirement"/);
   });
@@ -243,6 +293,17 @@ describe("Clip Studio transcript and timing controls", () => {
     const markup = renderToStaticMarkup(<ClipStudioTimeline {...panelProps} />);
 
     expect(markup).toContain('aria-label="Shared editing timeline"');
+    expect(markup).toContain('aria-label="Timeline transport and editing tools"');
+    expect(markup).toContain("Play timeline preview");
+    expect(markup).toContain("Snap on");
+    expect(markup).toContain("Split caption");
+    expect(markup).toContain("Fine edit off");
+    expect(markup).toContain("Timeline zoom");
+    expect(markup).toContain("Fit");
+    expect(markup).toContain("Speech map");
+    expect(markup).toContain("Collapse Captions track");
+    expect(markup).toContain("Lock B-roll track");
+    expect(markup).toContain("Focus the timeline for Space");
     expect(markup).toContain("Captions");
     expect(markup).toContain("Hook");
     expect(markup).toContain("B-roll");
@@ -394,6 +455,39 @@ describe("Clip Studio transcript and timing controls", () => {
       clipDurationSeconds: 30,
       maximumDurationSeconds: 12,
     })).toEqual({ startSeconds: 24, durationSeconds: 6 });
+  });
+
+  it("builds a precise zoomable ruler and snaps only inside the magnetic threshold", () => {
+    expect(__clipStudioTranscriptPanelTestUtils.normalizeTimelineZoom(9)).toBe(4);
+    expect(__clipStudioTranscriptPanelTestUtils.normalizeTimelineZoom(0.1)).toBe(1);
+    expect(__clipStudioTranscriptPanelTestUtils.normalizeTimelineZoom(2.13)).toBe(2.25);
+    expect(__clipStudioTranscriptPanelTestUtils.formatTimelineTimecode(65.24)).toBe("01:05.2");
+
+    const fitTicks = __clipStudioTranscriptPanelTestUtils.buildTimelineRulerTicks({
+      timelineStart: 10,
+      timelineEnd: 40,
+      zoom: 1,
+    });
+    const zoomedTicks = __clipStudioTranscriptPanelTestUtils.buildTimelineRulerTicks({
+      timelineStart: 10,
+      timelineEnd: 40,
+      zoom: 4,
+    });
+    expect(fitTicks).toHaveLength(11);
+    expect(zoomedTicks).toHaveLength(41);
+    expect(fitTicks[0]?.label).toBe("00:10.0");
+    expect(fitTicks.at(-1)?.label).toBe("00:40.0");
+
+    expect(__clipStudioTranscriptPanelTestUtils.snapTimelineSeconds({
+      seconds: 14.24,
+      candidates: [10, 14, 18],
+      thresholdSeconds: 0.3,
+    })).toBe(14);
+    expect(__clipStudioTranscriptPanelTestUtils.snapTimelineSeconds({
+      seconds: 14.31,
+      candidates: [10, 14, 18],
+      thresholdSeconds: 0.3,
+    })).toBe(14.31);
   });
 
   it("previews hook and B-roll markers at their exact start and selects a B-roll card", () => {

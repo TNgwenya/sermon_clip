@@ -14,6 +14,7 @@ import { SubtitlesButton } from "@/app/sermons/[id]/subtitles-button";
 import { RegenerationControls } from "@/app/sermons/[id]/regeneration-controls";
 import { RedoClipGenerationButton } from "@/app/sermons/[id]/redo-clip-generation-button";
 import { RetryFailedJobButton } from "@/app/sermons/[id]/retry-failed-job-button";
+import { YouTubeRecoveryUpload } from "@/app/sermons/[id]/youtube-recovery-upload";
 import { RepairFailedClipOperationsButton } from "@/app/sermons/[id]/repair-failed-clip-operations-button";
 import { SermonLiveRefresh } from "@/app/sermons/[id]/sermon-live-refresh";
 import { SermonDetailPreviewCard } from "@/app/sermons/[id]/sermon-detail-preview-card";
@@ -25,9 +26,12 @@ import {
 } from "@/lib/clipPreview";
 import { summarizeSermonClipAttention } from "@/lib/sermonClipAttention";
 import { getAudioPath, getLogPath, getSourceVideoPath } from "@/server/agents/storage";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantResourceScope } from "@/server/tenancy/scope";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import {
   buildPastorProcessingFailurePresentation,
+  readProcessingFailureCode,
   summarizeTranscriptFailureDiagnostics,
 } from "@/lib/pastorFriendlyErrors";
 import {
@@ -753,10 +757,13 @@ export default async function SermonDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const requestContext = await requireRequestCapability("sermons.read", {
+    resource: { kind: "SERMON", id },
+  });
   const localMediaAvailable = canRunLocalMediaProcessing();
 
-  const sermon: SermonDetailItem | null = await prisma.sermon.findUnique({
-    where: { id },
+  const sermon: SermonDetailItem | null = await prisma.sermon.findFirst({
+    where: tenantResourceScope(requestContext, id),
     include: {
       transcript: {
         select: {
@@ -1010,10 +1017,12 @@ export default async function SermonDetailPage({
   const latestFailurePresentation = latestFailedJob && !isStaleActiveProcessingJob(latestFailedJob)
     ? buildPastorProcessingFailurePresentation({
       message: latestFailedJob.errorMessage,
+      failureCode: readProcessingFailureCode(latestFailedJob.generationSummary),
       transcriptDiagnostics: transcriptFailureDiagnostics,
       transcriptRefreshedAfterFailure,
     })
     : null;
+  const youtubeSourceRecoveryFailure = latestFailurePresentation?.kind === "YOUTUBE_SOURCE_UNAVAILABLE";
   const clipQualityGateFailure = latestFailurePresentation?.kind === "CLIP_QUALITY_GATE"
     ? latestFailurePresentation
     : null;
@@ -1368,9 +1377,14 @@ export default async function SermonDetailPage({
             {primaryScripture ? <span>{primaryScripture}</span> : null}
           </div>
         </div>
-        <span className={`sermon-workspace-status is-${statusTone}`}>
-          {workspaceStatusLabel}
-        </span>
+        <div className="sermon-workspace-header-actions">
+          <span className={`sermon-workspace-status is-${statusTone}`}>
+            {workspaceStatusLabel}
+          </span>
+          <Link href={`/sermons/${sermon.id}/share`} className="button tertiary">
+            Create sermon page
+          </Link>
+        </div>
       </header>
 
       <nav className="sermon-workspace-journey" aria-label="Sermon workflow">
@@ -1455,7 +1469,12 @@ export default async function SermonDetailPage({
                 force
               />
             ) : null}
-            {workspaceAction === "recover" && (!clipQualityGateFailure || transcriptRefreshedAfterFailure) && latestFailedJob ? (
+            {workspaceAction === "recover" && youtubeSourceRecoveryFailure ? (
+              <a href="#youtube-upload-recovery" className="button primary">
+                Upload recording to continue
+              </a>
+            ) : null}
+            {workspaceAction === "recover" && !youtubeSourceRecoveryFailure && (!clipQualityGateFailure || transcriptRefreshedAfterFailure) && latestFailedJob ? (
               <RetryFailedJobButton sermonId={sermon.id} jobId={latestFailedJob.id} />
             ) : null}
             {workspaceAction === "recover" && !latestFailedJob && operationSummary.failed > 0 ? (
@@ -1736,7 +1755,17 @@ export default async function SermonDetailPage({
                     {unresolvedFailedJobs.length - 1} other failed or stuck processing step{unresolvedFailedJobs.length === 2 ? "" : "s"} can be retried after this one.
                   </p>
                 ) : null}
-                {clipQualityGateFailure && !transcriptRefreshedAfterFailure ? (
+                {youtubeSourceRecoveryFailure ? (
+                  <div className="stack-sm">
+                    <YouTubeRecoveryUpload sermonId={sermon.id} />
+                    <details>
+                      <summary>Try importing from YouTube again</summary>
+                      <div className="failure-recovery-action">
+                        <RetryFailedJobButton sermonId={sermon.id} jobId={latestFailedJob.id} />
+                      </div>
+                    </details>
+                  </div>
+                ) : clipQualityGateFailure && !transcriptRefreshedAfterFailure ? (
                   <div className="stack-sm failure-recovery-action">
                     <TranscribeSermonButton
                       sermonId={sermon.id}

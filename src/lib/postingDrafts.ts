@@ -162,13 +162,29 @@ export function normalizePostingDraftIdempotencyKey(value: unknown): string | nu
   return normalized.length > 0 && normalized.length <= 200 ? normalized : null;
 }
 
-function postingDraftRequestPrefix(value: string): string {
-  const digest = crypto.createHash("sha256").update(value).digest("hex");
+export type PostingDraftTenantScope = {
+  organizationId: string;
+  campusId: string | null;
+};
+
+function postingDraftRequestPrefix(
+  value: string,
+  tenantScope?: PostingDraftTenantScope,
+): string {
+  const identity = tenantScope
+    ? stableJson({ value, tenantScope })
+    : value;
+  const digest = crypto.createHash("sha256").update(identity).digest("hex");
   return `posting-draft-request:${digest}:`;
 }
 
-function postingDraftRequestKey(value: string, payloadFingerprint: string, sequence = 0): string {
-  return `${postingDraftRequestPrefix(value)}${payloadFingerprint}${sequence > 0 ? `:${sequence}` : ""}`;
+function postingDraftRequestKey(
+  value: string,
+  payloadFingerprint: string,
+  sequence = 0,
+  tenantScope?: PostingDraftTenantScope,
+): string {
+  return `${postingDraftRequestPrefix(value, tenantScope)}${payloadFingerprint}${sequence > 0 ? `:${sequence}` : ""}`;
 }
 
 function stableJson(value: unknown): string {
@@ -195,14 +211,28 @@ const postingDraftSelect = {
 async function findPostingDraftByRequestKey(
   requestKey: string,
   payloadFingerprint: string,
+  tenantScope?: PostingDraftTenantScope,
 ): Promise<PostingDraft | null> {
   const scheduledPost = await prisma.scheduledPost.findFirst({
-    where: { idempotencyKey: { startsWith: postingDraftRequestPrefix(requestKey) } },
+    where: {
+      idempotencyKey: {
+        startsWith: postingDraftRequestPrefix(requestKey, tenantScope),
+      },
+      ...(tenantScope
+        ? {
+            organizationId: tenantScope.organizationId,
+            campusId: tenantScope.campusId,
+          }
+        : {}),
+    },
     orderBy: { idempotencyKey: "asc" },
     select: { idempotencyKey: true, postingDraft: { select: postingDraftSelect } },
   });
   if (!scheduledPost) return null;
-  if (scheduledPost.idempotencyKey !== postingDraftRequestKey(requestKey, payloadFingerprint)) {
+  if (
+    scheduledPost.idempotencyKey
+      !== postingDraftRequestKey(requestKey, payloadFingerprint, 0, tenantScope)
+  ) {
     throw new PostingDraftValidationError(
       "This scheduling request key was already used with different post details. Start a new scheduling request.",
     );
@@ -224,8 +254,16 @@ function isRetryableIdempotencyRace(error: unknown): boolean {
   );
 }
 
-export async function listPostingDrafts(): Promise<PostingDraft[]> {
+export async function listPostingDrafts(
+  tenantScope?: PostingDraftTenantScope,
+): Promise<PostingDraft[]> {
   const drafts = await prisma.postingDraft.findMany({
+    where: tenantScope
+      ? {
+          organizationId: tenantScope.organizationId,
+          ...(tenantScope.campusId ? { campusId: tenantScope.campusId } : {}),
+        }
+      : undefined,
     orderBy: { createdAt: "desc" },
     take: 100,
   });
@@ -234,6 +272,7 @@ export async function listPostingDrafts(): Promise<PostingDraft[]> {
 }
 
 export async function createPostingDraft(input: {
+  tenantScope?: PostingDraftTenantScope;
   clipIds: string[];
   platforms: PostingPlatform[];
   socialAccountIdsByPlatform?: Partial<Record<PostingPlatform, string[]>>;
@@ -284,7 +323,11 @@ export async function createPostingDraft(input: {
   })).digest("hex");
 
   if (requestKey) {
-    const existingDraft = await findPostingDraftByRequestKey(requestKey, payloadFingerprint);
+    const existingDraft = await findPostingDraftByRequestKey(
+      requestKey,
+      payloadFingerprint,
+      input.tenantScope,
+    );
     if (existingDraft) return existingDraft;
   }
 
@@ -292,12 +335,30 @@ export async function createPostingDraft(input: {
     const result = await prisma.$transaction(async (tx) => {
       if (requestKey) {
         const existingScheduledPost = await tx.scheduledPost.findFirst({
-          where: { idempotencyKey: { startsWith: postingDraftRequestPrefix(requestKey) } },
+          where: {
+            idempotencyKey: {
+              startsWith: postingDraftRequestPrefix(requestKey, input.tenantScope),
+            },
+            ...(input.tenantScope
+              ? {
+                  organizationId: input.tenantScope.organizationId,
+                  campusId: input.tenantScope.campusId,
+                }
+              : {}),
+          },
           orderBy: { idempotencyKey: "asc" },
           select: { idempotencyKey: true, postingDraft: { select: postingDraftSelect } },
         });
         if (existingScheduledPost) {
-          if (existingScheduledPost.idempotencyKey !== postingDraftRequestKey(requestKey, payloadFingerprint)) {
+          if (
+            existingScheduledPost.idempotencyKey
+              !== postingDraftRequestKey(
+                requestKey,
+                payloadFingerprint,
+                0,
+                input.tenantScope,
+              )
+          ) {
             throw new PostingDraftValidationError(
               "This scheduling request key was already used with different post details. Start a new scheduling request.",
             );
@@ -313,6 +374,12 @@ export async function createPostingDraft(input: {
 
       const created = await tx.postingDraft.create({
       data: {
+        ...(input.tenantScope
+          ? {
+              organizationId: input.tenantScope.organizationId,
+              campusId: input.tenantScope.campusId,
+            }
+          : {}),
         clipIdsJson: input.clipIds,
         platformsJson: input.platforms,
         postingSlot,
@@ -325,6 +392,19 @@ export async function createPostingDraft(input: {
       where: {
         platform: { in: input.platforms.map((platform) => PLATFORM_TO_DB[platform]) },
         status: "CONNECTED",
+        ...(input.tenantScope
+          ? {
+              organizationId: input.tenantScope.organizationId,
+              ...(input.tenantScope.campusId
+                ? {
+                    OR: [
+                      { campusId: input.tenantScope.campusId },
+                      { campusId: null },
+                    ],
+                  }
+                : {}),
+            }
+          : {}),
       },
       orderBy: { createdAt: "desc" },
     });
@@ -362,6 +442,12 @@ export async function createPostingDraft(input: {
         const clipNote = clipCopy?.note?.trim() || note;
 
         return targetAccounts.map((account) => ({
+          ...(input.tenantScope
+            ? {
+                organizationId: input.tenantScope.organizationId,
+                campusId: input.tenantScope.campusId,
+              }
+            : {}),
           postingDraftId: created.id,
           socialAccountId: account?.id ?? null,
           clipIdsJson: clipIds,
@@ -389,7 +475,12 @@ export async function createPostingDraft(input: {
       data: scheduledPosts.map(({ idempotencyKeyInput, ...post }, index) => ({
         ...post,
         idempotencyKey: requestKey
-          ? postingDraftRequestKey(requestKey, payloadFingerprint, index)
+          ? postingDraftRequestKey(
+              requestKey,
+              payloadFingerprint,
+              index,
+              input.tenantScope,
+            )
           : buildScheduledPostIdempotencyKey(idempotencyKeyInput),
       })),
     });
@@ -401,7 +492,11 @@ export async function createPostingDraft(input: {
     return toPostingDraft(result.created);
   } catch (error) {
     if (requestKey && isRetryableIdempotencyRace(error)) {
-      const existingDraft = await findPostingDraftByRequestKey(requestKey, payloadFingerprint);
+      const existingDraft = await findPostingDraftByRequestKey(
+        requestKey,
+        payloadFingerprint,
+        input.tenantScope,
+      );
       if (existingDraft) return existingDraft;
     }
     throw error;

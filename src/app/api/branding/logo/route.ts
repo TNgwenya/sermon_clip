@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { NextResponse } from "next/server";
 
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import { getBrandingSettings } from "@/server/branding/settings";
 import {
   isPathInsideRoot,
@@ -20,7 +21,12 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 export async function GET(): Promise<NextResponse> {
-  const settings = await getBrandingSettings().catch(() => null);
+  const requestContext = await requireRequestCapability("brand.read", {
+    campusId: null,
+  });
+  const settings = await getBrandingSettings(
+    requestContext.organizationId,
+  ).catch(() => null);
   const logoPath = await resolveAvailableBrandingLogoPath(settings?.churchLogoPath);
   if (!logoPath) {
     return NextResponse.json({ error: "Branding logo is not available." }, { status: 404 });

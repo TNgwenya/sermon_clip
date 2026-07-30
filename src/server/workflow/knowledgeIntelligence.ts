@@ -34,6 +34,22 @@ export type KnowledgeBaseFilters = {
   contentType?: ContentOpportunityType;
 };
 
+export type KnowledgeTenantScope = Readonly<{
+  organizationId: string;
+  campusId?: string | null;
+}>;
+
+function sermonTenantWhere(
+  scope?: KnowledgeTenantScope,
+): Prisma.SermonWhereInput {
+  return scope
+    ? {
+        organizationId: scope.organizationId,
+        ...(scope.campusId ? { campusId: scope.campusId } : {}),
+      }
+    : {};
+}
+
 export type KnowledgeBaseResult = {
   id: string;
   title: string;
@@ -279,9 +295,12 @@ export function computeRelatedSermonScore(current: SimpleSermonSignal, candidate
 
 export async function searchSermonKnowledgeBase(
   filters: KnowledgeBaseFilters,
-  options?: { take?: number },
+  options?: { take?: number; tenant?: KnowledgeTenantScope },
 ): Promise<{ total: number; results: KnowledgeBaseResult[] }> {
-  const where = buildKnowledgeBaseWhere(filters);
+  const where = {
+    ...buildKnowledgeBaseWhere(filters),
+    ...sermonTenantWhere(options?.tenant),
+  };
   const take = options?.take ?? 100;
 
   const [total, sermons] = await Promise.all([
@@ -401,10 +420,12 @@ export async function searchSermonKnowledgeBase(
 
 export async function getKnowledgeBaseScopeAvailability(options?: {
   churchName?: string;
+  tenant?: KnowledgeTenantScope;
 }): Promise<KnowledgeBaseScopeAvailability> {
   const churchFilter = options?.churchName?.trim();
 
   const where: Prisma.SermonWhereInput = {
+    ...sermonTenantWhere(options?.tenant),
     status: { in: PROCESSED_SERMON_STATUSES },
     ...(churchFilter ? { churchName: { contains: churchFilter } } : {}),
   };
@@ -466,20 +487,39 @@ function monthKey(date: Date): string {
 }
 
 export async function getIntelligenceDashboardData(
-  options?: { churchName?: string; recentLimit?: number },
+  options?: {
+    churchName?: string;
+    recentLimit?: number;
+    tenant?: KnowledgeTenantScope;
+  },
 ): Promise<IntelligenceDashboardData> {
   const churchFilter = options?.churchName?.trim();
+  const tenantWhere = sermonTenantWhere(options?.tenant);
 
   const sermonWhere: Prisma.SermonWhereInput = {
+    ...tenantWhere,
     status: { in: PROCESSED_SERMON_STATUSES },
     ...(churchFilter ? { churchName: { contains: churchFilter } } : {}),
   };
 
-  const clipWhere: Prisma.ClipCandidateWhereInput = churchFilter
-    ? { sermon: { churchName: { contains: churchFilter } } }
-    : {};
+  const clipWhere: Prisma.ClipCandidateWhereInput = {
+    sermon: {
+      ...tenantWhere,
+      ...(churchFilter
+        ? { churchName: { contains: churchFilter } }
+        : {}),
+    },
+  };
 
   const opportunityWhere: Prisma.ContentOpportunityWhereInput = {
+    ...(options?.tenant
+      ? {
+          organizationId: options.tenant.organizationId,
+          ...(options.tenant.campusId
+            ? { campusId: options.tenant.campusId }
+            : {}),
+        }
+      : {}),
     status: { not: "ARCHIVED" },
     ...(churchFilter ? { sermon: { churchName: { contains: churchFilter } } } : {}),
   };
@@ -503,7 +543,14 @@ export async function getIntelligenceDashboardData(
       },
     }),
     prisma.sermonScriptureRef.findMany({
-      where: churchFilter ? { sermon: { churchName: { contains: churchFilter } } } : {},
+      where: {
+        sermon: {
+          ...tenantWhere,
+          ...(churchFilter
+            ? { churchName: { contains: churchFilter } }
+            : {}),
+        },
+      },
       select: {
         reference: true,
         book: true,
@@ -511,7 +558,14 @@ export async function getIntelligenceDashboardData(
       },
     }),
     prisma.ministryMoment.findMany({
-      where: churchFilter ? { sermon: { churchName: { contains: churchFilter } } } : {},
+      where: {
+        sermon: {
+          ...tenantWhere,
+          ...(churchFilter
+            ? { churchName: { contains: churchFilter } }
+            : {}),
+        },
+      },
       select: {
         momentType: true,
       },
@@ -532,7 +586,14 @@ export async function getIntelligenceDashboardData(
       },
     }),
     prisma.sermonTopicTag.findMany({
-      where: churchFilter ? { sermon: { churchName: { contains: churchFilter } } } : {},
+      where: {
+        sermon: {
+          ...tenantWhere,
+          ...(churchFilter
+            ? { churchName: { contains: churchFilter } }
+            : {}),
+        },
+      },
       select: { topic: true },
     }),
     prisma.sermon.findMany({
@@ -693,10 +754,13 @@ export async function getIntelligenceDashboardData(
 
 export async function getRelatedSermons(
   sermonId: string,
-  options?: { limit?: number },
+  options?: { limit?: number; tenant?: KnowledgeTenantScope },
 ): Promise<RelatedSermon[]> {
-  const current = await prisma.sermon.findUnique({
-    where: { id: sermonId },
+  const current = await prisma.sermon.findFirst({
+    where: {
+      id: sermonId,
+      ...sermonTenantWhere(options?.tenant),
+    },
     select: {
       id: true,
       title: true,
@@ -721,6 +785,7 @@ export async function getRelatedSermons(
   const candidates = await prisma.sermon.findMany({
     where: {
       id: { not: sermonId },
+      ...sermonTenantWhere(options?.tenant),
       status: { in: PROCESSED_SERMON_STATUSES },
       OR: [
         currentTopics.length > 0
@@ -783,6 +848,7 @@ export async function getRelatedSermons(
 
 export const __knowledgeIntelligenceTestUtils = {
   buildKnowledgeBaseWhere,
+  sermonTenantWhere,
   computeRelatedSermonScore,
   aggregateLabelCounts,
 };

@@ -4,6 +4,11 @@ import { notFound } from "next/navigation";
 import { EmptyState } from "@/components/ui";
 import { prisma } from "@/lib/prisma";
 import { IntelligenceExperience } from "@/app/sermons/[id]/intelligence/intelligence-experience";
+import { AuthorizationError } from "@/server/auth/authorization";
+import {
+  AuthorizedResourceNotFoundError,
+  requireSermonResource,
+} from "@/server/auth/resourceAuthorization";
 
 function formatSermonStatus(status: string): string {
   return status.replace(/_/g, " ").toLowerCase();
@@ -24,6 +29,17 @@ function missingTranscriptStatusLine(status: string): string {
 
 export default async function SermonIntelligencePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  try {
+    await requireSermonResource("sermons.read", id);
+  } catch (error) {
+    if (
+      error instanceof AuthorizationError
+      || error instanceof AuthorizedResourceNotFoundError
+    ) {
+      notFound();
+    }
+    throw error;
+  }
 
   const sermon = await prisma.sermon.findUnique({
     where: { id },

@@ -76,8 +76,17 @@ export function fromPrismaPostingPlatform(platform: PrismaPostingPlatform): Post
   return PLATFORM_FROM_DB[platform];
 }
 
-export async function listSocialAccounts(): Promise<SocialAccount[]> {
+export async function listSocialAccounts(options: {
+  organizationId: string;
+  campusId?: string | null;
+}): Promise<SocialAccount[]> {
   const accounts = await prisma.socialAccount.findMany({
+    where: {
+      organizationId: options.organizationId,
+      ...(options.campusId
+        ? { OR: [{ campusId: options.campusId }, { campusId: null }] }
+        : {}),
+    },
     orderBy: { createdAt: "desc" },
     take: 100,
     include: {
@@ -105,12 +114,18 @@ export async function listSocialAccounts(): Promise<SocialAccount[]> {
 }
 
 export async function createSocialAccount(input: {
+  tenantScope: {
+    organizationId: string;
+    campusId: string | null;
+  };
   platform: PostingPlatform;
   label: string;
   handle?: string;
 }): Promise<SocialAccount> {
   const account = await prisma.socialAccount.create({
     data: {
+      organizationId: input.tenantScope.organizationId,
+      campusId: input.tenantScope.campusId,
       platform: PLATFORM_TO_DB[input.platform],
       label: input.label.trim() || `${input.platform} account`,
       handle: input.handle?.trim() || null,
@@ -138,7 +153,9 @@ function buildZernioAccountLabel(account: ZernioAccount): string {
     || `${account.platform} account`;
 }
 
-export async function syncZernioSocialAccounts(): Promise<SocialAccount[]> {
+export async function syncZernioSocialAccounts(
+  tenantScope: { organizationId: string; campusId: string | null },
+): Promise<SocialAccount[]> {
   const accounts = await Promise.all([
     listZernioAccounts({ platform: "instagram", status: "connected" }),
     listZernioAccounts({ platform: "tiktok", status: "connected" }),
@@ -154,11 +171,21 @@ export async function syncZernioSocialAccounts(): Promise<SocialAccount[]> {
 
     const existing = await prisma.socialAccount.findFirst({
       where: {
+        organizationId: tenantScope.organizationId,
         externalProvider: "zernio",
         externalAccountId: account._id,
       },
-      select: { id: true },
+      select: { id: true, campusId: true },
     });
+    if (
+      existing
+      && !(
+        existing.campusId === null
+        || existing.campusId === tenantScope.campusId
+      )
+    ) {
+      throw new Error("This Zernio account is already connected to a different campus.");
+    }
     const data = {
       platform,
       label: buildZernioAccountLabel(account),
@@ -181,7 +208,11 @@ export async function syncZernioSocialAccounts(): Promise<SocialAccount[]> {
         data,
       })
       : await prisma.socialAccount.create({
-        data,
+        data: {
+          ...data,
+          organizationId: tenantScope.organizationId,
+          campusId: tenantScope.campusId,
+        },
       });
 
     synced.push(toSocialAccount(record));

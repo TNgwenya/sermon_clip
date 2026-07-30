@@ -14,6 +14,11 @@ import {
 } from "@/server/branding/artworkBrandFingerprint";
 import { getBrandingSettings } from "@/server/branding/settings";
 import { readBrandingArtworkLogoDataUrl } from "@/server/branding/artworkLogo";
+import { AuthorizationError } from "@/server/auth/authorization";
+import {
+  AuthorizedResourceNotFoundError,
+  requireContentAssetResource,
+} from "@/server/auth/resourceAuthorization";
 
 function readMetadataString(value: unknown, key: string): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -40,6 +45,18 @@ export default async function ContentAssetStudioPage({
   params: Promise<{ assetId: string }>;
 }) {
   const { assetId } = await params;
+  let resource;
+  try {
+    resource = await requireContentAssetResource("content.update", assetId);
+  } catch (error) {
+    if (
+      error instanceof AuthorizationError
+      || error instanceof AuthorizedResourceNotFoundError
+    ) {
+      notFound();
+    }
+    throw error;
+  }
   const [asset, branding] = await Promise.all([
     prisma.contentAsset.findUnique({
       where: { id: assetId },
@@ -75,7 +92,7 @@ export default async function ContentAssetStudioPage({
         },
       },
     }),
-    getBrandingSettings(),
+    getBrandingSettings(resource.organizationId),
   ]);
 
   if (!asset || !isDesignableContentAssetType(asset.assetType)) notFound();

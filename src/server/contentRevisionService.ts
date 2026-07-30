@@ -51,46 +51,66 @@ export type AssetRevisionSnapshot = {
 async function nextOpportunityRevisionNumber(
   tx: RevisionTransaction,
   contentOpportunityId: string,
-): Promise<number> {
-  await tx.$queryRaw(Prisma.sql`
-    SELECT "id"
+): Promise<{ revisionNumber: number; organizationId: string; campusId: string | null }> {
+  const [parent] = await tx.$queryRaw<Array<{
+    organizationId: string | null;
+    campusId: string | null;
+  }>>(Prisma.sql`
+    SELECT "organizationId", "campusId"
     FROM "ContentOpportunity"
     WHERE "id" = ${contentOpportunityId}
     FOR UPDATE
   `);
+  if (!parent?.organizationId) {
+    throw new Error("The content opportunity is missing tenant ownership.");
+  }
   const latest = await tx.contentOpportunityRevision.aggregate({
     where: { contentOpportunityId },
     _max: { revisionNumber: true },
   });
-  return (latest._max.revisionNumber ?? 0) + 1;
+  return {
+    revisionNumber: (latest._max.revisionNumber ?? 0) + 1,
+    organizationId: parent.organizationId,
+    campusId: parent.campusId,
+  };
 }
 
 async function nextAssetRevisionNumber(
   tx: RevisionTransaction,
   contentAssetId: string,
-): Promise<number> {
-  await tx.$queryRaw(Prisma.sql`
-    SELECT "id"
+): Promise<{ revisionNumber: number; organizationId: string; campusId: string | null }> {
+  const [parent] = await tx.$queryRaw<Array<{
+    organizationId: string | null;
+    campusId: string | null;
+  }>>(Prisma.sql`
+    SELECT "organizationId", "campusId"
     FROM "ContentAsset"
     WHERE "id" = ${contentAssetId}
     FOR UPDATE
   `);
+  if (!parent?.organizationId) {
+    throw new Error("The content asset is missing tenant ownership.");
+  }
   const latest = await tx.contentAssetRevision.aggregate({
     where: { contentAssetId },
     _max: { revisionNumber: true },
   });
-  return (latest._max.revisionNumber ?? 0) + 1;
+  return {
+    revisionNumber: (latest._max.revisionNumber ?? 0) + 1,
+    organizationId: parent.organizationId,
+    campusId: parent.campusId,
+  };
 }
 
 export async function createOpportunityRevision(
   tx: RevisionTransaction,
   snapshot: OpportunityRevisionSnapshot,
 ): Promise<{ id: string; revisionNumber: number }> {
-  const revisionNumber = await nextOpportunityRevisionNumber(tx, snapshot.contentOpportunityId);
+  const ownership = await nextOpportunityRevisionNumber(tx, snapshot.contentOpportunityId);
   return tx.contentOpportunityRevision.create({
     data: {
       ...snapshot,
-      revisionNumber,
+      ...ownership,
     },
     select: { id: true, revisionNumber: true },
   });
@@ -100,11 +120,11 @@ export async function createAssetRevision(
   tx: RevisionTransaction,
   snapshot: AssetRevisionSnapshot,
 ): Promise<{ id: string; revisionNumber: number }> {
-  const revisionNumber = await nextAssetRevisionNumber(tx, snapshot.contentAssetId);
+  const ownership = await nextAssetRevisionNumber(tx, snapshot.contentAssetId);
   return tx.contentAssetRevision.create({
     data: {
       ...snapshot,
-      revisionNumber,
+      ...ownership,
     },
     select: { id: true, revisionNumber: true },
   });

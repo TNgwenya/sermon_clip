@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { buildOAuthRedirectUriFromRequest, oauthFailureReason } from "@/lib/socialAnalyticsConnectors";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import {
   exchangeThreadsAuthorizationCode,
   exchangeThreadsLongLivedToken,
@@ -33,7 +34,14 @@ export async function GET(request: Request): Promise<NextResponse> {
   const error = url.searchParams.get("error");
   const state = url.searchParams.get("state");
 
-  if (!validateOAuthCallbackState(request, "threads", state)) {
+  let requestContext: Awaited<ReturnType<typeof requireRequestCapability>>;
+  try {
+    requestContext = await requireRequestCapability("channels.connect");
+  } catch {
+    return redirectToSettings(request, { oauth: "failed", provider: "threads", reason: "unauthorized" });
+  }
+
+  if (!validateOAuthCallbackState(request, "threads", state, requestContext)) {
     return redirectToSettings(request, { oauth: "failed", provider: "threads", reason: "invalid_oauth_state" });
   }
 
@@ -59,6 +67,10 @@ export async function GET(request: Request): Promise<NextResponse> {
     });
 
     await storeThreadsCredential({
+      tenantScope: {
+        organizationId: requestContext.organizationId,
+        campusId: requestContext.campusId,
+      },
       accessToken: longLived.accessToken,
       externalAccountId: shortLived.externalAccountId,
       expiresAt: longLived.expiresAt ?? shortLived.expiresAt,

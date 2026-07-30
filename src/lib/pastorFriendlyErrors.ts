@@ -1,4 +1,5 @@
 import { resolveClipReviewAcceptanceFloor } from "@/lib/clipVolumeTargets";
+import { shouldOfferYouTubeUploadRecovery } from "@/lib/youtubeSourceFailure";
 
 export type TranscriptDiagnosticSegment = {
   startTimeSeconds: number;
@@ -17,7 +18,7 @@ export type TranscriptFailureDiagnostics = {
 };
 
 export type PastorProcessingFailurePresentation = {
-  kind: "CLIP_QUALITY_GATE" | "GENERIC";
+  kind: "CLIP_QUALITY_GATE" | "YOUTUBE_SOURCE_UNAVAILABLE" | "GENERIC";
   title: string;
   summary: string;
   guidance: string;
@@ -30,6 +31,7 @@ export type PastorProcessingFailurePresentation = {
 
 type PastorProcessingFailureInput = {
   message: string | null | undefined;
+  failureCode?: string | null;
   transcriptDiagnostics?: TranscriptFailureDiagnostics | null;
   transcriptRefreshedAfterFailure?: boolean;
 };
@@ -44,6 +46,20 @@ type ClipQualityGateEvidence = {
 const LEGACY_CLIP_QUALITY_GATE_PATTERN = /clip generation produced\s+(\d+)\s+pastor-review option(?:\(s\)|s)?\s*,?\s*below the\s+(\d+\s*[-\u2013]\s*\d+)\s+target minimum of\s+(\d+)/i;
 const CLIP_QUALITY_GATE_PATTERN = /clip generation produced\s+(\d+)\s+pastor-review option(?:\(s\)|s)?\s*,?\s*below the acceptance floor of\s+(\d+)\s+for the\s+(\d+\s*[-\u2013]\s*\d+)\s+duration target\s*\(target minimum\s+(\d+)\)/i;
 const LARGE_TRANSCRIPT_GAP_SECONDS = 45;
+
+export function readProcessingFailureCode(generationSummary: unknown): string | null {
+  if (!generationSummary || typeof generationSummary !== "object" || Array.isArray(generationSummary)) {
+    return null;
+  }
+
+  const failure = (generationSummary as Record<string, unknown>).failure;
+  if (!failure || typeof failure !== "object" || Array.isArray(failure)) {
+    return null;
+  }
+
+  const code = (failure as Record<string, unknown>).code;
+  return typeof code === "string" && code.trim() ? code : null;
+}
 
 function parseClipQualityGate(message: string): ClipQualityGateEvidence | null {
   const currentMatch = message.match(CLIP_QUALITY_GATE_PATTERN);
@@ -157,10 +173,23 @@ function qualityGateGuidance(
 
 export function buildPastorProcessingFailurePresentation({
   message,
+  failureCode,
   transcriptDiagnostics,
   transcriptRefreshedAfterFailure = false,
 }: PastorProcessingFailureInput): PastorProcessingFailurePresentation {
   const normalizedMessage = message?.trim() ?? "";
+
+  if (shouldOfferYouTubeUploadRecovery({ failureCode, message: normalizedMessage })) {
+    return {
+      kind: "YOUTUBE_SOURCE_UNAVAILABLE",
+      title: "Upload the recording to continue",
+      summary: "YouTube asked Sermon Clip to verify itself, so the recording could not be imported. Your sermon details, sermon timing, and worship setting are safe.",
+      guidance: "Choose the same recording from your device. Sermon Clip will attach it to this sermon and continue from media preparation without downloading from YouTube.",
+      retryAfterTranscriptRefresh: false,
+      metrics: [],
+    };
+  }
+
   const qualityGate = parseClipQualityGate(normalizedMessage);
 
   if (qualityGate) {
@@ -204,6 +233,10 @@ export function pastorFriendlyError(message: string | null | undefined): string 
   }
 
   const lower = message.toLowerCase();
+
+  if (shouldOfferYouTubeUploadRecovery({ message })) {
+    return "YouTube could not provide this recording to Sermon Clip. Upload the same recording to continue; your saved sermon details will be kept.";
+  }
 
   if (lower.includes("drawtext") || lower.includes("filter not found")) {
     return "Text or branding overlay rendering failed because this FFmpeg install is missing the text overlay filter. The clip may still be downloadable without that overlay.";

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   canRunLocalMediaProcessing: vi.fn(),
   findUnique: vi.fn(),
+  requireClipResource: vi.fn(),
   stat: vi.fn(),
   videoFileResponse: vi.fn(),
 }));
@@ -13,6 +14,10 @@ vi.mock("@/lib/prisma", () => ({
 }));
 vi.mock("@/server/runtime/workerRuntime", () => ({
   canRunLocalMediaProcessing: mocks.canRunLocalMediaProcessing,
+}));
+vi.mock("@/server/auth/resourceAuthorization", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/server/auth/resourceAuthorization")>(),
+  requireClipResource: mocks.requireClipResource,
 }));
 vi.mock("@/server/http/videoFileResponse", () => ({
   videoFileResponse: mocks.videoFileResponse,
@@ -38,6 +43,11 @@ const baseClip = {
 describe("clip preview route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.requireClipResource.mockResolvedValue({
+      id: "clip-1",
+      organizationId: "org-1",
+      campusId: "campus-1",
+    });
     mocks.canRunLocalMediaProcessing.mockReturnValue(false);
     mocks.findUnique.mockResolvedValue(baseClip);
     mocks.stat.mockResolvedValue({ isFile: () => true, size: 1_024 });
@@ -56,6 +66,7 @@ describe("clip preview route", () => {
     expect(response.headers.get("Location")).toBe(baseClip.remotePreviewUrl);
     expect(response.headers.get("Cache-Control")).toBe("private, max-age=30, must-revalidate");
     expect(mocks.videoFileResponse).not.toHaveBeenCalled();
+    expect(mocks.requireClipResource).toHaveBeenCalledWith("content.read", "clip-1");
   });
 
   it("supports HEAD for a remote preview without proxying its bytes", async () => {

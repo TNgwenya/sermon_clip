@@ -5,6 +5,7 @@ import path from "node:path";
 import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import type { TenantScope } from "@/server/tenancy/scope";
 import {
   buildCoverFrameSource,
   buildNeutralCoverFrameCandidates,
@@ -452,8 +453,11 @@ export async function ensureClipThumbnail(
   }
 }
 
-function preparedClipWhere(): Prisma.ClipCandidateWhereInput {
+function preparedClipWhere(
+  tenantScope?: TenantScope,
+): Prisma.ClipCandidateWhereInput {
   return {
+    ...(tenantScope ? { sermon: tenantScope } : {}),
     OR: [
       { exportedFilePath: { not: null } },
       { captionedVideoPath: { not: null } },
@@ -463,26 +467,28 @@ function preparedClipWhere(): Prisma.ClipCandidateWhereInput {
   };
 }
 
-export async function getClipThumbnailReadiness(): Promise<ClipThumbnailReadiness> {
+export async function getClipThumbnailReadiness(
+  tenantScope?: TenantScope,
+): Promise<ClipThumbnailReadiness> {
   const [preparedClipCount, readyPosterCount, failedPosterCount, clipsWithPosters] = await Promise.all([
-    prisma.clipCandidate.count({ where: preparedClipWhere() }),
+    prisma.clipCandidate.count({ where: preparedClipWhere(tenantScope) }),
     prisma.clipCandidate.count({
       where: {
-        ...preparedClipWhere(),
+        ...preparedClipWhere(tenantScope),
         thumbnailPath: { not: null },
         thumbnailGeneratedAt: { not: null },
       },
     }),
     prisma.clipCandidate.count({
       where: {
-        ...preparedClipWhere(),
+        ...preparedClipWhere(tenantScope),
         thumbnailError: { not: null },
         thumbnailPath: null,
       },
     }),
     prisma.clipCandidate.findMany({
       where: {
-        ...preparedClipWhere(),
+        ...preparedClipWhere(tenantScope),
         thumbnailPath: { not: null },
       },
       select: {
@@ -515,12 +521,13 @@ export async function getClipThumbnailReadiness(): Promise<ClipThumbnailReadines
 export async function backfillClipThumbnails(options?: {
   limit?: number;
   ffmpegPath?: string;
+  tenantScope?: TenantScope;
 }): Promise<ClipThumbnailBackfillResult> {
   const limit = Math.max(1, Math.min(options?.limit ?? 25, 100));
   const clips = await prisma.clipCandidate.findMany({
     where: {
       AND: [
-        preparedClipWhere(),
+        preparedClipWhere(options?.tenantScope),
         {
           OR: [
             { thumbnailPath: null },
@@ -576,7 +583,7 @@ export async function backfillClipThumbnails(options?: {
     }
   }
 
-  const readiness = await getClipThumbnailReadiness();
+  const readiness = await getClipThumbnailReadiness(options?.tenantScope);
 
   return {
     ...readiness,

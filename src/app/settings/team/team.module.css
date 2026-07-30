@@ -1,0 +1,487 @@
+.shell {
+  max-width: 1180px;
+  padding-bottom: 80px;
+}
+
+.hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 0.34fr);
+  gap: 28px;
+  align-items: end;
+  overflow: hidden;
+  padding: clamp(28px, 5vw, 52px);
+  border: 1px solid rgba(115, 102, 255, 0.18);
+  border-radius: 30px;
+  background:
+    radial-gradient(circle at 86% 12%, rgba(123, 107, 255, 0.2), transparent 32%),
+    linear-gradient(138deg, rgba(25, 27, 47, 0.98), rgba(13, 15, 28, 0.98));
+  box-shadow: 0 30px 80px rgba(3, 6, 20, 0.34);
+}
+
+.hero::after {
+  content: "";
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  right: -72px;
+  bottom: -90px;
+  border: 1px solid rgba(168, 157, 255, 0.2);
+  border-radius: 42px;
+  transform: rotate(28deg);
+}
+
+.hero h1 {
+  max-width: 700px;
+  margin: 0;
+  color: #fff;
+  font-size: clamp(2.2rem, 5vw, 4.6rem);
+  line-height: 0.98;
+  letter-spacing: -0.055em;
+}
+
+.heroCopy {
+  max-width: 670px;
+  margin: 0;
+  color: #b8bccf;
+  font-size: 1.02rem;
+  line-height: 1.65;
+}
+
+.scopeCard {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 4px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.055);
+  backdrop-filter: blur(16px);
+}
+
+.scopeCard span,
+.scopeCard small {
+  color: #979daf;
+}
+
+.scopeCard span {
+  font-size: 0.69rem;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.scopeCard strong {
+  color: #fff;
+  font-size: 1.02rem;
+}
+
+.layout {
+  display: grid;
+  gap: 22px;
+}
+
+.card {
+  padding: clamp(22px, 4vw, 34px);
+  border: 1px solid rgba(135, 142, 171, 0.18);
+  border-radius: 24px;
+  background: rgba(20, 22, 35, 0.86);
+  box-shadow: 0 18px 55px rgba(4, 7, 20, 0.2);
+}
+
+.cardHeading {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+
+.cardHeading h2 {
+  margin: 3px 0 0;
+  color: #f9faff;
+  font-size: 1.45rem;
+  letter-spacing: -0.025em;
+}
+
+.stepBadge,
+.count {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 11px;
+  border: 1px solid rgba(143, 129, 255, 0.28);
+  border-radius: 999px;
+  color: #c7bfff;
+  background: rgba(115, 96, 255, 0.1);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.count {
+  min-width: 30px;
+}
+
+.inviteForm {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.25fr) minmax(170px, 0.8fr) minmax(170px, 0.8fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.field {
+  display: grid;
+  gap: 7px;
+}
+
+.field > span {
+  color: #bdc2d3;
+  font-size: 0.76rem;
+  font-weight: 720;
+}
+
+.field input,
+.field select,
+.secretInput {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid rgba(137, 143, 171, 0.27);
+  border-radius: 11px;
+  outline: none;
+  color: #f5f6fc;
+  background: #11131f;
+  font: inherit;
+}
+
+.field input:focus,
+.field select:focus,
+.secretInput:focus {
+  border-color: #9588ff;
+  box-shadow: 0 0 0 3px rgba(130, 112, 255, 0.14);
+}
+
+.field select:disabled {
+  color: #8f94a7;
+  cursor: not-allowed;
+}
+
+.primaryButton,
+.secondaryButton,
+.dangerButton {
+  min-height: 42px;
+  padding: 10px 15px;
+  border-radius: 11px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 760;
+  cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.primaryButton {
+  border: 1px solid #8e7fff;
+  color: #fff;
+  background: linear-gradient(135deg, #7c6cff, #5b4cda);
+}
+
+.secondaryButton {
+  border: 1px solid rgba(143, 149, 178, 0.3);
+  color: #d5d8e6;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.dangerButton {
+  border: 1px solid rgba(249, 104, 119, 0.38);
+  color: #ffb2ba;
+  background: rgba(220, 55, 73, 0.1);
+}
+
+.primaryButton:hover:not(:disabled),
+.secondaryButton:hover:not(:disabled),
+.dangerButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.secondaryButton:hover:not(:disabled) {
+  border-color: rgba(161, 147, 255, 0.58);
+}
+
+.dangerButton:hover:not(:disabled) {
+  border-color: rgba(249, 104, 119, 0.7);
+  background: rgba(220, 55, 73, 0.17);
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.dangerButton:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.notice {
+  padding: 13px 16px;
+  border: 1px solid;
+  border-radius: 13px;
+  font-size: 0.9rem;
+}
+
+.noticeSuccess {
+  border-color: rgba(74, 201, 153, 0.33);
+  color: #9ee7c7;
+  background: rgba(35, 157, 112, 0.1);
+}
+
+.noticeError {
+  border-color: rgba(248, 110, 126, 0.35);
+  color: #ffb3bc;
+  background: rgba(214, 54, 74, 0.11);
+}
+
+.secretPanel {
+  display: grid;
+  gap: 13px;
+  margin-top: 22px;
+  padding: 18px;
+  border: 1px solid rgba(137, 123, 255, 0.35);
+  border-radius: 16px;
+  background: rgba(111, 91, 255, 0.075);
+}
+
+.secretPanel strong {
+  color: #f7f5ff;
+}
+
+.secretPanel p {
+  margin: 4px 0 0;
+  color: #aeb3c5;
+  font-size: 0.82rem;
+}
+
+.secretInput {
+  color: #d8d2ff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.74rem;
+}
+
+.secretActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.memberList,
+.invitationList {
+  display: grid;
+  gap: 9px;
+}
+
+.memberRow {
+  display: grid;
+  grid-template-columns: auto minmax(170px, 1.2fr) minmax(160px, 0.75fr) auto auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid rgba(135, 142, 171, 0.14);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.022);
+}
+
+.avatar {
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(150, 137, 255, 0.26);
+  border-radius: 12px;
+  color: #d9d4ff;
+  background: linear-gradient(145deg, rgba(117, 100, 255, 0.22), rgba(77, 65, 173, 0.1));
+  font-weight: 800;
+}
+
+.memberIdentity,
+.memberMeta,
+.invitationRow > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.memberIdentity strong,
+.invitationRow strong {
+  overflow: hidden;
+  color: #f0f1f7;
+  text-overflow: ellipsis;
+}
+
+.memberIdentity span,
+.invitationRow span,
+.memberMeta small,
+.invitationRow small,
+.emptyState,
+.handover p {
+  color: #9298aa;
+  font-size: 0.78rem;
+}
+
+.memberIdentity span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rolePill {
+  width: fit-content;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #c9c4e9;
+  background: rgba(131, 118, 214, 0.11);
+  font-size: 0.7rem;
+  font-weight: 720;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #a6abbc;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.statusActive::before {
+  background: #43d39c;
+  box-shadow: 0 0 0 4px rgba(67, 211, 156, 0.1);
+}
+
+.statusPaused::before {
+  background: #e5a84d;
+  box-shadow: 0 0 0 4px rgba(229, 168, 77, 0.1);
+}
+
+.protected {
+  color: #73798c;
+  font-size: 0.73rem;
+}
+
+.handover {
+  position: relative;
+}
+
+.handover > summary {
+  list-style: none;
+  padding: 8px 11px;
+  border: 1px solid rgba(143, 149, 178, 0.25);
+  border-radius: 9px;
+  color: #c5c9d8;
+  font-size: 0.74rem;
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.handover > summary::-webkit-details-marker {
+  display: none;
+}
+
+.handover form {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  width: min(310px, 78vw);
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid rgba(143, 149, 178, 0.28);
+  border-radius: 14px;
+  background: #151724;
+  box-shadow: 0 20px 50px rgba(3, 5, 15, 0.46);
+}
+
+.handover p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.invitationRow {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  gap: 16px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid rgba(135, 142, 171, 0.14);
+  border-radius: 14px;
+}
+
+.emptyState {
+  margin: 0;
+  padding: 22px;
+  border: 1px dashed rgba(135, 142, 171, 0.2);
+  border-radius: 14px;
+  text-align: center;
+}
+
+@media (max-width: 980px) {
+  .inviteForm {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .memberRow {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .memberMeta {
+    grid-column: 2;
+  }
+
+  .status {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .handover,
+  .protected {
+    grid-column: 3;
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 700px) {
+  .hero {
+    grid-template-columns: 1fr;
+  }
+
+  .inviteForm {
+    grid-template-columns: 1fr;
+  }
+
+  .memberRow {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .memberMeta,
+  .status,
+  .handover,
+  .protected {
+    grid-column: 2;
+    grid-row: auto;
+  }
+
+  .handover form {
+    right: auto;
+    left: 0;
+  }
+
+  .invitationRow {
+    grid-template-columns: 1fr;
+  }
+}

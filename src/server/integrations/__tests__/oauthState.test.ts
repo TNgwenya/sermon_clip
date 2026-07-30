@@ -1,4 +1,25 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const authMocks = vi.hoisted(() => {
+  const binding = {
+    organizationId: "org-church-1",
+    campusId: "campus-main",
+    actorId: "user-admin-1",
+  } as const;
+  return {
+    binding,
+    requireRequestCapability: vi.fn().mockResolvedValue({
+      ...binding,
+      authenticationMethod: "session",
+    }),
+  };
+});
+
+vi.mock("@/server/auth/requestAuthorization", () => ({
+  requireRequestCapability: authMocks.requireRequestCapability,
+}));
+
+const tenantBinding = authMocks.binding;
 
 import { GET as startOAuth } from "@/app/api/oauth/[provider]/start/route";
 import { GET as metaCallback } from "@/app/api/oauth/meta/callback/route";
@@ -11,6 +32,13 @@ import {
   validateOAuthCallbackState,
 } from "@/server/integrations/oauthState";
 
+beforeEach(() => {
+  authMocks.requireRequestCapability.mockResolvedValue({
+    ...tenantBinding,
+    authenticationMethod: "session",
+  });
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -19,8 +47,9 @@ afterEach(() => {
 describe("OAuth state", () => {
   it("creates unique, HttpOnly, short-lived provider state", () => {
     vi.stubEnv("NODE_ENV", "production");
-    const first = createOAuthState("youtube", 1_750_000_000_000);
-    const second = createOAuthState("youtube", 1_750_000_000_000);
+    vi.stubEnv("AUTH_SECRET", "oauth-state-test-secret");
+    const first = createOAuthState("youtube", tenantBinding, 1_750_000_000_000);
+    const second = createOAuthState("youtube", tenantBinding, 1_750_000_000_000);
 
     expect(first.state).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(second.state).not.toBe(first.state);
@@ -37,21 +66,33 @@ describe("OAuth state", () => {
   });
 
   it("accepts only the matching, unexpired cookie-backed state", () => {
+    vi.stubEnv("AUTH_SECRET", "oauth-state-test-secret");
     const now = 1_750_000_000_000;
-    const attempt = createOAuthState("meta", now);
+    const attempt = createOAuthState("meta", tenantBinding, now);
     const request = new Request("https://church.example/api/oauth/meta/callback", {
       headers: { cookie: `${attempt.cookie.name}=${attempt.cookie.value}` },
     });
     const tamperedState = `${attempt.state.slice(0, -1)}${attempt.state.endsWith("a") ? "b" : "a"}`;
 
-    expect(validateOAuthCallbackState(request, "meta", attempt.state, now)).toBe(true);
-    expect(validateOAuthCallbackState(request, "meta", tamperedState, now)).toBe(false);
-    expect(validateOAuthCallbackState(request, "meta", attempt.state, now + (OAUTH_STATE_TTL_SECONDS + 1) * 1_000)).toBe(false);
-    expect(validateOAuthCallbackState(request, "youtube", attempt.state, now)).toBe(false);
+    expect(validateOAuthCallbackState(request, "meta", attempt.state, tenantBinding, now)).toBe(true);
+    expect(validateOAuthCallbackState(request, "meta", tamperedState, tenantBinding, now)).toBe(false);
+    expect(validateOAuthCallbackState(
+      request,
+      "meta",
+      attempt.state,
+      tenantBinding,
+      now + (OAUTH_STATE_TTL_SECONDS + 1) * 1_000,
+    )).toBe(false);
+    expect(validateOAuthCallbackState(request, "youtube", attempt.state, tenantBinding, now)).toBe(false);
+    expect(validateOAuthCallbackState(request, "meta", attempt.state, {
+      ...tenantBinding,
+      organizationId: "org-other",
+    }, now)).toBe(false);
   });
 
   it("creates state only when the user starts an OAuth connection", async () => {
     vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("AUTH_SECRET", "oauth-state-test-secret");
     vi.stubEnv("YOUTUBE_CLIENT_ID", "youtube-client-id");
     vi.stubEnv("YOUTUBE_CLIENT_SECRET", "youtube-client-secret");
 
@@ -72,10 +113,12 @@ describe("OAuth state", () => {
     expect(setCookie).toContain("Secure");
     expect(setCookie.toLowerCase()).toContain("samesite=lax");
     expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(authMocks.requireRequestCapability).toHaveBeenCalledWith("channels.connect");
   });
 
   it("does not leave an OAuth state cookie when provider setup is incomplete", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubEnv("AUTH_SECRET", "oauth-state-test-secret");
     vi.stubEnv("YOUTUBE_CLIENT_ID", "youtube-client-id");
     vi.stubEnv("YOUTUBE_CLIENT_SECRET", "");
 
@@ -99,6 +142,16 @@ describe("OAuth callbacks", () => {
     ["threads", threadsCallback],
   ] as const;
 
+  it("rejects callbacks when the initiating tenant capability is no longer active", async () => {
+    authMocks.requireRequestCapability.mockRejectedValueOnce(new Error("forbidden"));
+    const response = await youtubeCallback(new Request(
+      `https://church.example/api/oauth/youtube/callback?code=authorization-code&state=${"a".repeat(43)}`,
+    ));
+    const destination = new URL(response.headers.get("location") ?? "");
+
+    expect(destination.searchParams.get("reason")).toBe("unauthorized");
+  });
+
   it.each(callbacks)("rejects an unverified %s callback before code exchange", async (provider, callback) => {
     const response = await callback(new Request(
       `https://church.example/api/oauth/${provider}/callback?code=authorization-code&state=${"a".repeat(43)}`,
@@ -115,7 +168,8 @@ describe("OAuth callbacks", () => {
   });
 
   it.each(callbacks)("consumes %s state when the provider returns an error", async (provider, callback) => {
-    const attempt = createOAuthState(provider);
+    vi.stubEnv("AUTH_SECRET", "oauth-state-test-secret");
+    const attempt = createOAuthState(provider, tenantBinding);
     const request = new Request(
       `https://church.example/api/oauth/${provider}/callback?error=access_denied&state=${attempt.state}`,
       { headers: { cookie: `${attempt.cookie.name}=${attempt.cookie.value}` } },

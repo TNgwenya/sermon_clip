@@ -131,7 +131,16 @@ describe("posting worker claim payload", () => {
 
   it("revalidates the observed local path and size before external publishing", async () => {
     const post = automationPost();
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ valid: true }), {
+    const publicationGuard = {
+      approvedPreviewIdentity: "a".repeat(64),
+      retryIdempotencyKey: "b".repeat(64),
+      semanticDuplicateKey: "c".repeat(64),
+      destinationPayloadKey: "d".repeat(64),
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      valid: true,
+      publicationGuard,
+    }), {
       status: 200,
       headers: { "content-type": "application/json" },
     }));
@@ -141,7 +150,8 @@ describe("posting worker claim payload", () => {
       clipId: "clip-1",
       sha256: "a".repeat(64),
       sizeBytes: 1_024,
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual(publicationGuard);
+    expect(post.idempotencyKey).toBe(publicationGuard.retryIdempotencyKey);
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/scheduled-posts/post-1/validate-composition"),
@@ -156,6 +166,23 @@ describe("posting worker claim payload", () => {
       snapshotSha256: "a".repeat(64),
       snapshotSizeBytes: 1_024,
     }]);
+  });
+
+  it("fails closed when validation omits the approved-preview publication guard", async () => {
+    const post = automationPost();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      valid: true,
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })));
+
+    await expect(__postingWorkerTestUtils.revalidateClaimedPostComposition(post, {
+      clipId: "clip-1",
+      sha256: "a".repeat(64),
+      sizeBytes: 1_024,
+    })).rejects.toThrow("approved-preview publication guard");
+    expect(post.idempotencyKey).toBe("post-1-key");
   });
 
   it("fails closed when the server releases a changed composition", async () => {

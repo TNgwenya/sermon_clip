@@ -1,13 +1,25 @@
 import Link from "next/link";
 
 import { BrandingSettingsForm } from "./branding-settings-form";
+import {
+  canPersistedTenantCapability,
+  requireRequestCapability,
+} from "@/server/auth/requestAuthorization";
 import { getBrandingHelperPayload, getBrandingSettings } from "@/server/branding/settings";
 
 export const dynamic = "force-dynamic";
 
 export default async function BrandingSettingsPage() {
-  const settings = await getBrandingSettings();
+  const requestContext = await requireRequestCapability("brand.read", {
+    campusId: null,
+  });
+  const settings = await getBrandingSettings(requestContext.organizationId);
   const brandingHelper = getBrandingHelperPayload(settings);
+  const canManage = await canPersistedTenantCapability(
+    requestContext,
+    "brand.manage",
+    { campusId: null },
+  );
 
   return (
     <main className="container brand-kit-shell stack-lg">
@@ -19,7 +31,11 @@ export default async function BrandingSettingsPage() {
         </div>
       </header>
 
-      <BrandingSettingsForm settings={settings} helperPayload={brandingHelper} />
+      <BrandingSettingsForm
+        settings={settings}
+        helperPayload={brandingHelper}
+        canManage={canManage}
+      />
 
       <Link href="/" className="text-link">
         Back to dashboard

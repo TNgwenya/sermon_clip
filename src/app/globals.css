@@ -16000,3 +16000,1122 @@ textarea::placeholder {
   height: auto;
   min-height: 0;
 }
+
+/* Professional Clip Studio timeline. These final overrides consolidate the
+   transport, ruler, zoom, snapping, and track-management surface. */
+.clip-studio-bottom-timeline {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(2, 6, 23, 0.28);
+}
+
+.clip-studio-bottom-timeline > * {
+  order: 9;
+}
+
+.clip-studio-bottom-timeline > .clip-studio-edit-deck-head {
+  order: 1;
+}
+
+.clip-studio-bottom-timeline > .clip-studio-timeline-toolbar {
+  order: 2;
+}
+
+.clip-studio-bottom-timeline > .clip-studio-unified-timeline-scroll {
+  order: 3;
+}
+
+.clip-studio-bottom-timeline > .clip-studio-timeline-labels {
+  order: 4;
+}
+
+.clip-studio-bottom-timeline > .clip-studio-timeline-action-row {
+  order: 5;
+}
+
+.clip-studio-bottom-timeline > .clip-studio-timeline-draft-help {
+  order: 6;
+}
+
+.clip-studio-bottom-timeline > .clip-studio-transcript-range {
+  order: 7;
+}
+
+.clip-studio-bottom-timeline > .clip-studio-pacing-panel {
+  order: 8;
+}
+
+.clip-studio-timeline-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: center;
+  min-height: 3.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent),
+    rgba(9, 12, 18, 0.96);
+  box-shadow: 0 12px 34px rgba(2, 6, 23, 0.24);
+  padding: 0.5rem;
+  backdrop-filter: blur(18px);
+}
+
+.clip-studio-timeline-transport,
+.clip-studio-timeline-edit-tools,
+.clip-studio-timeline-zoom {
+  display: flex;
+  gap: 0.42rem;
+  align-items: center;
+}
+
+.clip-studio-timeline-edit-tools {
+  justify-content: center;
+}
+
+.clip-studio-timeline-play-button,
+.clip-studio-timeline-tool,
+.clip-studio-timeline-icon-button,
+.clip-studio-track-icon-button {
+  min-height: 2.15rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #dce4ef;
+  font: inherit;
+  font-size: 0.73rem;
+  font-weight: 820;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.clip-studio-timeline-play-button:hover,
+.clip-studio-timeline-tool:hover:not(:disabled),
+.clip-studio-timeline-icon-button:hover:not(:disabled),
+.clip-studio-track-icon-button:hover:not(:disabled) {
+  border-color: rgba(117, 217, 184, 0.58);
+  background: rgba(117, 217, 184, 0.1);
+  color: #f8fafc;
+}
+
+.clip-studio-timeline-play-button:focus-visible,
+.clip-studio-timeline-tool:focus-visible,
+.clip-studio-timeline-icon-button:focus-visible,
+.clip-studio-track-icon-button:focus-visible {
+  outline: 2px solid rgba(117, 217, 184, 0.86);
+  outline-offset: 2px;
+}
+
+.clip-studio-timeline-play-button {
+  display: inline-flex;
+  gap: 0.42rem;
+  align-items: center;
+  border-color: rgba(117, 217, 184, 0.42);
+  background: linear-gradient(135deg, rgba(117, 217, 184, 0.22), rgba(126, 141, 255, 0.14));
+  padding-inline: 0.72rem;
+}
+
+.clip-studio-timeline-play-button > span {
+  display: grid;
+  width: 1rem;
+  place-items: center;
+  color: #91e6ca;
+  font-size: 0.72rem;
+}
+
+.clip-studio-timeline-timecode {
+  display: flex;
+  gap: 0.28rem;
+  align-items: baseline;
+  min-width: 8.7rem;
+  color: #738094;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.clip-studio-timeline-timecode strong {
+  color: #f8fafc;
+  font-size: 0.83rem;
+}
+
+.clip-studio-timeline-tool {
+  padding-inline: 0.65rem;
+  white-space: nowrap;
+}
+
+.clip-studio-timeline-tool[aria-pressed="true"] {
+  border-color: rgba(117, 217, 184, 0.5);
+  background: rgba(117, 217, 184, 0.14);
+  color: #c9f7e8;
+}
+
+.clip-studio-timeline-tool:disabled,
+.clip-studio-timeline-icon-button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.clip-studio-timeline-zoom {
+  justify-content: flex-end;
+}
+
+.clip-studio-timeline-zoom label {
+  display: flex;
+  align-items: center;
+}
+
+.clip-studio-timeline-zoom input[type="range"] {
+  width: clamp(4rem, 7vw, 6.8rem);
+  min-height: auto;
+  accent-color: #75d9b8;
+}
+
+.clip-studio-timeline-zoom > span {
+  min-width: 2.7rem;
+  color: #95a2b5;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.clip-studio-timeline-icon-button,
+.clip-studio-track-icon-button {
+  display: inline-grid;
+  width: 2.15rem;
+  min-width: 2.15rem;
+  padding: 0;
+  place-items: center;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.clip-studio-track-icon-button {
+  width: 1.75rem;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 0.82rem;
+}
+
+.clip-studio-track-icon-button svg {
+  display: block;
+}
+
+.clip-studio-track-icon-button[aria-pressed="true"] {
+  border-color: rgba(250, 204, 21, 0.42);
+  background: rgba(250, 204, 21, 0.1);
+  color: #fde68a;
+}
+
+.clip-studio-unified-timeline-scroll {
+  position: relative;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 12px;
+  background: #0a0d13;
+  scrollbar-color: rgba(117, 217, 184, 0.48) rgba(148, 163, 184, 0.09);
+  scrollbar-width: thin;
+}
+
+.clip-studio-unified-timeline-scroll::-webkit-scrollbar {
+  height: 10px;
+}
+
+.clip-studio-unified-timeline-scroll::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.09);
+}
+
+.clip-studio-unified-timeline-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid #0a0d13;
+  border-radius: 999px;
+  background: rgba(117, 217, 184, 0.48);
+}
+
+.clip-studio-unified-timeline {
+  grid-template-columns: 7.4rem minmax(0, 1fr) 6.8rem;
+  gap: 0.38rem 0.55rem;
+  border: 0;
+  border-radius: 0;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025), transparent 14%),
+    #0a0d13;
+  padding: 0.55rem;
+  transition: min-width 180ms ease;
+}
+
+.clip-studio-timeline-ruler-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  gap: 0.55rem;
+  align-items: end;
+  min-height: 1.8rem;
+}
+
+.clip-studio-timeline-ruler {
+  position: relative;
+  height: 1.8rem;
+  overflow: visible;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent);
+}
+
+.clip-studio-timeline-ruler > span {
+  position: absolute;
+  bottom: 0;
+  width: 1px;
+  height: 0.38rem;
+  background: rgba(148, 163, 184, 0.44);
+}
+
+.clip-studio-timeline-ruler > span.is-major {
+  height: 0.64rem;
+  background: rgba(203, 213, 225, 0.62);
+}
+
+.clip-studio-timeline-ruler small {
+  position: absolute;
+  bottom: 0.76rem;
+  left: 0.24rem;
+  color: #7f8b9d;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.59rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.clip-studio-unified-timeline .clip-studio-layer-row {
+  min-height: 2.45rem;
+}
+
+.clip-studio-unified-timeline .clip-studio-layer-label {
+  position: sticky;
+  left: 0.55rem;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.32rem;
+  align-items: center;
+  min-height: 2rem;
+  border-right: 1px solid rgba(148, 163, 184, 0.12);
+  background: linear-gradient(90deg, #0d1119 78%, rgba(13, 17, 25, 0.82));
+  padding-right: 0.42rem;
+}
+
+.clip-studio-unified-timeline .clip-studio-layer-label > div {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.clip-studio-unified-timeline .clip-studio-layer-label.is-ruler-label {
+  align-self: stretch;
+}
+
+.clip-studio-unified-timeline .clip-studio-layer-track,
+.clip-studio-unified-timeline .clip-studio-transcript-strip,
+.clip-studio-unified-timeline .clip-studio-timeline-track {
+  height: 2.15rem;
+  border-color: rgba(148, 163, 184, 0.13);
+  border-radius: 7px;
+  background-color: rgba(15, 23, 42, 0.62);
+}
+
+.clip-studio-unified-timeline .clip-studio-layer-track,
+.clip-studio-unified-timeline .clip-studio-timeline-track {
+  background-image:
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.04) 0,
+      rgba(255, 255, 255, 0.04) 1px,
+      transparent 1px,
+      transparent 5%
+    );
+}
+
+.clip-studio-unified-timeline .clip-studio-layer-segment {
+  top: 0.32rem;
+  bottom: 0.32rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 5px;
+  box-shadow: 0 7px 18px rgba(2, 6, 23, 0.26);
+}
+
+.clip-studio-unified-timeline .clip-studio-layer-row.is-locked .is-draggable,
+.clip-studio-unified-timeline .clip-studio-layer-row.is-locked .clip-studio-timeline-track {
+  cursor: default;
+}
+
+.clip-studio-unified-timeline .clip-studio-layer-row.is-locked .clip-studio-layer-track {
+  background-image:
+    repeating-linear-gradient(
+      135deg,
+      rgba(250, 204, 21, 0.045) 0,
+      rgba(250, 204, 21, 0.045) 5px,
+      transparent 5px,
+      transparent 10px
+    );
+}
+
+.clip-studio-unified-timeline .clip-studio-layer-row.is-collapsed {
+  min-height: 1.8rem;
+}
+
+.clip-studio-unified-timeline .clip-studio-layer-row.is-collapsed .clip-studio-layer-track {
+  height: 0.48rem;
+  border-radius: 999px;
+  opacity: 0.58;
+}
+
+.clip-studio-layer-actions {
+  position: sticky;
+  right: 0.55rem;
+  z-index: 8;
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 2rem;
+  background: linear-gradient(270deg, #0d1119 78%, rgba(13, 17, 25, 0.82));
+  padding-left: 0.35rem;
+}
+
+.clip-studio-unified-timeline .clip-studio-layer-actions .button {
+  width: 4.4rem;
+  min-width: 4.4rem;
+  height: 1.9rem;
+  min-height: 1.9rem;
+  padding: 0.24rem 0.42rem;
+  font-size: 0.68rem;
+}
+
+.clip-studio-unified-timeline .clip-studio-shared-playhead > span {
+  width: 1px;
+  background: #f8fafc;
+  box-shadow:
+    0 0 0 1px rgba(2, 6, 23, 0.8),
+    0 0 13px rgba(117, 217, 184, 0.8);
+}
+
+.clip-studio-unified-timeline .clip-studio-shared-playhead > span::before {
+  top: -0.08rem;
+  width: 0.7rem;
+  height: 0.5rem;
+  border-radius: 3px 3px 50% 50%;
+  background: #75d9b8;
+}
+
+.clip-studio-bottom-timeline .clip-studio-timeline-labels {
+  border-top: 1px solid rgba(148, 163, 184, 0.11);
+  padding-top: 0.36rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 1120px) {
+  .clip-studio-timeline-toolbar {
+    grid-template-columns: 1fr auto;
+  }
+
+  .clip-studio-timeline-edit-tools {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+}
+
+@media (min-width: 1181px) {
+  .clip-studio-bottom-timeline {
+    height: clamp(24rem, 44dvh, 30rem);
+    min-height: 24rem;
+    max-height: 30rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-color: rgba(117, 217, 184, 0.42) rgba(148, 163, 184, 0.08);
+    scrollbar-width: thin;
+  }
+}
+
+@media (max-width: 720px) {
+  .clip-studio-timeline-toolbar {
+    position: static;
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(3, auto);
+    height: auto;
+    min-height: 10.75rem;
+    align-content: start;
+  }
+
+  .clip-studio-timeline-transport,
+  .clip-studio-timeline-zoom {
+    justify-content: space-between;
+  }
+
+  .clip-studio-timeline-edit-tools {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .clip-studio-timeline-tool {
+    flex: 0 0 auto;
+  }
+
+  .clip-studio-unified-timeline {
+    grid-template-columns: 6.5rem minmax(0, 1fr) 5.9rem;
+  }
+
+  .clip-studio-timeline-timecode {
+    min-width: 0;
+  }
+}
+
+/* Transcript navigator. Kept last to supersede the older, card-heavy
+   transcript treatment while preserving its clip-state semantics. */
+.clip-studio-transcript-rail {
+  align-content: stretch;
+  grid-template-rows: repeat(5, auto) minmax(10rem, 1fr) auto;
+  gap: 0.52rem;
+  overflow: hidden;
+  border-color: rgba(148, 163, 184, 0.15);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(117, 217, 184, 0.09), transparent 30%),
+    rgba(10, 12, 17, 0.97);
+  box-shadow: 0 22px 64px rgba(2, 6, 23, 0.24);
+}
+
+.clip-studio-transcript-rail > * + * {
+  margin-top: 0;
+}
+
+.clip-studio-transcript-head {
+  display: flex;
+  gap: 0.7rem;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.clip-studio-transcript-head h2 {
+  margin: 0;
+  font-size: 1.03rem;
+  letter-spacing: -0.015em;
+}
+
+.clip-studio-transcript-head p {
+  margin: 0.12rem 0 0;
+  color: #7f8b9e;
+  font-size: 0.68rem;
+  font-weight: 720;
+}
+
+.clip-studio-transcript-follow {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  min-height: 1.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #aeb8c7;
+  padding: 0.2rem 0.42rem;
+  font-size: 0.63rem;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.clip-studio-transcript-follow input {
+  width: 0.82rem;
+  height: 0.82rem;
+  min-height: 0;
+  margin: 0;
+  accent-color: #75d9b8;
+}
+
+.clip-studio-transcript-search {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.38rem;
+  align-items: center;
+  min-height: 2.35rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #718096;
+  padding: 0 0.52rem;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background 140ms ease;
+}
+
+.clip-studio-transcript-search:focus-within {
+  border-color: rgba(117, 217, 184, 0.68);
+  background: rgba(117, 217, 184, 0.055);
+  box-shadow: 0 0 0 3px rgba(117, 217, 184, 0.12);
+}
+
+.clip-studio-transcript-search > span[aria-hidden="true"] {
+  color: #8c99aa;
+  font-size: 1.1rem;
+  line-height: 1;
+  transform: rotate(-18deg);
+}
+
+.clip-studio-transcript-search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 2rem;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #f1f5f9;
+  padding: 0;
+  font: inherit;
+  font-size: 0.76rem;
+}
+
+.clip-studio-transcript-search input::placeholder {
+  color: #69768a;
+}
+
+.clip-studio-transcript-search kbd {
+  display: inline-grid;
+  width: 1.25rem;
+  height: 1.25rem;
+  place-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 4px;
+  background: rgba(2, 6, 23, 0.4);
+  color: #8793a4;
+  font: inherit;
+  font-size: 0.62rem;
+}
+
+.clip-studio-transcript-filter-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.clip-studio-transcript-filter-row > span {
+  color: #718096;
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.clip-studio-transcript-filters {
+  display: inline-flex;
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 7px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.clip-studio-transcript-filters button {
+  min-height: 1.75rem;
+  border: 0;
+  border-left: 1px solid rgba(148, 163, 184, 0.14);
+  background: transparent;
+  color: #8390a2;
+  padding: 0.2rem 0.48rem;
+  font: inherit;
+  font-size: 0.62rem;
+  font-weight: 780;
+  cursor: pointer;
+}
+
+.clip-studio-transcript-filters button:first-child {
+  border-left: 0;
+}
+
+.clip-studio-transcript-filters button:hover {
+  color: #e2e8f0;
+}
+
+.clip-studio-transcript-filters button:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid #75d9b8;
+  outline-offset: -2px;
+}
+
+.clip-studio-transcript-filters button[aria-pressed="true"] {
+  background: rgba(117, 217, 184, 0.13);
+  color: #c9f7e8;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-range {
+  gap: 0.3rem;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-range article {
+  display: flex;
+  gap: 0.3rem;
+  align-items: baseline;
+  justify-content: center;
+  min-width: 0;
+  border-radius: 7px;
+  padding: 0.34rem 0.28rem;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-range article > span {
+  color: #6f7b8e;
+  font-size: 0.57rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-range strong {
+  margin: 0;
+  color: #dbe3ed;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.clip-studio-transcript-active {
+  gap: 0.45rem;
+  border-color: rgba(117, 217, 184, 0.2);
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, rgba(117, 217, 184, 0.075), transparent 68%),
+    rgba(255, 255, 255, 0.025);
+  padding: 0.58rem;
+}
+
+.clip-studio-transcript-active-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.clip-studio-transcript-active-heading > div:first-child {
+  display: flex;
+  gap: 0.38rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.clip-studio-transcript-active-label {
+  color: #8d9aad;
+  font-size: 0.61rem;
+  font-weight: 820;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.clip-studio-transcript-active strong.clip-studio-transcript-active-time {
+  display: inline;
+  margin: 0;
+  color: #dbe3ed;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.65rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.clip-studio-transcript-active-heading .actions-row {
+  flex-wrap: nowrap;
+  gap: 0.25rem;
+  justify-content: flex-end;
+}
+
+.clip-studio-transcript-active-heading .status-pill {
+  padding: 0.16rem 0.32rem;
+  font-size: 0.55rem;
+  white-space: nowrap;
+}
+
+.clip-studio-transcript-active p.clip-studio-transcript-spoken-line {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  border-left-width: 2px;
+  border-radius: 0 6px 6px 0;
+  padding: 0.42rem 0.5rem;
+  color: #edf2f7;
+  font-size: 0.77rem;
+  line-height: 1.42;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.clip-studio-transcript-active .clip-studio-transcript-actions {
+  grid-template-columns: 0.8fr repeat(3, minmax(0, 1fr));
+  gap: 0.28rem;
+}
+
+.clip-studio-transcript-active .clip-studio-transcript-actions .button {
+  min-height: 1.9rem;
+  border-radius: 7px;
+  padding: 0.26rem 0.34rem;
+  font-size: 0.61rem;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.clip-studio-transcript-active-footer {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  justify-content: space-between;
+  color: #778497;
+  font-size: 0.59rem;
+  line-height: 1.35;
+}
+
+.clip-studio-transcript-active-footer > span {
+  min-width: 0;
+}
+
+.clip-studio-transcript-active-footer a {
+  flex: 0 0 auto;
+  color: #9ee8cf;
+  font-weight: 780;
+}
+
+.clip-studio-transcript-review-required {
+  display: flex;
+  gap: 0.42rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.48rem;
+}
+
+.clip-studio-transcript-review-required strong {
+  margin: 0;
+  font-size: 0.68rem;
+}
+
+.clip-studio-transcript-review-required p {
+  margin: 0.06rem 0 0;
+  font-size: 0.59rem;
+  line-height: 1.3;
+}
+
+.clip-studio-transcript-review-required .button {
+  min-height: 1.85rem;
+  padding-inline: 0.48rem;
+  font-size: 0.61rem;
+  white-space: nowrap;
+}
+
+.clip-studio-transcript-tags {
+  max-height: 1.55rem;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.clip-studio-transcript-tags span {
+  flex: 0 0 auto;
+  padding: 0.16rem 0.35rem;
+  font-size: 0.57rem;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 10rem;
+  max-height: none;
+  gap: 0.3rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0 0.22rem 0.1rem 0;
+  scrollbar-color: rgba(117, 217, 184, 0.42) rgba(148, 163, 184, 0.07);
+  scrollbar-width: thin;
+}
+
+.clip-studio-transcript-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.clip-studio-transcript-list::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.07);
+}
+
+.clip-studio-transcript-list::-webkit-scrollbar-thumb {
+  border: 2px solid #0a0c11;
+  border-radius: 999px;
+  background: rgba(117, 217, 184, 0.42);
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line {
+  position: relative;
+  grid-template-columns: 3.25rem minmax(0, 1fr) auto;
+  gap: 0.42rem;
+  align-items: center;
+  min-height: 3.05rem;
+  overflow: hidden;
+  border-color: rgba(148, 163, 184, 0.105);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.022);
+  padding: 0.44rem 0.46rem;
+  box-shadow: none;
+  transform: none;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: transparent;
+  content: "";
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line:hover {
+  border-color: rgba(148, 163, 184, 0.3);
+  background: rgba(255, 255, 255, 0.045);
+  transform: none;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line:focus-visible {
+  border-color: rgba(117, 217, 184, 0.58);
+  outline: 2px solid rgba(117, 217, 184, 0.56);
+  outline-offset: -2px;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line.is-selected::before {
+  background: #75d9b8;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line.is-selected {
+  border-color: rgba(117, 217, 184, 0.19);
+  background: rgba(117, 217, 184, 0.045);
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line.is-current {
+  border-color: rgba(250, 204, 21, 0.42);
+  background:
+    linear-gradient(90deg, rgba(250, 204, 21, 0.11), rgba(117, 217, 184, 0.04)),
+    rgba(255, 255, 255, 0.035);
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line.is-current::before {
+  background: #facc15;
+  box-shadow: 0 0 10px rgba(250, 204, 21, 0.62);
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line[aria-pressed="true"] {
+  border-color: rgba(226, 232, 240, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.16);
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line[data-clip-status="outside"] {
+  opacity: 0.62;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line[data-clip-status="partial"] {
+  border-left-style: dashed;
+}
+
+.clip-studio-transcript-line-time {
+  display: inline-flex;
+  gap: 0.28rem;
+  align-items: center;
+  color: #708095;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.63rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.clip-studio-transcript-line-time i {
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 50%;
+  background: #facc15;
+  box-shadow: 0 0 7px rgba(250, 204, 21, 0.72);
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line > strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #c9d2df;
+  font-size: 0.76rem;
+  font-weight: 590;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line > strong > span {
+  color: inherit;
+  font: inherit;
+}
+
+.clip-studio-transcript-line mark {
+  border-radius: 2px;
+  background: rgba(250, 204, 21, 0.3);
+  color: #fff3b0;
+  padding-inline: 0.08em;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line-action {
+  grid-column: 3;
+  grid-row: 1;
+  border: 0;
+  background: transparent;
+  color: #8ee3c6;
+  padding: 0;
+  font-size: 0.56rem;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.clip-studio-transcript-rail .clip-studio-transcript-line:hover .clip-studio-transcript-line-action,
+.clip-studio-transcript-rail .clip-studio-transcript-line:focus-visible .clip-studio-transcript-line-action,
+.clip-studio-transcript-rail .clip-studio-transcript-line[aria-pressed="true"] .clip-studio-transcript-line-action {
+  background: transparent;
+  opacity: 1;
+}
+
+.clip-studio-transcript-empty {
+  display: grid;
+  min-height: 9rem;
+  place-content: center;
+  justify-items: center;
+  gap: 0.3rem;
+  border: 1px dashed rgba(148, 163, 184, 0.18);
+  border-radius: 9px;
+  color: #dce4ef;
+  padding: 0.8rem;
+  text-align: center;
+}
+
+.clip-studio-transcript-empty span {
+  color: #7f8b9e;
+  font-size: 0.68rem;
+}
+
+.clip-studio-transcript-empty .button {
+  margin-top: 0.25rem;
+  min-height: 1.9rem;
+  padding-inline: 0.55rem;
+  font-size: 0.63rem;
+}
+
+.clip-studio-transcript-utility-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  padding-top: 0.42rem;
+}
+
+.clip-studio-transcript-utility-row > span {
+  color: #647186;
+  font-size: 0.55rem;
+  white-space: nowrap;
+}
+
+.clip-studio-transcript-utility-row > div {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.clip-studio-transcript-utility-row button {
+  border: 0;
+  background: transparent;
+  color: #8290a4;
+  padding: 0.1rem 0.15rem;
+  font: inherit;
+  font-size: 0.57rem;
+  font-weight: 730;
+  cursor: pointer;
+}
+
+.clip-studio-transcript-utility-row button:hover,
+.clip-studio-transcript-utility-row button:focus-visible {
+  color: #b8efdc;
+  outline: none;
+  text-decoration: underline;
+  text-underline-offset: 0.18rem;
+}
+
+@media (max-width: 1180px) {
+  .clip-studio-transcript-rail {
+    max-height: 42rem;
+  }
+
+  .clip-studio-transcript-rail .clip-studio-transcript-list {
+    min-height: 12rem;
+  }
+}
+
+@media (max-width: 760px) {
+  .clip-studio-transcript-rail {
+    grid-template-rows: none;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .clip-studio-transcript-rail .clip-studio-transcript-list {
+    min-height: 0;
+    max-height: 26rem;
+  }
+
+  .clip-studio-transcript-active .clip-studio-transcript-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .clip-studio-transcript-review-required {
+    display: grid;
+  }
+
+  .clip-studio-transcript-rail .clip-studio-transcript-line {
+    grid-template-columns: 3.25rem minmax(0, 1fr) auto;
+  }
+
+  .clip-studio-transcript-rail .clip-studio-transcript-line-action {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+
+@media (max-width: 420px) {
+  .clip-studio-transcript-head {
+    align-items: center;
+  }
+
+  .clip-studio-transcript-filter-row {
+    align-items: flex-end;
+  }
+
+  .clip-studio-transcript-filters button {
+    padding-inline: 0.38rem;
+  }
+
+  .clip-studio-transcript-active-heading {
+    align-items: flex-start;
+  }
+
+  .clip-studio-transcript-active-heading > div:first-child {
+    display: grid;
+    gap: 0.12rem;
+  }
+
+  .clip-studio-transcript-utility-row > span {
+    display: none;
+  }
+
+  .clip-studio-transcript-utility-row {
+    justify-content: flex-end;
+  }
+}

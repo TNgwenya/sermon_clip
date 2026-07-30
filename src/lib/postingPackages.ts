@@ -3,6 +3,8 @@ import path from "node:path";
 
 export type PostingPackageHistoryItem = {
   id: string;
+  organizationId?: string;
+  campusId?: string | null;
   clipIds: string[];
   clipTitles: string[];
   sermonTitle: string;
@@ -52,9 +54,20 @@ async function writePackageHistoryStore(items: PostingPackageHistoryItem[]): Pro
   await writeFile(/* turbopackIgnore: true */ storePath, JSON.stringify(items, null, 2));
 }
 
-export async function listPostingPackageHistory(): Promise<PostingPackageHistoryItem[]> {
+export async function listPostingPackageHistory(scope?: {
+  organizationId: string;
+  campusId: string | null;
+}): Promise<PostingPackageHistoryItem[]> {
   const items = await readPackageHistoryStore();
-  return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return items
+    .filter((item) => (
+      !scope
+      || (
+        item.organizationId === scope.organizationId
+        && (!scope.campusId || item.campusId === scope.campusId)
+      )
+    ))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export async function prunePostingPackageHistoryByClipIds(clipIds: string[]): Promise<number> {
@@ -83,6 +96,8 @@ export function buildPostingPackageDownloadHref(clipIds: string[]): string {
 }
 
 export async function recordPostingPackage(input: {
+  organizationId?: string;
+  campusId?: string | null;
   clipIds: string[];
   clipTitles: string[];
   sermonTitle: string;
@@ -92,6 +107,10 @@ export async function recordPostingPackage(input: {
 }): Promise<PostingPackageHistoryItem> {
   const item: PostingPackageHistoryItem = {
     id: `package-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    ...(input.organizationId ? {
+      organizationId: input.organizationId,
+      campusId: input.campusId ?? null,
+    } : {}),
     clipIds: input.clipIds,
     clipTitles: input.clipTitles,
     sermonTitle: input.sermonTitle,

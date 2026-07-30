@@ -26,6 +26,7 @@ vi.mock("@/lib/contentAssets", () => ({
 }));
 
 import {
+  __scheduledPostsTestUtils,
   assertClipCompositionNotActivelyPublishing,
   claimScheduledPost,
   listUpcomingAutomationPosts,
@@ -35,8 +36,10 @@ import {
 function queuedPost() {
   return {
     id: "post-1",
+    organizationId: "org-grace",
+    campusId: "campus-central",
     postingDraftId: null,
-    socialAccountId: null,
+    socialAccountId: "account-instagram",
     clipIdsJson: [],
     platform: "INSTAGRAM",
     postingSlot: "Monday",
@@ -95,6 +98,8 @@ function readyClip(overrides: Record<string, unknown> = {}) {
     caption: "Fresh approved caption",
     durationSeconds: 45,
     hashtags: ["#fresh"],
+    status: "APPROVED",
+    updatedAt: new Date("2099-07-21T09:00:00.000Z"),
     exportStatus: "COMPLETED",
     exportFreshness: "UP_TO_DATE",
     exportFormat: "VERTICAL_9_16",
@@ -220,6 +225,7 @@ describe("scheduled content revision queue", () => {
     ["stale", [readyClip({ exportFreshness: "OUTDATED" })]],
     ["missing", []],
     ["not a completed export", [readyClip({ exportStatus: "EXPORTING" })]],
+    ["not approved", [readyClip({ status: "GENERATED" })]],
     ["not the canonical vertical export", [readyClip({ exportFormat: "HORIZONTAL_16_9" })]],
     ["review blocked", [readyClip({ transcriptSafetyStatus: "REVIEW_REQUIRED" })]],
     ["missing an active edit plan", [readyClip({ editPlans: [] })]],
@@ -361,22 +367,134 @@ describe("scheduled content revision queue", () => {
       claimedAt: new Date("2099-07-23T08:00:00.000Z"),
       workerId: "worker-1",
       compositionReceiptJson: [identity],
+      contentAssetLinks: [],
     });
     mocks.clipCandidateFindMany.mockResolvedValue([readyClip()]);
+    mocks.scheduledPostFindMany.mockResolvedValue([]);
     mocks.scheduledPostUpdateMany.mockResolvedValue({ count: 1 });
 
-    await expect(revalidateClaimedScheduledPostComposition({
+    const result = await revalidateClaimedScheduledPostComposition({
       id: "post-1",
       workerId: "worker-1",
       compositionIdentities: [snapshotIdentity],
       now: new Date("2099-07-23T08:01:00.000Z"),
-    })).resolves.toEqual({ valid: true });
+    });
 
+    expect(result).toMatchObject({
+      valid: true,
+      publicationGuard: {
+        approvedPreviewIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        retryIdempotencyKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        semanticDuplicateKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        destinationPayloadKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      },
+    });
     expect(mocks.scheduledPostUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         workerStatus: "POSTING",
         claimedAt: new Date("2099-07-23T08:01:00.000Z"),
-        compositionReceiptJson: [snapshotIdentity],
+        compositionReceiptJson: expect.objectContaining({
+          schemaVersion: 2,
+          compositionIdentities: [snapshotIdentity],
+          publicationIntegrity: expect.objectContaining({
+            schemaVersion: 1,
+            approvedPreview: expect.objectContaining({
+              approvalState: "APPROVED",
+              approvedPreviewIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
+            }),
+            guard: expect.objectContaining({
+              scheduledPostId: "post-1",
+              organizationId: "org-grace",
+              campusId: "campus-central",
+            }),
+          }),
+        }),
+      }),
+    }));
+
+    const receiptJson = mocks.scheduledPostUpdateMany.mock.calls
+      .map(([call]) => call?.data?.compositionReceiptJson)
+      .find((value) => (
+        value
+        && typeof value === "object"
+        && !Array.isArray(value)
+        && value.schemaVersion === 2
+      ));
+    const completionPost = {
+      ...queuedPost(),
+      clipIdsJson: ["clip-1"],
+      status: "POSTING" as const,
+      workerStatus: "POSTING" as const,
+      workerId: "worker-1",
+      platform: "INSTAGRAM" as const,
+      title: "Mutable root title",
+      caption: "Mutable root caption",
+      compositionReceiptJson: receiptJson,
+      contentAssetLinks: [],
+    };
+    expect(__scheduledPostsTestUtils.clipPublicationReceiptMatchesPost({
+      post: completionPost,
+      workerId: "worker-1",
+    })).toBe(true);
+    expect(__scheduledPostsTestUtils.clipPublicationReceiptMatchesPost({
+      post: { ...completionPost, caption: "Changed after validation" },
+      workerId: "worker-1",
+    })).toBe(false);
+  });
+
+  it("releases a claim when the same clip may already be live on the destination", async () => {
+    const identity = {
+      schemaVersion: 1 as const,
+      clipId: "clip-1",
+      editPlanId: "plan-1",
+      artifactId: "artifact-1",
+      planHash: "plan-hash-1",
+      filePath: "/exports/fresh-final.mp4",
+      sizeBytes: 12_345_678,
+      snapshotSha256: null,
+      snapshotSizeBytes: null,
+    };
+    mocks.scheduledPostFindUnique.mockResolvedValue({
+      ...queuedPost(),
+      clipIdsJson: ["clip-1"],
+      status: "POSTING",
+      workerStatus: "CLAIMED",
+      claimedAt: new Date("2099-07-23T08:00:00.000Z"),
+      workerId: "worker-1",
+      compositionReceiptJson: [identity],
+      contentAssetLinks: [],
+    });
+    mocks.clipCandidateFindMany.mockResolvedValue([readyClip()]);
+    mocks.scheduledPostFindMany.mockResolvedValue([{
+      id: "post-already-live",
+      organizationId: "org-grace",
+      campusId: "campus-central",
+      status: "POSTED",
+      externalPostId: "instagram-existing",
+      compositionReceiptJson: null,
+    }]);
+    mocks.scheduledPostUpdateMany.mockResolvedValue({ count: 1 });
+
+    const result = await revalidateClaimedScheduledPostComposition({
+      id: "post-1",
+      workerId: "worker-1",
+      compositionIdentities: [{
+        ...identity,
+        snapshotSha256: "a".repeat(64),
+        snapshotSizeBytes: 12_345_678,
+      }],
+    });
+
+    expect(result).toMatchObject({
+      valid: false,
+      released: true,
+      reason: expect.stringContaining("already be publishing or published"),
+    });
+    expect(mocks.scheduledPostUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: "PLANNED",
+        workerStatus: "IDLE",
+        compositionReceiptJson: expect.anything(),
       }),
     }));
   });

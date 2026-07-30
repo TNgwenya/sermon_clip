@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   requestContentOpportunityGeneration: vi.fn(),
   generateContentOpportunities: vi.fn(),
   regenerateContentOpportunities: vi.fn(),
+  requireSermonResource: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({
@@ -32,6 +33,9 @@ vi.mock("@/lib/prisma", () => ({
 
 vi.mock("@/server/contentRevisionService", () => ({
   createOpportunityRevision: mocks.createOpportunityRevision,
+}));
+vi.mock("@/server/auth/resourceAuthorization", () => ({
+  requireSermonResource: mocks.requireSermonResource,
 }));
 
 vi.mock("@/server/contentFunnelTelemetry", () => ({
@@ -77,6 +81,11 @@ function opportunity(status: "DRAFT" | "NEEDS_REVIEW" | "APPROVED") {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.requireSermonResource.mockResolvedValue({
+    id: "sermon-1",
+    organizationId: "org-1",
+    campusId: "campus-1",
+  });
   mocks.contentOpportunityUpdate.mockResolvedValue({ id: "opportunity-1" });
   mocks.transcriptSegmentFindMany.mockResolvedValue([]);
   mocks.createOpportunityRevision.mockResolvedValue({ id: "revision-1", revisionNumber: 1 });
@@ -87,6 +96,22 @@ beforeEach(() => {
 });
 
 describe("content opportunity approval gate", () => {
+  it("denies another organization's sermon before reading or changing its opportunity", async () => {
+    mocks.requireSermonResource.mockRejectedValueOnce(
+      new Error("The requested resource was not found."),
+    );
+
+    const result = await updateContentOpportunityStatusAction(
+      "sermon-other-org",
+      "opportunity-other-org",
+      "APPROVED",
+    );
+
+    expect(result).toMatchObject({ success: false });
+    expect(mocks.contentOpportunityFindFirst).not.toHaveBeenCalled();
+    expect(mocks.contentOpportunityUpdate).not.toHaveBeenCalled();
+  });
+
   it.each(["DRAFT", "NEEDS_REVIEW"] as const)(
     "rejects the transition from %s to USED without updating the opportunity",
     async (status) => {

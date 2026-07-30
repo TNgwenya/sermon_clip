@@ -220,6 +220,47 @@ describe("posting drafts", () => {
     expect(data[0].socialAccountId).toBeNull();
   });
 
+  it("keeps draft, account lookup, and scheduled posts inside the requested tenant", async () => {
+    setupTransaction();
+
+    await createPostingDraft({
+      tenantScope: {
+        organizationId: "org-grace",
+        campusId: "campus-central",
+      },
+      clipIds: ["clip-1"],
+      platforms: ["Instagram"],
+      socialAccountIdsByPlatform: { Instagram: ["ig-1"] },
+      postingSlot: "Weekend invite",
+      automationMode: "AUTOMATIC",
+    });
+
+    expect(txMock.postingDraft.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: "org-grace",
+        campusId: "campus-central",
+      }),
+    });
+    expect(txMock.socialAccount.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        organizationId: "org-grace",
+        OR: [
+          { campusId: "campus-central" },
+          { campusId: null },
+        ],
+      }),
+    }));
+    expect(txMock.scheduledPost.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          organizationId: "org-grace",
+          campusId: "campus-central",
+          socialAccountId: "ig-1",
+        }),
+      ],
+    });
+  });
+
   it("returns the original draft when the same scheduling request is retried", async () => {
     setupTransaction();
     const input: Parameters<typeof createPostingDraft>[0] = {

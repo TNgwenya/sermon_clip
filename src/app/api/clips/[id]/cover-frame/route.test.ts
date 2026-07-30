@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   canRunLocalMediaProcessing: vi.fn(),
   findUnique: vi.fn(),
+  requireClipResource: vi.fn(),
   updateMany: vi.fn(),
   resolveSource: vi.fn(),
 }));
@@ -17,6 +18,10 @@ vi.mock("@/lib/prisma", () => ({
 }));
 vi.mock("@/server/agents/clipThumbnailService", () => ({
   resolveClipThumbnailSource: mocks.resolveSource,
+}));
+vi.mock("@/server/auth/resourceAuthorization", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/server/auth/resourceAuthorization")>(),
+  requireClipResource: mocks.requireClipResource,
 }));
 vi.mock("@/server/runtime/workerRuntime", () => ({
   canRunLocalMediaProcessing: mocks.canRunLocalMediaProcessing,
@@ -56,6 +61,11 @@ const clip = {
 describe("clip cover frame route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.requireClipResource.mockResolvedValue({
+      id: "clip-1",
+      organizationId: "org-1",
+      campusId: "campus-1",
+    });
     mocks.canRunLocalMediaProcessing.mockReturnValue(true);
     mocks.findUnique.mockResolvedValue(clip);
     mocks.updateMany.mockResolvedValue({ count: 1 });
@@ -86,6 +96,7 @@ describe("clip cover frame route", () => {
       "Later",
     ]);
     expect(payload).not.toHaveProperty("recommendedCandidate");
+    expect(mocks.requireClipResource).toHaveBeenCalledWith("content.read", "clip-1");
   });
 
   it("saves source provenance while preserving other caption data", async () => {
@@ -120,6 +131,7 @@ describe("clip cover frame route", () => {
         thumbnailError: null,
       }),
     }));
+    expect(mocks.requireClipResource).toHaveBeenCalledWith("content.update", "clip-1");
   });
 
   it("rejects cross-site mutations", async () => {
@@ -153,4 +165,3 @@ describe("clip cover frame route", () => {
     });
   });
 });
-

@@ -153,6 +153,10 @@ export async function exchangeMetaLongLivedToken(input: {
 }
 
 export async function storeMetaPageCredentials(input: {
+  tenantScope: {
+    organizationId: string;
+    campusId: string | null;
+  };
   accessToken: string;
   tokenType: string | null;
   expiresAt: Date | null;
@@ -173,6 +177,7 @@ export async function storeMetaPageCredentials(input: {
   for (const page of payload.data ?? []) {
     const pageAccessToken = page.access_token || input.accessToken;
     await upsertSocialCredential({
+      tenantScope: input.tenantScope,
       provider: "META_FACEBOOK",
       externalAccountId: page.id,
       accountName: page.name ?? "Facebook Page",
@@ -190,6 +195,7 @@ export async function storeMetaPageCredentials(input: {
 
     if (page.instagram_business_account?.id) {
       await upsertSocialCredential({
+        tenantScope: input.tenantScope,
         provider: "META_INSTAGRAM",
         externalAccountId: page.instagram_business_account.id,
         accountName: page.instagram_business_account.name ?? page.instagram_business_account.username ?? "Instagram account",

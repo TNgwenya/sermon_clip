@@ -104,5 +104,10 @@ describe("ClipStudioEditor caption selection workflow", () => {
     expect(markup).toContain("set clip boundaries");
     expect(markup).toContain("confirmed video cut");
     expect(markup).toContain('aria-pressed="false"');
+    expect(markup).toContain('aria-label="Caption style choices"');
+    expect(markup).toContain("<strong>Brand Kit default</strong>");
+    expect(markup).toContain("<strong>Modern Bold</strong>");
+    expect(markup).toContain("Scroll sideways to preview every style.");
+    expect(markup).not.toContain('aria-label="Caption style"');
   });
 });

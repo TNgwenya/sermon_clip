@@ -10,6 +10,8 @@ import {
 } from "@/lib/clipCoverFrame";
 import { prisma } from "@/lib/prisma";
 import { resolveClipThumbnailSource } from "@/server/agents/clipThumbnailService";
+import { requireClipResource } from "@/server/auth/resourceAuthorization";
+import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
 export const runtime = "nodejs";
@@ -78,6 +80,14 @@ export async function GET(
     return NextResponse.json({ error: "Clip id is required." }, { status: 400, headers: NO_STORE_HEADERS });
   }
 
+  try {
+    await requireClipResource("content.read", clipId);
+  } catch (error) {
+    const response = resourceAuthorizationErrorResponse(error, "Clip not found.", NO_STORE_HEADERS);
+    if (response) return response;
+    throw error;
+  }
+
   const clip = await prisma.clipCandidate.findUnique({ where: { id: clipId }, select: COVER_FRAME_SELECT });
   if (!clip) {
     return NextResponse.json({ error: "Clip not found." }, { status: 404, headers: NO_STORE_HEADERS });
@@ -109,6 +119,13 @@ export async function PUT(
   }
   if (!hasSafeMutationOrigin(request)) {
     return NextResponse.json({ error: "Cross-site cover frame updates are not allowed." }, { status: 403, headers: NO_STORE_HEADERS });
+  }
+  try {
+    await requireClipResource("content.update", clipId);
+  } catch (error) {
+    const response = resourceAuthorizationErrorResponse(error, "Clip not found.", NO_STORE_HEADERS);
+    if (response) return response;
+    throw error;
   }
   if (!canRunLocalMediaProcessing()) {
     return NextResponse.json(
@@ -168,4 +185,3 @@ export async function PUT(
     posterUrl: `/api/clips/${encodeURIComponent(clip.id)}/thumbnail?cover=${encodeURIComponent(selection.selectedAt)}`,
   }, { headers: NO_STORE_HEADERS });
 }
-

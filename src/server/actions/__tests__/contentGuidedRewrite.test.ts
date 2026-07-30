@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
   createLoggedChatCompletion: vi.fn(),
   resolveOpenAIChatModel: vi.fn(() => "gpt-test"),
   resolveOpenAIReasoningEffort: vi.fn(() => undefined),
+  requireSermonResource: vi.fn(),
+  requireContentOpportunityResource: vi.fn(),
+  getBrandingSettings: vi.fn(),
 }));
 
 vi.mock("@/lib/prisma", () => ({
@@ -22,6 +25,16 @@ vi.mock("@/server/ai/aiGateway", () => ({
 vi.mock("@/server/ai/modelConfig", () => ({
   resolveOpenAIChatModel: mocks.resolveOpenAIChatModel,
   resolveOpenAIReasoningEffort: mocks.resolveOpenAIReasoningEffort,
+}));
+
+vi.mock("@/server/auth/resourceAuthorization", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/auth/resourceAuthorization")>()),
+  requireSermonResource: mocks.requireSermonResource,
+  requireContentOpportunityResource: mocks.requireContentOpportunityResource,
+}));
+
+vi.mock("@/server/branding/settings", () => ({
+  getBrandingSettings: mocks.getBrandingSettings,
 }));
 
 import { requestGuidedContentRewriteAction } from "@/server/actions/contentGuidedRewrite";
@@ -101,8 +114,18 @@ function completionWith(value: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.requireSermonResource.mockResolvedValue({
+    id: "sermon-1",
+    organizationId: "org-1",
+    campusId: "campus-1",
+  });
+  mocks.requireContentOpportunityResource.mockResolvedValue({
+    id: "opportunity-1",
+    organizationId: "org-1",
+    campusId: "campus-1",
+  });
   mocks.opportunityFindFirst.mockResolvedValue(opportunity());
-  mocks.brandingFindUnique.mockResolvedValue({
+  mocks.getBrandingSettings.mockResolvedValue({
     churchName: "Example Church",
     primaryBrandColor: "#112233",
     secondaryBrandColor: "#445566",
@@ -145,7 +168,21 @@ describe("guided content rewrite action", () => {
       operation: "content_guided_rewrite",
       model: "gpt-test",
       response_format: { type: "json_object" },
+      organizationId: "org-1",
+      campusId: "campus-1",
       metadata: expect.objectContaining({ reviewOnly: true }),
+    }));
+    expect(mocks.opportunityFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        id: "opportunity-1",
+        sermonId: "sermon-1",
+        organizationId: "org-1",
+        campusId: "campus-1",
+        sermon: {
+          organizationId: "org-1",
+          campusId: "campus-1",
+        },
+      },
     }));
   });
 
@@ -227,5 +264,57 @@ describe("guided content rewrite action", () => {
 
     expect(result).toMatchObject({ success: false });
     expect(result.message).toMatch(/detail that was not present/i);
+  });
+
+  it("does not query opportunity content or AI when the sermon is outside the tenant", async () => {
+    const {
+      AuthorizedResourceNotFoundError,
+    } = await import("@/server/auth/resourceAuthorization");
+    mocks.requireSermonResource.mockRejectedValue(
+      new AuthorizedResourceNotFoundError(),
+    );
+
+    const result = await requestGuidedContentRewriteAction({
+      sermonId: "foreign-sermon",
+      opportunityId: "foreign-opportunity",
+      variant: "WARMER",
+      currentDraft: {
+        title: "Current title",
+        shortDescription: "Current description",
+        content: "Current grounded content.",
+      },
+    });
+
+    expect(result).toEqual({
+      success: false,
+      message: "This content idea is unavailable or you do not have permission to rewrite it.",
+    });
+    expect(mocks.opportunityFindFirst).not.toHaveBeenCalled();
+    expect(mocks.getBrandingSettings).not.toHaveBeenCalled();
+    expect(mocks.createLoggedChatCompletion).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mismatched opportunity tenant before loading its content", async () => {
+    mocks.requireContentOpportunityResource.mockResolvedValue({
+      id: "opportunity-1",
+      organizationId: "org-2",
+      campusId: "campus-2",
+    });
+
+    const result = await requestGuidedContentRewriteAction({
+      sermonId: "sermon-1",
+      opportunityId: "opportunity-1",
+      variant: "WARMER",
+      currentDraft: {
+        title: "Current title",
+        shortDescription: "Current description",
+        content: "Current grounded content.",
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/unavailable or you do not have permission/i);
+    expect(mocks.opportunityFindFirst).not.toHaveBeenCalled();
+    expect(mocks.createLoggedChatCompletion).not.toHaveBeenCalled();
   });
 });

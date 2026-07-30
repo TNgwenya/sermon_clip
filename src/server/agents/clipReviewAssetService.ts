@@ -16,6 +16,7 @@ import {
   createCompactClipPreview,
   removeCompactClipPreview,
 } from "@/server/agents/clipPreviewProxyService";
+import type { TenantScope } from "@/server/tenancy/scope";
 
 type ReviewAssetClip = {
   id: string;
@@ -46,6 +47,7 @@ export type ClipReviewAssetSummary = {
 
 function buildReviewAssetWhere(input: {
   sermonId: string;
+  tenantScope?: TenantScope;
   onlyFailed?: boolean;
   clipIds?: string[];
 }): Prisma.ClipCandidateWhereInput {
@@ -55,6 +57,7 @@ function buildReviewAssetWhere(input: {
 
   return {
     sermonId: input.sermonId,
+    ...(input.tenantScope ? { sermon: input.tenantScope } : {}),
     ...(input.clipIds !== undefined ? { id: { in: clipIds } } : {}),
     ...(input.onlyFailed
       ? {
@@ -254,6 +257,7 @@ async function uploadRemotePreviewBestEffort(input: {
 
 export async function prepareGeneratedClipReviewAssets(input: {
   sermonId: string;
+  tenantScope?: TenantScope;
   force?: boolean;
   onlyFailed?: boolean;
   clipIds?: string[];

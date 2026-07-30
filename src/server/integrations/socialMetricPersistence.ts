@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 
 export type SocialMetricSnapshotUpsertInput = Omit<
   Prisma.SocialMetricSnapshotUncheckedCreateInput,
-  "id" | "createdAt" | "dedupeKey" | "capturedAt" | "predictionResults"
+  "id" | "organizationId" | "campusId" | "createdAt" | "dedupeKey" | "capturedAt" | "predictionResults"
 > & {
   dedupeKey: string;
   capturedAt: Date;
@@ -17,14 +17,28 @@ export type SocialMetricSnapshotUpsertInput = Omit<
  */
 export async function upsertSocialMetricSnapshots(
   snapshots: SocialMetricSnapshotUpsertInput[],
+  scope: Readonly<{ organizationId: string; campusId: string | null }>,
 ): Promise<number> {
   if (snapshots.length === 0) return 0;
 
   await prisma.$transaction(snapshots.map(({ dedupeKey, ...values }) => (
     prisma.socialMetricSnapshot.upsert({
-      where: { dedupeKey },
-      create: { dedupeKey, ...values },
-      update: values,
+      where: {
+        organizationId_dedupeKey: {
+          organizationId: scope.organizationId,
+          dedupeKey,
+        },
+      },
+      create: {
+        organizationId: scope.organizationId,
+        campusId: scope.campusId,
+        dedupeKey,
+        ...values,
+      },
+      update: {
+        ...values,
+        campusId: scope.campusId,
+      },
     })
   )));
   return snapshots.length;

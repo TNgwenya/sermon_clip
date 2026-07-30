@@ -22,10 +22,12 @@ function hasCredential(summary: Partial<Record<SocialConnectorProvider, number>>
   return providers.reduce((sum, provider) => sum + (summary[provider] ?? 0), 0);
 }
 
-export async function listSocialAnalyticsConnectors(): Promise<SocialAnalyticsConnector[]> {
+export async function listSocialAnalyticsConnectors(
+  scope: Readonly<{ organizationId: string; campusId?: string | null }>,
+): Promise<SocialAnalyticsConnector[]> {
   let credentialSummary: Partial<Record<SocialConnectorProvider, number>> = {};
   try {
-    credentialSummary = await listConnectorCredentialSummaries();
+    credentialSummary = await listConnectorCredentialSummaries(scope);
   } catch (error) {
     console.warn("Unable to load social connector credential summary.", error);
   }

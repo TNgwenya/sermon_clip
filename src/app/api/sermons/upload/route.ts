@@ -9,9 +9,14 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import {
+  readTenantRequestContext,
+  type TenantRequestContext,
+} from "@/lib/tenancy/requestHeaders";
+import {
   buildLocalUploadSourceUrl,
   buildUploadedMediaCheckFailureMessage,
   createSermonSchema,
+  isLocalUploadSourceUrl,
   MAX_UPLOADED_MEDIA_BYTES,
   UPLOADED_MEDIA_TOO_LARGE_MESSAGE,
 } from "@/lib/sermonIntake";
@@ -31,6 +36,9 @@ import {
   localMediaProcessingUnavailableMessage,
 } from "@/server/runtime/workerRuntime";
 import { queueSermonProcessingJob } from "@/server/agents/processing";
+import { AuthorizationError } from "@/server/auth/authorization";
+import { requirePersistedTenantCapability } from "@/server/auth/requestAuthorization";
+import { tenantResourceScope } from "@/server/tenancy/scope";
 
 export const runtime = "nodejs";
 
@@ -57,6 +65,19 @@ function parseContentLength(request: Request): number | null {
   const header = request.headers.get("content-length");
   const value = header ? Number(header) : null;
   return value !== null && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function isYouTubeSourceUrl(value: string): boolean {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "youtube.com" || host === "www.youtube.com" || host === "youtu.be";
+  } catch {
+    return false;
+  }
+}
+
+function isUploadSessionSourceUrl(value: string): boolean {
+  return isLocalUploadSourceUrl(value) || value.trim().startsWith("upload://");
 }
 
 function fieldErrorsFromResult(result: ReturnType<typeof createSermonSchema.safeParse>) {
@@ -120,6 +141,45 @@ export async function POST(request: Request): Promise<NextResponse> {
   const fileName = url.searchParams.get("fileName")?.trim() || "sermon-media";
   const contentLength = parseContentLength(request);
   const totalBytes = parseByteParam(url, "totalBytes");
+  const requestedSermonId = url.searchParams.get("sermonId") ?? "";
+  let requestContext: TenantRequestContext;
+  let parsedRequestContext: TenantRequestContext;
+
+  try {
+    parsedRequestContext = readTenantRequestContext(request.headers);
+  } catch {
+    return NextResponse.json(
+      { success: false, message: "Authentication is required." },
+      { status: 401 },
+    );
+  }
+
+  try {
+    requestContext = await requirePersistedTenantCapability(
+      parsedRequestContext,
+      uploadMode === "chunk" || uploadMode === "finish" || uploadMode === "recovery-start"
+        ? "sermons.update"
+        : "sermons.create",
+      uploadMode === "chunk" || uploadMode === "finish" || uploadMode === "recovery-start"
+        ? (requestedSermonId
+            ? { resource: { kind: "SERMON", id: requestedSermonId } }
+            : undefined)
+        : undefined,
+    );
+  } catch (error) {
+    if (!(error instanceof AuthorizationError)) {
+      console.error("Upload authorization lookup failed.", error);
+      return NextResponse.json(
+        { success: false, message: "The service is temporarily unavailable." },
+        { status: 503 },
+      );
+    }
+
+    return NextResponse.json(
+      { success: false, message: "You do not have permission to upload sermons." },
+      { status: 403 },
+    );
+  }
 
   if ((contentLength !== null && contentLength > MAX_UPLOADED_MEDIA_BYTES) || (totalBytes !== null && totalBytes > MAX_UPLOADED_MEDIA_BYTES)) {
     return NextResponse.json(
@@ -128,8 +188,105 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
+  if (uploadMode === "recovery-start") {
+    if (!requestedSermonId || totalBytes === null || totalBytes === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "The recovery upload was missing its sermon or recording size.",
+          fieldErrors: { mediaFile: "Choose the recording again and retry." },
+        },
+        { status: 400 },
+      );
+    }
+
+    const sermon = await prisma.sermon.findFirst({
+      where: tenantResourceScope(requestContext, requestedSermonId),
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        youtubeUrl: true,
+        processingJobs: {
+          orderBy: { updatedAt: "desc" },
+          take: 20,
+          select: { type: true, status: true },
+        },
+      },
+    });
+    if (!sermon) {
+      return NextResponse.json(
+        { success: false, message: "This sermon could not be found.", fieldErrors: { mediaFile: "Return to the sermon and try again." } },
+        { status: 404 },
+      );
+    }
+
+    const failedYouTubeDownload = sermon.processingJobs.some(
+      (job) => job.type === "DOWNLOAD_VIDEO" && job.status === "FAILED",
+    );
+    const hasActiveWork = sermon.processingJobs.some(
+      (job) => job.status === "PENDING" || job.status === "RUNNING",
+    );
+    if (sermon.status !== "FAILED" || !isYouTubeSourceUrl(sermon.youtubeUrl) || !failedYouTubeDownload) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "This sermon is not waiting for a YouTube recovery upload.",
+          fieldErrors: { mediaFile: "Refresh the sermon page before trying again." },
+        },
+        { status: 409 },
+      );
+    }
+    if (hasActiveWork) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "This sermon already has processing work in progress.",
+          fieldErrors: { mediaFile: "Wait for the current work to finish, then refresh." },
+        },
+        { status: 409 },
+      );
+    }
+
+    try {
+      await assertMediaStorageCapacity({ incomingBytes: totalBytes });
+      await ensureSermonFolders(sermon.id, sermon.title);
+      const sourceVideoPath = getSourceVideoPath(sermon.id);
+      const existingSource = await mediaFileIsUsable(sourceVideoPath);
+      if (existingSource.usable) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "This sermon already has a usable recording.",
+            fieldErrors: { mediaFile: "Refresh the page to continue processing." },
+          },
+          { status: 409 },
+        );
+      }
+
+      await unlink(/* turbopackIgnore: true */ getUploadedSourceTempPath(sourceVideoPath)).catch(() => undefined);
+      await unlink(/* turbopackIgnore: true */ sourceVideoPath).catch(() => undefined);
+      await appendPipelineLog(
+        sermon.id,
+        "Recovery upload session started after YouTube could not provide the recording. Saved sermon details and timing were preserved.",
+      );
+
+      return NextResponse.json({
+        success: true,
+        message: "Recovery upload session started.",
+        createdSermonId: sermon.id,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "The recovery upload could not be prepared.";
+      return NextResponse.json(
+        { success: false, message: reason, fieldErrors: { mediaFile: reason }, createdSermonId: sermon.id },
+        { status: 400 },
+      );
+    }
+  }
+
   if (uploadMode === "chunk") {
-    const sermonId = url.searchParams.get("sermonId") ?? "";
+    const sermonId = requestedSermonId;
     const offset = parseByteParam(url, "offset");
     const chunkBytes = parseByteParam(url, "chunkBytes");
 
@@ -140,11 +297,39 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
-    const sermon = await prisma.sermon.findUnique({ where: { id: sermonId }, select: { id: true, title: true } });
+    const sermon = await prisma.sermon.findFirst({
+      where: tenantResourceScope(requestContext, sermonId),
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        youtubeUrl: true,
+        processingJobs: {
+          orderBy: { updatedAt: "desc" },
+          take: 20,
+          select: { type: true, status: true },
+        },
+      },
+    });
     if (!sermon) {
       return NextResponse.json(
         { success: false, message: "The upload session could not be found.", fieldErrors: { mediaFile: "The upload session expired. Try again." } },
         { status: 404 },
+      );
+    }
+    const isYouTubeRecovery = sermon.status === "FAILED"
+      && isYouTubeSourceUrl(sermon.youtubeUrl)
+      && sermon.processingJobs.some((job) => job.type === "DOWNLOAD_VIDEO" && job.status === "FAILED");
+    const isLocalUploadSession = isUploadSessionSourceUrl(sermon.youtubeUrl)
+      && (sermon.status === "CREATED" || sermon.status === "FAILED");
+    if (!isYouTubeRecovery && !isLocalUploadSession) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "This sermon is not accepting a recording upload.",
+          fieldErrors: { mediaFile: "Refresh the sermon page before trying again." },
+        },
+        { status: 409 },
       );
     }
 
@@ -206,7 +391,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   if (uploadMode === "finish") {
-    const sermonId = url.searchParams.get("sermonId") ?? "";
+    const sermonId = requestedSermonId;
     if (!sermonId || totalBytes === null) {
       return NextResponse.json(
         { success: false, message: "The upload finalization request was missing required upload details.", fieldErrors: { mediaFile: "The upload could not be finalized. Try again." } },
@@ -214,7 +399,20 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
-    const sermon = await prisma.sermon.findUnique({ where: { id: sermonId }, select: { id: true, title: true } });
+    const sermon = await prisma.sermon.findFirst({
+      where: tenantResourceScope(requestContext, sermonId),
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        youtubeUrl: true,
+        processingJobs: {
+          orderBy: { updatedAt: "desc" },
+          take: 20,
+          select: { type: true, status: true },
+        },
+      },
+    });
     if (!sermon) {
       return NextResponse.json(
         { success: false, message: "The upload session could not be found.", fieldErrors: { mediaFile: "The upload session expired. Try again." } },
@@ -223,6 +421,22 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     try {
+      const isYouTubeRecovery = sermon.status === "FAILED"
+        && isYouTubeSourceUrl(sermon.youtubeUrl)
+        && sermon.processingJobs.some((job) => job.type === "DOWNLOAD_VIDEO" && job.status === "FAILED");
+      const isLocalUploadSession = isUploadSessionSourceUrl(sermon.youtubeUrl)
+        && (sermon.status === "CREATED" || sermon.status === "FAILED" || sermon.status === "DOWNLOADED");
+      if (!isYouTubeRecovery && !isLocalUploadSession) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "This sermon is not waiting for an uploaded recording.",
+            fieldErrors: { mediaFile: "Refresh the sermon page before trying again." },
+          },
+          { status: 409 },
+        );
+      }
+
       await ensureSermonFolders(sermon.id, sermon.title);
       const sourceVideoPath = getSourceVideoPath(sermon.id);
       const tempSourceVideoPath = getUploadedSourceTempPath(sourceVideoPath);
@@ -255,6 +469,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       await prisma.sermon.update({
         where: { id: sermon.id },
         data: {
+          ...(isYouTubeRecovery ? { youtubeUrl: buildLocalUploadSourceUrl(fileName) } : {}),
           sourceVideoPath,
           audioPath: getAudioPath(sermon.id),
           transcriptJsonPath: getTranscriptJsonPath(sermon.id),
@@ -263,13 +478,55 @@ export async function POST(request: Request): Promise<NextResponse> {
         },
       });
 
-      await appendPipelineLog(sermon.id, "Sermon created from chunked uploaded media file and storage folders initialized.");
+      if (isYouTubeRecovery) {
+        await prisma.processingJob.create({
+          data: {
+            sermonId: sermon.id,
+            type: "DOWNLOAD_VIDEO",
+            status: "SUCCEEDED",
+            startedAt: new Date(),
+            completedAt: new Date(),
+            logs: "YouTube import was recovered by attaching an uploaded recording.",
+            generationSummary: {
+              recovery: {
+                version: 1,
+                source: "upload",
+                preservedSermonConfiguration: true,
+              },
+            },
+          },
+        });
+        await prisma.auditEvent.create({
+          data: {
+            organizationId: requestContext.organizationId,
+            campusId: requestContext.campusId,
+            actorType: "USER",
+            actorUserId: requestContext.actorId,
+            action: "sermon.source_recovered",
+            targetType: "Sermon",
+            targetId: sermon.id,
+            metadataJson: {
+              source: "upload",
+              previousSource: "youtube",
+            },
+          },
+        });
+        await appendPipelineLog(
+          sermon.id,
+          "Uploaded recording attached after YouTube import failure. Existing sermon details, timing, and worship setting were preserved.",
+        );
+      } else {
+        await appendPipelineLog(sermon.id, "Sermon created from chunked uploaded media file and storage folders initialized.");
+      }
       revalidatePath("/");
+      revalidatePath(`/sermons/${sermon.id}`);
       await startUploadedSermonPipeline(sermon.id);
 
       return NextResponse.json({
         success: true,
-        message: "Sermon saved. The full clip workflow has started automatically.",
+        message: isYouTubeRecovery
+          ? "Recording attached. Processing has resumed with your saved sermon settings."
+          : "Sermon saved. The full clip workflow has started automatically.",
         createdSermonId: sermon.id,
       });
     } catch (error) {
@@ -324,22 +581,42 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const sermon = await prisma.sermon.create({
-      data: {
-        youtubeUrl: buildLocalUploadSourceUrl(fileName),
-        title: result.data.title,
-        speakerName: result.data.speakerName,
-        churchName: result.data.churchName,
-        language: result.data.language,
-        sermonStartSeconds: result.data.sermonStartSeconds,
-        sermonEndSeconds: result.data.sermonEndSeconds,
-        analyzeFullRecording: false,
-        includeWorshipMoments: result.data.includeWorshipMoments,
-        sermonDate: result.data.sermonDate,
-        rightsConfirmed: result.data.rightsConfirmed,
-        status: "CREATED",
-      },
-      select: { id: true, title: true },
+    const sermon = await prisma.$transaction(async (tx) => {
+      const createdSermon = await tx.sermon.create({
+        data: {
+          organizationId: requestContext.organizationId,
+          campusId: requestContext.campusId,
+          youtubeUrl: buildLocalUploadSourceUrl(fileName),
+          title: result.data.title,
+          speakerName: result.data.speakerName,
+          churchName: result.data.churchName,
+          language: result.data.language,
+          sermonStartSeconds: result.data.sermonStartSeconds,
+          sermonEndSeconds: result.data.sermonEndSeconds,
+          analyzeFullRecording: false,
+          includeWorshipMoments: result.data.includeWorshipMoments,
+          sermonDate: result.data.sermonDate,
+          rightsConfirmed: result.data.rightsConfirmed,
+          status: "CREATED",
+        },
+        select: { id: true, title: true },
+      });
+      await tx.auditEvent.create({
+        data: {
+          organizationId: requestContext.organizationId,
+          campusId: requestContext.campusId,
+          actorType: "USER",
+          actorUserId: requestContext.actorId,
+          action: "sermon.created",
+          targetType: "Sermon",
+          targetId: createdSermon.id,
+          metadataJson: {
+            title: createdSermon.title,
+            source: "upload",
+          },
+        },
+      });
+      return createdSermon;
     });
 
     if (uploadMode === "start") {

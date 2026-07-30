@@ -15,6 +15,7 @@ type NavigationIconName =
   | "insights"
   | "brand"
   | "channels"
+  | "team"
   | "settings"
   | "more";
 
@@ -48,11 +49,10 @@ const primaryItems: NavigationItem[] = [
     emphasis: true,
   },
   {
-    href: "/sermons",
-    label: "Review & library",
-    shortLabel: "Review",
+    href: "/inbox",
+    label: "Inbox",
     icon: "review",
-    isActive: (pathname) => pathname === "/sermons" || (pathname.startsWith("/sermons/") && !pathname.startsWith("/sermons/new")),
+    isActive: (pathname) => pathname.startsWith("/inbox"),
   },
   {
     href: "/ready-to-post",
@@ -64,10 +64,22 @@ const primaryItems: NavigationItem[] = [
 
 const contentPlanItems: NavigationItem[] = [
   {
+    href: "/week-drafts",
+    label: "Week drafts",
+    icon: "plan",
+    isActive: (pathname) => pathname.startsWith("/week-drafts"),
+  },
+  {
     href: "/weekly-plan",
     label: "Weekly plan",
     icon: "plan",
     isActive: (pathname) => pathname.startsWith("/weekly-plan"),
+  },
+  {
+    href: "/sermons",
+    label: "Sermon library",
+    icon: "review",
+    isActive: (pathname) => pathname === "/sermons" || (pathname.startsWith("/sermons/") && !pathname.startsWith("/sermons/new")),
   },
   {
     href: "/opportunities",
@@ -101,6 +113,18 @@ const settingsItems: NavigationItem[] = [
     label: "Social channels",
     icon: "channels",
     isActive: (pathname) => pathname.startsWith("/settings/social"),
+  },
+  {
+    href: "/settings/team",
+    label: "Team & access",
+    icon: "team",
+    isActive: (pathname) => pathname.startsWith("/settings/team"),
+  },
+  {
+    href: "/settings/account",
+    label: "Account & security",
+    icon: "settings",
+    isActive: (pathname) => pathname.startsWith("/settings/account"),
   },
 ];
 
@@ -186,6 +210,15 @@ function NavigationIconPaths({ name }: { name: NavigationIconName }) {
           <circle cx="18" cy="6" r="2.5" />
           <circle cx="18" cy="18" r="2.5" />
           <path d="m8.25 10.9 7.5-3.8M8.25 13.1l7.5 3.8" />
+        </>
+      );
+    case "team":
+      return (
+        <>
+          <circle cx="9" cy="8" r="3" />
+          <circle cx="17.5" cy="9.5" r="2.25" />
+          <path d="M3.5 20v-1.5A4.5 4.5 0 0 1 8 14h2a4.5 4.5 0 0 1 4.5 4.5V20" />
+          <path d="M15 15.25h1.25A3.75 3.75 0 0 1 20 19v1" />
         </>
       );
     case "settings":
@@ -281,6 +314,10 @@ function UtilityMenu({ menu, pathname }: { menu: NavigationMenu; pathname: strin
 export function AppNavigation() {
   const pathname = usePathname();
   const mobileMoreRef = useRef<HTMLDetailsElement>(null);
+
+  if (pathname === "/login" || pathname === "/accept-invitation") {
+    return null;
+  }
   const secondaryIsActive = secondaryItems.some((item) => item.isActive(pathname));
 
   function closeMobileMore() {

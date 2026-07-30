@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   appendPipelineLog: vi.fn(async () => undefined),
+  authorizeClip: vi.fn(),
+  authorizeSermon: vi.fn(),
   canRunInline: vi.fn(() => false),
+  clipFindFirst: vi.fn(),
   clipFindUnique: vi.fn(),
   clipCount: vi.fn(),
   clipUpdate: vi.fn(async () => ({})),
@@ -22,6 +25,7 @@ vi.mock("@/lib/prisma", () => ({
   prisma: {
     clipCandidate: {
       count: mocks.clipCount,
+      findFirst: mocks.clipFindFirst,
       findUnique: mocks.clipFindUnique,
       update: mocks.clipUpdate,
     },
@@ -50,6 +54,10 @@ vi.mock("@/server/runtime/workerRuntime", () => ({
 vi.mock("@/server/agents/clipRenderService", () => ({
   renderApprovedClip: mocks.render,
 }));
+vi.mock("@/server/auth/resourceAuthorization", () => ({
+  requireClipResource: mocks.authorizeClip,
+  requireSermonResource: mocks.authorizeSermon,
+}));
 
 import {
   downloadVideoAction,
@@ -58,6 +66,7 @@ import {
   generateAndBurnSubtitlesForExportedClipsAction,
   generateClipSuggestionsAction,
   prepareClipStudioForPostingAction,
+  regenerateClipOutdatedAssetsAction,
   renderClipCandidateAction,
   reexportVerticalClipAction,
   retryFailedProcessingJobById,
@@ -88,6 +97,16 @@ describe("production media action queue routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.canRunInline.mockReturnValue(false);
+    mocks.authorizeClip.mockResolvedValue({
+      id: "clip-1",
+      organizationId: "org-a",
+      campusId: "campus-a",
+    });
+    mocks.authorizeSermon.mockResolvedValue({
+      id: "sermon-1",
+      organizationId: "org-a",
+      campusId: "campus-a",
+    });
     mocks.queue.mockResolvedValue({ id: "job-1", reusedExisting: false, intentConflict: false });
     mocks.processingFindMany.mockResolvedValue([]);
   });
@@ -190,6 +209,30 @@ describe("production media action queue routing", () => {
       mediaAssetClipIds: ["clip-a", "clip-b"],
       forceMediaAssets: true,
     });
+  });
+
+  it("cannot retry another organization's processing job", async () => {
+    mocks.authorizeSermon.mockRejectedValueOnce(new Error("Not found"));
+
+    await expect(retryFailedProcessingJobById({
+      sermonId: "sermon-b",
+      jobId: "failed-burn-b",
+    })).rejects.toThrow("Not found");
+
+    expect(mocks.processingFindFirst).not.toHaveBeenCalled();
+    expect(mocks.processingFindMany).not.toHaveBeenCalled();
+    expect(mocks.queue).not.toHaveBeenCalled();
+  });
+
+  it("cannot regenerate another organization's clip", async () => {
+    mocks.authorizeClip.mockRejectedValueOnce(new Error("Not found"));
+
+    await expect(
+      regenerateClipOutdatedAssetsAction("clip-b"),
+    ).rejects.toThrow("Not found");
+
+    expect(mocks.clipFindFirst).not.toHaveBeenCalled();
+    expect(mocks.queue).not.toHaveBeenCalled();
   });
 
   it("rejects unsupported queued Studio formats before saving or approving", async () => {

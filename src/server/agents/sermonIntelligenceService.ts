@@ -17,6 +17,7 @@ import {
 import { appendPipelineLog } from "@/server/agents/storage";
 import { persistMinistryMoments } from "@/server/agents/ministryMomentService";
 import { refreshSubjectSpeakerTracking } from "@/server/agents/subjectSpeakerTrackingService";
+import type { TenantScope } from "@/server/tenancy/scope";
 import {
   applyInferredSermonWindowToSegments,
   inferSermonWindowFromTranscript,
@@ -26,6 +27,8 @@ import {
 
 type SermonContext = {
   id: string;
+  organizationId: string | null;
+  campusId: string | null;
   title: string;
   speakerName: string;
   churchName: string;
@@ -37,6 +40,7 @@ export type GenerateIntelligenceOptions = {
   force?: boolean;
   parentJobId?: string;
   processingJobId?: string;
+  tenantScope?: TenantScope;
 };
 
 export type IntelligenceResult = {
@@ -98,6 +102,8 @@ async function callIntelligenceAI(
   return createLoggedChatCompletion({
     operation: "sermon_intelligence",
     sermonId: sermon.id,
+    organizationId: sermon.organizationId,
+    campusId: sermon.campusId,
     model,
     reasoningEffort,
     temperature: 0.2,
@@ -241,10 +247,15 @@ export async function generateSermonIntelligence(
   sermonId: string,
   options?: GenerateIntelligenceOptions,
 ): Promise<IntelligenceResult> {
-  const sermon = await prisma.sermon.findUnique({
-    where: { id: sermonId },
+  const sermon = await prisma.sermon.findFirst({
+    where: {
+      id: sermonId,
+      ...(options?.tenantScope ?? {}),
+    },
     select: {
       id: true,
+      organizationId: true,
+      campusId: true,
       title: true,
       speakerName: true,
       churchName: true,
@@ -352,7 +363,10 @@ export async function generateSermonIntelligence(
     }
 
     try {
-      const trackingResult = await refreshSubjectSpeakerTracking(sermonId);
+      const trackingResult = await refreshSubjectSpeakerTracking(
+        sermonId,
+        options?.tenantScope,
+      );
       await appendPipelineLog(
         sermonId,
         `Subject/speaker tracking refreshed: ${trackingResult.subjectCount} subjects, ${trackingResult.speakerCount} speakers.`,
@@ -395,6 +409,7 @@ export async function generateSermonIntelligence(
 
 export async function regenerateSermonIntelligence(
   sermonId: string,
+  tenantScope?: TenantScope,
 ): Promise<IntelligenceResult> {
-  return generateSermonIntelligence(sermonId, { force: true });
+  return generateSermonIntelligence(sermonId, { force: true, tenantScope });
 }

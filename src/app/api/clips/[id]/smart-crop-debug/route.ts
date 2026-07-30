@@ -3,6 +3,8 @@ import { readFile, stat } from "node:fs/promises";
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
+import { requireClipResource } from "@/server/auth/resourceAuthorization";
+import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 
 async function fileHasBytes(filePath: string): Promise<boolean> {
   try {
@@ -22,6 +24,14 @@ export async function GET(
 
   if (!clipId) {
     return NextResponse.json({ error: "Clip id is required." }, { status: 400 });
+  }
+
+  try {
+    await requireClipResource("content.read", clipId);
+  } catch (error) {
+    const response = resourceAuthorizationErrorResponse(error, "Clip not found.");
+    if (response) return response;
+    throw error;
   }
 
   const clip = await prisma.clipCandidate.findUnique({

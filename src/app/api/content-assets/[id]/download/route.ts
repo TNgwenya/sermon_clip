@@ -11,6 +11,8 @@ import {
   isTrustedContentAssetPublicUrl,
   readContentAssetPublicFile,
 } from "@/server/contentAssets/contentAssetPublicStorage";
+import { requireContentAssetResource } from "@/server/auth/resourceAuthorization";
+import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 
 function isPathInside(parentPath: string, childPath: string): boolean {
   const parent = path.resolve(parentPath);
@@ -24,7 +26,21 @@ export async function GET(
   context: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
   const { id } = await context.params;
-  const asset = await getContentAsset(id);
+  let resource;
+  try {
+    resource = await requireContentAssetResource("content.export", id);
+  } catch (error) {
+    const response = resourceAuthorizationErrorResponse(
+      error,
+      "This prepared content asset is not available.",
+    );
+    if (response) return response;
+    throw error;
+  }
+  const asset = await getContentAsset(id, {
+    organizationId: resource.organizationId,
+    campusId: resource.campusId,
+  });
 
   if (!asset || asset.status === "GENERATED" || asset.status === "ARCHIVED") {
     return NextResponse.json({ error: "This prepared content asset is not available." }, { status: 404 });

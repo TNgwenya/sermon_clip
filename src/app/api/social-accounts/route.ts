@@ -5,13 +5,19 @@ import {
   listSocialAccounts,
   normalizeSocialPlatform,
 } from "@/lib/socialAccounts";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 
 export async function GET(): Promise<NextResponse> {
-  const accounts = await listSocialAccounts();
+  const context = await requireRequestCapability("channels.read");
+  const accounts = await listSocialAccounts({
+    organizationId: context.organizationId,
+    campusId: context.campusId,
+  });
   return NextResponse.json({ accounts });
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
+  const context = await requireRequestCapability("channels.manage");
   const body = await request.json().catch(() => null);
   const platform = normalizeSocialPlatform(body?.platform);
   const label = typeof body?.label === "string" ? body.label.trim() : "";
@@ -26,6 +32,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const account = await createSocialAccount({
+    tenantScope: {
+      organizationId: context.organizationId,
+      campusId: context.campusId,
+    },
     platform,
     label,
     handle,

@@ -5,6 +5,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { resolveExportHistory } from "@/lib/clipExportSettings";
 import { buildClipDownloadFileName } from "@/lib/exportNaming";
+import { requireClipResource } from "@/server/auth/resourceAuthorization";
+import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 import { videoFileResponse } from "@/server/http/videoFileResponse";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
@@ -36,6 +38,14 @@ export async function GET(
 
   if (!clipId) {
     return NextResponse.json({ error: "Clip id is required." }, { status: 400 });
+  }
+
+  try {
+    await requireClipResource("content.export", clipId);
+  } catch (error) {
+    const response = resourceAuthorizationErrorResponse(error, "Clip not found.");
+    if (response) return response;
+    throw error;
   }
 
   if (!canRunLocalMediaProcessing()) {

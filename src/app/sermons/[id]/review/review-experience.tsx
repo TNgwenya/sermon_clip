@@ -129,6 +129,8 @@ type Draft = {
   clipNotes: string;
 };
 
+type ContentKindFilter = "ALL" | ClipReviewItem["contentKind"];
+
 const REVIEW_INITIAL_VISIBLE_COUNT = 12;
 
 function toDraft(clip: Pick<ClipReviewItem, "title" | "hook" | "caption" | "hashtags" | "clipNotes">): Draft {
@@ -206,6 +208,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [filter, setFilter] = useState<ReviewFilter>("ALL");
+  const [contentKindFilter, setContentKindFilter] = useState<ContentKindFilter>("ALL");
   const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
   const [sort, setSort] = useState<ReviewSort>("HIGHEST_SCORE");
   const [viewMode, setViewMode] = useState<"LIST" | "GRID">("LIST");
@@ -247,6 +250,16 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
     () => normalizedClips.filter((clip) => clip.status !== "REJECTED" && isDeterministicFallbackClip(clip)).length,
     [normalizedClips],
   );
+  const contentKindCounts = useMemo(
+    () => normalizedClips.reduce(
+      (counts, clip) => {
+        counts[clip.contentKind] += 1;
+        return counts;
+      },
+      { SERMON: 0, WORSHIP: 0 },
+    ),
+    [normalizedClips],
+  );
 
   const availableCategories = useMemo(
     () =>
@@ -262,6 +275,9 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
 
   const visibleClips = useMemo(() => {
     const filtered = filterClips(normalizedClips, filter).filter((clip) => {
+      if (contentKindFilter !== "ALL" && clip.contentKind !== contentKindFilter) {
+        return false;
+      }
       if (categoryFilter === "ALL") {
         return true;
       }
@@ -269,10 +285,15 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
       return (clip.qualityClipCategory ?? clip.smartClipCategory) === categoryFilter;
     });
     return sortClips(filtered, sort);
-  }, [normalizedClips, filter, categoryFilter, sort]);
+  }, [normalizedClips, filter, contentKindFilter, categoryFilter, sort]);
   const isFeedLimited = !showFullFeed && visibleClips.length > REVIEW_INITIAL_VISIBLE_COUNT;
   const renderedClips = isFeedLimited ? visibleClips.slice(0, REVIEW_INITIAL_VISIBLE_COUNT) : visibleClips;
   const filterSummary = [
+    contentKindFilter === "ALL"
+      ? "All moments"
+      : contentKindFilter === "WORSHIP"
+        ? "Worship clips"
+        : "Sermon clips",
     filter === "ALL" ? "All clips" : filter.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase()),
     categoryFilter === "ALL" ? "All categories" : getQualityCategoryLabel(categoryFilter),
     sort === "HIGHEST_SCORE"
@@ -472,6 +493,8 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               <div><dt>Waiting</dt><dd>{summary.pending}</dd></div>
               <div><dt>Not selected</dt><dd>{summary.rejected}</dd></div>
               <div><dt>Preview ready</dt><dd>{summary.rendered}</dd></div>
+              <div><dt>Sermon clips</dt><dd>{contentKindCounts.SERMON}</dd></div>
+              <div><dt>Worship clips</dt><dd>{contentKindCounts.WORSHIP}</dd></div>
               {fallbackClipCount > 0 ? <div><dt>Fallback suggestions</dt><dd>{fallbackClipCount}</dd></div> : null}
             </dl>
           </details>
@@ -519,6 +542,35 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
       ) : null}
 
       <section className="card review-feed-toolbar premium-review-toolbar stack-sm">
+        <div className="stack-sm">
+          <strong>Moment type</strong>
+          <div className="review-content-kind-toggle" role="group" aria-label="Filter by moment type">
+            <button
+              type="button"
+              className={contentKindFilter === "ALL" ? "review-view-btn review-view-btn-active" : "review-view-btn"}
+              onClick={() => setContentKindFilter("ALL")}
+              disabled={isPending}
+            >
+              All moments ({summary.total})
+            </button>
+            <button
+              type="button"
+              className={contentKindFilter === "SERMON" ? "review-view-btn review-view-btn-active" : "review-view-btn"}
+              onClick={() => setContentKindFilter("SERMON")}
+              disabled={isPending}
+            >
+              Sermon clips ({contentKindCounts.SERMON})
+            </button>
+            <button
+              type="button"
+              className={contentKindFilter === "WORSHIP" ? "review-view-btn review-view-btn-active" : "review-view-btn"}
+              onClick={() => setContentKindFilter("WORSHIP")}
+              disabled={isPending}
+            >
+              Worship clips ({contentKindCounts.WORSHIP})
+            </button>
+          </div>
+        </div>
         <div className="review-feed-toolbar-row">
           <details
             className="review-filter-disclosure"
@@ -649,6 +701,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                 type="button"
                 className="button primary"
                 onClick={() => {
+                  setContentKindFilter("ALL");
                   setFilter("ALL");
                   setCategoryFilter("ALL");
                   setSort("HIGHEST_SCORE");
@@ -807,7 +860,9 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                   <div className="review-feed-content-column stack-sm">
                     <div className="premium-review-card-heading">
                       <p className="kicker">
-                        {sort === "SERMON_ORDER" ? `Sermon ${toDurationLabel(clip.startTimeSeconds)} · ` : ""}
+                        {sort === "SERMON_ORDER"
+                          ? `${clip.contentKind === "WORSHIP" ? "Service" : "Sermon"} ${toDurationLabel(clip.startTimeSeconds)} · `
+                          : ""}
                         {clipCategory} · {toDurationLabel(clip.durationSeconds)}
                       </p>
                       <h3>{clip.title}</h3>

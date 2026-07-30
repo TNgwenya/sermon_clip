@@ -9,6 +9,7 @@ import {
   oauthFailureReason,
   type OAuthProvider,
 } from "@/lib/socialAnalyticsConnectors";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import { createOAuthState, setOAuthStateCookie } from "@/server/integrations/oauthState";
 
 export const dynamic = "force-dynamic";
@@ -86,7 +87,8 @@ export async function GET(
   }
 
   try {
-    const attempt = createOAuthState(rawProvider);
+    const requestContext = await requireRequestCapability("channels.connect");
+    const attempt = createOAuthState(rawProvider, requestContext);
     const response = NextResponse.redirect(providerAuthorizationUrl(rawProvider, request.url, attempt.state));
     setOAuthStateCookie(response, attempt.cookie);
     return response;

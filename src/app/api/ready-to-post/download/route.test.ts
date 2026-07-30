@@ -11,6 +11,12 @@ const prismaMock = vi.hoisted(() => ({
 }));
 
 const recordPostingPackageMock = vi.hoisted(() => vi.fn());
+const requestContext = vi.hoisted(() => ({
+  organizationId: "org-test",
+  campusId: "campus-test",
+  actorId: "user-test",
+  authenticationMethod: "session" as const,
+}));
 
 vi.mock("@/lib/prisma", () => ({
   prisma: prismaMock,
@@ -23,6 +29,10 @@ vi.mock("@/lib/postingPackages", async (importOriginal) => {
     recordPostingPackage: recordPostingPackageMock,
   };
 });
+
+vi.mock("@/server/auth/requestAuthorization", () => ({
+  requireRequestCapability: vi.fn(async () => requestContext),
+}));
 
 import { GET } from "./route";
 
@@ -112,6 +122,12 @@ describe("ready-to-post download route", () => {
       );
       expect(prismaMock.clipCandidate.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
+          where: expect.objectContaining({
+            sermon: {
+              organizationId: "org-test",
+              campusId: "campus-test",
+            },
+          }),
           orderBy: [
             { finalQualityScore: "desc" },
             { score: "desc" },

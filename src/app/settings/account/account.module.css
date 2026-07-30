@@ -1,0 +1,508 @@
+.shell {
+  max-width: 1060px;
+  padding-bottom: 84px;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.34fr);
+  gap: 30px;
+  align-items: end;
+  overflow: hidden;
+  padding: clamp(28px, 5vw, 52px);
+  border: 1px solid rgba(115, 102, 255, 0.2);
+  border-radius: 30px;
+  background:
+    radial-gradient(circle at 87% 14%, rgba(101, 214, 174, 0.16), transparent 34%),
+    linear-gradient(138deg, rgba(25, 27, 47, 0.98), rgba(13, 15, 28, 0.98));
+  box-shadow: 0 30px 80px rgba(3, 6, 20, 0.34);
+}
+
+.hero h1 {
+  max-width: 720px;
+  margin: 0;
+  color: #fff;
+  font-size: clamp(2.2rem, 5vw, 4.5rem);
+  line-height: 0.98;
+  letter-spacing: -0.055em;
+}
+
+.hero p {
+  max-width: 680px;
+  margin: 0;
+  color: #b8bccf;
+  line-height: 1.65;
+}
+
+.securityScore {
+  display: grid;
+  gap: 5px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.055);
+  backdrop-filter: blur(16px);
+}
+
+.securityScore span,
+.securityScore small {
+  color: #9da4b8;
+}
+
+.securityScore span {
+  font-size: 0.69rem;
+  font-weight: 760;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.securityScore strong {
+  color: #fff;
+  font-size: 1.3rem;
+}
+
+.layout {
+  display: grid;
+  gap: 22px;
+}
+
+.noticeRegion {
+  min-height: 0;
+}
+
+.noticeRegion:empty {
+  display: none;
+}
+
+.notice {
+  padding: 14px 17px;
+  border: 1px solid;
+  border-radius: 13px;
+  font-size: 0.9rem;
+}
+
+.noticeSuccess {
+  border-color: rgba(74, 201, 153, 0.33);
+  color: #a8e9cd;
+  background: rgba(35, 157, 112, 0.1);
+}
+
+.noticeError {
+  border-color: rgba(248, 110, 126, 0.35);
+  color: #ffb3bc;
+  background: rgba(214, 54, 74, 0.11);
+}
+
+.card {
+  padding: clamp(22px, 4vw, 34px);
+  border: 1px solid rgba(135, 142, 171, 0.18);
+  border-radius: 24px;
+  background: rgba(20, 22, 35, 0.86);
+  box-shadow: 0 18px 55px rgba(4, 7, 20, 0.2);
+}
+
+.cardHeading {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+
+.cardHeading h2 {
+  margin: 3px 0 0;
+  color: #f9faff;
+  font-size: 1.45rem;
+  letter-spacing: -0.025em;
+}
+
+.statusPill {
+  display: inline-flex;
+  min-height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 11px;
+  border: 1px solid rgba(143, 149, 178, 0.28);
+  border-radius: 999px;
+  color: #c8ccda;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 0.72rem;
+  font-weight: 760;
+}
+
+.statusStrong {
+  border-color: rgba(74, 201, 153, 0.32);
+  color: #a8e9cd;
+  background: rgba(35, 157, 112, 0.1);
+}
+
+.statusStandard {
+  border-color: rgba(246, 185, 79, 0.3);
+  color: #f4d49b;
+  background: rgba(190, 126, 27, 0.1);
+}
+
+.lastChanged {
+  color: #959caf;
+  font-size: 0.76rem;
+}
+
+.supportingCopy {
+  max-width: 710px;
+  margin: -8px 0 20px;
+  color: #aeb4c7;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.field {
+  display: grid;
+  gap: 7px;
+}
+
+.field > span {
+  color: #c5c9d7;
+  font-size: 0.78rem;
+  font-weight: 730;
+}
+
+.field > small {
+  color: #888fa3;
+  font-size: 0.73rem;
+  line-height: 1.45;
+}
+
+.field input {
+  width: 100%;
+  min-height: 45px;
+  padding: 10px 12px;
+  border: 1px solid rgba(137, 143, 171, 0.27);
+  border-radius: 11px;
+  outline: none;
+  color: #f5f6fc;
+  background: #11131f;
+  font: inherit;
+}
+
+.field input[readonly] {
+  color: #9ea5b8;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.field input:focus {
+  border-color: #9588ff;
+  box-shadow: 0 0 0 3px rgba(130, 112, 255, 0.14);
+}
+
+.fullField {
+  grid-column: 1 / -1;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.primaryButton,
+.secondaryButton,
+.dangerButton {
+  min-height: 42px;
+  padding: 10px 15px;
+  border-radius: 11px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 760;
+  cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.primaryButton {
+  border: 1px solid #8e7fff;
+  color: #fff;
+  background: linear-gradient(135deg, #7c6cff, #5b4cda);
+}
+
+.secondaryButton {
+  border: 1px solid rgba(143, 149, 178, 0.3);
+  color: #d5d8e6;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.dangerButton {
+  border: 1px solid rgba(249, 104, 119, 0.38);
+  color: #ffb2ba;
+  background: rgba(220, 55, 73, 0.1);
+}
+
+.primaryButton:hover:not(:disabled),
+.secondaryButton:hover:not(:disabled),
+.dangerButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.primaryButton:focus-visible,
+.secondaryButton:focus-visible,
+.dangerButton:focus-visible,
+.openAppLink:focus-visible,
+.dangerDisclosure summary:focus-visible {
+  outline: 2px solid #a99fff;
+  outline-offset: 3px;
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.dangerButton:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.enableMfa {
+  display: grid;
+  max-width: 600px;
+  gap: 16px;
+}
+
+.enableMfa .supportingCopy {
+  margin: 0;
+}
+
+.enrollmentPanel,
+.recoveryPanel {
+  display: grid;
+  gap: 20px;
+  padding: 20px;
+  border: 1px solid rgba(137, 123, 255, 0.35);
+  border-radius: 17px;
+  background: rgba(111, 91, 255, 0.075);
+}
+
+.recoveryPanel strong {
+  color: #fff;
+}
+
+.recoveryPanel p {
+  margin: 6px 0 0;
+  color: #adb3c6;
+  line-height: 1.55;
+}
+
+.steps {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.steps li {
+  padding-left: 6px;
+  color: #e4e6ef;
+}
+
+.steps strong,
+.steps span {
+  display: block;
+}
+
+.steps span {
+  margin-top: 4px;
+  color: #9ea5b8;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.secretBox {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid rgba(149, 136, 255, 0.26);
+  border-radius: 13px;
+  background: #0f111c;
+}
+
+.secretBox span {
+  color: #9ca3b7;
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.secretBox code {
+  overflow-wrap: anywhere;
+  color: #efecff;
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+}
+
+.openAppLink {
+  width: fit-content;
+  color: #bfb7ff;
+  font-size: 0.82rem;
+  font-weight: 740;
+}
+
+.inlineForm {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.65fr) auto auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.recoveryGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recoveryGrid li {
+  padding: 10px 12px;
+  border: 1px solid rgba(145, 133, 255, 0.2);
+  border-radius: 9px;
+  color: #efecff;
+  background: rgba(8, 9, 17, 0.62);
+  text-align: center;
+}
+
+.mfaEnabled {
+  display: grid;
+  gap: 18px;
+}
+
+.mfaEnabled > p {
+  margin: 0;
+  color: #aeb4c7;
+}
+
+.dangerDisclosure {
+  border-top: 1px solid rgba(137, 143, 171, 0.16);
+  padding-top: 17px;
+}
+
+.dangerDisclosure summary {
+  width: fit-content;
+  color: #efadb5;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 740;
+}
+
+.dangerDisclosure form {
+  margin-top: 18px;
+}
+
+.sessionList {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.sessionRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 14px;
+  align-items: center;
+  padding: 15px;
+  border: 1px solid rgba(137, 143, 171, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.022);
+}
+
+.deviceIcon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgba(143, 129, 255, 0.25);
+  border-radius: 12px;
+  color: #a99fff;
+  background: rgba(115, 96, 255, 0.08);
+}
+
+.sessionRow > div {
+  display: grid;
+  gap: 3px;
+}
+
+.sessionRow strong {
+  color: #f2f4fb;
+  font-size: 0.9rem;
+}
+
+.sessionRow span,
+.sessionRow small {
+  color: #959caf;
+  font-size: 0.76rem;
+}
+
+.signOutAll {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.55fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.signOutAll p {
+  margin: 0;
+  color: #9fa6b9;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .hero {
+    grid-template-columns: 1fr;
+  }
+
+  .formGrid,
+  .recoveryGrid,
+  .inlineForm,
+  .signOutAll {
+    grid-template-columns: 1fr;
+  }
+
+  .sessionRow {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .sessionRow > button,
+  .sessionRow > .statusPill {
+    grid-column: 2;
+    width: fit-content;
+  }
+}
+
+@media (max-width: 480px) {
+  .cardHeading {
+    display: grid;
+  }
+
+  .card {
+    border-radius: 18px;
+  }
+
+  .actions > button,
+  .inlineForm > button,
+  .sessionRow > button,
+  .signOutAll > button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primaryButton,
+  .secondaryButton,
+  .dangerButton {
+    transition: none;
+  }
+}

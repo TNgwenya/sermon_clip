@@ -16,13 +16,20 @@ import {
 import { isValidIanaTimeZone, normalizeScheduleIntervalMinutes } from "@/lib/postingSchedule";
 import { runPublishingPreflight } from "@/lib/publishingPreflightServer";
 import { resolveReadyMedia } from "@/lib/readyMedia";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantScope } from "@/server/tenancy/scope";
 
 export async function GET(): Promise<NextResponse> {
-  const drafts = await listPostingDrafts();
+  const requestContext = await requireRequestCapability("publishing.read");
+  const drafts = await listPostingDrafts({
+    organizationId: requestContext.organizationId,
+    campusId: requestContext.campusId,
+  });
   return NextResponse.json({ drafts });
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
+  const requestContext = await requireRequestCapability("publishing.schedule");
   const controlPanelMode = process.env.VERCEL === "1" || process.env.CONTROL_PANEL_MODE === "true";
   const body = await request.json().catch(() => null);
   const clipIds = normalizeClipIds(body?.clipIds);
@@ -68,6 +75,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const readyClips = await prisma.clipCandidate.findMany({
     where: {
       id: { in: clipIds },
+      sermon: tenantScope(requestContext),
       transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
       OR: [
         { exportStatus: "COMPLETED" },
@@ -124,6 +132,15 @@ export async function POST(request: Request): Promise<NextResponse> {
           externalProvider: "zernio",
           externalAccountId: { not: null },
           externalPlatform: { in: zernioPlatforms.map((platform) => platform.toLowerCase()) },
+          organizationId: requestContext.organizationId,
+          ...(requestContext.campusId
+            ? {
+                OR: [
+                  { campusId: requestContext.campusId },
+                  { campusId: null },
+                ],
+              }
+            : {}),
         },
         select: { id: true, platform: true, externalPlatform: true },
       });
@@ -169,6 +186,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     automationMode,
     selectedAccountIdsByPlatform: socialAccountIdsByPlatform,
     controlPanelMode,
+    tenantScope: {
+      organizationId: requestContext.organizationId,
+      campusId: requestContext.campusId,
+    },
   });
   if (!authoritativePreflight.canSchedule) {
     const firstBlocker = authoritativePreflight.checks.find((check) => check.status === "BLOCKED");
@@ -195,6 +216,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       clipCopyById,
       platformCopyByClipId,
       idempotencyKey,
+      tenantScope: {
+        organizationId: requestContext.organizationId,
+        campusId: requestContext.campusId,
+      },
     });
   } catch (error) {
     if (error instanceof PostingDraftValidationError) {

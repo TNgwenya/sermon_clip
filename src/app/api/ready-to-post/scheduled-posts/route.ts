@@ -13,18 +13,25 @@ import {
   updateScheduledPostStatus,
 } from "@/lib/scheduledPosts";
 import { isValidIanaTimeZone, resolveScheduledInstant } from "@/lib/postingSchedule";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { tenantScope } from "@/server/tenancy/scope";
 
 export async function GET(request: Request): Promise<NextResponse> {
+  const requestContext = await requireRequestCapability("publishing.read");
   const url = new URL(request.url);
   const scheduledPosts = await listScheduledPosts({
     scheduledPostId: url.searchParams.get("scheduledPostId"),
     contentAssetId: url.searchParams.get("contentAssetId"),
+    organizationId: requestContext.organizationId,
+    campusId: requestContext.campusId,
     includeContentAssetFiles: false,
   });
   return NextResponse.json({ scheduledPosts });
 }
 
 export async function PATCH(request: Request): Promise<NextResponse> {
+  const requestContext = await requireRequestCapability("publishing.schedule");
+  const requestTenantScope = tenantScope(requestContext);
   const body = await request.json().catch(() => null);
   const id = typeof body?.id === "string" ? body.id.trim() : "";
   const action = normalizeScheduledPostAction(body?.action);
@@ -53,6 +60,7 @@ export async function PATCH(request: Request): Promise<NextResponse> {
       }
 
       const scheduledPost = await restoreScheduledPostStatus({
+        tenantScope: requestTenantScope,
         id,
         status: restoreStatus,
         expectedCurrentStatus,
@@ -67,7 +75,10 @@ export async function PATCH(request: Request): Promise<NextResponse> {
     }
 
     if (action === "POST_NOW") {
-      const scheduledPost = await postScheduledPostNow({ id });
+      const scheduledPost = await postScheduledPostNow({
+        tenantScope: requestTenantScope,
+        id,
+      });
 
       if (!scheduledPost) {
         return NextResponse.json({
@@ -91,7 +102,12 @@ export async function PATCH(request: Request): Promise<NextResponse> {
         return NextResponse.json({ error: "Choose a future time for this scheduled post." }, { status: 400 });
       }
 
-      const scheduledPost = await updateScheduledPostSchedule({ id, scheduledFor, timezone });
+      const scheduledPost = await updateScheduledPostSchedule({
+        tenantScope: requestTenantScope,
+        id,
+        scheduledFor,
+        timezone,
+      });
 
       if (!scheduledPost) {
         return NextResponse.json({
@@ -106,7 +122,11 @@ export async function PATCH(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: "Choose a valid manual publishing status." }, { status: 400 });
     }
 
-    const scheduledPost = await updateScheduledPostStatus({ id, status });
+    const scheduledPost = await updateScheduledPostStatus({
+      tenantScope: requestTenantScope,
+      id,
+      status,
+    });
 
     if (!scheduledPost) {
       return NextResponse.json({
@@ -124,6 +144,8 @@ export async function PATCH(request: Request): Promise<NextResponse> {
 }
 
 export async function DELETE(request: Request): Promise<NextResponse> {
+  const requestContext = await requireRequestCapability("publishing.schedule");
+  const requestTenantScope = tenantScope(requestContext);
   const body = await request.json().catch(() => null);
   const id = typeof body?.id === "string" ? body.id.trim() : "";
 
@@ -132,7 +154,10 @@ export async function DELETE(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const deleted = await deleteScheduledPost({ id });
+    const deleted = await deleteScheduledPost({
+      tenantScope: requestTenantScope,
+      id,
+    });
     if (!deleted) {
       return NextResponse.json({
         error: "This post cannot be cancelled while it is publishing, posted, or waiting for platform verification.",

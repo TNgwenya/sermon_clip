@@ -8,9 +8,21 @@ import { queueSermonProcessingJob } from "@/server/agents/processing";
 import { prepareGeneratedClipReviewAssets } from "@/server/agents/clipReviewAssetService";
 import { SMART_CLIP_CATEGORIES, type SmartClipCategory } from "@/server/ai/ministryMomentSchema";
 import {
+  AuthorizationError,
+  type AuthorizationCapability,
+} from "@/server/auth/authorization";
+import {
+  AuthorizedResourceNotFoundError,
+  ResourceAuthenticationRequiredError,
+  requireSermonResource,
+  type AuthorizedResource,
+} from "@/server/auth/resourceAuthorization";
+import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import {
   canRunInlineMediaProcessing,
   localMediaProcessingUnavailableMessage,
 } from "@/server/runtime/workerRuntime";
+import { tenantScope, type TenantScope } from "@/server/tenancy/scope";
 
 // ─── Shared response type ──────────────────────────────────────────────────────
 
@@ -20,6 +32,31 @@ export type IntelligenceActionState = {
 };
 
 export type RegenerationActionState = IntelligenceActionState;
+
+function authorizedTenantScope(resource: AuthorizedResource): TenantScope {
+  return {
+    organizationId: resource.organizationId,
+    ...(resource.campusId ? { campusId: resource.campusId } : {}),
+  };
+}
+
+async function authorizeSermonAction(
+  sermonId: string,
+  capability: AuthorizationCapability,
+): Promise<TenantScope> {
+  return authorizedTenantScope(await requireSermonResource(capability, sermonId));
+}
+
+function actionErrorMessage(error: unknown, fallback: string): string {
+  if (
+    error instanceof AuthorizationError
+    || error instanceof AuthorizedResourceNotFoundError
+    || error instanceof ResourceAuthenticationRequiredError
+  ) {
+    return "This sermon is unavailable or you do not have permission to change it.";
+  }
+  return error instanceof Error ? error.message : fallback;
+}
 
 function assertLocalMediaProcessing(action: string): void {
   if (!canRunInlineMediaProcessing()) {
@@ -62,7 +99,20 @@ function generateClipSuggestions(
   return import("@/server/agents/clipIntelligenceAgent").then((module) => module.generateClipSuggestions(...args));
 }
 
-async function queueSmartClipGeneration(sermonId: string): Promise<void> {
+async function queueSmartClipGeneration(
+  sermonId: string,
+  scope: TenantScope,
+): Promise<void> {
+  const exists = await prisma.sermon.findFirst({
+    where: {
+      id: sermonId,
+      ...scope,
+    },
+    select: { id: true },
+  });
+  if (!exists) {
+    throw new AuthorizedResourceNotFoundError();
+  }
   const queued = await queueSermonProcessingJob(sermonId, "GENERATE_CLIPS", {
     mode: "retry_generation",
   });
@@ -81,7 +131,10 @@ export async function generateIntelligenceAction(
   }
 
   try {
-    const result = await generateSermonIntelligence(sermonId);
+    const scope = await authorizeSermonAction(sermonId, "sermons.update");
+    const result = await generateSermonIntelligence(sermonId, {
+      tenantScope: scope,
+    });
     revalidatePath(`/sermons/${sermonId}/intelligence`);
 
     if (result.status === "COMPLETED") {
@@ -90,7 +143,7 @@ export async function generateIntelligenceAction(
 
     return { success: false, message: result.failureReason ?? "Intelligence generation failed." };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error.";
+    const message = actionErrorMessage(error, "Intelligence generation failed.");
     return { success: false, message };
   }
 }
@@ -105,7 +158,8 @@ export async function regenerateIntelligenceAction(
   }
 
   try {
-    const result = await regenerateSermonIntelligence(sermonId);
+    const scope = await authorizeSermonAction(sermonId, "sermons.update");
+    const result = await regenerateSermonIntelligence(sermonId, scope);
     revalidatePath(`/sermons/${sermonId}/intelligence`);
 
     if (result.status === "COMPLETED") {
@@ -114,7 +168,7 @@ export async function regenerateIntelligenceAction(
 
     return { success: false, message: result.failureReason ?? "Intelligence regeneration failed." };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error.";
+    const message = actionErrorMessage(error, "Intelligence regeneration failed.");
     return { success: false, message };
   }
 }
@@ -127,7 +181,8 @@ export async function regenerateMinistryMomentsAction(
   }
 
   try {
-    const result = await regenerateMinistryMoments(sermonId);
+    const scope = await authorizeSermonAction(sermonId, "content.create");
+    const result = await regenerateMinistryMoments(sermonId, scope);
     revalidatePath(`/sermons/${sermonId}/intelligence`);
     revalidatePath(`/sermons/${sermonId}/review`);
 
@@ -136,7 +191,7 @@ export async function regenerateMinistryMomentsAction(
       message: `Ministry moments refreshed (${result.momentCount} detected).`,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error.";
+    const message = actionErrorMessage(error, "Ministry moments could not be refreshed.");
     return { success: false, message };
   }
 }
@@ -149,7 +204,8 @@ export async function refreshSubjectSpeakerTrackingAction(
   }
 
   try {
-    const result = await refreshSubjectSpeakerTracking(sermonId);
+    const scope = await authorizeSermonAction(sermonId, "sermons.update");
+    const result = await refreshSubjectSpeakerTracking(sermonId, scope);
     revalidatePath(`/sermons/${sermonId}/intelligence`);
     revalidatePath(`/sermons/${sermonId}`);
 
@@ -158,7 +214,7 @@ export async function refreshSubjectSpeakerTrackingAction(
       message: `Subject and speaker tracking refreshed (${result.subjectCount} subjects, ${result.speakerCount} speakers).`,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error.";
+    const message = actionErrorMessage(error, "Subject and speaker tracking could not be refreshed.");
     return { success: false, message };
   }
 }
@@ -170,21 +226,25 @@ export async function regenerateSmartClipsAction(
     return { success: false, message: "Sermon ID is required." };
   }
 
-  if (!canRunInlineMediaProcessing()) {
-    try {
-      await queueSmartClipGeneration(sermonId);
+  try {
+    const scope = await authorizeSermonAction(sermonId, "content.create");
+
+    if (!canRunInlineMediaProcessing()) {
+      await queueSmartClipGeneration(sermonId, scope);
       revalidatePath(`/sermons/${sermonId}/review`);
       revalidatePath(`/sermons/${sermonId}`);
       return { success: true, message: "Smart clip generation queued for your local worker." };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Smart clip generation could not be queued.";
-      return { success: false, message };
     }
-  }
 
-  try {
-    const result = await generateClipSuggestions(sermonId, { force: true });
-    const previewSummary = await prepareGeneratedClipReviewAssets({ sermonId, force: true });
+    const result = await generateClipSuggestions(sermonId, {
+      force: true,
+      tenantScope: scope,
+    });
+    const previewSummary = await prepareGeneratedClipReviewAssets({
+      sermonId,
+      tenantScope: scope,
+      force: true,
+    });
     revalidatePath(`/sermons/${sermonId}/review`);
     revalidatePath(`/sermons/${sermonId}`);
 
@@ -195,7 +255,7 @@ export async function regenerateSmartClipsAction(
         : `Smart clips refreshed (${result.clipCount} recommendations). Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error.";
+    const message = actionErrorMessage(error, "Smart clip generation could not be completed.");
     return { success: false, message };
   }
 }
@@ -215,19 +275,24 @@ export async function regenerateSmartClipsByCategoryAction(
     return { success: false, message: "Invalid smart clip category." };
   }
 
-  if (!canRunInlineMediaProcessing()) {
-    return {
-      success: false,
-      message: "Category-only smart clip regeneration is not queued yet. Use Regenerate Smart Clips to run the safe full refresh.",
-    };
-  }
-
   try {
+    const scope = await authorizeSermonAction(sermonId, "content.create");
+    if (!canRunInlineMediaProcessing()) {
+      return {
+        success: false,
+        message: "Category-only smart clip regeneration is not queued yet. Use Regenerate Smart Clips to run the safe full refresh.",
+      };
+    }
     const result = await generateClipSuggestions(sermonId, {
       force: true,
       targetCategory: parsedCategory.data,
+      tenantScope: scope,
     });
-    const previewSummary = await prepareGeneratedClipReviewAssets({ sermonId, force: true });
+    const previewSummary = await prepareGeneratedClipReviewAssets({
+      sermonId,
+      tenantScope: scope,
+      force: true,
+    });
 
     revalidatePath(`/sermons/${sermonId}/review`);
     revalidatePath(`/sermons/${sermonId}`);
@@ -239,7 +304,7 @@ export async function regenerateSmartClipsByCategoryAction(
         : `${parsedCategory.data} clips refreshed (${result.clipCount} recommendation${result.clipCount === 1 ? "" : "s"}). Preview prep: ${previewSummary.prepared} prepared, ${previewSummary.skipped} skipped, ${previewSummary.failed} failed.`,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error.";
+    const message = actionErrorMessage(error, "Smart clip generation could not be completed.");
     return { success: false, message };
   }
 }
@@ -267,10 +332,12 @@ export async function updateMinistryMomentReviewStatusAction(
   }
 
   try {
+    const scope = await authorizeSermonAction(sermonId, "content.update");
     const updated = await prisma.ministryMoment.updateMany({
       where: {
         id: momentId,
         sermonId,
+        sermon: scope,
       },
       data: {
         reviewStatus: parsedStatus.data,
@@ -284,7 +351,7 @@ export async function updateMinistryMomentReviewStatusAction(
     revalidatePath(`/sermons/${sermonId}/intelligence`);
     return { success: true, message: "Ministry moment review status updated." };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Update failed.";
+    const message = actionErrorMessage(error, "Update failed.");
     return { success: false, message };
   }
 }
@@ -329,8 +396,12 @@ export async function saveIntelligenceOverridesAction(
   }
 
   try {
-    await prisma.sermonIntelligence.update({
-      where: { sermonId },
+    const scope = await authorizeSermonAction(sermonId, "sermons.update");
+    const updated = await prisma.sermonIntelligence.updateMany({
+      where: {
+        sermonId,
+        sermon: scope,
+      },
       data: {
         manualTitle: parsed.data.manualTitle ?? null,
         manualSummary: parsed.data.manualSummary ?? null,
@@ -339,11 +410,14 @@ export async function saveIntelligenceOverridesAction(
         status: "COMPLETED",
       },
     });
+    if (updated.count === 0) {
+      return { success: false, message: "Sermon intelligence is not available for this sermon." };
+    }
 
     revalidatePath(`/sermons/${sermonId}/intelligence`);
     return { success: true, message: "Overrides saved." };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Save failed.";
+    const message = actionErrorMessage(error, "Save failed.");
     return { success: false, message };
   }
 }
@@ -365,8 +439,13 @@ export async function addManualTopicAction(
   }
 
   try {
+    const scope = await authorizeSermonAction(sermonId, "sermons.update");
     const existing = await prisma.sermonTopicTag.findFirst({
-      where: { sermonId, topic: parsed.data.topic },
+      where: {
+        sermonId,
+        topic: parsed.data.topic,
+        sermon: scope,
+      },
     });
 
     if (existing) {
@@ -386,7 +465,7 @@ export async function addManualTopicAction(
     revalidatePath(`/sermons/${sermonId}/intelligence`);
     return { success: true, message: "Topic added." };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Add failed.";
+    const message = actionErrorMessage(error, "Add failed.");
     return { success: false, message };
   }
 }
@@ -402,14 +481,22 @@ export async function removeTopicAction(
   }
 
   try {
-    await prisma.sermonTopicTag.deleteMany({
-      where: { id: topicId, sermonId },
+    const scope = await authorizeSermonAction(sermonId, "sermons.update");
+    const deleted = await prisma.sermonTopicTag.deleteMany({
+      where: {
+        id: topicId,
+        sermonId,
+        sermon: scope,
+      },
     });
+    if (deleted.count === 0) {
+      return { success: false, message: "Topic not found for this sermon." };
+    }
 
     revalidatePath(`/sermons/${sermonId}/intelligence`);
     return { success: true, message: "Topic removed." };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Remove failed.";
+    const message = actionErrorMessage(error, "Remove failed.");
     return { success: false, message };
   }
 }
@@ -445,6 +532,7 @@ export async function addManualScriptureAction(
   }
 
   try {
+    await authorizeSermonAction(sermonId, "sermons.update");
     await prisma.sermonScriptureRef.create({
       data: {
         sermonId,
@@ -460,7 +548,7 @@ export async function addManualScriptureAction(
     revalidatePath(`/sermons/${sermonId}/intelligence`);
     return { success: true, message: "Scripture added." };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Add failed.";
+    const message = actionErrorMessage(error, "Add failed.");
     return { success: false, message };
   }
 }
@@ -489,10 +577,12 @@ export async function searchSermonsAction(
   rawParams: z.infer<typeof searchSchema>,
 ): Promise<SermonSearchResult[]> {
   const params = searchSchema.parse(rawParams);
+  const requestContext = await requireRequestCapability("sermons.read");
 
   const sermons = await prisma.sermon.findMany({
     where: {
       AND: [
+        tenantScope(requestContext),
         params.query
           ? {
               OR: [

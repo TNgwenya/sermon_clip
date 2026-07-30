@@ -1,0 +1,137 @@
+.hero {
+  align-items: end;
+}
+
+.heroActions {
+  display: grid;
+  justify-items: end;
+  gap: 9px;
+}
+
+.readinessLink {
+  color: #a9a0ff;
+  font-size: 0.72rem;
+  font-weight: 720;
+  text-decoration: none;
+}
+
+.quickStartNote {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 13px;
+  align-items: start;
+  padding: 15px 17px;
+  border: 1px solid rgba(127, 111, 255, 0.24);
+  border-radius: 15px;
+  background: linear-gradient(135deg, rgba(120, 101, 255, 0.09), rgba(255, 255, 255, 0.018));
+}
+
+.quickStartNote > span {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border-radius: 9px;
+  color: #c1b9ff;
+  background: rgba(123, 104, 255, 0.13);
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.quickStartNote div {
+  display: grid;
+  gap: 4px;
+}
+
+.quickStartNote strong {
+  color: #f0f2fa;
+  font-size: 0.86rem;
+}
+
+.quickStartNote p,
+.processingNote p {
+  margin: 0;
+  color: #9097aa;
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.detailsDisclosure {
+  overflow: hidden;
+  padding: 0;
+}
+
+.detailsDisclosure > summary {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 19px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.detailsDisclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.detailsDisclosure > summary::after {
+  color: #a8a0f5;
+  content: "+";
+  font-size: 1.15rem;
+}
+
+.detailsDisclosure[open] > summary::after {
+  content: "−";
+}
+
+.detailsDisclosure > summary > span:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.detailsDisclosure > summary strong {
+  color: #eceef7;
+}
+
+.summaryValue {
+  margin-left: auto;
+  color: #9299ac;
+  font-size: 0.73rem;
+}
+
+.detailsBody {
+  padding: 0 19px 19px;
+  border-top: 1px solid rgba(139, 145, 172, 0.13);
+  padding-top: 19px;
+}
+
+.processingNote {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid rgba(72, 197, 150, 0.21);
+  border-radius: 13px;
+  background: rgba(37, 151, 110, 0.07);
+}
+
+.processingNote strong {
+  color: #b2e5d1;
+  font-size: 0.78rem;
+}
+
+@media (max-width: 680px) {
+  .heroActions {
+    width: 100%;
+    justify-items: start;
+  }
+
+  .detailsDisclosure > summary {
+    align-items: flex-start;
+  }
+
+  .summaryValue {
+    display: none;
+  }
+}

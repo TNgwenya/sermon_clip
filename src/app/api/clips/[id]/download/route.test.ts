@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   canRunLocalMediaProcessing: vi.fn(),
   findUnique: vi.fn(),
+  requireClipResource: vi.fn(),
   stat: vi.fn(),
   videoFileResponse: vi.fn(),
 }));
@@ -13,6 +14,10 @@ vi.mock("@/lib/prisma", () => ({
 }));
 vi.mock("@/server/runtime/workerRuntime", () => ({
   canRunLocalMediaProcessing: mocks.canRunLocalMediaProcessing,
+}));
+vi.mock("@/server/auth/resourceAuthorization", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/server/auth/resourceAuthorization")>(),
+  requireClipResource: mocks.requireClipResource,
 }));
 vi.mock("@/server/http/videoFileResponse", () => ({
   videoFileResponse: mocks.videoFileResponse,
@@ -47,6 +52,11 @@ const baseClip = {
 describe("clip download route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.requireClipResource.mockResolvedValue({
+      id: "clip-1",
+      organizationId: "org-1",
+      campusId: "campus-1",
+    });
     mocks.canRunLocalMediaProcessing.mockReturnValue(true);
     mocks.findUnique.mockResolvedValue(baseClip);
     mocks.stat.mockResolvedValue({ isFile: () => true, size: 1_024 });
@@ -72,6 +82,7 @@ describe("clip download route", () => {
     });
     expect(mocks.stat).not.toHaveBeenCalled();
     expect(mocks.videoFileResponse).not.toHaveBeenCalled();
+    expect(mocks.requireClipResource).toHaveBeenCalledWith("content.export", "clip-1");
   });
 
   it("does not treat a plain render as a best prepared download", async () => {

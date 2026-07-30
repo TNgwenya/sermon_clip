@@ -29,6 +29,7 @@ import {
 import { createAssetRevision } from "@/server/contentRevisionService";
 import { recordContentFunnelEvent } from "@/server/contentFunnelTelemetry";
 import { validateScriptureReference } from "@/lib/contentIntegrity";
+import { requireContentAssetResource } from "@/server/auth/resourceAuthorization";
 
 const slideSchema = z.object({
   id: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9._-]+$/),
@@ -92,8 +93,16 @@ export async function saveContentAssetDesignAction(
   }
 
   try {
-    const asset = await prisma.contentAsset.findUnique({
-      where: { id: parsed.data.assetId },
+    const authorizedAsset = await requireContentAssetResource(
+      "content.update",
+      parsed.data.assetId,
+    );
+    const asset = await prisma.contentAsset.findFirst({
+      where: {
+        id: parsed.data.assetId,
+        organizationId: authorizedAsset.organizationId,
+        ...(authorizedAsset.campusId ? { campusId: authorizedAsset.campusId } : {}),
+      },
       select: {
         id: true,
         sermonId: true,
@@ -111,6 +120,9 @@ export async function saveContentAssetDesignAction(
         contentOpportunityId: true,
         contentOpportunity: {
           select: {
+            organizationId: true,
+            campusId: true,
+            sermonId: true,
             opportunityType: true,
             status: true,
             relatedScripture: true,
@@ -125,6 +137,19 @@ export async function saveContentAssetDesignAction(
 
     if (!asset || !isDesignableContentAssetType(asset.assetType)) {
       return { success: false, message: "This publishing design could not be found." };
+    }
+    if (
+      asset.contentOpportunity
+      && (
+        asset.contentOpportunity.organizationId !== authorizedAsset.organizationId
+        || asset.contentOpportunity.campusId !== authorizedAsset.campusId
+        || asset.contentOpportunity.sermonId !== asset.sermonId
+      )
+    ) {
+      return {
+        success: false,
+        message: "This publishing design contains a reference outside its workspace.",
+      };
     }
     if (asset.status !== "PREPARED" && asset.status !== "READY") {
       return {
@@ -262,7 +287,10 @@ export async function saveContentAssetDesignAction(
     let renderAttemptId: string | null = null;
     let renderedFiles: ReturnType<typeof toContentAssetFilePersistenceInput>[] = [];
     if (parsed.data.rerender) {
-      const branding = await getBrandingSettings();
+      const branding = await getBrandingSettings(
+        authorizedAsset.organizationId,
+        authorizedAsset.campusId,
+      );
       const logoDataUrl = await readBrandingArtworkLogoDataUrl(branding.churchLogoPath);
       const renderBranding = {
         churchName: branding.churchName,
@@ -386,6 +414,8 @@ export async function saveContentAssetDesignAction(
 
     await recordContentFunnelEvent({
       eventType: "DESIGN_SAVED",
+      organizationId: authorizedAsset.organizationId,
+      campusId: authorizedAsset.campusId,
       sermonId: asset.sermonId,
       opportunityId: asset.contentOpportunityId,
       contentAssetId: asset.id,
@@ -400,6 +430,8 @@ export async function saveContentAssetDesignAction(
     if (!parsed.data.rerender) {
       await recordContentFunnelEvent({
         eventType: "REAPPROVAL_REQUIRED",
+        organizationId: authorizedAsset.organizationId,
+        campusId: authorizedAsset.campusId,
         sermonId: asset.sermonId,
         opportunityId: asset.contentOpportunityId,
         contentAssetId: asset.id,
@@ -416,6 +448,8 @@ export async function saveContentAssetDesignAction(
     if (parsed.data.rerender) {
       await recordContentFunnelEvent({
         eventType: "DESIGN_RENDERED",
+        organizationId: authorizedAsset.organizationId,
+        campusId: authorizedAsset.campusId,
         sermonId: asset.sermonId,
         opportunityId: asset.contentOpportunityId,
         contentAssetId: asset.id,

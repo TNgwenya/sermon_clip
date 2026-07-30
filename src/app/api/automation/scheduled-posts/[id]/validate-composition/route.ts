@@ -39,5 +39,8 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     );
   }
 
-  return NextResponse.json({ valid: true });
+  return NextResponse.json({
+    valid: true,
+    publicationGuard: result.publicationGuard,
+  });
 }

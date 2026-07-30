@@ -7,6 +7,8 @@ import {
   ensureClipThumbnail,
   generateClipThumbnailPreview,
 } from "@/server/agents/clipThumbnailService";
+import { requireClipResource } from "@/server/auth/resourceAuthorization";
+import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 import { canRunInlineMediaProcessing } from "@/server/runtime/workerRuntime";
 
 export const runtime = "nodejs";
@@ -48,6 +50,14 @@ export async function GET(
 
   if (!clipId) {
     return NextResponse.json({ error: "Clip id is required." }, { status: 400 });
+  }
+
+  try {
+    await requireClipResource("content.read", clipId);
+  } catch (error) {
+    const response = resourceAuthorizationErrorResponse(error, "Clip not found.");
+    if (response) return response;
+    throw error;
   }
 
   const clip = await prisma.clipCandidate.findUnique({

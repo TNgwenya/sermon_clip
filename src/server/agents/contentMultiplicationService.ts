@@ -44,15 +44,46 @@ import {
 } from "@/server/ai/contentOpportunitySchema";
 import { createLoggedChatCompletion } from "@/server/ai/aiGateway";
 import { resolveOpenAIChatModel, resolveOpenAIReasoningEffort } from "@/server/ai/modelConfig";
+import {
+  assembleWeekDraftAfterContentCompletion,
+  AutomaticWeekDraftError,
+} from "@/server/weekDraft/assembler";
 
 type SermonContext = {
   id: string;
+  organizationId?: string | null;
+  campusId?: string | null;
   title: string;
   speakerName: string;
   churchName: string;
   language: string;
   sermonDate: Date | null;
 };
+
+async function attemptAutomaticWeekDraftAssembly(
+  sermonId: string,
+): Promise<void> {
+  try {
+    const result = await assembleWeekDraftAfterContentCompletion(sermonId);
+    if (result.status === "CREATED") {
+      await appendPipelineLog(
+        sermonId,
+        `Automatic Week Draft created with ${result.draft.itemCount} review-ready items across ${result.draft.formatCount} formats.`,
+      );
+    }
+  } catch (error) {
+    if (
+      error instanceof AutomaticWeekDraftError
+      && error.code === "NOT_FOUND"
+    ) {
+      return;
+    }
+    console.warn(
+      `Automatic Week Draft assembly deferred for sermon ${sermonId}.`,
+      error,
+    );
+  }
+}
 
 type IntelligenceContext = {
   generatedTitle: string | null;
@@ -1468,11 +1499,12 @@ function buildGenerationShortfalls(
 }
 
 async function loadContext(sermonId: string): Promise<OpportunitySourceContext | null> {
-  const [sermon, branding] = await Promise.all([
-    prisma.sermon.findUnique({
-      where: { id: sermonId },
-      select: {
+  const sermon = await prisma.sermon.findUnique({
+    where: { id: sermonId },
+    select: {
       id: true,
+      organizationId: true,
+      campusId: true,
       title: true,
       speakerName: true,
       churchName: true,
@@ -1555,9 +1587,24 @@ async function loadContext(sermonId: string): Promise<OpportunitySourceContext |
         orderBy: { score: "desc" },
         take: 25,
       },
+    },
+  });
+  if (!sermon) {
+    return null;
+  }
+
+  const branding = sermon.organizationId
+    ? await prisma.brandingSettings.findUnique({
+      where: { organizationId: sermon.organizationId },
+      select: {
+        churchName: true,
+        primaryBrandColor: true,
+        secondaryBrandColor: true,
+        defaultFontFamily: true,
+        defaultCaptionStyleName: true,
       },
-    }),
-    prisma.brandingSettings.findUnique({
+    })
+    : await prisma.brandingSettings.findUnique({
       where: { id: "local" },
       select: {
         churchName: true,
@@ -1566,12 +1613,7 @@ async function loadContext(sermonId: string): Promise<OpportunitySourceContext |
         defaultFontFamily: true,
         defaultCaptionStyleName: true,
       },
-    }),
-  ]);
-
-  if (!sermon) {
-    return null;
-  }
+    });
 
   const transcriptFullText = sermon.transcript?.fullText?.trim()
     ? sermon.transcript.fullText
@@ -1579,6 +1621,8 @@ async function loadContext(sermonId: string): Promise<OpportunitySourceContext |
 
   return {
     id: sermon.id,
+    organizationId: sermon.organizationId,
+    campusId: sermon.campusId,
     title: sermon.title,
     speakerName: sermon.speakerName,
     churchName: sermon.churchName,
@@ -1619,6 +1663,12 @@ export async function generateContentOpportunities(
   const activeExistingOpportunities = await prisma.contentOpportunity.findMany({
     where: {
       sermonId,
+      ...(context.organizationId
+        ? {
+            organizationId: context.organizationId,
+            ...(context.campusId ? { campusId: context.campusId } : {}),
+          }
+        : {}),
       status: { not: "ARCHIVED" },
     },
     select: {
@@ -1680,6 +1730,7 @@ export async function generateContentOpportunities(
         throw new Error("The content generation job is no longer active.");
       }
     }
+    await attemptAutomaticWeekDraftAssembly(sermonId);
     return result;
   }
 
@@ -1840,6 +1891,8 @@ export async function generateContentOpportunities(
           data: curated.map((item) => {
           const languageSummary = buildLanguageHintSummary(item);
           return {
+            organizationId: context.organizationId,
+            campusId: context.campusId,
             sermonId,
             churchName: context.churchName,
             category: item.category,
@@ -1902,6 +1955,7 @@ export async function generateContentOpportunities(
       : `Generated ${curated.length} validated content opportunities with ${shortfalls.reduce((sum, item) => sum + item.missing, 0)} explicit shortfall(s) after ${repairPasses} repair pass(es).`,
   );
 
+  await attemptAutomaticWeekDraftAssembly(sermonId);
   return result;
 }
 

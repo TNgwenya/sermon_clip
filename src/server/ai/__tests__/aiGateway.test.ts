@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   findCachedResponse: vi.fn(),
   upsertCachedResponse: vi.fn(),
   deleteCachedResponse: vi.fn(),
+  assertUsageAvailable: vi.fn(),
+  reserveUsage: vi.fn(),
 }));
 
 vi.mock("@/server/ai/openaiClient", () => ({
@@ -19,15 +21,25 @@ vi.mock("@/server/ai/openaiClient", () => ({
 vi.mock("@/server/ai/aiInvocationLogger", () => ({
   recordAiInvocation: mocks.recordAiInvocation,
   buildAiRequestHash: (value: unknown) => JSON.stringify(value),
+  resolveAiTenantScope: vi.fn(async () => ({
+    organizationId: "org-one",
+    campusId: "campus-one",
+  })),
 }));
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     aiResponseCache: {
-      findUnique: mocks.findCachedResponse,
+      findFirst: mocks.findCachedResponse,
       upsert: mocks.upsertCachedResponse,
       delete: mocks.deleteCachedResponse,
     },
+  },
+}));
+vi.mock("@/server/billing/entitlements", () => ({
+  entitlements: {
+    assertUsageAvailable: mocks.assertUsageAvailable,
+    reserveUsage: mocks.reserveUsage,
   },
 }));
 
@@ -70,6 +82,14 @@ describe("createLoggedChatCompletion response validation", () => {
     mocks.upsertCachedResponse.mockResolvedValue(undefined);
     mocks.deleteCachedResponse.mockReset();
     mocks.deleteCachedResponse.mockResolvedValue(undefined);
+    mocks.assertUsageAvailable.mockReset();
+    mocks.assertUsageAvailable.mockResolvedValue({
+      used: BigInt(0),
+      limit: BigInt(1_000_000),
+      remaining: BigInt(1_000_000),
+    });
+    mocks.reserveUsage.mockReset();
+    mocks.reserveUsage.mockResolvedValue({});
   });
 
   it("records FAILED, not SUCCEEDED, when post-response validation fails", async () => {
@@ -100,6 +120,14 @@ describe("createLoggedChatCompletion response validation", () => {
         language: "English and Zulu",
         failureStage: "response_validation",
       },
+    }));
+    expect(mocks.assertUsageAvailable).toHaveBeenCalledWith(expect.objectContaining({
+      organizationId: "org-one",
+      entitlementKey: "ai.tokens.monthly",
+    }));
+    expect(mocks.reserveUsage).toHaveBeenCalledWith(expect.objectContaining({
+      organizationId: "org-one",
+      quantity: BigInt(29),
     }));
     expect(mocks.recordAiInvocation.mock.calls.map(([input]) => input.status)).toEqual(["FAILED"]);
   });

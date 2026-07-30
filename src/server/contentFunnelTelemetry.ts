@@ -30,6 +30,8 @@ export type ContentFunnelTelemetryMetadata = {
 
 export type RecordContentFunnelEventInput = {
   eventType: ContentFunnelEventType;
+  organizationId?: string | null;
+  campusId?: string | null;
   sermonId?: string | null;
   opportunityId?: string | null;
   contentAssetId?: string | null;
@@ -99,8 +101,20 @@ export async function recordContentFunnelEvent(input: RecordContentFunnelEventIn
     // under test. Missing analytics support must behave like telemetry being
     // unavailable, not like a product-flow failure.
     if (!delegate) return;
+    let organizationId = safeId(input.organizationId);
+    let campusId = safeId(input.campusId);
+    if (!organizationId && input.sermonId) {
+      const sermon = await prisma.sermon.findUnique({
+        where: { id: safeId(input.sermonId) ?? "" },
+        select: { organizationId: true, campusId: true },
+      });
+      organizationId = safeId(sermon?.organizationId);
+      campusId = safeId(sermon?.campusId);
+    }
     await delegate.createMany({
       data: [{
+        ...(organizationId ? { organizationId } : {}),
+        campusId,
         eventType: input.eventType,
         sermonId: safeId(input.sermonId),
         opportunityId: safeId(input.opportunityId),
@@ -222,12 +236,16 @@ export function aggregateContentFunnelMetrics(
 }
 
 export async function getContentFunnelReviewMetrics(input: {
+  organizationId?: string;
+  campusId?: string | null;
   from?: Date;
   to?: Date;
   sermonId?: string;
 } = {}): Promise<ContentFunnelReviewMetrics> {
   const events = await prisma.contentFunnelEvent.findMany({
     where: {
+      ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+      ...(input.campusId ? { campusId: input.campusId } : {}),
       ...(input.sermonId ? { sermonId: input.sermonId } : {}),
       ...(input.from || input.to
         ? {

@@ -6,12 +6,22 @@ import { slugifyExportName } from "@/lib/exportNaming";
 import { renderBrandedContentSvg, splitCarouselSlides } from "@/lib/contentAssetRenderer";
 import { readBrandingArtworkLogoDataUrl } from "@/server/branding/artworkLogo";
 import { getBrandingSettings } from "@/server/branding/settings";
+import { requireSermonResource } from "@/server/auth/resourceAuthorization";
+import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 
 export async function GET(
   _request: Request,
   context: { params: Promise<{ sermonId: string }> },
 ): Promise<NextResponse> {
   const { sermonId } = await context.params;
+  try {
+    await requireSermonResource("content.export", sermonId);
+  } catch (error) {
+    const response = resourceAuthorizationErrorResponse(error, "Sermon not found.");
+    if (response) return response;
+    throw error;
+  }
+
   const sermon = await prisma.sermon.findUnique({
     where: { id: sermonId },
     select: {

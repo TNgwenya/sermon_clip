@@ -1,18 +1,15 @@
 import type { BrandingSettings, WatermarkPosition } from "@prisma/client";
 import { z } from "zod";
 
+import { watermarkPositions } from "@/lib/brandingSettings";
+import {
+  DEFAULT_CAMPUS_ID,
+  DEFAULT_ORGANIZATION_ID,
+} from "@/lib/tenancy/requestHeaders";
 import { prisma } from "@/lib/prisma";
 import { CAPTION_STYLE_PRESETS } from "@/lib/captionStylePresets";
 
 export const LOCAL_BRANDING_SETTINGS_ID = "local";
-
-export const watermarkPositions = [
-  "TOP_LEFT",
-  "TOP_RIGHT",
-  "BOTTOM_LEFT",
-  "BOTTOM_RIGHT",
-  "CENTER",
-] as const;
 
 const colorValuePattern = /^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
 
@@ -21,7 +18,7 @@ export const brandingSettingsSchema = z.object({
   churchLogoPath: z
     .string()
     .trim()
-    .optional()
+    .nullish()
     .transform((value) => (value && value.length > 0 ? value : null)),
   primaryBrandColor: z
     .string()
@@ -49,6 +46,26 @@ export type BrandingSettingsParsed = z.output<typeof brandingSettingsSchema>;
 export type BrandingSettingsPatchInput = z.input<typeof brandingSettingsPatchSchema>;
 export type BrandingSettingsRecord = BrandingSettings;
 
+type BrandingSettingsValues = Pick<
+  BrandingSettingsRecord,
+  | "churchName"
+  | "churchLogoPath"
+  | "primaryBrandColor"
+  | "secondaryBrandColor"
+  | "defaultFontFamily"
+  | "watermarkPosition"
+  | "defaultCaptionStyleName"
+>;
+
+type BrandingSettingsTenantScope = Readonly<{
+  organizationId: string;
+  campusId: string | null;
+}>;
+
+type BrandingSettingsCreateData = BrandingSettingsValues & BrandingSettingsTenantScope & {
+  id?: string;
+};
+
 export const defaultBrandingSettings: BrandingSettingsInput = {
   churchName: "Local Church",
   churchLogoPath: "",
@@ -60,12 +77,17 @@ export const defaultBrandingSettings: BrandingSettingsInput = {
 };
 
 type BrandingRepository = {
-  findById(id: string): Promise<BrandingSettingsRecord | null>;
-  create(data: Omit<BrandingSettingsRecord, "createdAt" | "updatedAt">): Promise<BrandingSettingsRecord>;
-  update(id: string, data: Partial<Omit<BrandingSettingsRecord, "id" | "createdAt" | "updatedAt">>): Promise<BrandingSettingsRecord>;
+  findByOrganizationId(organizationId: string): Promise<BrandingSettingsRecord | null>;
+  create(data: BrandingSettingsCreateData): Promise<BrandingSettingsRecord>;
+  updateByOrganizationId(
+    organizationId: string,
+    data: Partial<BrandingSettingsValues & Pick<BrandingSettingsRecord, "campusId">>,
+  ): Promise<BrandingSettingsRecord>;
 };
 
-function toPersistedData(input: BrandingSettingsInput | BrandingSettingsParsed): Omit<BrandingSettingsRecord, "id" | "createdAt" | "updatedAt"> {
+function toPersistedData(
+  input: BrandingSettingsInput | BrandingSettingsParsed,
+): BrandingSettingsValues {
   const parsed = brandingSettingsSchema.parse(input);
 
   return {
@@ -79,32 +101,54 @@ function toPersistedData(input: BrandingSettingsInput | BrandingSettingsParsed):
   };
 }
 
-export function createBrandingSettingsService(repository: BrandingRepository) {
+export function createBrandingSettingsService(
+  repository: BrandingRepository,
+  tenantScope: BrandingSettingsTenantScope = {
+    organizationId: DEFAULT_ORGANIZATION_ID,
+    campusId: DEFAULT_CAMPUS_ID,
+  },
+) {
   async function getOrCreate(): Promise<BrandingSettingsRecord> {
-    const existing = await repository.findById(LOCAL_BRANDING_SETTINGS_ID);
+    const existing = await repository.findByOrganizationId(
+      tenantScope.organizationId,
+    );
     if (existing) {
       return existing;
     }
 
     const defaults = toPersistedData(defaultBrandingSettings);
     return repository.create({
-      id: LOCAL_BRANDING_SETTINGS_ID,
+      ...(tenantScope.organizationId === DEFAULT_ORGANIZATION_ID
+        ? { id: LOCAL_BRANDING_SETTINGS_ID }
+        : {}),
+      ...tenantScope,
       ...defaults,
     });
   }
 
   async function save(input: BrandingSettingsInput | BrandingSettingsParsed): Promise<BrandingSettingsRecord> {
     const parsed = toPersistedData(input);
-    const existing = await repository.findById(LOCAL_BRANDING_SETTINGS_ID);
+    const existing = await repository.findByOrganizationId(
+      tenantScope.organizationId,
+    );
 
     if (!existing) {
       return repository.create({
-        id: LOCAL_BRANDING_SETTINGS_ID,
+        ...(tenantScope.organizationId === DEFAULT_ORGANIZATION_ID
+          ? { id: LOCAL_BRANDING_SETTINGS_ID }
+          : {}),
+        ...tenantScope,
         ...parsed,
       });
     }
 
-    return repository.update(LOCAL_BRANDING_SETTINGS_ID, parsed);
+    return repository.updateByOrganizationId(
+      tenantScope.organizationId,
+      {
+        ...parsed,
+        campusId: tenantScope.campusId,
+      },
+    );
   }
 
   async function update(input: BrandingSettingsPatchInput): Promise<BrandingSettingsRecord> {
@@ -167,9 +211,9 @@ export function createBrandingSettingsService(repository: BrandingRepository) {
 }
 
 const prismaRepository: BrandingRepository = {
-  findById(id) {
+  findByOrganizationId(organizationId) {
     return prisma.brandingSettings.findUnique({
-      where: { id },
+      where: { organizationId },
     });
   },
   create(data) {
@@ -177,30 +221,50 @@ const prismaRepository: BrandingRepository = {
       data,
     });
   },
-  update(id, data) {
+  updateByOrganizationId(organizationId, data) {
     return prisma.brandingSettings.update({
-      where: { id },
+      where: { organizationId },
       data,
     });
   },
 };
 
-const brandingSettingsService = createBrandingSettingsService(prismaRepository);
-
-export async function getBrandingSettings(): Promise<BrandingSettingsRecord> {
-  return brandingSettingsService.getOrCreate();
+function serviceForTenant(
+  organizationId: string,
+  campusId: string | null = null,
+) {
+  return createBrandingSettingsService(prismaRepository, {
+    organizationId,
+    campusId,
+  });
 }
 
-export async function saveBrandingSettings(input: BrandingSettingsInput | BrandingSettingsParsed): Promise<BrandingSettingsRecord> {
-  return brandingSettingsService.save(input);
+export async function getBrandingSettings(
+  organizationId = DEFAULT_ORGANIZATION_ID,
+  campusId: string | null = null,
+): Promise<BrandingSettingsRecord> {
+  return serviceForTenant(organizationId, campusId).getOrCreate();
 }
 
-export async function updateBrandingSettings(input: BrandingSettingsPatchInput): Promise<BrandingSettingsRecord> {
-  return brandingSettingsService.update(input);
+export async function saveBrandingSettings(
+  input: BrandingSettingsInput | BrandingSettingsParsed,
+  organizationId = DEFAULT_ORGANIZATION_ID,
+  campusId: string | null = null,
+): Promise<BrandingSettingsRecord> {
+  return serviceForTenant(organizationId, campusId).save(input);
+}
+
+export async function updateBrandingSettings(
+  input: BrandingSettingsPatchInput,
+  organizationId = DEFAULT_ORGANIZATION_ID,
+  campusId: string | null = null,
+): Promise<BrandingSettingsRecord> {
+  return serviceForTenant(organizationId, campusId).update(input);
 }
 
 export function getBrandingHelperPayload(settings: BrandingSettingsRecord) {
-  return brandingSettingsService.toBrandingHelperPayload(settings);
+  return createBrandingSettingsService(prismaRepository)
+    .toBrandingHelperPayload(settings);
 }
 
 export const __brandingTestUtils = {
