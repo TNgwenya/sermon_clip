@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { publicAppUrl } from "@/lib/publicAppUrl";
 import {
   issuePasswordReset,
   revokePasswordResetToken,
@@ -7,19 +8,13 @@ import {
 import { deliverPasswordReset } from "@/server/auth/passwordResetDelivery";
 
 function responseDestination(request: Request): URL {
-  const destination = new URL("/forgot-password", request.url);
+  const destination = publicAppUrl(request, "/forgot-password");
   destination.searchParams.set("sent", "1");
   return destination;
 }
 
 function passwordResetUrl(request: Request, token: string): URL {
-  const configuredBaseUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
-  if (process.env.NODE_ENV === "production" && !configuredBaseUrl) {
-    throw new Error(
-      "NEXT_PUBLIC_APP_URL is required for production password-reset delivery.",
-    );
-  }
-  const resetUrl = new URL("/reset-password", configuredBaseUrl || request.url);
+  const resetUrl = publicAppUrl(request, "/reset-password");
   if (process.env.NODE_ENV === "production" && resetUrl.protocol !== "https:") {
     throw new Error("Production password-reset links must use HTTPS.");
   }

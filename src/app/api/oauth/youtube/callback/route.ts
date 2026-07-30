@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { buildOAuthRedirectUriFromRequest, oauthFailureReason } from "@/lib/socialAnalyticsConnectors";
+import { oauthFailureReason } from "@/lib/socialAnalyticsConnectors";
+import { publicAppUrl } from "@/lib/publicAppUrl";
 import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import { upsertSocialCredential } from "@/server/integrations/socialCredentials";
 import { clearOAuthStateCookie, validateOAuthCallbackState } from "@/server/integrations/oauthState";
@@ -12,7 +13,7 @@ import {
 export const dynamic = "force-dynamic";
 
 function redirectToSettings(request: Request, params: Record<string, string>): NextResponse {
-  const url = new URL("/settings/social", request.url);
+  const url = publicAppUrl(request, "/settings/social");
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
   const response = NextResponse.redirect(url);
   clearOAuthStateCookie(response, "youtube");
@@ -57,7 +58,10 @@ export async function GET(request: Request): Promise<NextResponse> {
     const tokenSet = await exchangeYouTubeAuthorizationCode({
       clientId: requiredEnv("YOUTUBE_CLIENT_ID"),
       clientSecret: requiredEnv("YOUTUBE_CLIENT_SECRET"),
-      redirectUri: buildOAuthRedirectUriFromRequest("youtube", request.url),
+      redirectUri: publicAppUrl(
+        request,
+        "/api/oauth/youtube/callback",
+      ).toString(),
       code,
     });
     const channel = await fetchYouTubeChannelIdentity(tokenSet.accessToken);

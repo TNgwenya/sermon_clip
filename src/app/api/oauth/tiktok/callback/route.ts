@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { buildOAuthRedirectUriFromRequest, oauthFailureReason } from "@/lib/socialAnalyticsConnectors";
+import { oauthFailureReason } from "@/lib/socialAnalyticsConnectors";
+import { publicAppUrl } from "@/lib/publicAppUrl";
 import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import {
   exchangeTikTokAuthorizationCode,
@@ -11,7 +12,7 @@ import { clearOAuthStateCookie, validateOAuthCallbackState } from "@/server/inte
 export const dynamic = "force-dynamic";
 
 function redirectToSettings(request: Request, params: Record<string, string>): NextResponse {
-  const url = new URL("/settings/social", request.url);
+  const url = publicAppUrl(request, "/settings/social");
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
   const response = NextResponse.redirect(url);
   clearOAuthStateCookie(response, "tiktok");
@@ -56,7 +57,10 @@ export async function GET(request: Request): Promise<NextResponse> {
     const tokenSet = await exchangeTikTokAuthorizationCode({
       clientKey: requiredEnv("TIKTOK_CLIENT_KEY"),
       clientSecret: requiredEnv("TIKTOK_CLIENT_SECRET"),
-      redirectUri: buildOAuthRedirectUriFromRequest("tiktok", request.url),
+      redirectUri: publicAppUrl(
+        request,
+        "/api/oauth/tiktok/callback",
+      ).toString(),
       code,
     });
     await storeTikTokCredential({

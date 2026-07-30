@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
+import { publicAppUrl } from "@/lib/publicAppUrl";
 import {
   authenticatePasswordLogin,
   PasswordLoginError,
@@ -27,7 +28,7 @@ function loginFailure(
   returnTo: string,
   code: string,
 ): NextResponse {
-  const url = new URL("/login", request.url);
+  const url = publicAppUrl(request, "/login");
   url.searchParams.set("error", code);
   if (returnTo !== "/") {
     url.searchParams.set("returnTo", returnTo);
@@ -63,7 +64,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       ),
       userAgentHash: privacyHash(request.headers.get("user-agent")),
     });
-    const response = NextResponse.redirect(new URL(returnTo, request.url), {
+    const response = NextResponse.redirect(publicAppUrl(request, returnTo), {
       status: 303,
     });
     response.headers.set("Set-Cookie", session.cookie);

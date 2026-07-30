@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { publicAppUrl } from "@/lib/publicAppUrl";
 import {
   clearSessionCookie,
   SESSION_COOKIE_NAME,
@@ -18,7 +19,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
   }
 
-  const response = NextResponse.redirect(new URL("/login", request.url), {
+  const response = NextResponse.redirect(publicAppUrl(request, "/login"), {
     status: 303,
   });
   response.headers.set("Set-Cookie", clearSessionCookie());

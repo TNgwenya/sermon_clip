@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 
+import { publicAppUrl } from "@/lib/publicAppUrl";
 import {
   completePasswordReset,
   PasswordResetError,
 } from "@/server/auth/passwordReset";
 
 function resetFailure(request: Request, token: string, code: string) {
-  const destination = new URL("/reset-password", request.url);
+  const destination = publicAppUrl(request, "/reset-password");
   if (token) destination.searchParams.set("token", token);
   destination.searchParams.set("error", code);
   return NextResponse.redirect(destination, { status: 303 });
@@ -22,7 +23,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   try {
     await completePasswordReset({ token, password });
-    const destination = new URL("/login", request.url);
+    const destination = publicAppUrl(request, "/login");
     destination.searchParams.set("reset", "complete");
     const response = NextResponse.redirect(destination, { status: 303 });
     response.headers.set("Cache-Control", "no-store");

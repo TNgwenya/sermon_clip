@@ -18,6 +18,7 @@ import {
 import {
   readTenantRequestContext,
 } from "@/lib/tenancy/requestHeaders";
+import { publicAppUrl } from "@/lib/publicAppUrl";
 
 type AccountContextResult =
   | Readonly<{ context: AccountSecurityContext; error?: never }>
@@ -43,7 +44,7 @@ function requestIsSameOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return false;
   try {
-    return new URL(origin).origin === new URL(request.url).origin;
+    return new URL(origin).origin === publicAppUrl(request, "/").origin;
   } catch {
     return false;
   }

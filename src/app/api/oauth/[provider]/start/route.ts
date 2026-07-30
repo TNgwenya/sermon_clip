@@ -2,13 +2,13 @@ import { NextResponse } from "next/server";
 
 import {
   buildMetaOAuthUrl,
-  buildOAuthRedirectUriFromRequest,
   buildThreadsOAuthUrl,
   buildTikTokOAuthUrl,
   buildYouTubeOAuthUrl,
   oauthFailureReason,
   type OAuthProvider,
 } from "@/lib/socialAnalyticsConnectors";
+import { publicAppUrl } from "@/lib/publicAppUrl";
 import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import { createOAuthState, setOAuthStateCookie } from "@/server/integrations/oauthState";
 
@@ -27,15 +27,14 @@ function requiredEnv(name: string, provider: OAuthProvider): string {
 }
 
 function redirectToSettings(request: Request, provider: string, reason: string): NextResponse {
-  const url = new URL("/settings/social", request.url);
+  const url = publicAppUrl(request, "/settings/social");
   url.searchParams.set("oauth", "failed");
   url.searchParams.set("provider", provider);
   url.searchParams.set("reason", reason);
   return NextResponse.redirect(url);
 }
 
-function providerAuthorizationUrl(provider: OAuthProvider, requestUrl: string, state: string): string {
-  const redirectUri = buildOAuthRedirectUriFromRequest(provider, requestUrl);
+function providerAuthorizationUrl(provider: OAuthProvider, redirectUri: string, state: string): string {
 
   switch (provider) {
     case "youtube": {
@@ -89,7 +88,13 @@ export async function GET(
   try {
     const requestContext = await requireRequestCapability("channels.connect");
     const attempt = createOAuthState(rawProvider, requestContext);
-    const response = NextResponse.redirect(providerAuthorizationUrl(rawProvider, request.url, attempt.state));
+    const redirectUri = publicAppUrl(
+      request,
+      `/api/oauth/${rawProvider}/callback`,
+    ).toString();
+    const response = NextResponse.redirect(
+      providerAuthorizationUrl(rawProvider, redirectUri, attempt.state),
+    );
     setOAuthStateCookie(response, attempt.cookie);
     return response;
   } catch (error) {

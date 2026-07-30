@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { publicAppUrl } from "@/lib/publicAppUrl";
 import {
   completeInvitationOnboarding,
   InvitationOnboardingError,
@@ -7,7 +8,7 @@ import {
 import { getPrismaSessionService } from "@/server/auth/prismaSessionRepository";
 
 function invitationFailure(request: Request, token: string, code: string) {
-  const url = new URL("/accept-invitation", request.url);
+  const url = publicAppUrl(request, "/accept-invitation");
   if (token) url.searchParams.set("token", token);
   url.searchParams.set("error", code);
   return NextResponse.redirect(url, { status: 303 });
@@ -30,7 +31,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       ipAddressHash: null,
     });
     const response = NextResponse.redirect(
-      new URL("/week-drafts?welcome=1", request.url),
+      publicAppUrl(request, "/week-drafts?welcome=1"),
       { status: 303 },
     );
     response.headers.set("Set-Cookie", session.cookie);

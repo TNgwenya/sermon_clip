@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { publicAppUrl } from "@/lib/publicAppUrl";
 import {
   BOOTSTRAP_OWNER_USER_ID,
   DEFAULT_CAMPUS_ID,
@@ -29,9 +30,7 @@ function unauthorized(): NextResponse {
 }
 
 function loginRedirect(request: NextRequest): NextResponse {
-  const loginUrl = request.nextUrl.clone();
-  loginUrl.pathname = "/login";
-  loginUrl.search = "";
+  const loginUrl = publicAppUrl(request, "/login");
   const returnTo = `${request.nextUrl.pathname}${request.nextUrl.search}`;
   if (returnTo !== "/") {
     loginUrl.searchParams.set("returnTo", returnTo);
