@@ -56,8 +56,14 @@ export type AccountSecurityOverview = Readonly<{
 }>;
 
 export class AccountSecurityError extends Error {
+  readonly code:
+    | "INVALID_INPUT"
+    | "REAUTHENTICATION_FAILED"
+    | "CONFLICT"
+    | "NOT_FOUND";
+
   constructor(
-    readonly code:
+    code:
       | "INVALID_INPUT"
       | "REAUTHENTICATION_FAILED"
       | "CONFLICT"
@@ -66,6 +72,7 @@ export class AccountSecurityError extends Error {
   ) {
     super(message);
     this.name = "AccountSecurityError";
+    this.code = code;
   }
 }
 

@@ -28,8 +28,15 @@ type ApprovalTransaction = Pick<
 >;
 
 export class ApprovalServiceError extends Error {
+  readonly code:
+    | "NOT_FOUND"
+    | "INVALID_INPUT"
+    | "MEMBERSHIP_REQUIRED"
+    | "APPROVAL_FORBIDDEN"
+    | "REQUEST_CLOSED";
+
   constructor(
-    readonly code:
+    code:
       | "NOT_FOUND"
       | "INVALID_INPUT"
       | "MEMBERSHIP_REQUIRED"
@@ -39,6 +46,7 @@ export class ApprovalServiceError extends Error {
   ) {
     super(message);
     this.name = "ApprovalServiceError";
+    this.code = code;
   }
 }
 

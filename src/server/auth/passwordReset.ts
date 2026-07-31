@@ -20,12 +20,15 @@ export type PasswordResetDelivery = Readonly<{
 }>;
 
 export class PasswordResetError extends Error {
+  readonly code: "INVALID_TOKEN" | "EXPIRED_TOKEN" | "INVALID_PASSWORD";
+
   constructor(
-    readonly code: "INVALID_TOKEN" | "EXPIRED_TOKEN" | "INVALID_PASSWORD",
+    code: "INVALID_TOKEN" | "EXPIRED_TOKEN" | "INVALID_PASSWORD",
     message: string,
   ) {
     super(message);
     this.name = "PasswordResetError";
+    this.code = code;
   }
 }
 

@@ -53,12 +53,15 @@ export type AutomaticWeekDraftAttemptResult =
   | Readonly<{ status: "WAITING_FOR_SOURCES"; draft: null }>;
 
 export class AutomaticWeekDraftError extends Error {
+  readonly code: "INVALID_INPUT" | "NOT_FOUND" | "NO_SOURCES";
+
   constructor(
-    readonly code: "INVALID_INPUT" | "NOT_FOUND" | "NO_SOURCES",
+    code: "INVALID_INPUT" | "NOT_FOUND" | "NO_SOURCES",
     message: string,
   ) {
     super(message);
     this.name = "AutomaticWeekDraftError";
+    this.code = code;
   }
 }
 

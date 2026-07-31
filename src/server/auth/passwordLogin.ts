@@ -27,12 +27,18 @@ export type LoginWorkspace = Readonly<{
 }>;
 
 export class PasswordLoginError extends Error {
+  readonly code:
+    | "INVALID_CREDENTIALS"
+    | "MFA_REQUIRED"
+    | "WORKSPACE_REQUIRED";
+  readonly workspaces: readonly LoginWorkspace[];
+
   constructor(
-    readonly code:
+    code:
       | "INVALID_CREDENTIALS"
       | "MFA_REQUIRED"
       | "WORKSPACE_REQUIRED",
-    readonly workspaces: readonly LoginWorkspace[] = [],
+    workspaces: readonly LoginWorkspace[] = [],
   ) {
     super(
       code === "MFA_REQUIRED"
@@ -42,6 +48,8 @@ export class PasswordLoginError extends Error {
           : "The email, password, or authentication code is incorrect.",
     );
     this.name = "PasswordLoginError";
+    this.code = code;
+    this.workspaces = workspaces;
   }
 }
 

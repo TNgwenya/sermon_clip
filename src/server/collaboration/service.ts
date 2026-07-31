@@ -15,8 +15,13 @@ type CollaborationTransaction = Pick<
 >;
 
 export class CollaborationServiceError extends Error {
+  readonly code:
+    | "NOT_FOUND"
+    | "INVALID_INPUT"
+    | "MEMBERSHIP_REQUIRED";
+
   constructor(
-    readonly code:
+    code:
       | "NOT_FOUND"
       | "INVALID_INPUT"
       | "MEMBERSHIP_REQUIRED",
@@ -24,6 +29,7 @@ export class CollaborationServiceError extends Error {
   ) {
     super(message);
     this.name = "CollaborationServiceError";
+    this.code = code;
   }
 }
 

@@ -35,8 +35,14 @@ type WeekDraftTransaction = Pick<
 >;
 
 export class WeekDraftServiceError extends Error {
+  readonly code:
+    | "NOT_FOUND"
+    | "INVALID_INPUT"
+    | "MEMBERSHIP_REQUIRED"
+    | "SOURCE_NOT_FOUND";
+
   constructor(
-    readonly code:
+    code:
       | "NOT_FOUND"
       | "INVALID_INPUT"
       | "MEMBERSHIP_REQUIRED"
@@ -45,6 +51,7 @@ export class WeekDraftServiceError extends Error {
   ) {
     super(message);
     this.name = "WeekDraftServiceError";
+    this.code = code;
   }
 }
 

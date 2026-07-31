@@ -8,8 +8,14 @@ import {
 } from "@/server/trust/tokens";
 
 export class InvitationOnboardingError extends Error {
+  readonly code:
+    | "INVALID_INVITATION"
+    | "EXPIRED_INVITATION"
+    | "EXISTING_ACCOUNT"
+    | "INVALID_PROFILE";
+
   constructor(
-    readonly code:
+    code:
       | "INVALID_INVITATION"
       | "EXPIRED_INVITATION"
       | "EXISTING_ACCOUNT"
@@ -18,6 +24,7 @@ export class InvitationOnboardingError extends Error {
   ) {
     super(message);
     this.name = "InvitationOnboardingError";
+    this.code = code;
   }
 }
 

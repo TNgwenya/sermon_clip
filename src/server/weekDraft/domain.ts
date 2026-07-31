@@ -74,8 +74,16 @@ export type ApprovalEvaluation =
   | Readonly<{ status: "CHANGES_REQUESTED"; approvals: number }>;
 
 export class WeekDraftDomainError extends Error {
+  readonly code:
+    | "INVALID_STATUS_TRANSITION"
+    | "INVALID_ORDER"
+    | "INVALID_PROVENANCE"
+    | "TENANT_MISMATCH"
+    | "STALE_REVISION"
+    | "INVALID_APPROVAL_POLICY";
+
   constructor(
-    readonly code:
+    code:
       | "INVALID_STATUS_TRANSITION"
       | "INVALID_ORDER"
       | "INVALID_PROVENANCE"
@@ -86,6 +94,7 @@ export class WeekDraftDomainError extends Error {
   ) {
     super(message);
     this.name = "WeekDraftDomainError";
+    this.code = code;
   }
 }
 

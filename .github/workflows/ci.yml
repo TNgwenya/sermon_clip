@@ -71,6 +71,9 @@ jobs:
       - name: Type-check
         run: npx tsc --noEmit
 
+      - name: Media worker runtime smoke
+        run: npm run test:worker-runtime
+
       - name: Unit and integration tests
         run: npm test
 
