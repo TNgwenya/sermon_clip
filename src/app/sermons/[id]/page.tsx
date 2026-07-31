@@ -238,6 +238,12 @@ async function doesFileExist(filePath: string): Promise<boolean> {
   }
 }
 
+async function doesAnyFileExist(filePaths: Array<string | null | undefined>): Promise<boolean> {
+  const uniquePaths = [...new Set(filePaths.filter((filePath): filePath is string => Boolean(filePath?.trim())))];
+  const readiness = await Promise.all(uniquePaths.map((filePath) => doesFileExist(filePath)));
+  return readiness.some(Boolean);
+}
+
 async function hasClipPreviewMedia(clip: Pick<
   RawClipCandidate,
   | "remotePreviewUrl"
@@ -988,12 +994,18 @@ export default async function SermonDetailPage({
 
   const operationSummary = summarizeSermonClipAttention(orderedClipCandidates);
 
-  const hasSourceVideo = Boolean(sermon.sourceVideoPath) || await doesFileExist(getSourceVideoPath(sermon.id));
+  const hasSourceVideo = await doesAnyFileExist([
+    sermon.sourceVideoPath,
+    getSourceVideoPath(sermon.id),
+  ]);
   const pipelineLogTail = await readPipelineLogTail(sermon.id);
   const downloadProgress = parseLatestDownloadProgress(pipelineLogTail);
   const audioExtractionProgress = parseAudioExtractionProgress(pipelineLogTail, sermon.sourceDurationSeconds);
   const transcriptionProgress = parseTranscriptionProgress(pipelineLogTail);
-  const hasAudioFile = Boolean(sermon.audioPath) || await doesFileExist(getAudioPath(sermon.id));
+  const hasAudioFile = await doesAnyFileExist([
+    sermon.audioPath,
+    getAudioPath(sermon.id),
+  ]);
   const readyClipCount = clipCounts.approved + clipCounts.exported;
   const hasReadyClips = readyClipCount > 0;
   const hasApprovedClips = clipCounts.approved > 0;

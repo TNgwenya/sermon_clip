@@ -357,6 +357,17 @@ export async function downloadSermonVideo(
       await appendPipelineLog(sermon.id, `Existing source.mp4 was not reused: ${existingSource.reason}`);
     }
 
+    if (!existingSource.usable && sermon.sourceVideoPath) {
+      await prisma.sermon.update({
+        where: { id: sermon.id },
+        data: {
+          sourceVideoPath: null,
+          sourceDurationSeconds: null,
+        },
+      });
+      await appendPipelineLog(sermon.id, "Cleared the stale source video reference before downloading again.");
+    }
+
     await checkYtDlpInstalled(options?.ytDlpPath);
 
     const tempSourceVideoPath = getTempDownloadPath(sourceVideoPath);
