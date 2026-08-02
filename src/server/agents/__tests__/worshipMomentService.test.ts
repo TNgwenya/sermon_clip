@@ -133,6 +133,31 @@ describe("lyric-led worship moment discovery", () => {
     expect(candidates).toEqual([]);
   });
 
+  it("rejects spoken context found anywhere in the complete proposed clip", () => {
+    const candidates = detectLyricLedWorshipMoments([
+      segment(0, 7, "Hallelujah, glory to Jesus."),
+      segment(8, 15, "Hallelujah, we praise You Lord."),
+      segment(16, 23, "Our vision is to become transformed believers."),
+      segment(24, 31, "Hallelujah, glory to Jesus."),
+    ]);
+
+    expect(candidates).toEqual([]);
+  });
+
+  it("rejects testimonies and event announcements with repeated praise language", () => {
+    const candidates = detectLyricLedWorshipMoments([
+      segment(0, 7, "Hallelujah, glory to Jesus."),
+      segment(8, 15, "This testimony is about divine favor and a vehicle to drive."),
+      segment(16, 23, "Hallelujah, glory to the Lord."),
+      segment(100, 107, "Praise the Lord, hallelujah."),
+      segment(108, 115, "The program is starting and the doors are opening."),
+      segment(116, 123, "General admission and VIP tickets are available."),
+      segment(124, 131, "Praise the Lord, hallelujah."),
+    ]);
+
+    expect(candidates).toEqual([]);
+  });
+
   it("excludes the sermon window before looking for praise and worship moments", () => {
     const segments = [
       segment(0, 20, "Hallelujah, You are holy, we worship You."),
