@@ -22,6 +22,20 @@ export const MINISTRY_MOMENT_TYPES = [
 
 export type MinistryMomentType = (typeof MINISTRY_MOMENT_TYPES)[number];
 
+const ministryMomentTypeSet = new Set<MinistryMomentType>(MINISTRY_MOMENT_TYPES);
+
+const MINISTRY_MOMENT_TYPE_ALIASES: Record<string, MinistryMomentType> = {
+  APPLICATION: "CALL_TO_ACTION",
+  APPLICATION_MOMENT: "CALL_TO_ACTION",
+  HEALING_TESTIMONY: "HEALING_MOMENT",
+  PRAYER: "PRAYER_MOMENT",
+  SCRIPTURE_EXPLANATION: "OTHER",
+  SCRIPTURE_EXPLANATION_MOMENT: "OTHER",
+  TESTIMONY_MOMENT: "TESTIMONY",
+  WORSHIP: "WORSHIP_MOMENT",
+  WORSHIP_RESPONSE: "WORSHIP_MOMENT",
+};
+
 export const SMART_CLIP_CATEGORIES = [
   "Best Faith Clip",
   "Best Prayer Clip",
@@ -41,8 +55,45 @@ export const SMART_CLIP_CATEGORIES = [
 
 export type SmartClipCategory = (typeof SMART_CLIP_CATEGORIES)[number];
 
+function normalizeEnumKey(value: string): string {
+  return value.trim().toUpperCase().replace(/[\s-]+/g, "_").replace(/[^A-Z0-9_]/g, "");
+}
+
+const smartClipCategoryByKey = new Map(
+  SMART_CLIP_CATEGORIES.map((category) => [normalizeEnumKey(category), category] as const),
+);
+
+const SMART_CLIP_CATEGORY_ALIASES: Record<string, SmartClipCategory> = {
+  HEALING_TESTIMONY: "Best Testimony Clip",
+  WORSHIP_RESPONSE: "Best Worship Clip",
+};
+
+export function normalizeMinistryMomentType(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const normalized = normalizeEnumKey(value);
+  if (ministryMomentTypeSet.has(normalized as MinistryMomentType)) {
+    return normalized;
+  }
+
+  return MINISTRY_MOMENT_TYPE_ALIASES[normalized] ?? value;
+}
+
+export function normalizeSmartClipCategory(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const normalized = normalizeEnumKey(value);
+  return smartClipCategoryByKey.get(normalized)
+    ?? SMART_CLIP_CATEGORY_ALIASES[normalized]
+    ?? value;
+}
+
 export const ministryMomentSchema = z.object({
-  momentType: z.enum(MINISTRY_MOMENT_TYPES),
+  momentType: z.preprocess(normalizeMinistryMomentType, z.enum(MINISTRY_MOMENT_TYPES)),
   title: z.string().trim().min(1),
   description: z.string().trim().min(1),
   startTimeSeconds: z.number().min(0).nullable(),
@@ -52,7 +103,10 @@ export const ministryMomentSchema = z.object({
   whyDetected: z.string().trim().min(1),
   suggestedAudience: z.string().trim().min(1),
   suggestedUsage: z.string().trim().min(1),
-  clipCategory: z.enum(SMART_CLIP_CATEGORIES).nullable().optional(),
+  clipCategory: z.preprocess(
+    normalizeSmartClipCategory,
+    z.enum(SMART_CLIP_CATEGORIES).nullable().optional(),
+  ),
 });
 
 export const ministryMomentResponseSchema = z.object({

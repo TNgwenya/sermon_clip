@@ -257,6 +257,60 @@ describe("aiSermonIntelligenceSchema", () => {
     }
   });
 
+  it("normalizes human-readable ministry labels returned by the model", () => {
+    const result = aiSermonIntelligenceSchema.safeParse({
+      ...makeValidPayload(),
+      structureSections: [{
+        sectionType: "MINISTRY",
+        orderIndex: 0,
+        confidenceScore: 0.8,
+      }],
+      ministryMoments: [
+        {
+          momentType: "Worship Response",
+          title: "Congregational worship",
+          description: "The congregation responds in worship.",
+          startTimeSeconds: 120,
+          endTimeSeconds: 165,
+          confidenceScore: 0.9,
+          transcriptExcerpt: "We worship you.",
+          whyDetected: "The congregation sings a worship response.",
+          suggestedAudience: "The church community",
+          suggestedUsage: "Worship clip",
+          clipCategory: "Worship Response",
+        },
+        {
+          momentType: "Healing Testimony",
+          title: "Healing testimony",
+          description: "A testimony of healing is shared.",
+          startTimeSeconds: 180,
+          endTimeSeconds: 225,
+          confidenceScore: 0.88,
+          transcriptExcerpt: "God healed me.",
+          whyDetected: "The transcript contains a healing testimony.",
+          suggestedAudience: "People needing encouragement",
+          suggestedUsage: "Testimony clip",
+          clipCategory: "Best Testimony clip",
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.structureSections[0]?.sectionType).toBe("OTHER");
+      expect(result.data.ministryMoments).toMatchObject([
+        {
+          momentType: "WORSHIP_MOMENT",
+          clipCategory: "Best Worship Clip",
+        },
+        {
+          momentType: "HEALING_MOMENT",
+          clipCategory: "Best Testimony Clip",
+        },
+      ]);
+    }
+  });
+
   it("parses a valid response body", () => {
     expect(parseSermonIntelligenceResponse(JSON.stringify(makeValidPayload()))).toMatchObject({
       title: "Walking in Faith",

@@ -122,6 +122,7 @@ const structureSectionTypeAliases: Record<string, StructureSectionType> = {
   INVITATION: "ALTAR_CALL",
   SALVATION_INVITATION: "ALTAR_CALL",
   MINISTRY_CALL: "ALTAR_CALL",
+  MINISTRY: "OTHER",
   CLOSING_PRAYER: "PRAYER",
   PRAYER_TIME: "PRAYER",
   BENEDICTION: "CLOSING",
