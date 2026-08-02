@@ -82,7 +82,9 @@ export function normalizeMinistryMomentType(value: unknown): unknown {
     return normalized;
   }
 
-  return MINISTRY_MOMENT_TYPE_ALIASES[normalized] ?? value;
+  // Ministry moments are supporting metadata. A new descriptive label from the
+  // model should not invalidate the otherwise usable sermon intelligence.
+  return MINISTRY_MOMENT_TYPE_ALIASES[normalized] ?? "OTHER";
 }
 
 export function normalizeSmartClipCategory(value: unknown): unknown {
@@ -91,9 +93,22 @@ export function normalizeSmartClipCategory(value: unknown): unknown {
   }
 
   const normalized = normalizeEnumKey(value);
-  return smartClipCategoryByKey.get(normalized)
-    ?? SMART_CLIP_CATEGORY_ALIASES[normalized]
-    ?? value;
+  const directOrAliased = smartClipCategoryByKey.get(normalized)
+    ?? SMART_CLIP_CATEGORY_ALIASES[normalized];
+  if (directOrAliased) {
+    return directOrAliased;
+  }
+
+  if (/(HEALING|BREAKTHROUGH|TESTIMONY)/.test(normalized)) {
+    return "Best Testimony Clip";
+  }
+  if (/(WORSHIP|PRAISE)/.test(normalized)) {
+    return "Best Worship Clip";
+  }
+
+  // clipCategory is optional. Preserve the ministry moment while dropping an
+  // unfamiliar free-form category instead of rejecting the full response.
+  return null;
 }
 
 export const ministryMomentSchema = z.object({

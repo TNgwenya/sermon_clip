@@ -317,6 +317,32 @@ describe("aiSermonIntelligenceSchema", () => {
           suggestedUsage: "Healing testimony clip",
           clipCategory: "Worship Highlight",
         },
+        {
+          momentType: "New Ministry Label",
+          title: "Other ministry moment",
+          description: "A ministry moment with a new descriptive label.",
+          startTimeSeconds: 300,
+          endTimeSeconds: 345,
+          confidenceScore: 0.82,
+          transcriptExcerpt: "God is moving in this place.",
+          whyDetected: "The model detected a ministry response.",
+          suggestedAudience: "The church community",
+          suggestedUsage: "Ministry response clip",
+          clipCategory: "Unmapped Optional Category",
+        },
+        {
+          momentType: "Healing Testimony",
+          title: "Healing and breakthrough",
+          description: "A testimony about healing and breakthrough.",
+          startTimeSeconds: 360,
+          endTimeSeconds: 405,
+          confidenceScore: 0.84,
+          transcriptExcerpt: "God brought healing and breakthrough.",
+          whyDetected: "The transcript contains a healing testimony.",
+          suggestedAudience: "People needing encouragement",
+          suggestedUsage: "Testimony clip",
+          clipCategory: "Healing and Breakthrough",
+        },
       ],
     });
 
@@ -338,6 +364,14 @@ describe("aiSermonIntelligenceSchema", () => {
         {
           momentType: "HEALING_MOMENT",
           clipCategory: "Best Worship Clip",
+        },
+        {
+          momentType: "OTHER",
+          clipCategory: null,
+        },
+        {
+          momentType: "HEALING_MOMENT",
+          clipCategory: "Best Testimony Clip",
         },
       ]);
     }
