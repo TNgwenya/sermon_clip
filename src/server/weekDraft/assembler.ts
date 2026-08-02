@@ -620,7 +620,11 @@ export async function assembleAutomaticWeekDraft(
       sermon.id,
       weekStartsOn.toISOString().slice(0, 10),
     ].join(":");
-    await tx.$queryRaw(Prisma.sql`
+    // pg_advisory_xact_lock returns PostgreSQL `void`. `$queryRaw` attempts to
+    // deserialize that value and Prisma rejects it as an unsupported column
+    // type, even though the lock was acquired. Execute the statement without
+    // asking Prisma to materialize a result row.
+    await tx.$executeRaw(Prisma.sql`
       SELECT pg_advisory_xact_lock(hashtextextended(${idempotencyKey}, 0))
     `);
 

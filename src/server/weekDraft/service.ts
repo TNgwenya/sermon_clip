@@ -21,6 +21,7 @@ import {
 type WeekDraftTransaction = Pick<
   AppPrismaClient,
   | "$queryRaw"
+  | "$executeRaw"
   | "membership"
   | "campus"
   | "sermon"

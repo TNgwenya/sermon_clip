@@ -124,7 +124,7 @@ describe("automatic Week Draft mix", () => {
           campusId: "campus-1",
         }),
       },
-      $queryRaw: vi.fn().mockResolvedValue([{ pg_advisory_xact_lock: null }]),
+      $executeRaw: vi.fn().mockResolvedValue(1),
       weekDraft: {
         findFirst: vi.fn().mockResolvedValue({
           id: "draft-existing",
@@ -162,7 +162,7 @@ describe("automatic Week Draft mix", () => {
       itemCount: 6,
       formatCount: 6,
     });
-    expect(transaction.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(transaction.$executeRaw).toHaveBeenCalledTimes(1);
     expect(transaction.weekDraft.findFirst).toHaveBeenCalledWith({
       where: {
         organizationId: "org-1",
