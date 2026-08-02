@@ -113,6 +113,16 @@ describe("lyric-led worship moment discovery", () => {
     expect(candidates).toEqual([]);
   });
 
+  it("rejects a single worship phrase surrounded by spoken prose", () => {
+    const candidates = detectLyricLedWorshipMoments([
+      segment(0, 9, "This morning I am growing up and celebrating my birthday."),
+      segment(10, 19, "Hallelujah, glory to Jesus."),
+      segment(20, 34, "Give me one minute while we wait for everybody."),
+    ]);
+
+    expect(candidates).toEqual([]);
+  });
+
   it("excludes the sermon window before looking for praise and worship moments", () => {
     const segments = [
       segment(0, 20, "Hallelujah, You are holy, we worship You."),
