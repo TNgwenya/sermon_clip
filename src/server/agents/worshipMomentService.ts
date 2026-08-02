@@ -32,27 +32,32 @@ export type WorshipMomentResult = {
 const MIN_WORSHIP_CLIP_SECONDS = 20;
 const MAX_WORSHIP_CLIP_SECONDS = 90;
 const MAX_PRAISE_AND_WORSHIP_CLIPS = 15;
-const MAX_REGION_GAP_SECONDS = 14;
+const MAX_REGION_GAP_SECONDS = 45;
 const MIN_WORSHIP_EVIDENCE_SEGMENTS = 3;
 
 const DIRECT_WORSHIP_PATTERNS = [
   /\b(?:hallelujah|haleluya|alleluia)\b/iu,
   /\b(?:holy[\s,]+holy|worthy is|you are worthy|you are holy)\b/iu,
   /\b(?:we|i)\s+(?:worship|praise|adore|exalt|magnify|glorify|sing to)\b/iu,
-  /\b(?:praise|bless|worship)\s+(?:you|the lord|his name|your name)\b/iu,
+  /\b(?:praise|bless|worship|adore|exalt|magnify|glorify)\s+(?:you|him|the lord|his name|your name|jesus|god)\b/iu,
   /\b(?:glory|honour|honor|praise)\s+(?:to|belongs to)\s+(?:god|jesus|the lord|you)\b/iu,
-  /\b(?:lift|raise)\s+(?:our|my|your)\s+(?:hands|voice|voices)\b/iu,
+  /\b(?:lift|raise)(?:\s+up)?\s+(?:our|my|your)\s+(?:hands|voice|voices)\b/iu,
   /\b(?:you are|god is|jesus is)\s+(?:good|faithful|holy|worthy|mighty|great)\b/iu,
   /\b(?:i love you|we love you)\s+(?:jesus|lord|god)\b/iu,
+  /\b(?:lord|jesus|god)[\s,]+(?:we|i)\s+(?:adore|worship|praise|exalt|magnify|glorify)\b/iu,
+  /\b(?:none|no one|nothing|no other|besides)\b[^.!?]{0,28}\b(?:you|lord|god)\b/iu,
+  /\b(?:thank you|we thank you)\s+(?:jesus|lord|god)\b/iu,
   /\b(?:siyakudumisa|ngiyakudumisa|siyakukhonza|ngiyakukhonza|uyingcwele|udumo kuwe|haleluya)\b/iu,
 ] as const;
 
+const STRONG_DIRECT_WORSHIP_PATTERNS = DIRECT_WORSHIP_PATTERNS.slice(1);
+const WORSHIP_ACCLAMATION_PATTERN = DIRECT_WORSHIP_PATTERNS[0];
 const WORSHIP_VOCABULARY_PATTERN =
   /\b(?:worship|praise|sing|song|hallelujah|haleluya|holy|worthy|glory|adore|exalt|magnify|jesus|lord|god|saviour|savior|king|inkosi|jesu|ngcwele|khonza|dumisa)\b/iu;
 const SERMON_PROSE_PATTERN =
   /\b(?:the bible says|scripture says|turn with me|today i want to|i want to teach|let me explain|the point is|this passage|this verse|my first point|in conclusion)\b/iu;
 const ANNOUNCEMENT_PROSE_PATTERN =
-  /\b(?:rsvp|whatsapp group|sign up|volunteers?|membership training|scholarship|conference|hospitality team|kindly see|the link|every saturday|service (?:from|until|at))\b/iu;
+  /\b(?:rsvp|whatsapp group|sign up|scan (?:it|the|this)|volunteers?|membership training|scholarship|conference|hospitality team|kindly see|the link|every saturday|service (?:from|until|at)|we are selling|t[ -]?shirts?|hoodies?|join (?:our|the)|join us|department|monthly fasting|fasting prayer|taking place|monday|tuesday|wednesday|friday|saturday|women(?:'s)?|temporarily closed|serve (?:and|with|the)|other churches|his ministry)\b/iu;
 
 function normalizeText(value: string): string {
   return value
@@ -79,6 +84,10 @@ function directSignalCount(text: string): number {
   return DIRECT_WORSHIP_PATTERNS.reduce((count, pattern) => count + (pattern.test(text) ? 1 : 0), 0);
 }
 
+function strongDirectSignalCount(text: string): number {
+  return STRONG_DIRECT_WORSHIP_PATTERNS.reduce((count, pattern) => count + (pattern.test(text) ? 1 : 0), 0);
+}
+
 function isSpokenProse(text: string): boolean {
   return SERMON_PROSE_PATTERN.test(text) || ANNOUNCEMENT_PROSE_PATTERN.test(text);
 }
@@ -100,12 +109,19 @@ function segmentWorshipScore(
 ): number {
   const normalized = normalizeText(segment.text);
   const directSignals = directSignalCount(normalized);
+  const strongDirectSignals = strongDirectSignalCount(normalized);
   const repeatedLyric = isLikelyRepeatedLyric(segment, segments);
   const vocabulary = WORSHIP_VOCABULARY_PATTERN.test(normalized);
   const prosePenalty = isSpokenProse(normalized) ? 3 : 0;
   const shortRefrainBonus = words(normalized).length <= 16 && directSignals > 0 ? 1 : 0;
+  const acclamationBonus = WORSHIP_ACCLAMATION_PATTERN.test(normalized) ? 2 : 0;
 
-  return directSignals * 3 + (repeatedLyric ? 2 : 0) + (vocabulary ? 1 : 0) + shortRefrainBonus - prosePenalty;
+  return strongDirectSignals * 3
+    + acclamationBonus
+    + (repeatedLyric ? 2 : 0)
+    + (vocabulary ? 1 : 0)
+    + shortRefrainBonus
+    - prosePenalty;
 }
 
 function isWorshipSegment(
@@ -232,8 +248,16 @@ function candidateFromGroup(
   }
 
   const directSignals = selected.reduce((total, segment) => total + directSignalCount(segment.text), 0);
+  const strongDirectSignals = selected.reduce(
+    (total, segment) => total + strongDirectSignalCount(segment.text),
+    0,
+  );
   const repeatedLines = selected.filter((segment) => isLikelyRepeatedLyric(segment, allSegments)).length;
-  if (directSignals === 0 || (directSignals < 2 && repeatedLines === 0)) {
+  if (
+    directSignals === 0
+    || (directSignals < 2 && repeatedLines === 0)
+    || (strongDirectSignals === 0 && repeatedLines < 2)
+  ) {
     return null;
   }
 

@@ -87,6 +87,32 @@ describe("lyric-led worship moment discovery", () => {
     expect(candidates).toEqual([]);
   });
 
+  it("keeps sparse lyric lines together across short instrumental gaps", () => {
+    const candidates = detectLyricLedWorshipMoments([
+      segment(0, 4, "We love You Lord."),
+      segment(31, 35, "We adore You Lord."),
+      segment(39, 44, "There is none besides You Lord."),
+      segment(45, 51, "There is no other God but You."),
+    ]);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      startTimeSeconds: 0,
+      endTimeSeconds: 51,
+      durationSeconds: 51,
+    });
+  });
+
+  it("rejects repeated hallelujah language inside operational announcements", () => {
+    const candidates = detectLyricLedWorshipMoments([
+      segment(0, 18, "Hallelujah, we are selling our t-shirts and hoodies after service."),
+      segment(20, 38, "Hallelujah, scan the link and join our hospitality team."),
+      segment(40, 61, "The monthly fasting prayer starts Monday. Hallelujah."),
+    ]);
+
+    expect(candidates).toEqual([]);
+  });
+
   it("excludes the sermon window before looking for praise and worship moments", () => {
     const segments = [
       segment(0, 20, "Hallelujah, You are holy, we worship You."),
