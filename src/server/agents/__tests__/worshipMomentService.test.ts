@@ -100,8 +100,8 @@ describe("lyric-led worship moment discovery", () => {
     ]);
   });
 
-  it("returns at most eight non-overlapping praise and worship suggestions", () => {
-    const segments = Array.from({ length: 9 }, (_, groupIndex) => {
+  it("returns at most fifteen non-overlapping praise and worship suggestions", () => {
+    const segments = Array.from({ length: 16 }, (_, groupIndex) => {
       const start = groupIndex * 100;
       return [
         segment(start, start + 8, "Hallelujah, You are holy, we worship You."),
@@ -112,7 +112,7 @@ describe("lyric-led worship moment discovery", () => {
 
     const candidates = detectLyricLedWorshipMoments(segments);
 
-    expect(candidates).toHaveLength(8);
+    expect(candidates).toHaveLength(15);
     expect(candidates.map((candidate) => candidate.startTimeSeconds)).toEqual([
       0,
       100,
@@ -122,6 +122,13 @@ describe("lyric-led worship moment discovery", () => {
       500,
       600,
       700,
+      800,
+      900,
+      1000,
+      1100,
+      1200,
+      1300,
+      1400,
     ]);
   });
 });
