@@ -214,7 +214,10 @@ const MAX_AI_PROMPT_WINDOW_LIMIT = 64;
 const MAX_BATCH_CLIPS = 4;
 const WINDOW_TARGET_DURATIONS_SECONDS = [40, 60, 90] as const;
 const SEMANTIC_ANCHOR_MIN_SPACING_SECONDS = 24;
-const INLINE_VIDEO_SUBJECT_TRACKING_LIMIT = 6;
+// Keep the initial review queue responsive on a single media worker. The top
+// clips get model tracking immediately; lower-ranked clips can be tracked when
+// a pastor opens or edits them instead of blocking worship discovery.
+const INLINE_VIDEO_SUBJECT_TRACKING_LIMIT = 2;
 const MAX_TRANSCRIPT_ISLAND_GAP_SECONDS = 12;
 const MAX_REPAIR_EXTENSION_SECONDS = 72;
 const MIN_WINDOW_WORDS = 35;
