@@ -129,6 +129,8 @@ const structureSectionTypeAliases: Record<string, StructureSectionType> = {
   CONCLUSION: "CLOSING",
   WRAP_UP: "CLOSING",
   ANNOUNCEMENTS: "ANNOUNCEMENT",
+  ADMINISTRATION: "ANNOUNCEMENT",
+  WORSHIP_RESPONSE: "OTHER",
 };
 
 export function normalizeStructureSectionType(value: unknown): unknown {

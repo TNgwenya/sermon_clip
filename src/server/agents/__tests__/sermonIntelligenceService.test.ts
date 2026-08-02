@@ -261,8 +261,12 @@ describe("aiSermonIntelligenceSchema", () => {
     const result = aiSermonIntelligenceSchema.safeParse({
       ...makeValidPayload(),
       structureSections: [{
-        sectionType: "MINISTRY",
+        sectionType: "WORSHIP_RESPONSE",
         orderIndex: 0,
+        confidenceScore: 0.8,
+      }, {
+        sectionType: "ADMINISTRATION",
+        orderIndex: 1,
         confidenceScore: 0.8,
       }],
       ministryMoments: [
@@ -277,7 +281,7 @@ describe("aiSermonIntelligenceSchema", () => {
           whyDetected: "The congregation sings a worship response.",
           suggestedAudience: "The church community",
           suggestedUsage: "Worship clip",
-          clipCategory: "Worship Response",
+          clipCategory: "Worship Praise Clip",
         },
         {
           momentType: "Healing Testimony",
@@ -298,6 +302,7 @@ describe("aiSermonIntelligenceSchema", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.structureSections[0]?.sectionType).toBe("OTHER");
+      expect(result.data.structureSections[1]?.sectionType).toBe("ANNOUNCEMENT");
       expect(result.data.ministryMoments).toMatchObject([
         {
           momentType: "WORSHIP_MOMENT",

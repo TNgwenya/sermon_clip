@@ -65,6 +65,7 @@ const smartClipCategoryByKey = new Map(
 
 const SMART_CLIP_CATEGORY_ALIASES: Record<string, SmartClipCategory> = {
   HEALING_TESTIMONY: "Best Testimony Clip",
+  WORSHIP_PRAISE_CLIP: "Best Worship Clip",
   WORSHIP_RESPONSE: "Best Worship Clip",
 };
 
