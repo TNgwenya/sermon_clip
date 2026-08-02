@@ -76,6 +76,7 @@ import { resolvedFramingPlanToSmartCropOptions } from "@/lib/resolvedFramingPlan
 type RenderOptions = {
   ffmpegPath?: string;
   allowRerender?: boolean;
+  allowTrackingGeneration?: boolean;
   force?: boolean;
 };
 
@@ -1082,6 +1083,7 @@ export async function renderApprovedClip(
       guard: editPlanGuard,
       sourceVideoPath,
       ffmpegPath: options?.ffmpegPath,
+      allowTrackingGeneration: options?.allowTrackingGeneration,
       applicationMode: "APPLY_AT_BASE_RENDER",
     });
     let framingPreset = resolveFramingPreset(resolvedFramingRecord.plan.effective.layout);

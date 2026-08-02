@@ -171,6 +171,10 @@ async function renderReviewPreviewWithFallback(sermonId: string, clip: ReviewAss
   const result = await renderApprovedClip(clip.id, {
     force,
     allowRerender: Boolean(force),
+    // Review preparation must stay responsive on the shared media worker.
+    // Clips without model tracking use the framing service's safe blurred
+    // fallback; an explicit Studio edit can still request fresh tracking.
+    allowTrackingGeneration: false,
   });
   const renderedClip = await prisma.clipCandidate.findUnique({
     where: { id: clip.id },
