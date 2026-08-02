@@ -20,6 +20,7 @@ import {
   getSourceVideoPath,
 } from "@/server/agents/storage";
 import { downloadSermonVideo } from "@/server/agents/videoDownloadAgent";
+import { materializeS3SermonSource } from "@/server/agents/sourceMaterializationAgent";
 import { extractSermonAudio } from "@/server/agents/audioExtractionAgent";
 import { generateClipSuggestions } from "@/server/agents/clipIntelligenceAgent";
 import { transcribeSermonAudio } from "@/server/agents/transcriptionAgent";
@@ -116,6 +117,11 @@ async function loadSermon(sermonId: string) {
       sourceVideoPath: true,
       audioPath: true,
       transcriptJsonPath: true,
+      sourceAsset: {
+        select: {
+          status: true,
+        },
+      },
       includeWorshipMoments: true,
       sermonStartSeconds: true,
       sermonEndSeconds: true,
@@ -307,11 +313,12 @@ export async function processSermonPipeline(
     activeStepLabel = "Download video";
     const sourceVideoPath = getSourceVideoPath(sermon.id);
     const existingSource = await mediaFileIsUsable(sourceVideoPath);
+    const durableSourceReady = sermon.sourceAsset?.status === "READY";
 
     const sourceProtectionMessage = advancedSermonMissingMediaMessage({
       advanced: advancedAtStart,
       artifact: "source",
-      usable: existingSource.usable,
+      usable: existingSource.usable || durableSourceReady,
     });
     if (sourceProtectionMessage) {
       activeStepLabel = "Repair source video";
@@ -319,7 +326,7 @@ export async function processSermonPipeline(
       throw new Error(sourceProtectionMessage);
     }
 
-    if (!existingSource.usable && isLocalUploadSourceUrl(sermon.youtubeUrl)) {
+    if (!existingSource.usable && !durableSourceReady && isLocalUploadSourceUrl(sermon.youtubeUrl)) {
       activeStepLabel = "Upload media";
       const message = incompleteLocalUploadMessage();
       steps.push({ label: activeStepLabel, status: "FAILED", message });
@@ -327,15 +334,25 @@ export async function processSermonPipeline(
       await appendPipelineLog(sermon.id, message);
       throw new Error(message);
     }
-    const downloadSkipped = !options?.force && existingSource.usable;
 
     if (!existingSource.usable && !options?.force && isAtOrAfter(sermon.status, "DOWNLOADED") && Boolean(sermon.sourceVideoPath)) {
       await appendJobLog(parentJob.id, `Download video will run again because source.mp4 is not usable: ${existingSource.reason}`);
     }
 
-    if (downloadSkipped) {
+    if (existingSource.usable && (!options?.force || durableSourceReady)) {
       steps.push({ label: "Download video", status: "SKIPPED", message: "source.mp4 already exists." });
       await appendJobLog(parentJob.id, "Download video skipped.");
+    } else if (durableSourceReady) {
+      activeStepLabel = "Restore source video";
+      const materialized = await materializeS3SermonSource(sermon.id);
+      steps.push({
+        label: "Restore source video",
+        status: materialized.reusedExistingFile ? "SKIPPED" : "SUCCEEDED",
+        message: materialized.reusedExistingFile
+          ? "Existing local source reused."
+          : "Durable private S3 source restored.",
+      });
+      await appendJobLog(parentJob.id, "Private S3 source is ready on the media worker.");
     } else {
       const downloadResult = await downloadSermonVideo(sermon.id, { force: options?.force });
       steps.push({

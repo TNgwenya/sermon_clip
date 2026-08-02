@@ -39,7 +39,8 @@ It supports:
 - Prisma
 - Postgres metadata database for Vercel/worker scheduling
 - Node.js server actions and backend modules
-- Local filesystem storage, with optional Cloudflare R2 staging for remote previews and platform publishing
+- Private AWS S3 source storage with resumable browser-direct multipart uploads
+- Local worker filesystem storage for active processing, with optional Cloudflare R2 staging for remote previews and platform publishing
 - FFmpeg
 - yt-dlp
 - OpenAI API (transcription and clip intelligence)
@@ -95,6 +96,11 @@ Set `PLAYWRIGHT_DATABASE_URL` when your local test database uses different crede
 Optional:
 
 SERMON_STORAGE_ROOT=/custom/path/if/you/want
+SOURCE_MEDIA_S3_BUCKET=your_private_source_bucket
+SOURCE_MEDIA_S3_REGION=eu-central-1
+SOURCE_MEDIA_S3_KEY_PREFIX=sermon-sources
+SOURCE_MEDIA_S3_PART_SIZE_MIB=16
+SOURCE_MEDIA_S3_PRESIGN_TTL_SECONDS=900
 OPENAI_CLIP_SELECTION_MODEL=
 OPENAI_CLIP_SELECTION_MODEL_REASONING_EFFORT=
 OPENAI_CLIP_REPAIR_MODEL=
@@ -154,6 +160,15 @@ sermon per organization per scan, and queues normal `PROCESS_SERMON` work. Set
 Content idea generation is also claimed by `npm run worker:media` as a durable `GENERATE_CONTENT_OPPORTUNITIES` job. Keep `CONTENT_OPPORTUNITY_GENERATION_EXECUTION=QUEUED` in production; `INLINE` is an explicit local fallback for environments that cannot run the worker.
 `POSTING_WORKER_DRY_RUN` defaults to true unless explicitly set to `false`, so the worker can be tested without posting.
 Social Settings OAuth links use the current app host for callback URLs. Register the exact local and live callback URLs with each provider, for example `http://localhost:3000/api/oauth/youtube/callback` and `https://your-vercel-app.vercel.app/api/oauth/youtube/callback`. Keep `WORKER_API_BASE_URL` pointed at the app the worker should poll; it does not need to match the OAuth callback host.
+
+Original uploaded recordings use the private S3 ingestion path when
+`SOURCE_MEDIA_S3_BUCKET` and `SOURCE_MEDIA_S3_REGION` are configured. Browsers
+upload four multipart parts concurrently through short-lived presigned URLs;
+the media worker restores the completed object through its EC2 instance role.
+The original object remains available for reprocessing even after local
+intermediates are removed. See
+[`docs/aws-s3-source-ingestion.md`](./docs/aws-s3-source-ingestion.md) for the
+bucket CORS, lifecycle, and least-privilege IAM configuration.
 
 ## Setup instructions
 

@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import { getSermonStartDefaults } from "@/server/onboarding/activationSnapshot";
+import { isS3SourceStorageConfigured } from "@/server/media/s3SourceStorage";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
 import { NewSermonForm } from "./new-sermon-form";
@@ -21,7 +22,9 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
     },
     requestContext.actorId,
   );
-  const canUploadMedia = canRunLocalMediaProcessing();
+  const localUploadFallbackEnabled = canRunLocalMediaProcessing();
+  const directSourceUploadEnabled = isS3SourceStorageConfigured();
+  const canUploadMedia = localUploadFallbackEnabled || directSourceUploadEnabled;
 
   return (
     <main id="main-content" className="upload-page-shell premium-intake-page stack-lg">
@@ -55,6 +58,8 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
         <NewSermonForm
           initialYoutubeUrl={params.youtubeUrl ?? ""}
           canUploadMedia={canUploadMedia}
+          directSourceUploadEnabled={directSourceUploadEnabled}
+          localUploadFallbackEnabled={localUploadFallbackEnabled}
           defaults={defaults}
         />
 

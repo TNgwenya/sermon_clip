@@ -7,6 +7,10 @@ import { useRouter } from "next/navigation";
 
 import { FeatureModal, type FeatureModalKind } from "@/components/feature-modal";
 import {
+  DirectSourceUploadUnavailableError,
+  uploadFileToPrivateSource,
+} from "@/lib/directSourceUpload";
+import {
   HOSTED_MEDIA_UPLOAD_UNAVAILABLE_MESSAGE,
   MAX_UPLOADED_MEDIA_LABEL,
   MOBILE_UPLOAD_FAILURE_HELP,
@@ -176,10 +180,14 @@ function UploadProgressTheater({
 export function NewSermonForm({
   initialYoutubeUrl = "",
   canUploadMedia = true,
+  directSourceUploadEnabled = false,
+  localUploadFallbackEnabled = true,
   defaults,
 }: {
   initialYoutubeUrl?: string;
   canUploadMedia?: boolean;
+  directSourceUploadEnabled?: boolean;
+  localUploadFallbackEnabled?: boolean;
   defaults: {
     title: string;
     speakerName: string;
@@ -273,6 +281,54 @@ export function NewSermonForm({
     setIsUploadSubmitting(true);
     setUploadProgressPercent(0);
     try {
+      if (directSourceUploadEnabled) {
+        try {
+          const directResult = await uploadFileToPrivateSource({
+            mode: "create",
+            sermonId: uploadSermonId,
+            file,
+            fields: {
+              title: String(formData.get("title") ?? ""),
+              speakerName: String(formData.get("speakerName") ?? ""),
+              churchName: String(formData.get("churchName") ?? ""),
+              language: String(formData.get("language") ?? ""),
+              sermonDate: String(formData.get("sermonDate") ?? ""),
+              sermonStartTimestamp: String(formData.get("sermonStartTimestamp") ?? ""),
+              sermonEndTimestamp: String(formData.get("sermonEndTimestamp") ?? ""),
+              includeWorshipMoments: formData.get("includeWorshipMoments") === "on",
+              rightsConfirmed: formData.get("rightsConfirmed") === "on",
+            },
+            onSession: (sermonId) => {
+              uploadSermonId = sermonId;
+              window.sessionStorage.setItem(MOBILE_UPLOAD_SESSION_STORAGE_KEY, JSON.stringify({
+                sermonId,
+                fileName: file.name,
+                fileSize: file.size,
+              }));
+            },
+            onProgress: setUploadProgressPercent,
+          });
+          setUploadState(directResult);
+          if (directResult.createdSermonId) {
+            window.sessionStorage.removeItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY);
+            window.sessionStorage.removeItem(MOBILE_UPLOAD_SESSION_STORAGE_KEY);
+            router.replace(`/sermons/${directResult.createdSermonId}`);
+          }
+          return;
+        } catch (error) {
+          if (!(error instanceof DirectSourceUploadUnavailableError) || !localUploadFallbackEnabled) {
+            const failed = error as Error & { result?: CreateSermonFormState };
+            setUploadState(failed.result ?? {
+              success: false,
+              message: `The private upload did not finish. ${failed.message}`,
+              fieldErrors: { mediaFile: "Keep the recording and retry on a stable connection." },
+              createdSermonId: uploadSermonId ?? undefined,
+            });
+            return;
+          }
+        }
+      }
+
       if (!uploadSermonId) {
         const startResponse = await fetch(uploadUrl, {
           method: "POST",

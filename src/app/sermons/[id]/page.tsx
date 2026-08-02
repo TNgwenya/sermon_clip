@@ -27,6 +27,7 @@ import {
 import { summarizeSermonClipAttention } from "@/lib/sermonClipAttention";
 import { getAudioPath, getLogPath, getSourceVideoPath } from "@/server/agents/storage";
 import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { isS3SourceStorageConfigured } from "@/server/media/s3SourceStorage";
 import { tenantResourceScope } from "@/server/tenancy/scope";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import {
@@ -767,6 +768,7 @@ export default async function SermonDetailPage({
     resource: { kind: "SERMON", id },
   });
   const localMediaAvailable = canRunLocalMediaProcessing();
+  const directSourceUploadEnabled = isS3SourceStorageConfigured();
 
   const sermon: SermonDetailItem | null = await prisma.sermon.findFirst({
     where: tenantResourceScope(requestContext, id),
@@ -1769,7 +1771,11 @@ export default async function SermonDetailPage({
                 ) : null}
                 {youtubeSourceRecoveryFailure ? (
                   <div className="stack-sm">
-                    <YouTubeRecoveryUpload sermonId={sermon.id} />
+                    <YouTubeRecoveryUpload
+                      sermonId={sermon.id}
+                      directSourceUploadEnabled={directSourceUploadEnabled}
+                      localUploadFallbackEnabled={localMediaAvailable}
+                    />
                     <details>
                       <summary>Try importing from YouTube again</summary>
                       <div className="failure-recovery-action">

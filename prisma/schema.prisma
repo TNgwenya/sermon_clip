@@ -28,6 +28,13 @@ enum SermonStatus {
   FAILED
 }
 
+enum SermonSourceAssetStatus {
+  INITIATED
+  UPLOADING
+  READY
+  FAILED
+}
+
 enum ProcessingJobType {
   DOWNLOAD_VIDEO
   EXTRACT_AUDIO
@@ -788,6 +795,7 @@ model Organization {
   userSessions                UserSession[]
   automationSettings          OrganizationAutomationSettings?
   publicSermonPages           SermonPublicPage[]
+  sermonSourceAssets          SermonSourceAsset[]
 
   @@index([status])
   @@index([createdAt])
@@ -838,6 +846,7 @@ model Campus {
   approvalPolicies            ApprovalPolicy[]
   approvalPolicyRules         ApprovalPolicyRule[]
   approvalRequests            ApprovalRequest[]
+  sermonSourceAssets          SermonSourceAsset[]
   approvalDecisions           ApprovalDecision[]
   userSessions                UserSession[]
   publicSermonPages           SermonPublicPage[]
@@ -1468,12 +1477,41 @@ model Sermon {
   aiInvocations         AiInvocation[]
   weekDrafts            WeekDraft[]
   publicPage            SermonPublicPage?
+  sourceAsset           SermonSourceAsset?
   organization          Organization?            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   campus                Campus?                  @relation(fields: [campusId], references: [id], onDelete: SetNull)
 
   @@unique([id, organizationId])
   @@index([organizationId, createdAt])
   @@index([campusId, createdAt])
+}
+
+model SermonSourceAsset {
+  id               String                  @id @default(cuid())
+  organizationId   String
+  campusId         String?
+  sermonId         String                  @unique
+  bucket           String
+  objectKey        String
+  region           String
+  uploadId         String?
+  originalFileName String
+  contentType      String
+  sizeBytes        BigInt
+  partSizeBytes    Int
+  etag             String?
+  versionId        String?
+  status           SermonSourceAssetStatus @default(INITIATED)
+  completedAt      DateTime?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+  sermon           Sermon                  @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus           Campus?                 @relation(fields: [campusId], references: [id], onDelete: SetNull)
+
+  @@unique([bucket, objectKey])
+  @@index([organizationId, status, createdAt])
+  @@index([campusId, status, createdAt])
 }
 
 model SermonPublicPage {

@@ -4,6 +4,10 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
+  DirectSourceUploadUnavailableError,
+  uploadFileToPrivateSource,
+} from "@/lib/directSourceUpload";
+import {
   MAX_UPLOADED_MEDIA_LABEL,
   MOBILE_UPLOAD_FAILURE_HELP,
   UPLOADED_MEDIA_TOO_LARGE_MESSAGE,
@@ -65,7 +69,15 @@ function waitForRetry(delayMs: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, delayMs));
 }
 
-export function YouTubeRecoveryUpload({ sermonId }: { sermonId: string }) {
+export function YouTubeRecoveryUpload({
+  sermonId,
+  directSourceUploadEnabled = false,
+  localUploadFallbackEnabled = true,
+}: {
+  sermonId: string;
+  directSourceUploadEnabled?: boolean;
+  localUploadFallbackEnabled?: boolean;
+}) {
   const router = useRouter();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -92,6 +104,29 @@ export function YouTubeRecoveryUpload({ sermonId }: { sermonId: string }) {
     setSuccess(false);
 
     try {
+      if (directSourceUploadEnabled) {
+        try {
+          const directResult = await uploadFileToPrivateSource({
+            mode: "recovery",
+            sermonId,
+            file: selectedFile,
+            onProgress: setProgressPercent,
+          });
+          window.sessionStorage.removeItem(sessionKey);
+          setProgressPercent(100);
+          setSuccess(true);
+          setMessage(directResult.message);
+          router.refresh();
+          return;
+        } catch (error) {
+          if (!(error instanceof DirectSourceUploadUnavailableError) || !localUploadFallbackEnabled) {
+            const failed = error as Error & { result?: UploadApiResponse };
+            setMessage(failed.result?.fieldErrors?.mediaFile ?? failed.result?.message ?? failed.message);
+            return;
+          }
+        }
+      }
+
       const savedSession = window.sessionStorage.getItem(sessionKey);
       const canResume = savedSession === `${selectedFile.name}:${selectedFile.size}`;
       if (!canResume) {
