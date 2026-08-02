@@ -268,6 +268,14 @@ describe("aiSermonIntelligenceSchema", () => {
         sectionType: "ADMINISTRATION",
         orderIndex: 1,
         confidenceScore: 0.8,
+      }, {
+        sectionType: "TRANSITION",
+        orderIndex: 2,
+        confidenceScore: 0.8,
+      }, {
+        sectionType: "CHURCH_ADMINISTRATION",
+        orderIndex: 3,
+        confidenceScore: 0.8,
       }],
       ministryMoments: [
         {
@@ -294,7 +302,20 @@ describe("aiSermonIntelligenceSchema", () => {
           whyDetected: "The transcript contains a healing testimony.",
           suggestedAudience: "People needing encouragement",
           suggestedUsage: "Testimony clip",
-          clipCategory: "Best Testimony clip",
+          clipCategory: "Healing Testimony Clip",
+        },
+        {
+          momentType: "HEALING_TESTIMONY_MOMENT",
+          title: "Healing ministry",
+          description: "A healing ministry moment.",
+          startTimeSeconds: 240,
+          endTimeSeconds: 285,
+          confidenceScore: 0.86,
+          transcriptExcerpt: "Receive your healing.",
+          whyDetected: "The transcript contains a healing ministry moment.",
+          suggestedAudience: "People needing healing",
+          suggestedUsage: "Healing testimony clip",
+          clipCategory: "Worship Highlight",
         },
       ],
     });
@@ -303,6 +324,8 @@ describe("aiSermonIntelligenceSchema", () => {
     if (result.success) {
       expect(result.data.structureSections[0]?.sectionType).toBe("OTHER");
       expect(result.data.structureSections[1]?.sectionType).toBe("ANNOUNCEMENT");
+      expect(result.data.structureSections[2]?.sectionType).toBe("OTHER");
+      expect(result.data.structureSections[3]?.sectionType).toBe("ANNOUNCEMENT");
       expect(result.data.ministryMoments).toMatchObject([
         {
           momentType: "WORSHIP_MOMENT",
@@ -311,6 +334,10 @@ describe("aiSermonIntelligenceSchema", () => {
         {
           momentType: "HEALING_MOMENT",
           clipCategory: "Best Testimony Clip",
+        },
+        {
+          momentType: "HEALING_MOMENT",
+          clipCategory: "Best Worship Clip",
         },
       ]);
     }
