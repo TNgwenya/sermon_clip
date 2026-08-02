@@ -123,6 +123,16 @@ describe("lyric-led worship moment discovery", () => {
     expect(candidates).toEqual([]);
   });
 
+  it("does not label spoken prayer or service logistics as a lyric-led worship clip", () => {
+    const candidates = detectLyricLedWorshipMoments([
+      segment(0, 18, "I thank You Jesus, and in Jesus Christ's mighty name I pray."),
+      segment(20, 39, "Can I get a microphone? Raise your hand if that is you."),
+      segment(41, 62, "The venue is here in Joburg. Praise the Lord."),
+    ]);
+
+    expect(candidates).toEqual([]);
+  });
+
   it("excludes the sermon window before looking for praise and worship moments", () => {
     const segments = [
       segment(0, 20, "Hallelujah, You are holy, we worship You."),

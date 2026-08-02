@@ -55,9 +55,9 @@ const WORSHIP_ACCLAMATION_PATTERN = DIRECT_WORSHIP_PATTERNS[0];
 const WORSHIP_VOCABULARY_PATTERN =
   /\b(?:worship|praise|sing|song|hallelujah|haleluya|holy|worthy|glory|adore|exalt|magnify|jesus|lord|god|saviour|savior|king|inkosi|jesu|ngcwele|khonza|dumisa)\b/iu;
 const SERMON_PROSE_PATTERN =
-  /\b(?:the bible says|scripture says|turn with me|today i want to|i want to teach|let me explain|the point is|this passage|this verse|my first point|in conclusion|purposefully ordained|body of christ|obedience|looking for a sermon)\b/iu;
+  /\b(?:the bible says|scripture says|turn with me|today i want to|i want to teach|let me explain|the point is|this passage|this verse|my first point|in conclusion|purposefully ordained|body of christ|obedience|looking for a sermon|vision of the church|mission of the church|number of years|serve him faithfully|i pray|we pray|let us pray|in jesus(?: christ)? mighty name|god bless you)\b/iu;
 const ANNOUNCEMENT_PROSE_PATTERN =
-  /\b(?:rsvp|whatsapp group|sign up|scan (?:it|the|this)|volunteers?|membership training|scholarship|conference|hospitality team|kindly see|the link|every saturday|service (?:from|until|at)|we are selling|t[ -]?shirts?|hoodies?|join (?:our|the)|join us|department|monthly fasting|fasting prayer|taking place|monday|tuesday|wednesday|friday|saturday|women(?:'s)?|temporarily closed|serve (?:and|with|the)|other churches|his ministry|birthday|growing up|give me (?:a|one) minute|waiting for everybody)\b/iu;
+  /\b(?:rsvp|whatsapp group|sign up|scan (?:it|the|this)|volunteers?|membership training|scholarship|conference|hospitality team|kindly see|the link|every saturday|service (?:from|until|at)|we are selling|t[ -]?shirts?|hoodies?|join (?:our|the)|join us|department|monthly fasting|fasting prayer|taking place|monday|tuesday|wednesday|friday|saturday|women(?:'s)?|temporarily closed|serve (?:and|with|the)|other churches|his ministry|birthday|growing up|give me (?:a|one) minute|waiting for everybody|venue|joburg|no excuse|microphone|raise your hand|is that a hand)\b/iu;
 
 function normalizeText(value: string): string {
   return value
