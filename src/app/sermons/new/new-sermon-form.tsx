@@ -183,6 +183,7 @@ export function NewSermonForm({
   directSourceUploadEnabled = false,
   localUploadFallbackEnabled = true,
   defaults,
+  eventContext,
 }: {
   initialYoutubeUrl?: string;
   canUploadMedia?: boolean;
@@ -195,11 +196,25 @@ export function NewSermonForm({
     language: string;
     sermonDate: string;
   };
+  eventContext?: {
+    eventId: string;
+    eventName: string;
+    sessionId: string;
+    sessionTitle: string;
+    resumeUpload?: {
+      sermonId: string;
+      sourceAssetId?: string;
+      fileName?: string;
+      fileSize?: number;
+    };
+  };
 }) {
   const [state, formAction] = useActionState(createSermonAction, initialCreateSermonState);
   const router = useRouter();
   const [activeFeatureModal, setActiveFeatureModal] = useState<FeatureModalKind | null>(null);
-  const [sourceMode, setSourceMode] = useState<SermonSourceMode>("youtube");
+  const [sourceMode, setSourceMode] = useState<SermonSourceMode>(
+    eventContext?.resumeUpload ? "upload" : "youtube",
+  );
   const [youtubeUrl, setYoutubeUrl] = useState(initialYoutubeUrl);
   const [uploadState, setUploadState] = useState<CreateSermonFormState | null>(null);
   const [isUploadSubmitting, setIsUploadSubmitting] = useState(false);
@@ -215,9 +230,11 @@ export function NewSermonForm({
 
   useEffect(() => {
     if (state.success && state.createdSermonId) {
-      router.replace(`/sermons/${state.createdSermonId}`);
+      router.replace(eventContext
+        ? `/events/${eventContext.eventId}#session-${eventContext.sessionId}`
+        : `/sermons/${state.createdSermonId}`);
     }
-  }, [router, state.createdSermonId, state.success]);
+  }, [eventContext, router, state.createdSermonId, state.success]);
 
   useEffect(() => {
     if (state.message || uploadState?.message) {
@@ -254,10 +271,41 @@ export function NewSermonForm({
     const savedUploadSession = parseMobileUploadSession(
       window.sessionStorage.getItem(MOBILE_UPLOAD_SESSION_STORAGE_KEY),
     );
-    let uploadSermonId = savedUploadSession?.fileName === file.name
+    const savedUploadMatches = savedUploadSession?.fileName === file.name
       && savedUploadSession.fileSize === file.size
+      && savedUploadSession.fileLastModified === file.lastModified
+      && savedUploadSession.eventSessionId === eventContext?.sessionId;
+    const durableEventUploadMatches = Boolean(
+      eventContext?.resumeUpload?.sourceAssetId
+      && eventContext.resumeUpload.fileName === file.name
+      && eventContext.resumeUpload.fileSize === file.size,
+    );
+    let uploadSermonId = savedUploadMatches
       ? savedUploadSession.sermonId
+      : durableEventUploadMatches
+        ? eventContext?.resumeUpload?.sermonId ?? null
+        : null;
+    let uploadSourceAssetId = uploadSermonId
+      ? savedUploadSession?.sourceAssetId
+        ?? eventContext?.resumeUpload?.sourceAssetId
+        ?? null
       : null;
+    if (eventContext?.resumeUpload && !uploadSermonId) {
+      const expectedFile = eventContext.resumeUpload.fileName;
+      setUploadState({
+        success: false,
+        message: expectedFile
+          ? `Choose the same recording (${expectedFile}) to resume this event upload.`
+          : "Resume this upload in the same browser where it started.",
+        fieldErrors: {
+          mediaFile: expectedFile
+            ? "The selected file does not match the recording already attached to this session."
+            : "This local upload can only resume from the browser that started it.",
+        },
+        createdSermonId: eventContext.resumeUpload.sermonId,
+      });
+      return;
+    }
     if (!uploadSermonId) {
       window.sessionStorage.removeItem(MOBILE_UPLOAD_SESSION_STORAGE_KEY);
     }
@@ -276,6 +324,9 @@ export function NewSermonForm({
     uploadUrl.searchParams.set("sermonEndTimestamp", String(formData.get("sermonEndTimestamp") ?? ""));
     uploadUrl.searchParams.set("includeWorshipMoments", formData.get("includeWorshipMoments") === "on" ? "true" : "false");
     uploadUrl.searchParams.set("rightsConfirmed", formData.get("rightsConfirmed") === "on" ? "true" : "false");
+    if (eventContext) {
+      uploadUrl.searchParams.set("eventSessionId", eventContext.sessionId);
+    }
 
     window.sessionStorage.setItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY, "true");
     setIsUploadSubmitting(true);
@@ -286,8 +337,10 @@ export function NewSermonForm({
           const directResult = await uploadFileToPrivateSource({
             mode: "create",
             sermonId: uploadSermonId,
+            sourceAssetId: uploadSourceAssetId,
             file,
             fields: {
+              eventSessionId: eventContext?.sessionId,
               title: String(formData.get("title") ?? ""),
               speakerName: String(formData.get("speakerName") ?? ""),
               churchName: String(formData.get("churchName") ?? ""),
@@ -298,12 +351,16 @@ export function NewSermonForm({
               includeWorshipMoments: formData.get("includeWorshipMoments") === "on",
               rightsConfirmed: formData.get("rightsConfirmed") === "on",
             },
-            onSession: (sermonId) => {
+            onSession: (sermonId, sourceAssetId) => {
               uploadSermonId = sermonId;
+              uploadSourceAssetId = sourceAssetId ?? null;
               window.sessionStorage.setItem(MOBILE_UPLOAD_SESSION_STORAGE_KEY, JSON.stringify({
                 sermonId,
                 fileName: file.name,
                 fileSize: file.size,
+                fileLastModified: file.lastModified,
+                ...(sourceAssetId ? { sourceAssetId } : {}),
+                ...(eventContext ? { eventSessionId: eventContext.sessionId } : {}),
               }));
             },
             onProgress: setUploadProgressPercent,
@@ -312,7 +369,9 @@ export function NewSermonForm({
           if (directResult.createdSermonId) {
             window.sessionStorage.removeItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY);
             window.sessionStorage.removeItem(MOBILE_UPLOAD_SESSION_STORAGE_KEY);
-            router.replace(`/sermons/${directResult.createdSermonId}`);
+            router.replace(eventContext
+              ? `/events/${eventContext.eventId}#session-${eventContext.sessionId}`
+              : `/sermons/${directResult.createdSermonId}`);
           }
           return;
         } catch (error) {
@@ -344,6 +403,8 @@ export function NewSermonForm({
           sermonId: uploadSermonId,
           fileName: file.name,
           fileSize: file.size,
+          fileLastModified: file.lastModified,
+          ...(eventContext ? { eventSessionId: eventContext.sessionId } : {}),
         }));
       }
 
@@ -464,7 +525,9 @@ export function NewSermonForm({
         setUploadProgressPercent(100);
         window.sessionStorage.removeItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY);
         window.sessionStorage.removeItem(MOBILE_UPLOAD_SESSION_STORAGE_KEY);
-        router.replace(`/sermons/${result.createdSermonId}`);
+        router.replace(eventContext
+          ? `/events/${eventContext.eventId}#session-${eventContext.sessionId}`
+          : `/sermons/${result.createdSermonId}`);
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : "The upload request could not be completed.";
@@ -493,7 +556,22 @@ export function NewSermonForm({
           }
         }}
       >
+        {eventContext ? <input type="hidden" name="eventSessionId" value={eventContext.sessionId} /> : null}
         <UploadProgressTheater sourceMode={sourceMode} selectedFileName={selectedFile?.name ?? null} isUploadSubmitting={isUploadSubmitting} uploadProgressPercent={uploadProgressPercent} />
+        {eventContext ? (
+          <div className={styles.eventContextNote} role="note">
+            <span aria-hidden="true">EV</span>
+            <div>
+              <strong>{eventContext.eventName}</strong>
+              <p>
+                {eventContext.sessionTitle}
+                {eventContext.resumeUpload
+                  ? " · choose the same recording to resume this upload."
+                  : " · this recording will return to the event dashboard."}
+              </p>
+            </div>
+          </div>
+        ) : null}
         <div className={styles.quickStartNote} role="note">
           <span aria-hidden="true">01</span>
           <div>

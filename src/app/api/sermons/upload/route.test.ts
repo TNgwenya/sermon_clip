@@ -321,6 +321,15 @@ describe("raw sermon upload route", () => {
 
     const finishResponse = await POST(trustedRequest(finishUrl, { method: "POST" }));
     expect(finishResponse.status).toBe(200);
+    await expect(finishResponse.clone().json()).resolves.toMatchObject({
+      success: true,
+      sourceStored: true,
+      originalPreserved: true,
+      storedBytes: 3,
+      resumedImport: true,
+      message: expect.stringContaining("stored safely"),
+    });
+    await expect(readFile(testState.sourcePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
     expect(prismaMock.sermon.update).toHaveBeenCalledWith({
       where: { id: "sermon-1" },
       data: expect.objectContaining({

@@ -1,6 +1,7 @@
 export type DirectSourceUploadMode = "create" | "recovery";
 
 export type DirectSourceUploadFields = {
+  eventSessionId?: string;
   title?: string;
   speakerName?: string;
   churchName?: string;
@@ -17,6 +18,10 @@ export type DirectSourceUploadResult = {
   message: string;
   createdSermonId?: string;
   sourceAssetId?: string;
+  sourceStored?: boolean;
+  originalPreserved?: boolean;
+  storedBytes?: number;
+  resumedImport?: boolean;
   ready?: boolean;
   uploadedPartNumbers?: number[];
   uploadedBytes?: number;
@@ -131,15 +136,17 @@ async function uploadOnePart(input: {
 export async function uploadFileToPrivateSource(input: {
   mode: DirectSourceUploadMode;
   sermonId?: string | null;
+  sourceAssetId?: string | null;
   file: File;
   fields?: DirectSourceUploadFields;
-  onSession?: (sermonId: string) => void;
+  onSession?: (sermonId: string, sourceAssetId?: string) => void;
   onProgress?: (percent: number) => void;
 }): Promise<DirectSourceUploadResult> {
   const initiated = await sourceUploadRequest({
     action: "initiate",
     mode: input.mode,
     sermonId: input.sermonId || undefined,
+    sourceAssetId: input.sourceAssetId || undefined,
     fileName: input.file.name,
     fileSize: input.file.size,
     contentType: input.file.type || "application/octet-stream",
@@ -151,7 +158,7 @@ export async function uploadFileToPrivateSource(input: {
   if (!sermonId) {
     throw new Error("The private upload service did not return a sermon ID.");
   }
-  input.onSession?.(sermonId);
+  input.onSession?.(sermonId, sourceAssetId);
   if (session.ready) {
     input.onProgress?.(100);
     return session;
@@ -199,6 +206,7 @@ export async function uploadFileToPrivateSource(input: {
 
   const completed = await sourceUploadRequest({
     action: "complete",
+    mode: input.mode,
     sermonId: activeSermonId,
     sourceAssetId: activeSourceAssetId,
   });

@@ -2631,6 +2631,184 @@
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 14.5rem), 1fr));
 }
 
+.premium-sermon-workspace .youtube-recovery-fallback {
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  gap: clamp(1rem, 2.5vw, 1.6rem);
+  padding: clamp(1rem, 2.5vw, 1.5rem);
+  border: 1px solid color-mix(in srgb, var(--review, #dda95a) 40%, transparent);
+  border-radius: var(--radius-panel, 14px);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--review, #dda95a) 9%, transparent), transparent 55%),
+    color-mix(in srgb, var(--workflow-surface-raised) 92%, transparent);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.16);
+}
+
+.premium-sermon-workspace .youtube-recovery-fallback.is-complete {
+  border-color: color-mix(in srgb, var(--success, #91d2ad) 38%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--success, #91d2ad) 9%, transparent), transparent 55%),
+    color-mix(in srgb, var(--workflow-surface-raised) 92%, transparent);
+}
+
+.premium-sermon-workspace .youtube-recovery-heading {
+  align-self: start;
+}
+
+.premium-sermon-workspace .youtube-recovery-heading h2 {
+  max-width: 22ch;
+  margin: 0;
+  font-size: clamp(1.25rem, 2.6vw, 1.75rem);
+  line-height: 1.12;
+}
+
+.premium-sermon-workspace .youtube-recovery-heading p {
+  margin: 0;
+}
+
+.premium-sermon-workspace .youtube-recovery-steps {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.premium-sermon-workspace .youtube-recovery-steps li {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  gap: 0.72rem;
+  padding: 0.78rem;
+  border: 1px solid var(--workflow-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--workflow-surface) 76%, transparent);
+}
+
+.premium-sermon-workspace .youtube-recovery-steps li > span {
+  width: 2rem;
+  height: 2rem;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--review, #dda95a) 16%, transparent);
+  color: var(--review-strong, #f2c77f);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.premium-sermon-workspace .youtube-recovery-steps li > div {
+  min-width: 0;
+  display: grid;
+  gap: 0.22rem;
+}
+
+.premium-sermon-workspace .youtube-recovery-steps p,
+.premium-sermon-workspace .youtube-recovery-phone-copy p,
+.premium-sermon-workspace .youtube-recovery-upload-panel p,
+.premium-sermon-workspace .youtube-recovery-progress p,
+.premium-sermon-workspace .youtube-recovery-fallback .success-banner p,
+.premium-sermon-workspace .youtube-recovery-fallback .error-banner p {
+  margin: 0;
+}
+
+.premium-sermon-workspace .youtube-recovery-steps a {
+  width: fit-content;
+  color: var(--review-strong, #f2c77f);
+  font-size: 0.82rem;
+  font-weight: 760;
+}
+
+.premium-sermon-workspace .youtube-recovery-upload-panel,
+.premium-sermon-workspace .youtube-recovery-progress,
+.premium-sermon-workspace .youtube-recovery-fallback > .success-banner,
+.premium-sermon-workspace .youtube-recovery-fallback > .error-banner,
+.premium-sermon-workspace .youtube-recovery-phone-copy,
+.premium-sermon-workspace .youtube-recovery-actions,
+.premium-sermon-workspace .youtube-recovery-privacy-note {
+  grid-column: 1 / -1;
+}
+
+.premium-sermon-workspace .youtube-recovery-upload-panel {
+  padding: clamp(0.85rem, 2vw, 1.05rem);
+  border: 1px dashed color-mix(in srgb, var(--review, #dda95a) 42%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--workflow-surface) 72%, transparent);
+}
+
+.premium-sermon-workspace .youtube-recovery-picker-row,
+.premium-sermon-workspace .youtube-recovery-progress-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.premium-sermon-workspace .youtube-recovery-file {
+  min-width: 0;
+  display: grid;
+  justify-items: end;
+  gap: 0.08rem;
+  color: var(--text-secondary, #aaa9a2);
+  font-size: 0.78rem;
+  text-align: right;
+}
+
+.premium-sermon-workspace .youtube-recovery-file strong {
+  max-width: min(48vw, 30rem);
+  overflow: hidden;
+  color: var(--text, #f5f3ec);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.premium-sermon-workspace .youtube-recovery-progress progress {
+  width: 100%;
+}
+
+.premium-sermon-workspace .youtube-recovery-actions .button {
+  min-height: 3rem;
+}
+
+.premium-sermon-workspace .youtube-recovery-phone-copy {
+  display: grid;
+  gap: 0.28rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--success, #91d2ad) 26%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--success, #91d2ad) 7%, transparent);
+}
+
+.premium-sermon-workspace .youtube-recovery-privacy-note {
+  margin: 0;
+  color: var(--text-muted, #7f817d);
+}
+
+@media (max-width: 700px) {
+  .premium-sermon-workspace .youtube-recovery-fallback {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0.9rem;
+  }
+
+  .premium-sermon-workspace .youtube-recovery-picker-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .premium-sermon-workspace .youtube-recovery-picker-row .button,
+  .premium-sermon-workspace .youtube-recovery-actions .button {
+    width: 100%;
+  }
+
+  .premium-sermon-workspace .youtube-recovery-file {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .premium-sermon-workspace .youtube-recovery-file strong {
+    max-width: 100%;
+  }
+}
+
 .premium-sermon-workspace .troubleshoot-action-item {
   border-color: var(--workflow-line);
   border-radius: var(--radius-control, 10px);

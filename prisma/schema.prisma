@@ -35,6 +35,38 @@ enum SermonSourceAssetStatus {
   FAILED
 }
 
+enum MinistryEventType {
+  CONFERENCE
+  REVIVAL
+  SUMMIT
+  RETREAT
+  CAMP
+  CRUSADE
+  OTHER
+}
+
+enum MinistryEventStatus {
+  DRAFT
+  UPCOMING
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+enum EventSessionType {
+  PREACHING
+  WORSHIP
+  PANEL
+  WORKSHOP
+  PRAYER
+  OTHER
+}
+
+enum EventSessionStatus {
+  PLANNED
+  CANCELLED
+}
+
 enum ProcessingJobType {
   DOWNLOAD_VIDEO
   EXTRACT_AUDIO
@@ -796,6 +828,8 @@ model Organization {
   automationSettings          OrganizationAutomationSettings?
   publicSermonPages           SermonPublicPage[]
   sermonSourceAssets          SermonSourceAsset[]
+  ministryEvents              MinistryEvent[]
+  eventSessions               EventSession[]
 
   @@index([status])
   @@index([createdAt])
@@ -850,6 +884,8 @@ model Campus {
   approvalDecisions           ApprovalDecision[]
   userSessions                UserSession[]
   publicSermonPages           SermonPublicPage[]
+  ministryEvents              MinistryEvent[]
+  eventSessions               EventSession[]
 
   @@unique([organizationId, slug])
   @@unique([id, organizationId])
@@ -893,6 +929,7 @@ model User {
   securityTokens                  SecurityToken[]
   confirmedAutomationSettings     OrganizationAutomationSettings[] @relation("AutomationRightsConfirmedBy")
   createdPublicSermonPages        SermonPublicPage[]               @relation("PublicSermonPageCreatedBy")
+  createdMinistryEvents           MinistryEvent[]                  @relation("MinistryEventCreatedBy")
 
   @@unique([authProvider, authSubject])
   @@index([status])
@@ -1478,6 +1515,7 @@ model Sermon {
   weekDrafts            WeekDraft[]
   publicPage            SermonPublicPage?
   sourceAsset           SermonSourceAsset?
+  eventSession          EventSession?
   organization          Organization?            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   campus                Campus?                  @relation(fields: [campusId], references: [id], onDelete: SetNull)
 
@@ -1512,6 +1550,68 @@ model SermonSourceAsset {
   @@unique([bucket, objectKey])
   @@index([organizationId, status, createdAt])
   @@index([campusId, status, createdAt])
+}
+
+model MinistryEvent {
+  id                  String              @id @default(cuid())
+  organizationId      String
+  campusId            String?
+  name                String
+  eventType           MinistryEventType   @default(CONFERENCE)
+  theme               String?
+  description         String?
+  venue               String?
+  timezone            String
+  startDate           DateTime            @db.Date
+  endDate             DateTime            @db.Date
+  status              MinistryEventStatus @default(DRAFT)
+  logoPath            String?
+  primaryBrandColor   String?
+  secondaryBrandColor String?
+  createdByUserId     String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus              Campus?             @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  createdBy           User?               @relation("MinistryEventCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  sessions            EventSession[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, status, startDate])
+  @@index([campusId, status, startDate])
+  @@index([createdByUserId, createdAt])
+}
+
+model EventSession {
+  id               String             @id @default(cuid())
+  organizationId   String
+  campusId         String?
+  eventId          String
+  sermonId         String?            @unique
+  title            String
+  sessionType      EventSessionType   @default(PREACHING)
+  speakerName      String?
+  language         String?
+  scheduledStartAt DateTime
+  scheduledEndAt   DateTime?
+  dayNumber        Int
+  sortOrder        Int
+  priority         Int                @default(0)
+  status           EventSessionStatus @default(PLANNED)
+  notes            String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus           Campus?            @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  event            MinistryEvent      @relation(fields: [eventId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  sermon           Sermon?            @relation(fields: [sermonId], references: [id], onDelete: SetNull)
+
+  @@unique([id, organizationId])
+  @@unique([eventId, dayNumber, sortOrder])
+  @@index([organizationId, scheduledStartAt])
+  @@index([campusId, scheduledStartAt])
+  @@index([eventId, scheduledStartAt])
+  @@index([eventId, status, scheduledStartAt])
 }
 
 model SermonPublicPage {

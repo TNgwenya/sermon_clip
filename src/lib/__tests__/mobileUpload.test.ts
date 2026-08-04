@@ -78,8 +78,35 @@ describe("mobile upload transport", () => {
       sermonId: "sermon-1",
       fileName: "Mobile Sermon.mov",
       fileSize: 12_345,
-    }))).toEqual({ sermonId: "sermon-1", fileName: "Mobile Sermon.mov", fileSize: 12_345 });
+      fileLastModified: 1_720_000_000_000,
+      sourceAssetId: "asset-1",
+      eventSessionId: "session-1",
+    }))).toEqual({
+      sermonId: "sermon-1",
+      fileName: "Mobile Sermon.mov",
+      fileSize: 12_345,
+      fileLastModified: 1_720_000_000_000,
+      sourceAssetId: "asset-1",
+      eventSessionId: "session-1",
+    });
     expect(parseMobileUploadSession("not-json")).toBeNull();
-    expect(parseMobileUploadSession(JSON.stringify({ sermonId: "sermon-1", fileName: "Mobile Sermon.mov", fileSize: 0 }))).toBeNull();
+    expect(parseMobileUploadSession(JSON.stringify({
+      sermonId: "sermon-1",
+      fileName: "Mobile Sermon.mov",
+      fileSize: 0,
+      fileLastModified: 1_720_000_000_000,
+    }))).toBeNull();
+    expect(parseMobileUploadSession(JSON.stringify({
+      sermonId: "sermon-1",
+      fileName: "Mobile Sermon.mov",
+      fileSize: 12_345,
+    }))).toBeNull();
+    expect(parseMobileUploadSession(JSON.stringify({
+      sermonId: "sermon-1",
+      fileName: "Mobile Sermon.mov",
+      fileSize: 12_345,
+      fileLastModified: 1_720_000_000_000,
+      eventSessionId: "",
+    }))).toBeNull();
   });
 });

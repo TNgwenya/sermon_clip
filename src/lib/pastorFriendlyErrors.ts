@@ -182,9 +182,9 @@ export function buildPastorProcessingFailurePresentation({
   if (shouldOfferYouTubeUploadRecovery({ failureCode, message: normalizedMessage })) {
     return {
       kind: "YOUTUBE_SOURCE_UNAVAILABLE",
-      title: "Upload the recording to continue",
-      summary: "YouTube asked Sermon Clip to verify itself, so the recording could not be imported. Your sermon details, sermon timing, and worship setting are safe.",
-      guidance: "Choose the same recording from your device. Sermon Clip will attach it to this sermon and continue from media preparation without downloading from YouTube.",
+      title: "YouTube could not provide this video",
+      summary: "The YouTube link import stopped. Your sermon details, sermon timing, and worship setting are safe.",
+      guidance: "The video owner must download their own video from YouTube Studio, then upload that original file here. Simonclip will attach it to this same sermon and continue automatically.",
       retryAfterTranscriptRefresh: false,
       metrics: [],
     };

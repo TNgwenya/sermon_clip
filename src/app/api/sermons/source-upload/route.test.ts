@@ -10,6 +10,9 @@ const prismaMock = vi.hoisted(() => {
       findFirst: vi.fn(),
       update: vi.fn(),
     },
+    processingJob: {
+      create: vi.fn(),
+    },
     sermonSourceAsset: {
       findFirst: vi.fn(),
       upsert: vi.fn(),
@@ -100,7 +103,11 @@ describe("private S3 source upload route", () => {
       organizationId: "org-1",
       status: "ACTIVE",
     });
-    prismaMock.sermon.create.mockResolvedValue({ id: "sermon-1", title: "Sunday Service" });
+    prismaMock.sermon.create.mockResolvedValue({
+      id: "sermon-1",
+      title: "Sunday Service",
+      campusId: "campus-1",
+    });
     prismaMock.sermonSourceAsset.upsert.mockResolvedValue({ id: "asset-1" });
   });
 
@@ -166,6 +173,7 @@ describe("private S3 source upload route", () => {
       sizeBytes: BigInt(20 * 1024 * 1024),
       partSizeBytes: 16 * 1024 * 1024,
       status: "INITIATED",
+      sermon: { youtubeUrl: "local-upload://service.mp4" },
     });
 
     const response = await POST(trustedRequest({
@@ -203,6 +211,7 @@ describe("private S3 source upload route", () => {
       sizeBytes: BigInt(20 * 1024 * 1024),
       partSizeBytes: 16 * 1024 * 1024,
       status: "UPLOADING",
+      sermon: { youtubeUrl: "local-upload://service.mp4" },
     });
 
     const response = await POST(trustedRequest({
@@ -216,6 +225,10 @@ describe("private S3 source upload route", () => {
       success: true,
       ready: true,
       createdSermonId: "sermon-1",
+      sourceStored: true,
+      originalPreserved: true,
+      storedBytes: 20 * 1024 * 1024,
+      resumedImport: false,
     });
     expect(prismaMock.sermonSourceAsset.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
@@ -231,5 +244,107 @@ describe("private S3 source upload route", () => {
       }),
     }));
     expect(queueMock).toHaveBeenCalledWith("sermon-1", "PROCESS_SERMON");
+  });
+
+  it("resumes the same sermon after safely storing an owner-provided YouTube source", async () => {
+    prismaMock.sermonSourceAsset.findFirst.mockResolvedValue({
+      id: "asset-1",
+      sermonId: "sermon-1",
+      bucket: "private-sources",
+      objectKey: "source.mp4",
+      region: "eu-central-1",
+      uploadId: "upload-1",
+      originalFileName: "owner-download.mp4",
+      sizeBytes: BigInt(20 * 1024 * 1024),
+      partSizeBytes: 16 * 1024 * 1024,
+      status: "UPLOADING",
+      sermon: { youtubeUrl: "https://www.youtube.com/watch?v=owner-video" },
+    });
+
+    const response = await POST(trustedRequest({
+      action: "complete",
+      mode: "recovery",
+      sermonId: "sermon-1",
+      sourceAssetId: "asset-1",
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      sourceStored: true,
+      originalPreserved: true,
+      storedBytes: 20 * 1024 * 1024,
+      resumedImport: true,
+      message: expect.stringContaining("import has resumed"),
+    });
+    expect(prismaMock.sermon.update).toHaveBeenCalledWith({
+      where: { id: "sermon-1" },
+      data: {
+        youtubeUrl: "local-upload://owner-download.mp4",
+        sourceVideoPath: null,
+        sourceDurationSeconds: null,
+      },
+    });
+    expect(prismaMock.processingJob.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        sermonId: "sermon-1",
+        type: "DOWNLOAD_VIDEO",
+        status: "SUCCEEDED",
+      }),
+    }));
+    expect(prismaMock.auditEvent.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        action: "sermon.source_recovered",
+        targetId: "sermon-1",
+        metadataJson: expect.objectContaining({
+          originalPreserved: true,
+          recovery: true,
+        }),
+      }),
+    }));
+    expect(queueMock).toHaveBeenCalledWith("sermon-1", "PROCESS_SERMON");
+  });
+
+  it("re-queues a completed recovery upload when the first completion response was interrupted", async () => {
+    prismaMock.sermon.findFirst.mockResolvedValue({
+      id: "sermon-1",
+      title: "Saved sermon",
+      status: "FAILED",
+      youtubeUrl: "local-upload://owner-download.mp4",
+      processingJobs: [{ type: "DOWNLOAD_VIDEO", status: "SUCCEEDED" }],
+      sourceAsset: {
+        id: "asset-1",
+        bucket: "private-sources",
+        objectKey: "source.mp4",
+        region: "eu-central-1",
+        uploadId: null,
+        originalFileName: "owner-download.mp4",
+        contentType: "video/mp4",
+        sizeBytes: BigInt(20 * 1024 * 1024),
+        partSizeBytes: 16 * 1024 * 1024,
+        status: "READY",
+      },
+    });
+
+    const response = await POST(trustedRequest({
+      action: "initiate",
+      mode: "recovery",
+      sermonId: "sermon-1",
+      sourceAssetId: "asset-1",
+      fileName: "owner-download.mp4",
+      fileSize: 20 * 1024 * 1024,
+      contentType: "video/mp4",
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      sourceStored: true,
+      originalPreserved: true,
+      resumedImport: true,
+      ready: true,
+    });
+    expect(queueMock).toHaveBeenCalledWith("sermon-1", "PROCESS_SERMON");
+    expect(s3Mock.create).not.toHaveBeenCalled();
   });
 });

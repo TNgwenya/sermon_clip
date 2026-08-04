@@ -43,7 +43,7 @@ export function classifyYouTubeSourceFailure(message: string): YouTubeSourceFail
   return {
     code: "VIDEO_DOWNLOAD_FAILED",
     retryable: true,
-    uploadRecoveryRecommended: false,
+    uploadRecoveryRecommended: true,
   };
 }
 
@@ -51,10 +51,14 @@ export function shouldOfferYouTubeUploadRecovery(input: {
   failureCode?: string | null;
   message?: string | null;
 }): boolean {
-  if (input.failureCode === "YOUTUBE_AUTH_REQUIRED" || input.failureCode === "YOUTUBE_FORBIDDEN") {
+  if (
+    input.failureCode === "YOUTUBE_AUTH_REQUIRED"
+    || input.failureCode === "YOUTUBE_FORBIDDEN"
+    || input.failureCode === "VIDEO_DOWNLOAD_FAILED"
+  ) {
     return true;
   }
 
-  const classification = classifyYouTubeSourceFailure(input.message ?? "");
-  return classification.uploadRecoveryRecommended;
+  const message = input.message ?? "";
+  return looksLikeYouTubeAuthFailure(message) || looksLikeYouTubeForbiddenFailure(message);
 }

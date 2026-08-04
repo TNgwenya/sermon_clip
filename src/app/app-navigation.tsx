@@ -10,6 +10,7 @@ type NavigationIconName =
   | "review"
   | "publish"
   | "plan"
+  | "events"
   | "growth"
   | "ideas"
   | "insights"
@@ -63,6 +64,12 @@ const primaryItems: NavigationItem[] = [
 ];
 
 const contentPlanItems: NavigationItem[] = [
+  {
+    href: "/events",
+    label: "Events",
+    icon: "events",
+    isActive: (pathname) => pathname.startsWith("/events"),
+  },
   {
     href: "/week-drafts",
     label: "Week drafts",
@@ -171,6 +178,14 @@ function NavigationIconPaths({ name }: { name: NavigationIconName }) {
         <>
           <rect x="3.5" y="5.5" width="17" height="15" rx="2.5" />
           <path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17M8 14h.01M12 14h.01M16 14h.01M8 17.5h.01M12 17.5h.01" />
+        </>
+      );
+    case "events":
+      return (
+        <>
+          <path d="M5 5.5h14v15H5z" />
+          <path d="M8 3.5v4M16 3.5v4M5 10h14" />
+          <path d="m9 15 1.8 1.8 4.2-4.2" />
         </>
       );
     case "growth":

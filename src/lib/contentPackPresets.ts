@@ -1,6 +1,7 @@
 import type { ContentOpportunityType } from "@prisma/client";
 
 export const CONTENT_PACK_PRESET_IDS = [
+  "SAME_DAY_EVENT_PACK",
   "WEEKLY_CONTENT_PACK",
   "MINISTRY_DEPTH_PACK",
   "PRODUCTION_PACK",
@@ -16,6 +17,20 @@ export type ContentPackPreset = {
 };
 
 export const CONTENT_PACK_PRESETS: ContentPackPreset[] = [
+  {
+    id: "SAME_DAY_EVENT_PACK",
+    label: "Same-day event pack",
+    description: "Fast-turnaround clips, quotes, recap copy, stories, and next-session promotion for a conference day.",
+    quantities: {
+      SHORT_FORM_CLIP_IDEA: 3,
+      QUOTE_GRAPHIC: 2,
+      SCRIPTURE_GRAPHIC: 1,
+      SERMON_SUMMARY: 1,
+      PLATFORM_CAPTION_PACK: 1,
+      ENGAGEMENT_STORY_SET: 1,
+      NEXT_SERVICE_PROMOTION: 1,
+    },
+  },
   {
     id: "WEEKLY_CONTENT_PACK",
     label: "Weekly content pack",

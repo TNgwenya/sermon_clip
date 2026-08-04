@@ -17,6 +17,11 @@ import { queueSermonProcessingJob } from "@/server/agents/processing";
 import { AuthorizationError } from "@/server/auth/authorization";
 import { requirePersistedTenantCapability } from "@/server/auth/requestAuthorization";
 import {
+  attachEventSessionToSermon,
+  EventSessionLinkError,
+  resolveEventSessionForIntake,
+} from "@/server/events/eventSessionLinking";
+import {
   abortS3SourceMultipartUpload,
   completeS3SourceMultipartUpload,
   createS3SourceMultipartUpload,
@@ -125,14 +130,23 @@ type ExistingUpload = NonNullable<
   NonNullable<Awaited<ReturnType<typeof loadSermonForUpload>>>["sourceAsset"]
 >;
 
-async function resumableUploadResponse(sermonId: string, asset: ExistingUpload): Promise<NextResponse | null> {
+async function resumableUploadResponse(
+  sermonId: string,
+  asset: ExistingUpload,
+  mode: string,
+): Promise<NextResponse | null> {
   const sizeBytes = Number(asset.sizeBytes);
   if (asset.status === "READY") {
+    await queueSermonProcessingJob(sermonId, "PROCESS_SERMON");
     return NextResponse.json({
       success: true,
       message: "The recording is already stored safely.",
       createdSermonId: sermonId,
       sourceAssetId: asset.id,
+      sourceStored: true,
+      originalPreserved: true,
+      storedBytes: sizeBytes,
+      resumedImport: mode === "recovery",
       ready: true,
       uploadedPartNumbers: [],
       partSizeBytes: asset.partSizeBytes,
@@ -167,6 +181,7 @@ async function loadSermonForUpload(context: TenantRequestContext, sermonId: stri
     select: {
       id: true,
       title: true,
+      campusId: true,
       status: true,
       youtubeUrl: true,
       sourceAsset: {
@@ -194,7 +209,9 @@ async function loadSermonForUpload(context: TenantRequestContext, sermonId: stri
 
 async function initiateUpload(context: TenantRequestContext, body: JsonObject): Promise<NextResponse> {
   const mode = stringValue(body.mode);
+  const eventSessionId = stringValue(body.eventSessionId);
   const requestedSermonId = stringValue(body.sermonId);
+  const requestedSourceAssetId = stringValue(body.sourceAssetId);
   const fileName = stringValue(body.fileName) || "sermon-media";
   const contentType = stringValue(body.contentType) || "application/octet-stream";
   const fileSize = positiveSafeInteger(body.fileSize);
@@ -225,21 +242,18 @@ async function initiateUpload(context: TenantRequestContext, body: JsonObject): 
     );
   }
 
-  if (sermon?.sourceAsset) {
+  if (
+    sermon?.sourceAsset
+    && sermon.sourceAsset.status === "READY"
+    && requestedSourceAssetId === sermon.sourceAsset.id
+  ) {
     const assetSize = Number(sermon.sourceAsset.sizeBytes);
     const sameFile = sermon.sourceAsset.originalFileName === fileName
       && assetSize === fileSize
       && sermon.sourceAsset.contentType === contentType;
     if (sameFile) {
-      try {
-        const response = await resumableUploadResponse(sermon.id, sermon.sourceAsset);
-        if (response) return response;
-      } catch (error) {
-        const code = error && typeof error === "object" && "name" in error
-          ? String((error as { name?: unknown }).name ?? "")
-          : "";
-        if (code !== "NoSuchUpload") throw error;
-      }
+      const response = await resumableUploadResponse(sermon.id, sermon.sourceAsset, mode);
+      if (response) return response;
     }
   }
 
@@ -295,10 +309,15 @@ async function initiateUpload(context: TenantRequestContext, body: JsonObject): 
     }
 
     const created = await prisma.$transaction(async (tx) => {
+      const eventSession = await resolveEventSessionForIntake(
+        tx,
+        context,
+        eventSessionId,
+      );
       const record = await tx.sermon.create({
         data: {
           organizationId: context.organizationId,
-          campusId: context.campusId,
+          campusId: eventSession?.campusId ?? context.campusId,
           youtubeUrl: buildLocalUploadSourceUrl(fileName),
           title: parsed.data.title,
           speakerName: parsed.data.speakerName,
@@ -312,22 +331,37 @@ async function initiateUpload(context: TenantRequestContext, body: JsonObject): 
           rightsConfirmed: parsed.data.rightsConfirmed,
           status: "CREATED",
         },
-        select: { id: true, title: true },
+        select: { id: true, title: true, campusId: true },
       });
+      await attachEventSessionToSermon(tx, context, eventSession, record.id);
       await tx.auditEvent.create({
         data: {
           organizationId: context.organizationId,
-          campusId: context.campusId,
+          campusId: eventSession?.campusId ?? context.campusId,
           actorType: "USER",
           actorUserId: context.actorId,
           action: "sermon.created",
           targetType: "Sermon",
           targetId: record.id,
-          metadataJson: { title: record.title, source: "s3-direct-upload" },
+          metadataJson: {
+            title: record.title,
+            source: "s3-direct-upload",
+            ...(eventSession ? {
+              eventId: eventSession.eventId,
+              eventSessionId: eventSession.id,
+            } : {}),
+          },
         },
       });
-      return record;
+      return {
+        ...record,
+        eventId: eventSession?.eventId ?? null,
+      };
     });
+    if (created.eventId) {
+      revalidatePath(`/events/${created.eventId}`);
+      revalidatePath("/events");
+    }
     sermon = {
       ...created,
       status: "CREATED",
@@ -339,6 +373,24 @@ async function initiateUpload(context: TenantRequestContext, body: JsonObject): 
 
   if (!sermon) {
     return NextResponse.json({ success: false, message: "The sermon could not be prepared." }, { status: 500 });
+  }
+
+  if (sermon.sourceAsset && requestedSourceAssetId === sermon.sourceAsset.id) {
+    const assetSize = Number(sermon.sourceAsset.sizeBytes);
+    const sameFile = sermon.sourceAsset.originalFileName === fileName
+      && assetSize === fileSize
+      && sermon.sourceAsset.contentType === contentType;
+    if (sameFile) {
+      try {
+        const response = await resumableUploadResponse(sermon.id, sermon.sourceAsset, mode);
+        if (response) return response;
+      } catch (error) {
+        const code = error && typeof error === "object" && "name" in error
+          ? String((error as { name?: unknown }).name ?? "")
+          : "";
+        if (code !== "NoSuchUpload") throw error;
+      }
+    }
   }
 
   if (sermon.sourceAsset?.uploadId) {
@@ -363,7 +415,7 @@ async function initiateUpload(context: TenantRequestContext, body: JsonObject): 
       where: { sermonId: sermon.id },
       create: {
         organizationId: context.organizationId,
-        campusId: context.campusId,
+        campusId: sermon.campusId,
         sermonId: sermon.id,
         bucket: multipart.bucket,
         objectKey: multipart.objectKey,
@@ -399,7 +451,7 @@ async function initiateUpload(context: TenantRequestContext, body: JsonObject): 
   await prisma.auditEvent.create({
     data: {
       organizationId: context.organizationId,
-      campusId: context.campusId,
+      campusId: sermon.campusId,
       actorType: "USER",
       actorUserId: context.actorId,
       action: "sermon.source_upload_started",
@@ -439,6 +491,7 @@ async function loadOwnedAsset(context: TenantRequestContext, body: JsonObject) {
     select: {
       id: true,
       sermonId: true,
+      campusId: true,
       bucket: true,
       objectKey: true,
       region: true,
@@ -447,6 +500,11 @@ async function loadOwnedAsset(context: TenantRequestContext, body: JsonObject) {
       sizeBytes: true,
       partSizeBytes: true,
       status: true,
+      sermon: {
+        select: {
+          youtubeUrl: true,
+        },
+      },
     },
   });
 }
@@ -498,6 +556,10 @@ async function completeUpload(context: TenantRequestContext, body: JsonObject): 
       success: true,
       message: "Recording is stored safely and processing is queued.",
       createdSermonId: asset.sermonId,
+      sourceStored: true,
+      originalPreserved: true,
+      storedBytes: Number(asset.sizeBytes),
+      resumedImport: stringValue(body.mode) === "recovery",
       ready: true,
     });
   }
@@ -506,6 +568,7 @@ async function completeUpload(context: TenantRequestContext, body: JsonObject): 
   }
 
   const sizeBytes = Number(asset.sizeBytes);
+  const isYouTubeRecovery = isYouTubeSourceUrl(asset.sermon.youtubeUrl);
   const completed = await completeS3SourceMultipartUpload({
     bucket: asset.bucket,
     objectKey: asset.objectKey,
@@ -534,19 +597,43 @@ async function completeUpload(context: TenantRequestContext, body: JsonObject): 
         sourceDurationSeconds: null,
       },
     });
+    if (isYouTubeRecovery) {
+      await tx.processingJob.create({
+        data: {
+          sermonId: asset.sermonId,
+          type: "DOWNLOAD_VIDEO",
+          status: "SUCCEEDED",
+          startedAt: now,
+          completedAt: now,
+          logs: "YouTube import was recovered by attaching an owner-provided source video.",
+          generationSummary: {
+            recovery: {
+              version: 1,
+              source: "upload",
+              durable: true,
+              preservedSermonConfiguration: true,
+              originalPreserved: true,
+            },
+          },
+        },
+      });
+    }
     await tx.auditEvent.create({
       data: {
         organizationId: context.organizationId,
-        campusId: context.campusId,
+        campusId: asset.campusId,
         actorType: "USER",
         actorUserId: context.actorId,
-        action: "sermon.source_uploaded",
+        action: isYouTubeRecovery ? "sermon.source_recovered" : "sermon.source_uploaded",
         targetType: "Sermon",
         targetId: asset.sermonId,
         metadataJson: {
           provider: "AWS_S3",
           bytes: sizeBytes,
           durable: true,
+          originalPreserved: true,
+          recovery: isYouTubeRecovery,
+          previousSource: isYouTubeRecovery ? "youtube" : undefined,
         },
       },
     });
@@ -555,17 +642,27 @@ async function completeUpload(context: TenantRequestContext, body: JsonObject): 
   const queued = await queueSermonProcessingJob(asset.sermonId, "PROCESS_SERMON");
   await appendPipelineLog(
     asset.sermonId,
-    queued.reusedExisting
-      ? "Durable S3 source completed; sermon processing was already queued."
-      : "Durable S3 source completed; sermon processing queued for the media worker.",
+    isYouTubeRecovery
+      ? queued.reusedExisting
+        ? "Owner-provided source stored without quality reduction; this sermon import was already queued."
+        : "Owner-provided source stored without quality reduction; this same sermon import resumed on the media worker."
+      : queued.reusedExisting
+        ? "Durable S3 source completed; sermon processing was already queued."
+        : "Durable S3 source completed; sermon processing queued for the media worker.",
   );
   revalidatePath("/");
   revalidatePath(`/sermons/${asset.sermonId}`);
 
   return NextResponse.json({
     success: true,
-    message: "Recording stored safely. Processing has started.",
+    message: isYouTubeRecovery
+      ? "Original video stored safely. This sermon import has resumed."
+      : "Recording stored safely. Processing has started.",
     createdSermonId: asset.sermonId,
+    sourceStored: true,
+    originalPreserved: true,
+    storedBytes: sizeBytes,
+    resumedImport: isYouTubeRecovery,
     ready: true,
   });
 }
@@ -600,6 +697,16 @@ export async function POST(request: Request): Promise<NextResponse> {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Private source upload failed.";
     console.error(`Private S3 source upload ${action} failed: ${message}`);
+    if (error instanceof EventSessionLinkError) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: error.message,
+          fieldErrors: { mediaFile: error.message },
+        },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       {
         success: false,

@@ -38,6 +38,11 @@ import {
 import { queueSermonProcessingJob } from "@/server/agents/processing";
 import { AuthorizationError } from "@/server/auth/authorization";
 import { requirePersistedTenantCapability } from "@/server/auth/requestAuthorization";
+import {
+  attachEventSessionToSermon,
+  EventSessionLinkError,
+  resolveEventSessionForIntake,
+} from "@/server/events/eventSessionLinking";
 import { tenantResourceScope } from "@/server/tenancy/scope";
 
 export const runtime = "nodejs";
@@ -142,6 +147,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const contentLength = parseContentLength(request);
   const totalBytes = parseByteParam(url, "totalBytes");
   const requestedSermonId = url.searchParams.get("sermonId") ?? "";
+  const eventSessionId = url.searchParams.get("eventSessionId")?.trim() ?? "";
   let requestContext: TenantRequestContext;
   let parsedRequestContext: TenantRequestContext;
 
@@ -492,6 +498,7 @@ export async function POST(request: Request): Promise<NextResponse> {
                 version: 1,
                 source: "upload",
                 preservedSermonConfiguration: true,
+                originalPreserved: true,
               },
             },
           },
@@ -508,12 +515,14 @@ export async function POST(request: Request): Promise<NextResponse> {
             metadataJson: {
               source: "upload",
               previousSource: "youtube",
+              bytes: totalBytes,
+              originalPreserved: true,
             },
           },
         });
         await appendPipelineLog(
           sermon.id,
-          "Uploaded recording attached after YouTube import failure. Existing sermon details, timing, and worship setting were preserved.",
+          "Owner-provided recording stored without quality reduction after YouTube import failure. Existing sermon details, timing, and worship setting were preserved.",
         );
       } else {
         await appendPipelineLog(sermon.id, "Sermon created from chunked uploaded media file and storage folders initialized.");
@@ -525,9 +534,13 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({
         success: true,
         message: isYouTubeRecovery
-          ? "Recording attached. Processing has resumed with your saved sermon settings."
+          ? "Original video stored safely. This sermon import has resumed with your saved settings."
           : "Sermon saved. The full clip workflow has started automatically.",
         createdSermonId: sermon.id,
+        sourceStored: true,
+        originalPreserved: true,
+        storedBytes: totalBytes,
+        resumedImport: isYouTubeRecovery,
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Unknown upload finalization error.";
@@ -582,10 +595,15 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   try {
     const sermon = await prisma.$transaction(async (tx) => {
+      const eventSession = await resolveEventSessionForIntake(
+        tx,
+        requestContext,
+        eventSessionId,
+      );
       const createdSermon = await tx.sermon.create({
         data: {
           organizationId: requestContext.organizationId,
-          campusId: requestContext.campusId,
+          campusId: eventSession?.campusId ?? requestContext.campusId,
           youtubeUrl: buildLocalUploadSourceUrl(fileName),
           title: result.data.title,
           speakerName: result.data.speakerName,
@@ -601,10 +619,11 @@ export async function POST(request: Request): Promise<NextResponse> {
         },
         select: { id: true, title: true },
       });
+      await attachEventSessionToSermon(tx, requestContext, eventSession, createdSermon.id);
       await tx.auditEvent.create({
         data: {
           organizationId: requestContext.organizationId,
-          campusId: requestContext.campusId,
+          campusId: eventSession?.campusId ?? requestContext.campusId,
           actorType: "USER",
           actorUserId: requestContext.actorId,
           action: "sermon.created",
@@ -613,11 +632,22 @@ export async function POST(request: Request): Promise<NextResponse> {
           metadataJson: {
             title: createdSermon.title,
             source: "upload",
+            ...(eventSession ? {
+              eventId: eventSession.eventId,
+              eventSessionId: eventSession.id,
+            } : {}),
           },
         },
       });
-      return createdSermon;
+      return {
+        ...createdSermon,
+        eventId: eventSession?.eventId ?? null,
+      };
     });
+    if (sermon.eventId) {
+      revalidatePath(`/events/${sermon.eventId}`);
+      revalidatePath("/events");
+    }
 
     if (uploadMode === "start") {
       try {
@@ -709,6 +739,16 @@ export async function POST(request: Request): Promise<NextResponse> {
   } catch (error) {
     const reason = error instanceof Error ? error.message : "Unknown save error.";
     console.error(`Raw upload sermon creation failed: ${reason}`);
+    if (error instanceof EventSessionLinkError) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: error.message,
+          fieldErrors: { mediaFile: error.message },
+        },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       {
         success: false,

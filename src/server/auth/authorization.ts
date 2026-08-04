@@ -288,6 +288,7 @@ export const ROLE_CAPABILITIES: Readonly<
 
 export const AUTHORIZATION_RESOURCE_KINDS = [
   "SERMON",
+  "EVENT",
   "WEEK_DRAFT",
   "CONTENT_ITEM",
   "BRAND_KIT",

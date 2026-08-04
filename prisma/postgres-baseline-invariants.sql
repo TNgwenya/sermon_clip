@@ -685,3 +685,96 @@ CREATE TRIGGER "ContentAsset_revision_tenant_guard"
 BEFORE UPDATE OF "organizationId", "campusId" ON "ContentAsset"
 FOR EACH ROW
 EXECUTE FUNCTION "protect_content_parent_revision_tenant"();
+
+-- Event programme constraints are also expressed in the migration, but empty
+-- databases are created with `prisma db push` before this invariant file runs.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'MinistryEvent_date_range_check'
+      AND conrelid = '"MinistryEvent"'::regclass
+  ) THEN
+    ALTER TABLE "MinistryEvent"
+      ADD CONSTRAINT "MinistryEvent_date_range_check"
+      CHECK ("endDate" >= "startDate");
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'EventSession_day_number_check'
+      AND conrelid = '"EventSession"'::regclass
+  ) THEN
+    ALTER TABLE "EventSession"
+      ADD CONSTRAINT "EventSession_day_number_check"
+      CHECK ("dayNumber" > 0);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'EventSession_sort_order_check'
+      AND conrelid = '"EventSession"'::regclass
+  ) THEN
+    ALTER TABLE "EventSession"
+      ADD CONSTRAINT "EventSession_sort_order_check"
+      CHECK ("sortOrder" > 0);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'EventSession_priority_check'
+      AND conrelid = '"EventSession"'::regclass
+  ) THEN
+    ALTER TABLE "EventSession"
+      ADD CONSTRAINT "EventSession_priority_check"
+      CHECK ("priority" BETWEEN 0 AND 100);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'EventSession_time_range_check'
+      AND conrelid = '"EventSession"'::regclass
+  ) THEN
+    ALTER TABLE "EventSession"
+      ADD CONSTRAINT "EventSession_time_range_check"
+      CHECK ("scheduledEndAt" IS NULL OR "scheduledEndAt" > "scheduledStartAt");
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION enforce_event_session_sermon_tenant()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  sermon_organization_id TEXT;
+  sermon_campus_id TEXT;
+BEGIN
+  IF NEW."sermonId" IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT "organizationId", "campusId"
+  INTO sermon_organization_id, sermon_campus_id
+  FROM "Sermon"
+  WHERE "id" = NEW."sermonId";
+
+  IF sermon_organization_id IS DISTINCT FROM NEW."organizationId" THEN
+    RAISE EXCEPTION 'Event session and sermon must belong to the same organization';
+  END IF;
+
+  IF NEW."campusId" IS NOT NULL
+    AND sermon_campus_id IS DISTINCT FROM NEW."campusId" THEN
+    RAISE EXCEPTION 'Event session and sermon must belong to the same campus';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS "EventSession_sermon_tenant_guard"
+  ON "EventSession";
+CREATE TRIGGER "EventSession_sermon_tenant_guard"
+BEFORE INSERT OR UPDATE OF "sermonId", "organizationId", "campusId"
+ON "EventSession"
+FOR EACH ROW
+EXECUTE FUNCTION enforce_event_session_sermon_tenant();

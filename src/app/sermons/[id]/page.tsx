@@ -1267,7 +1267,9 @@ export default async function SermonDetailPage({
         : workspaceAction === "working"
           ? activeProcessingStep?.label ?? "Finding sermon moments"
           : workspaceAction === "recover"
-            ? clipQualityGateFailure
+            ? youtubeSourceRecoveryFailure
+              ? "Continue with the owner’s original video"
+              : clipQualityGateFailure
               ? "Analysis paused at the transcript"
               : latestFailedJob
                 ? `${pastorJobStepLabel(latestFailedJob.type)} needs attention`
@@ -1282,7 +1284,7 @@ export default async function SermonDetailPage({
         : workspaceAction === "working"
           ? "Sermon Clip is preparing the message now. You can follow the current stage or leave while the work continues."
           : workspaceAction === "recover"
-            ? clipQualityGateFailure?.summary
+            ? latestFailurePresentation?.summary
               ?? "The sermon and completed work are safe. Retry the paused step to continue finding moments."
             : "Analyze the sermon to prepare a transcript and surface message-safe moments for pastor review.";
   const previewableClipIds = new Set(
@@ -1442,7 +1444,7 @@ export default async function SermonDetailPage({
               </strong>
               <span>
                 {workspaceAction === "recover"
-                  ? clipQualityGateFailure?.guidance ?? "Retry the paused step below when you are ready."
+                  ? latestFailurePresentation?.guidance ?? "Retry the paused step below when you are ready."
                   : "This does not stop you from continuing the most mature clip. "}
                 <a href="#troubleshoot-this-sermon">Open troubleshooting</a>
               </span>
@@ -1516,6 +1518,14 @@ export default async function SermonDetailPage({
           )}
         </aside>
       </section>
+
+      {youtubeSourceRecoveryFailure ? (
+        <YouTubeRecoveryUpload
+          sermonId={sermon.id}
+          directSourceUploadEnabled={directSourceUploadEnabled}
+          localUploadFallbackEnabled={localMediaAvailable}
+        />
+      ) : null}
 
       {previewClips.length > 0 ? (
         <section className="sermon-preview-strip" aria-label="Strongest sermon moments">
@@ -1770,19 +1780,15 @@ export default async function SermonDetailPage({
                   </p>
                 ) : null}
                 {youtubeSourceRecoveryFailure ? (
-                  <div className="stack-sm">
-                    <YouTubeRecoveryUpload
-                      sermonId={sermon.id}
-                      directSourceUploadEnabled={directSourceUploadEnabled}
-                      localUploadFallbackEnabled={localMediaAvailable}
-                    />
-                    <details>
-                      <summary>Try importing from YouTube again</summary>
-                      <div className="failure-recovery-action">
-                        <RetryFailedJobButton sermonId={sermon.id} jobId={latestFailedJob.id} />
-                      </div>
-                    </details>
-                  </div>
+                  <details>
+                    <summary>Try importing from YouTube again</summary>
+                    <div className="failure-recovery-action">
+                      <p className="muted small">
+                        The normal YouTube link import remains available. It may work later if the earlier failure was temporary.
+                      </p>
+                      <RetryFailedJobButton sermonId={sermon.id} jobId={latestFailedJob.id} />
+                    </div>
+                  </details>
                 ) : clipQualityGateFailure && !transcriptRefreshedAfterFailure ? (
                   <div className="stack-sm failure-recovery-action">
                     <TranscribeSermonButton

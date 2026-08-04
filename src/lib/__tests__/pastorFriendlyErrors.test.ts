@@ -23,9 +23,20 @@ describe("pastorFriendlyError", () => {
     });
 
     expect(presentation.kind).toBe("YOUTUBE_SOURCE_UNAVAILABLE");
-    expect(presentation.title).toBe("Upload the recording to continue");
+    expect(presentation.title).toBe("YouTube could not provide this video");
     expect(presentation.summary).toContain("sermon timing");
-    expect(presentation.guidance).toContain("continue from media preparation");
+    expect(presentation.guidance).toContain("video owner");
+    expect(presentation.guidance).toContain("same sermon");
+  });
+
+  it("offers the owner-upload fallback for a structured general YouTube import failure", () => {
+    const presentation = buildPastorProcessingFailurePresentation({
+      message: "The remote source ended before the video could be prepared.",
+      failureCode: "VIDEO_DOWNLOAD_FAILED",
+    });
+
+    expect(presentation.kind).toBe("YOUTUBE_SOURCE_UNAVAILABLE");
+    expect(presentation.guidance).toContain("YouTube Studio");
   });
 
   it("reads a structured processing failure code safely", () => {

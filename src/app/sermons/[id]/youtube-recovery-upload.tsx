@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -9,7 +9,6 @@ import {
 } from "@/lib/directSourceUpload";
 import {
   MAX_UPLOADED_MEDIA_LABEL,
-  MOBILE_UPLOAD_FAILURE_HELP,
   UPLOADED_MEDIA_TOO_LARGE_MESSAGE,
   uploadedMediaExceedsSizeLimit,
 } from "@/lib/sermonIntake";
@@ -28,24 +27,25 @@ type UploadApiResponse = {
   success: boolean;
   message: string;
   createdSermonId?: string;
+  sourceStored?: boolean;
+  originalPreserved?: boolean;
+  storedBytes?: number;
+  resumedImport?: boolean;
   receivedBytes?: number;
   fieldErrors?: {
     mediaFile?: string;
   };
 };
 
-const mediaAcceptTypes = [
+const videoAcceptTypes = [
   "video/*",
-  "audio/*",
   ".mp4",
   ".mov",
   ".m4v",
   ".webm",
-  ".mp3",
-  ".m4a",
-  ".aac",
-  ".wav",
 ].join(",");
+
+const PHONE_COPY_DELETE_GUIDANCE = "You can now delete the downloaded copy from your phone if you no longer need it. Removing that phone copy will not delete the source safely stored in Simonclip.";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) {
@@ -55,6 +55,10 @@ function formatFileSize(bytes: number): string {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   }
   return `${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+function buildSafelyStoredMessage(fileName: string): string {
+  return `${fileName} is safely stored exactly as received. Simonclip has resumed this same sermon import with your saved details.`;
 }
 
 async function parseUploadResponse(response: Response): Promise<UploadApiResponse> {
@@ -79,7 +83,9 @@ export function YouTubeRecoveryUpload({
   localUploadFallbackEnabled?: boolean;
 }) {
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [directUploadAssetId, setDirectUploadAssetId] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [progressPercent, setProgressPercent] = useState(0);
   const [message, setMessage] = useState("");
@@ -106,16 +112,20 @@ export function YouTubeRecoveryUpload({
     try {
       if (directSourceUploadEnabled) {
         try {
-          const directResult = await uploadFileToPrivateSource({
+          await uploadFileToPrivateSource({
             mode: "recovery",
             sermonId,
+            sourceAssetId: directUploadAssetId,
             file: selectedFile,
+            onSession: (_activeSermonId, sourceAssetId) => {
+              if (sourceAssetId) setDirectUploadAssetId(sourceAssetId);
+            },
             onProgress: setProgressPercent,
           });
           window.sessionStorage.removeItem(sessionKey);
           setProgressPercent(100);
           setSuccess(true);
-          setMessage(directResult.message);
+          setMessage(buildSafelyStoredMessage(selectedFile.name));
           router.refresh();
           return;
         } catch (error) {
@@ -241,7 +251,7 @@ export function YouTubeRecoveryUpload({
       window.sessionStorage.removeItem(sessionKey);
       setProgressPercent(100);
       setSuccess(true);
-      setMessage(finishResult.message);
+      setMessage(buildSafelyStoredMessage(selectedFile.name));
       router.refresh();
     } catch (error) {
       const reason = error instanceof Error ? error.message : "The upload request could not be completed.";
@@ -252,48 +262,152 @@ export function YouTubeRecoveryUpload({
   }
 
   return (
-    <section id="youtube-upload-recovery" className="failure-recovery-action stack-sm" aria-labelledby="youtube-upload-recovery-title">
-      <div className="stack-sm">
-        <strong id="youtube-upload-recovery-title">Attach the recording to this sermon</strong>
-        <p className="muted small">
-          This keeps the existing sermon details, start/end times, and worship choice. Maximum file size: {MAX_UPLOADED_MEDIA_LABEL}.
-        </p>
+    <section
+      id="youtube-upload-recovery"
+      className={`youtube-recovery-fallback${success ? " is-complete" : ""}`}
+      aria-labelledby="youtube-upload-recovery-title"
+    >
+      <div className="youtube-recovery-heading stack-sm">
+        <p className="kicker">Safe YouTube fallback</p>
+        <h2 id="youtube-upload-recovery-title">
+          {success ? "Your source video is safely stored" : "Download your own video, then continue here"}
+        </h2>
+        {success ? (
+          <p className="muted">
+            Simonclip is continuing the original import. Your sermon details, timing, and worship setting stayed with it.
+          </p>
+        ) : (
+          <p className="muted">
+            The YouTube link import did not work. The video owner must download their own video from YouTube Studio, then upload that file to Simonclip.
+          </p>
+        )}
       </div>
-      <label className="stack-sm">
-        Recording
-        <input
-          type="file"
-          accept={mediaAcceptTypes}
-          disabled={isUploading}
-          onChange={(event) => {
-            const file = event.currentTarget.files?.[0] ?? null;
-            setSelectedFile(file);
-            setMessage("");
-            setSuccess(false);
-          }}
-        />
-      </label>
-      {selectedFile ? (
-        <p className="small muted">{selectedFile.name} · {formatFileSize(selectedFile.size)}</p>
+
+      {!success ? (
+        <ol className="youtube-recovery-steps" aria-label="How to continue the YouTube import">
+          <li>
+            <span>1</span>
+            <div>
+              <strong>Open YouTube Studio</strong>
+              <p>As the video owner, find the video, open its menu, and choose <strong>Download</strong>.</p>
+              <a href="https://studio.youtube.com/" target="_blank" rel="noreferrer">Open YouTube Studio</a>
+            </div>
+          </li>
+          <li>
+            <span>2</span>
+            <div>
+              <strong>Choose the downloaded video</strong>
+              <p>Return here and pick the original file from Files, Downloads, or your device storage.</p>
+            </div>
+          </li>
+          <li>
+            <span>3</span>
+            <div>
+              <strong>Upload and continue</strong>
+              <p>Simonclip stores the file exactly as received and resumes this same sermon automatically.</p>
+            </div>
+          </li>
+        </ol>
       ) : null}
-      {isUploading ? (
-        <div className="stack-sm" role="status" aria-live="polite">
-          <progress value={progressPercent} max={100} aria-label="Recording upload progress" />
-          <p className="small">Uploading recording… {progressPercent}%. Keep this page open.</p>
+
+      {!success ? (
+        <div className="youtube-recovery-upload-panel stack-sm">
+          <input
+            ref={fileInputRef}
+            id={`youtube-recovery-file-${sermonId}`}
+            className="sr-only"
+            type="file"
+            accept={videoAcceptTypes}
+            disabled={isUploading}
+            aria-hidden="true"
+            tabIndex={-1}
+            onClick={(event) => {
+              event.currentTarget.value = "";
+            }}
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0] ?? null;
+              window.sessionStorage.removeItem(sessionKey);
+              setDirectUploadAssetId(null);
+              setSelectedFile(file);
+              setProgressPercent(0);
+              setMessage("");
+              setSuccess(false);
+            }}
+          />
+          <div className="youtube-recovery-picker-row">
+            <button
+              type="button"
+              className="button secondary"
+              disabled={isUploading}
+              aria-describedby="youtube-recovery-file-help"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {selectedFile ? "Choose a different video" : "Choose video from this device"}
+            </button>
+            {selectedFile ? (
+              <p className="youtube-recovery-file" role="status">
+                <strong>{selectedFile.name}</strong>
+                <span>{formatFileSize(selectedFile.size)}</span>
+              </p>
+            ) : null}
+          </div>
+          <p id="youtube-recovery-file-help" className="muted small">
+            Video only, up to {MAX_UPLOADED_MEDIA_LABEL}. Uploading does not compress, resize, or reduce the source quality.
+          </p>
         </div>
       ) : null}
-      {message ? (
-        <p className={success ? "success-banner" : "error-banner"} role="status">{message}</p>
+
+      {isUploading ? (
+        <div className="youtube-recovery-progress stack-sm" role="status" aria-live="polite">
+          <div className="youtube-recovery-progress-label">
+            <strong>Uploading the original video</strong>
+            <span>{progressPercent}%</span>
+          </div>
+          <progress value={progressPercent} max={100} aria-label="Original video upload progress" />
+          <p className="small muted">Keep this page open. If the connection stops, use the same button to resume.</p>
+        </div>
       ) : null}
-      <button
-        type="button"
-        className="button primary"
-        disabled={isUploading || !selectedFile}
-        onClick={() => void uploadRecording()}
-      >
-        {isUploading ? `Uploading… ${progressPercent}%` : "Upload recording and continue"}
-      </button>
-      {!isUploading && !success ? <p className="muted small">{MOBILE_UPLOAD_FAILURE_HELP}</p> : null}
+
+      {message ? (
+        <div className={success ? "success-banner stack-sm" : "error-banner stack-sm"} role="status" aria-live="polite">
+          <strong>{success ? "Source safely stored" : "The video is still on your device"}</strong>
+          <p>{message}</p>
+        </div>
+      ) : null}
+
+      {!success ? (
+        <div className="youtube-recovery-actions">
+          <button
+            type="button"
+            className="button primary"
+            disabled={isUploading || !selectedFile}
+            onClick={() => void uploadRecording()}
+          >
+            {isUploading ? `Uploading… ${progressPercent}%` : "Upload original video and continue"}
+          </button>
+        </div>
+      ) : (
+        <div className="youtube-recovery-phone-copy" role="note">
+          <strong>Temporary phone copy</strong>
+          <p>{PHONE_COPY_DELETE_GUIDANCE}</p>
+        </div>
+      )}
+
+      {!isUploading && !success ? (
+        <p className="muted small">
+          On a phone, keep Simonclip open on stable Wi-Fi. If the upload is interrupted, keep the same file on the device and tap upload again to resume.
+        </p>
+      ) : null}
+
+      <p className="youtube-recovery-privacy-note small">
+        Simonclip will never ask for your YouTube password or use your cookies, browser automation, or an unofficial downloader for this fallback.
+      </p>
     </section>
   );
 }
+
+export const __youtubeRecoveryUploadTestUtils = {
+  PHONE_COPY_DELETE_GUIDANCE,
+  buildSafelyStoredMessage,
+  videoAcceptTypes,
+};

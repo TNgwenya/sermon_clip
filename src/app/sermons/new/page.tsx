@@ -1,15 +1,20 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 
+import { dateInputInTimezone } from "@/lib/ministryEvents";
+import { prisma } from "@/lib/prisma";
 import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import { getSermonStartDefaults } from "@/server/onboarding/activationSnapshot";
 import { isS3SourceStorageConfigured } from "@/server/media/s3SourceStorage";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+import { tenantResourceScope } from "@/server/tenancy/scope";
 
 import { NewSermonForm } from "./new-sermon-form";
 import styles from "./new-sermon.module.css";
 
 type NewSermonSearchParams = {
   youtubeUrl?: string;
+  eventSessionId?: string;
 };
 
 export default async function NewSermonPage({ searchParams }: { searchParams: Promise<NewSermonSearchParams> }) {
@@ -22,6 +27,84 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
     },
     requestContext.actorId,
   );
+  const eventSession = params.eventSessionId
+    ? await prisma.eventSession.findFirst({
+        where: tenantResourceScope(requestContext, params.eventSessionId),
+        select: {
+          id: true,
+          title: true,
+          speakerName: true,
+          language: true,
+          scheduledStartAt: true,
+          status: true,
+          sermonId: true,
+          sermon: {
+            select: {
+              id: true,
+              status: true,
+              youtubeUrl: true,
+              sourceAsset: {
+                select: {
+                  id: true,
+                  status: true,
+                  originalFileName: true,
+                  sizeBytes: true,
+                },
+              },
+            },
+          },
+          event: {
+            select: {
+              id: true,
+              name: true,
+              timezone: true,
+              status: true,
+            },
+          },
+        },
+      })
+    : null;
+  const resumableEventUpload = Boolean(
+    eventSession?.sermon
+    && eventSession.sermon.status === "CREATED"
+    && eventSession.sermon.youtubeUrl.startsWith("local-upload://")
+    && eventSession.sermon.sourceAsset?.status !== "READY",
+  );
+  if (params.eventSessionId && (
+    !eventSession
+    || eventSession.status === "CANCELLED"
+    || eventSession.event.status === "ARCHIVED"
+    || (eventSession.sermonId && !resumableEventUpload)
+  )) {
+    notFound();
+  }
+  const eventContext = eventSession
+    ? {
+        eventId: eventSession.event.id,
+        eventName: eventSession.event.name,
+        sessionId: eventSession.id,
+        sessionTitle: eventSession.title,
+        ...(resumableEventUpload && eventSession.sermon ? {
+          resumeUpload: {
+            sermonId: eventSession.sermon.id,
+            ...(eventSession.sermon.sourceAsset ? {
+              sourceAssetId: eventSession.sermon.sourceAsset.id,
+              fileName: eventSession.sermon.sourceAsset.originalFileName,
+              fileSize: Number(eventSession.sermon.sourceAsset.sizeBytes),
+            } : {}),
+          },
+        } : {}),
+      }
+    : undefined;
+  const formDefaults = eventSession
+    ? {
+        ...defaults,
+        title: eventSession.title,
+        speakerName: eventSession.speakerName || defaults.speakerName,
+        language: eventSession.language || defaults.language,
+        sermonDate: dateInputInTimezone(eventSession.scheduledStartAt, eventSession.event.timezone),
+      }
+    : defaults;
   const localUploadFallbackEnabled = canRunLocalMediaProcessing();
   const directSourceUploadEnabled = isS3SourceStorageConfigured();
   const canUploadMedia = localUploadFallbackEnabled || directSourceUploadEnabled;
@@ -30,12 +113,15 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
     <main id="main-content" className="upload-page-shell premium-intake-page stack-lg">
       <header className={`upload-hero premium-intake-hero ${styles.hero}`}>
         <div className="stack-sm">
-          <Link href="/" className="text-link">Back to your studio</Link>
-          <p className="kicker">Add a sermon</p>
-          <h1>One sermon in. A week of content underway.</h1>
+          <Link href={eventContext ? `/events/${eventContext.eventId}` : "/"} className="text-link">
+            {eventContext ? `Back to ${eventContext.eventName}` : "Back to your studio"}
+          </Link>
+          <p className="kicker">{eventContext ? "Add event recording" : "Add a sermon"}</p>
+          <h1>{eventContext ? "Attach this recording to the planned session." : "One sermon in. A week of content underway."}</h1>
           <p className="muted">
-            Add the recording. Church details are already filled in, and SermonClip
-            will prepare complete, meaningful moments for your team to review.
+            {eventContext
+              ? `${eventContext.eventName} · ${eventContext.sessionTitle}. The event, day, and speaker context will stay attached through processing.`
+              : "Add the recording. Church details are already filled in, and SermonClip will prepare complete, meaningful moments for your team to review."}
           </p>
         </div>
         <div className={styles.heroActions}>
@@ -60,7 +146,8 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
           canUploadMedia={canUploadMedia}
           directSourceUploadEnabled={directSourceUploadEnabled}
           localUploadFallbackEnabled={localUploadFallbackEnabled}
-          defaults={defaults}
+          defaults={formDefaults}
+          eventContext={eventContext}
         />
 
         <aside className="upload-outcome-panel" aria-label="What Sermon Clip will prepare">

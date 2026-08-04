@@ -19,11 +19,13 @@ function jsonResponse(body: unknown, status = 200): Response {
 describe("direct private source upload client", () => {
   it("resumes completed parts, uploads the remainder, and completes the source", async () => {
     const uploadedPartNumbers: number[] = [];
+    const initiatedRequests: Array<Record<string, unknown>> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/sermons/source-upload") {
         const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
         if (request.action === "initiate") {
+          initiatedRequests.push(request);
           return jsonResponse({
             success: true,
             message: "resume",
@@ -70,11 +72,15 @@ describe("direct private source upload client", () => {
 
     const result = await uploadFileToPrivateSource({
       mode: "create",
+      sourceAssetId: "asset-1",
       file,
       onProgress: (percent) => progress.push(percent),
     });
 
     expect(result.ready).toBe(true);
+    expect(initiatedRequests).toEqual([
+      expect.objectContaining({ sourceAssetId: "asset-1" }),
+    ]);
     expect(uploadedPartNumbers.sort()).toEqual([2, 3]);
     expect(progress.at(-1)).toBe(100);
   });

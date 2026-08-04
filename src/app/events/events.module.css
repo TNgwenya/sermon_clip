@@ -1,0 +1,530 @@
+.eventsShell {
+  width: min(100%, 108rem);
+  margin-inline: auto;
+  padding: clamp(1rem, 3vw, 3rem) clamp(0.8rem, 3vw, 3.25rem) 7rem;
+}
+
+.eventGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 23rem), 1fr));
+  gap: 1rem;
+}
+
+.eventCard {
+  --event-accent: #9fceb1;
+  min-width: 0;
+  display: grid;
+  gap: 1.1rem;
+  align-content: start;
+  padding: clamp(1.1rem, 2vw, 1.5rem);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--event-accent);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--event-accent) 14%, transparent), transparent 12rem),
+    rgba(17, 20, 18, 0.94);
+  box-shadow: var(--shadow-panel);
+}
+
+.eventCard h2 {
+  font-size: clamp(1.2rem, 2vw, 1.55rem);
+}
+
+.eventCard h2 a {
+  color: inherit;
+}
+
+.eventCardTopline,
+.sessionTopline,
+.sectionHeading,
+.formActions,
+.eventStatusActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.eventCardTopline > span:first-child,
+.sessionTopline > span:first-child {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 780;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.eventTheme {
+  color: color-mix(in srgb, var(--event-accent) 82%, white);
+  font-weight: 720;
+}
+
+.eventCardStats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.eventCardStats span {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.eventCardStats strong {
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.eventIssue {
+  padding: 0.65rem 0.75rem;
+  border-left: 2px solid var(--warning);
+  background: rgba(221, 169, 90, 0.08);
+  color: #ead2a8;
+  font-size: 0.8rem;
+}
+
+.eventsEmpty {
+  min-height: 24rem;
+}
+
+.newEventHeader {
+  max-width: 52rem;
+}
+
+.newEventHeader h1 {
+  font-size: clamp(2rem, 5vw, 4rem);
+  line-height: 0.98;
+}
+
+.newEventLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(18rem, 0.65fr);
+  gap: 1.2rem;
+  align-items: start;
+}
+
+.eventForm {
+  padding: clamp(1rem, 3vw, 2rem);
+}
+
+.formHeading {
+  display: grid;
+  grid-template-columns: 2.6rem minmax(0, 1fr);
+  gap: 0.8rem;
+  align-items: start;
+}
+
+.formHeading > span {
+  width: 2.35rem;
+  height: 2.35rem;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.formHeading h2 {
+  font-size: clamp(1.15rem, 2vw, 1.45rem);
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.fullField {
+  grid-column: 1 / -1;
+}
+
+.eventForm input,
+.eventForm select,
+.eventForm textarea,
+.sessionForm input,
+.sessionForm select,
+.sessionForm textarea {
+  width: 100%;
+}
+
+.brandDetails {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.85rem;
+}
+
+.brandDetails > summary {
+  font-weight: 740;
+}
+
+.brandDetails[open] > summary {
+  margin-bottom: 0.9rem;
+}
+
+.eventBenefits {
+  position: sticky;
+  top: 1rem;
+  padding: 1.35rem;
+}
+
+.eventBenefits ul {
+  display: grid;
+  gap: 0;
+  list-style: none;
+  padding: 0;
+}
+
+.eventBenefits li {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.eventBenefits li span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.eventHeader {
+  border-top-color: var(--event-accent);
+}
+
+.eventCommandStrip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: rgba(17, 20, 18, 0.88);
+}
+
+.eventCommandStrip article {
+  min-width: 0;
+  display: grid;
+  gap: 0.2rem;
+  padding: 1rem;
+}
+
+.eventCommandStrip article + article {
+  border-left: 1px solid var(--border);
+}
+
+.eventCommandStrip span,
+.eventCommandStrip small {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.eventCommandStrip strong {
+  font-size: clamp(1.5rem, 3vw, 2.2rem);
+}
+
+.eventContextBar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem 1.15rem;
+}
+
+.eventContextBar > div {
+  display: flex;
+  gap: 1.2rem;
+  flex-wrap: wrap;
+}
+
+.eventContextBar p {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.eventContextBar p span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.programmeSection {
+  scroll-margin-top: 1rem;
+}
+
+.sectionHeading > span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.eventDay {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.eventDay > header {
+  align-self: start;
+  position: sticky;
+  top: 1rem;
+  display: grid;
+  gap: 0.25rem;
+  padding: 1rem;
+  border-left: 3px solid var(--event-accent);
+}
+
+.eventDay > header span {
+  color: var(--event-accent);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.eventDay > header small {
+  color: var(--muted);
+}
+
+.sessionList {
+  min-width: 0;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.sessionCard {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(120deg, rgba(255, 255, 255, 0.02), transparent 45%),
+    rgba(17, 20, 18, 0.9);
+}
+
+.sessionTime {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.2rem;
+  padding-right: 1rem;
+  border-right: 1px solid var(--border);
+}
+
+.sessionTime strong {
+  font-size: 1.05rem;
+}
+
+.sessionTime span,
+.sessionTime small {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.sessionTime small {
+  width: fit-content;
+  margin-top: 0.3rem;
+  padding: 0.18rem 0.38rem;
+  border-radius: 999px;
+  background: rgba(221, 177, 105, 0.12);
+  color: #e8c98f;
+}
+
+.sessionMain {
+  min-width: 0;
+}
+
+.sessionMain h3 {
+  overflow-wrap: anywhere;
+}
+
+.sessionProgress {
+  height: 0.3rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.sessionProgress span {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--event-accent), var(--event-accent-secondary));
+  transition: width 240ms ease;
+}
+
+.sessionActions {
+  min-width: 9.5rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.sessionActions :global(.button) {
+  width: 100%;
+}
+
+.noSessions {
+  padding: 1.2rem;
+}
+
+.addSessionPanel {
+  overflow: hidden;
+}
+
+.addSessionPanel > summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem 1.2rem;
+}
+
+.addSessionPanel > summary > span {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.addSessionPanel > summary small {
+  color: var(--muted);
+}
+
+.addSessionBody {
+  padding: 0 1.2rem 1.2rem;
+}
+
+.sessionForm {
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.timeFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+@media (max-width: 960px) {
+  .newEventLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .eventBenefits {
+    position: static;
+  }
+
+  .eventCommandStrip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .eventCommandStrip article + article {
+    border-left: 0;
+  }
+
+  .eventCommandStrip article:nth-child(n + 4) {
+    border-top: 1px solid var(--border);
+  }
+
+  .eventDay {
+    grid-template-columns: 1fr;
+  }
+
+  .eventDay > header {
+    position: static;
+    padding: 0.7rem 0.9rem;
+  }
+}
+
+@media (max-width: 720px) {
+  .eventsShell {
+    padding-inline: 0.7rem;
+  }
+
+  .formGrid,
+  .eventCommandStrip {
+    grid-template-columns: 1fr;
+  }
+
+  .fullField {
+    grid-column: auto;
+  }
+
+  .eventCommandStrip article {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+  }
+
+  .eventCommandStrip article + article,
+  .eventCommandStrip article:nth-child(n + 4) {
+    border-top: 1px solid var(--border);
+  }
+
+  .eventCommandStrip small {
+    grid-column: 1 / -1;
+  }
+
+  .eventContextBar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .eventStatusActions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sessionCard {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .sessionTime {
+    min-width: 0;
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0 0 0.65rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sessionActions {
+    min-width: 0;
+    grid-template-columns: 1fr;
+  }
+
+  .addSessionPanel > summary {
+    align-items: flex-start;
+  }
+
+  .addSessionPanel > summary small {
+    display: none;
+  }
+
+  .timeFields {
+    grid-template-columns: 1fr;
+  }
+
+  .formActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .formActions :global(.button) {
+    width: 100%;
+  }
+}

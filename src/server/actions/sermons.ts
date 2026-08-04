@@ -9,6 +9,11 @@ import { Prisma, type ProcessingJobType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import {
+  attachEventSessionToSermon,
+  EventSessionLinkError,
+  resolveEventSessionForIntake,
+} from "@/server/events/eventSessionLinking";
+import {
   requireClipResource,
   requireSermonResource,
 } from "@/server/auth/resourceAuthorization";
@@ -1649,6 +1654,7 @@ export async function createSermonAction(
   const uploadedMedia = formData.get("sermonVideoFile");
   const hasUploadedMedia = isUploadedMediaFile(uploadedMedia);
   const uploadedMediaName = hasUploadedMedia ? uploadedMedia.name : "sermon-media";
+  const eventSessionId = String(formData.get("eventSessionId") ?? "").trim();
   const values = {
     youtubeUrl: String(formData.get("youtubeUrl") ?? "").trim(),
     title: String(formData.get("title") ?? "").trim(),
@@ -1720,10 +1726,15 @@ export async function createSermonAction(
 
   try {
     const sermon = await prisma.$transaction(async (tx) => {
+      const eventSession = await resolveEventSessionForIntake(
+        tx,
+        requestContext,
+        eventSessionId,
+      );
       const createdSermon = await tx.sermon.create({
         data: {
           organizationId: requestContext.organizationId,
-          campusId: requestContext.campusId,
+          campusId: eventSession?.campusId ?? requestContext.campusId,
           youtubeUrl: result.data.youtubeUrl || buildLocalUploadSourceUrl(uploadedMediaName),
           title: result.data.title,
           speakerName: result.data.speakerName,
@@ -1742,10 +1753,11 @@ export async function createSermonAction(
           title: true,
         },
       });
+      await attachEventSessionToSermon(tx, requestContext, eventSession, createdSermon.id);
       await tx.auditEvent.create({
         data: {
           organizationId: requestContext.organizationId,
-          campusId: requestContext.campusId,
+          campusId: eventSession?.campusId ?? requestContext.campusId,
           actorType: "USER",
           actorUserId: requestContext.actorId,
           action: "sermon.created",
@@ -1754,11 +1766,22 @@ export async function createSermonAction(
           metadataJson: {
             title: createdSermon.title,
             source: hasUploadedMedia ? "upload" : "youtube",
+            ...(eventSession ? {
+              eventId: eventSession.eventId,
+              eventSessionId: eventSession.id,
+            } : {}),
           },
         },
       });
-      return createdSermon;
+      return {
+        ...createdSermon,
+        eventId: eventSession?.eventId ?? null,
+      };
     });
+    if (sermon.eventId) {
+      revalidatePath(`/events/${sermon.eventId}`);
+      revalidatePath("/events");
+    }
 
     if (!canRunLocalMediaProcessing()) {
       await prisma.sermon.update({
@@ -1853,6 +1876,12 @@ export async function createSermonAction(
   } catch (error) {
     const reason = error instanceof Error ? error.message : "Unknown save error.";
     console.error(`Create sermon failed: ${reason}`);
+    if (error instanceof EventSessionLinkError) {
+      return {
+        success: false,
+        message: error.message,
+      };
+    }
     return {
       success: false,
       message: hasUploadedMedia

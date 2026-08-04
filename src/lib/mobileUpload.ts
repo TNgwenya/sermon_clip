@@ -7,6 +7,9 @@ export type MobileUploadSession = {
   sermonId: string;
   fileName: string;
   fileSize: number;
+  fileLastModified: number;
+  sourceAssetId?: string;
+  eventSessionId?: string;
 };
 
 export function parseMobileUploadSession(value: string | null): MobileUploadSession | null {
@@ -24,6 +27,24 @@ export function parseMobileUploadSession(value: string | null): MobileUploadSess
       || parsed.fileName.length === 0
       || !Number.isSafeInteger(parsed.fileSize)
       || Number(parsed.fileSize) <= 0
+      || !Number.isSafeInteger(parsed.fileLastModified)
+      || Number(parsed.fileLastModified) < 0
+      || (
+        parsed.sourceAssetId !== undefined
+        && (
+          typeof parsed.sourceAssetId !== "string"
+          || parsed.sourceAssetId.length === 0
+          || parsed.sourceAssetId.length > 128
+        )
+      )
+      || (
+        parsed.eventSessionId !== undefined
+        && (
+          typeof parsed.eventSessionId !== "string"
+          || parsed.eventSessionId.length === 0
+          || parsed.eventSessionId.length > 128
+        )
+      )
     ) {
       return null;
     }
@@ -32,6 +53,9 @@ export function parseMobileUploadSession(value: string | null): MobileUploadSess
       sermonId: parsed.sermonId,
       fileName: parsed.fileName,
       fileSize: Number(parsed.fileSize),
+      fileLastModified: Number(parsed.fileLastModified),
+      ...(parsed.sourceAssetId ? { sourceAssetId: parsed.sourceAssetId } : {}),
+      ...(parsed.eventSessionId ? { eventSessionId: parsed.eventSessionId } : {}),
     };
   } catch {
     return null;

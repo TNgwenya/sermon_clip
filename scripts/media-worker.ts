@@ -30,6 +30,7 @@ import {
   isForcedProcessingJobSummary,
   resolveMediaAssetJobDependencyId,
 } from "../src/lib/mediaProcessingJobIntent.ts";
+import { sortEventAwareProcessingCandidates } from "../src/lib/eventProcessingPriority.ts";
 
 process.env.WORKER_ENABLED ||= "true";
 // This process-only marker distinguishes the persistent media worker from a
@@ -272,7 +273,22 @@ async function claimNextJob(): Promise<ProcessingJob | null> {
       createdAt: "asc",
     },
     take: 200,
+    include: {
+      sermon: {
+        select: {
+          eventSession: {
+            select: {
+              priority: true,
+              scheduledStartAt: true,
+              status: true,
+              event: { select: { status: true } },
+            },
+          },
+        },
+      },
+    },
   });
+  sortEventAwareProcessingCandidates(candidates);
 
   if (candidates.length === 0) {
     return null;

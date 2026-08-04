@@ -135,3 +135,31 @@
     display: none;
   }
 }
+.eventContextNote {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.85rem;
+  border: 1px solid rgba(159, 206, 177, 0.24);
+  border-radius: var(--radius-md);
+  background: rgba(159, 206, 177, 0.07);
+}
+
+.eventContextNote > span {
+  width: 2.4rem;
+  height: 2.4rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.eventContextNote p {
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
