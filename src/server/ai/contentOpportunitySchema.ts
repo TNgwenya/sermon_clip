@@ -107,30 +107,30 @@ export const CONTENT_OPPORTUNITY_CATEGORY_LABELS: Record<ContentOpportunityCateg
 };
 
 export const DEFAULT_CONTENT_OPPORTUNITY_QUANTITIES: Record<ContentOpportunityType, number> = {
-  SHORT_FORM_CLIP_IDEA: 5,
-  QUOTE_GRAPHIC: 5,
-  SCRIPTURE_GRAPHIC: 3,
+  SHORT_FORM_CLIP_IDEA: 1,
+  QUOTE_GRAPHIC: 1,
+  SCRIPTURE_GRAPHIC: 1,
   CAROUSEL_IDEA: 0,
-  CAPTION: 4,
-  REEL_HOOK: 2,
+  CAPTION: 1,
+  REEL_HOOK: 0,
   YOUTUBE_SHORTS_IDEA: 0,
   TIKTOK_IDEA: 0,
   FACEBOOK_POST_IDEA: 0,
   INSTAGRAM_POST_IDEA: 0,
-  SERMON_SUMMARY: 1,
-  DEVOTIONAL_SUMMARY: 1,
-  NEWSLETTER_SUMMARY: 1,
-  BLOG_DRAFT_OUTLINE: 1,
+  SERMON_SUMMARY: 0,
+  DEVOTIONAL_SUMMARY: 0,
+  NEWSLETTER_SUMMARY: 0,
+  BLOG_DRAFT_OUTLINE: 0,
   ARTICLE_OUTLINE: 0,
   EMAIL_RECAP: 0,
   DISCUSSION_QUESTIONS: 0,
-  SMALL_GROUP_QUESTIONS: 5,
-  REFLECTION_QUESTIONS: 5,
+  SMALL_GROUP_QUESTIONS: 1,
+  REFLECTION_QUESTIONS: 1,
   FAMILY_DISCUSSION_QUESTIONS: 0,
   YOUTH_DISCUSSION_QUESTIONS: 0,
   SUNDAY_RECAP: 1,
-  NEXT_SERVICE_PROMOTION: 1,
-  INVITATION_CONTENT: 1,
+  NEXT_SERVICE_PROMOTION: 0,
+  INVITATION_CONTENT: 0,
   ALTAR_CALL_FOLLOW_UP_CONTENT: 0,
   EVENT_FOLLOW_UP_CONTENT: 0,
   PLATFORM_CAPTION_PACK: 0,
@@ -163,6 +163,29 @@ export const contentOpportunitySchema = z.object({
   englishMeaning: z.string().trim().max(500).nullable().optional(),
   translationConfidence: z.number().min(0).max(1).nullable().optional(),
   translationUncertaintyNote: z.string().trim().max(400).nullable().optional(),
+  publishingCopy: z.object({
+    caption: z.string().trim().min(1).max(5000),
+    hashtags: z.array(z.string().trim().regex(/^#[\p{L}\p{N}_]+$/u).max(100)).max(12),
+    callToAction: z.object({
+      type: z.enum(["COMMENT", "SHARE", "SAVE", "PRAY", "ATTEND", "VISIT_LINK", "WATCH", "CUSTOM"]),
+      text: z.string().trim().min(1).max(240),
+      url: z.string().url().max(2000).nullable(),
+    }).strict().superRefine((callToAction, context) => {
+      if (callToAction.type === "VISIT_LINK" && !callToAction.url) {
+        context.addIssue({
+          code: "custom",
+          path: ["url"],
+          message: "A visit-link call to action requires a URL.",
+        });
+      }
+    }).nullable(),
+    platforms: z.array(z.enum(["INSTAGRAM", "FACEBOOK", "TIKTOK", "YOUTUBE", "EMAIL", "WEBSITE", "OTHER"])).min(1).max(7),
+  }).strict().optional(),
+  creativeDirection: z.object({
+    visualMood: z.string().trim().min(1).max(200).nullable(),
+    imageDirection: z.string().trim().min(1).max(800).nullable(),
+    emphasisWords: z.array(z.string().trim().min(1).max(80)).max(8),
+  }).strict().optional(),
   confidenceScore: z.number().min(0).max(1),
   aiReason: z.string().trim().min(1).max(1200),
 });
@@ -193,6 +216,21 @@ export const CONTENT_OPPORTUNITY_JSON_SHAPE = `{
       "englishMeaning": "God is with us",
       "translationConfidence": 0.78,
       "translationUncertaintyNote": null,
+      "publishingCopy": {
+        "caption": "Fear does not get the final word. God is with us, and faith can take the next step.",
+        "hashtags": ["#Faith", "#SermonClip", "#Church"],
+        "callToAction": {
+          "type": "WATCH",
+          "text": "Watch the full message",
+          "url": null
+        },
+        "platforms": ["INSTAGRAM", "FACEBOOK"]
+      },
+      "creativeDirection": {
+        "visualMood": "Hopeful, calm, and confident",
+        "imageDirection": "Warm sunrise light with generous negative space for the quote",
+        "emphasisWords": ["faith", "fear"]
+      },
       "confidenceScore": 0.92,
       "aiReason": "Strong direct quote and scripture anchor that aligns with the sermon theme."
     }

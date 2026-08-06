@@ -5,6 +5,7 @@ import {
   deriveSermonPointKey,
   findExactScheduleDuplicateWarning,
   findRepeatedSermonPointWarnings,
+  isWeeklyPlanCopyReady,
   isValidIanaTimeZone,
   localDateTimeToUtcInstant,
   nextMondayDateInput,
@@ -74,6 +75,35 @@ describe("weekly plan", () => {
     });
 
     expect(result[0].duplicateWarnings.join(" ")).toContain("exact item");
+  });
+
+  it("replaces a dismissed piece with the next strongest prepared option", () => {
+    const candidates = [
+      candidate({ id: "quote-1", sourceKind: "CONTENT_ASSET", title: "Strong quote", qualityScore: 95 }),
+      candidate({ id: "clip-1", sourceKind: "CLIP", title: "Strong clip", qualityScore: 90 }),
+      candidate({ id: "quote-2", sourceKind: "CONTENT_ASSET", title: "Fresh quote", qualityScore: 85 }),
+    ];
+    const initial = buildWeeklyPlan({
+      sermonId: "sermon-1",
+      weekStart: "2026-07-20",
+      platforms: ["INSTAGRAM"],
+      frequency: 2,
+      objective: "BALANCED",
+      candidates,
+    });
+    const replaced = buildWeeklyPlan({
+      sermonId: "sermon-1",
+      weekStart: "2026-07-20",
+      platforms: ["INSTAGRAM"],
+      frequency: 2,
+      objective: "BALANCED",
+      candidates,
+      replacedSourceKeys: [`${initial[0].sourceKind}:${initial[0].sourceId}`],
+    });
+
+    expect(replaced).toHaveLength(2);
+    expect(replaced.map((item) => item.sourceId)).not.toContain(initial[0].sourceId);
+    expect(replaced.map((item) => item.sourceId)).toContain("quote-2");
   });
 
   it("derives stable point keys and detects repeated points", () => {
@@ -156,5 +186,20 @@ describe("weekly plan", () => {
       hour: 18,
       minute: 0,
     }, "Europe/London")?.toISOString()).toBe("2026-10-28T18:00:00.000Z");
+  });
+
+  it("keeps raw transcript fragments out of the premium weekly plan", () => {
+    expect(isWeeklyPlanCopyReady({
+      title: "Stop Looking Backward",
+      caption: "Your race requires forward attention. Ask God to help you move ahead in faithful obedience.",
+    })).toBe(true);
+    expect(isWeeklyPlanCopyReady({
+      title: "Darknes They Don't Want Jesu",
+      caption: "the darkness they don't want Jesus is saying you are in darkness do you want to come out",
+    })).toBe(false);
+    expect(isWeeklyPlanCopyReady({
+      title: "Going All Running Same Race",
+      caption: "Going to We are all not running the same race and some of us are running a while others",
+    })).toBe(false);
   });
 });

@@ -148,6 +148,20 @@
   color: var(--muted, #667085);
 }
 
+.connectionCard .channelLine {
+  width: fit-content;
+  padding: .22rem .48rem;
+  border-radius: 999px;
+  background: rgb(5 150 105 / 10%);
+  color: #047857;
+  font-weight: 750;
+}
+
+.connectionCard .channelAttention {
+  background: rgb(217 119 6 / 12%);
+  color: #b45309;
+}
+
 .connectionReady,
 .connectionManual {
   width: 0.65rem;

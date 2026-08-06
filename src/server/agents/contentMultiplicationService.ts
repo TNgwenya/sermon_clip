@@ -529,6 +529,11 @@ function buildSystemPrompt(): string {
     "You are a church content strategist creating reusable content opportunities from one sermon.",
     "Do not invent facts, scripture references, names, events, or claims not supported by the transcript or sermon intelligence context.",
     "Every opportunity must be grounded in transcript evidence and ministry context.",
+    "Create a small number of complete publishing packages, not a backlog of loose ideas.",
+    "Every social or promotional opportunity must include publishingCopy with a finished caption, 3-6 relevant hashtags, one clear call to action when appropriate, and explicit target platforms.",
+    "For graphic and carousel opportunities, include creativeDirection with a specific visual mood, image direction, and only the words that deserve visual emphasis.",
+    "Make every item usable with Approve, Change, or Replace. Do not leave placeholders such as 'confirm details', 'insert link', or 'contact the church' unless the supplied context genuinely lacks a required fact.",
+    "Never use relative event timing such as 'this Thursday' unless the supplied context includes the exact event date. Prefer a date or state that one event detail is required.",
     "Prefer practical, publish-ready drafts with clear ministry value.",
     "Support multilingual sermons including South African language mixing (Zulu, Sotho, Xhosa, Tswana, and English mixed with local phrases).",
     "When local-language phrases appear, provide English-friendly wording and translation hints. If uncertain, explicitly note uncertainty.",
@@ -1047,7 +1052,38 @@ function buildStructuredContentJson(input: {
     relatedClipTitle: input.item.relatedClipTitle,
     suggestedPlatform: input.item.suggestedPlatform,
   }).contract;
-  const sourceEvidence = converted.sourceEvidence.map((evidence) => {
+  let enrichedContract: ContentOpportunityContract = input.item.publishingCopy
+    ? {
+        ...converted,
+        publishingCopy: input.item.publishingCopy,
+      }
+    : converted;
+  const creativeDirection = input.item.creativeDirection;
+  if (
+    creativeDirection
+    && (
+      enrichedContract.family === "QUOTE_GRAPHIC"
+      || enrichedContract.family === "SCRIPTURE_GRAPHIC"
+    )
+  ) {
+    enrichedContract = {
+      ...enrichedContract,
+      designBrief: {
+        visualMood: creativeDirection.visualMood,
+        imageDirection: creativeDirection.imageDirection,
+        emphasisWords: creativeDirection.emphasisWords,
+      },
+    };
+  } else if (creativeDirection && enrichedContract.family === "CAROUSEL") {
+    enrichedContract = {
+      ...enrichedContract,
+      designBrief: {
+        visualMood: creativeDirection.visualMood,
+        layoutDirection: creativeDirection.imageDirection,
+      },
+    };
+  }
+  const sourceEvidence = enrichedContract.sourceEvidence.map((evidence) => {
     if (evidence.kind !== "TRANSCRIPT_SPAN" || !input.sourceTranscriptExcerpt) return evidence;
     return {
       ...evidence,
@@ -1071,7 +1107,7 @@ function buildStructuredContentJson(input: {
   });
 
   return parseContentOpportunityContractForType(input.type, {
-    ...converted,
+    ...enrichedContract,
     sourceEvidence,
   });
 }

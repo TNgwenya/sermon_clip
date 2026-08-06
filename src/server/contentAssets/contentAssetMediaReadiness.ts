@@ -1,4 +1,5 @@
 import { open } from "node:fs/promises";
+import path from "node:path";
 
 import type { PostingPlatform } from "@/lib/postingDrafts";
 import { selectContentPublishingFiles } from "@/lib/contentPublishingPreflight";
@@ -373,4 +374,50 @@ export async function checkContentAssetMediaReadiness(input: {
     selectedFileIds: selectedFiles.map((file) => file.id),
     files,
   };
+}
+
+/**
+ * Fast page-level availability check. Trusted durable URLs and valid object
+ * keys are accepted without a network round trip, while local-only files are
+ * still opened to ensure that this app instance can actually serve them.
+ * The scheduling boundary continues to use checkContentAssetMediaReadiness,
+ * which probes the remote bytes before any automatic post is queued.
+ */
+export async function checkContentAssetMediaPresence(input: {
+  assetType: string;
+  platform: PostingPlatform | null;
+  files: ContentAssetMediaReadinessFile[];
+  localFileRoot?: string | null;
+}): Promise<ContentAssetMediaReadinessResult> {
+  const localFileRoot = cleanLocation(input.localFileRoot);
+  const files = localFileRoot
+    ? input.files.map((file) => {
+      const localPath = cleanLocation(file.filePath);
+      if (!localPath) return file;
+
+      let resolvedLocalPath: string;
+      let resolvedRoot: string;
+      try {
+        resolvedLocalPath = path.resolve(resolvePortableStoragePath(localPath));
+        resolvedRoot = path.resolve(localFileRoot);
+      } catch {
+        return { ...file, filePath: null };
+      }
+      const relative = path.relative(resolvedRoot, resolvedLocalPath);
+      const isServable = relative !== ""
+        && !relative.startsWith("..")
+        && !path.isAbsolute(relative);
+      return isServable ? file : { ...file, filePath: null };
+    })
+    : input.files;
+
+  return checkContentAssetMediaReadiness({
+    assetType: input.assetType,
+    platform: input.platform,
+    files,
+    dependencies: {
+      ...defaultDependencies,
+      probePublicUrl: async () => ({ byteLength: 1 }),
+    },
+  });
 }

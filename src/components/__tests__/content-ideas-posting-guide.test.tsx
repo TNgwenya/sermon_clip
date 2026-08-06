@@ -10,7 +10,7 @@ describe("ContentIdeasPostingGuide", () => {
   it("explains the complete review-to-scheduling path without implying that drafts publish", () => {
     const markup = renderToStaticMarkup(<ContentIdeasPostingGuide defaultOpen />);
 
-    expect(markup).toContain("Your first post in three steps");
+    expect(markup).toContain("Finish this post in three decisions");
     expect(markup).toContain("Preview &amp; approve");
     expect(markup).toContain("Review this idea");
     expect(markup).toContain("Prepare approved content");
@@ -30,8 +30,9 @@ describe("ContentIdeasPostingGuide", () => {
   it("offers a compact refresher from Ready to Post", () => {
     const markup = renderToStaticMarkup(<ContentIdeasPostingGuide compact />);
 
-    expect(markup).toContain("Need a refresher?");
-    expect(markup).toContain('href="/opportunities#content-ideas-posting-guide"');
+    expect(markup).toContain("Working on one piece?");
+    expect(markup).toContain("approve it, change it, or replace it");
+    expect(markup).toContain('href="/weekly-plan"');
   });
 
   it("teaches the real first action when a sermon has no ideas", () => {
@@ -39,11 +40,11 @@ describe("ContentIdeasPostingGuide", () => {
       <ContentIdeasPostingGuide defaultOpen startingWithoutIdeas />,
     );
 
-    expect(markup).toContain("Create your first content plan");
-    expect(markup).toContain("Create the weekly pack");
-    expect(markup).toContain("Create weekly content pack");
-    expect(markup).toContain("Create standard idea set");
-    expect(markup.indexOf("Create weekly content pack")).toBeLessThan(
+    expect(markup).toContain("Create your first Content Week");
+    expect(markup).toContain("Create the Content Week");
+    expect(markup).toContain("Create my Content Week");
+    expect(markup).toContain("smaller idea set");
+    expect(markup.indexOf("Create my Content Week")).toBeLessThan(
       markup.indexOf("Recommended next"),
     );
   });

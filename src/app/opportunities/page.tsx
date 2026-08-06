@@ -552,9 +552,9 @@ export default async function OpportunitiesPage({
   return (
     <main className="secondary-media-shell stack-lg">
       <PageHeader
-        eyebrow="Content ideas"
-        title="Plan, preview, then publish"
-        description="Choose one idea at a time. Preview the content, edit the wording, and only move it to Design Studio or the calendar when it is ready."
+        eyebrow="Advanced content library"
+        title="Shape the pieces behind your Content Week"
+        description="Review sermon-grounded copy, replace weak options, or prepare a specific post. For the fastest path, return to Content Week and schedule the finished set together."
         className="opportunities-page-header"
       />
 

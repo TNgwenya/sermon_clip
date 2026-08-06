@@ -59,6 +59,10 @@ export type ReadyContentAsset = {
     approvedAt: string | null;
   } | null;
   sourceOpportunityStatus: "DRAFT" | "NEEDS_REVIEW" | "APPROVED" | "REJECTED" | "USED" | "ARCHIVED" | null;
+  mediaReadiness: {
+    status: "READY" | "BLOCKED";
+    message: string;
+  } | null;
   files: Array<{
     id: string;
     fileName: string;
@@ -141,6 +145,9 @@ function ContentAssetScheduleModal({
   const [note, setNote] = useState("");
   const [feedback, setFeedback] = useState<{ message: string; success: boolean } | null>(null);
   const supportsManualWithoutMedia = supportsManualContentHandoffWithoutMedia(asset.assetType);
+  const mediaBlocker = !supportsManualWithoutMedia && asset.mediaReadiness?.status === "BLOCKED"
+    ? asset.mediaReadiness.message
+    : null;
   const automaticAccounts = metaPublishingAccounts.filter((account) => account.platform === platform);
   const publishingFiles = selectContentPublishingFiles({
     assetType: asset.assetType,
@@ -178,7 +185,7 @@ function ContentAssetScheduleModal({
     title,
     caption,
   });
-  const blockingMessage = automaticBlocker ?? validationMessage;
+  const blockingMessage = mediaBlocker ?? automaticBlocker ?? validationMessage;
 
   useEffect(() => {
     if (!open || typeof document === "undefined") return;
@@ -655,7 +662,8 @@ export function GeneratedContentAssets({
           const canExportGuidePdf = ["DEVOTIONAL", "PRAYER", "DISCUSSION", "GUIDE", "SERMON_RECAP"].includes(asset.assetType);
           const isVersionLocked = ["SCHEDULED", "PUBLISHED", "ARCHIVED"].includes(asset.status);
           const supportsManualWithoutMedia = supportsManualContentHandoffWithoutMedia(asset.assetType);
-          const previewFile = selectPreviewFile(asset);
+          const mediaNeedsRepair = !supportsManualWithoutMedia && asset.mediaReadiness?.status === "BLOCKED";
+          const previewFile = mediaNeedsRepair ? null : selectPreviewFile(asset);
           const isDesignable = isDesignableContentAssetType(asset.assetType);
           const hasApprovedPublishingRevision = hasApprovedAssetPublishingRevision({
             currentRevisionId: asset.currentRevisionId,
@@ -678,8 +686,8 @@ export function GeneratedContentAssets({
                 </div>
                 <div className="clip-badge-row">
                   <span className="status-pill">{CONTENT_ASSET_TYPE_LABELS[asset.assetType]}</span>
-                  <span className={`status-pill ${revisionNeedsApproval ? "tone-warning" : asset.status === "READY" ? "status-exported" : asset.status === "PUBLISHED" ? "status-approved" : ""}`}>
-                    {revisionNeedsApproval ? "review required" : asset.status.toLowerCase()}
+                  <span className={`status-pill ${revisionNeedsApproval || mediaNeedsRepair ? "tone-warning" : asset.status === "READY" ? "status-exported" : asset.status === "PUBLISHED" ? "status-approved" : ""}`}>
+                    {revisionNeedsApproval ? "review required" : mediaNeedsRepair ? "media needs repair" : asset.status.toLowerCase()}
                   </span>
                 </div>
               </div>
@@ -707,8 +715,12 @@ export function GeneratedContentAssets({
                   ) : (
                     <div className={styles.previewPlaceholder}>
                       <span>{CONTENT_ASSET_TYPE_LABELS[asset.assetType]}</span>
-                      <strong>{supportsManualWithoutMedia ? "Copy ready to review" : "Artwork needs rendering"}</strong>
-                      <small>{supportsManualWithoutMedia ? "Review the words before scheduling." : "Open the design tools to create the final preview."}</small>
+                      <strong>{supportsManualWithoutMedia ? "Copy ready to review" : mediaNeedsRepair ? "Artwork needs repair" : "Artwork needs rendering"}</strong>
+                      <small>{supportsManualWithoutMedia
+                        ? "Review the words before scheduling."
+                        : mediaNeedsRepair
+                          ? asset.mediaReadiness?.message
+                          : "Open the design tools to create the final preview."}</small>
                     </div>
                   )}
                 </div>
@@ -720,7 +732,9 @@ export function GeneratedContentAssets({
                   </div>
                   <div className="generated-content-asset-meta">
                     <span>{formatContentPublishingPlatform(asset.platform)}</span>
-                    <span>{asset.files.length > 0
+                    <span>{mediaNeedsRepair
+                      ? "Production media unavailable"
+                      : asset.files.length > 0
                       ? `${asset.files.length} production file${asset.files.length === 1 ? "" : "s"}`
                       : supportsManualWithoutMedia
                         ? "Manual document/text handoff"
@@ -757,6 +771,10 @@ export function GeneratedContentAssets({
                   <button type="button" className="button primary" onClick={() => setComposerAssetId(asset.id)}>
                     Review publishing version
                   </button>
+                ) : mediaNeedsRepair && isDesignable ? (
+                  <a className="button primary" href={`/ready-to-post/content-assets/${asset.id}/studio`}>
+                    Repair artwork
+                  </a>
                 ) : asset.status === "PREPARED" && isDesignable ? (
                   <a className="button primary" href={`/ready-to-post/content-assets/${asset.id}/studio`}>
                     Create final artwork
@@ -770,7 +788,7 @@ export function GeneratedContentAssets({
                     type="button"
                     className="button primary"
                     onClick={() => setScheduleAssetId(asset.id)}
-                    disabled={!(["READY", "SCHEDULED"] as ReadyContentAsset["status"][]).includes(asset.status)}
+                    disabled={mediaNeedsRepair || !(["READY", "SCHEDULED"] as ReadyContentAsset["status"][]).includes(asset.status)}
                   >
                     Choose date &amp; time
                   </button>
@@ -804,7 +822,9 @@ export function GeneratedContentAssets({
                   >
                     {copiedAssetId === asset.id ? "Copied" : "Copy post copy"}
                   </button>
-                  <a className="button tertiary" href={`/api/content-assets/${asset.id}/download`}>Download production files</a>
+                  {!mediaNeedsRepair ? (
+                    <a className="button tertiary" href={`/api/content-assets/${asset.id}/download`}>Download production files</a>
+                  ) : null}
                   <a className="button tertiary" href={`/api/content-assets/${asset.id}/handoff/whatsapp`}>WhatsApp pack</a>
                   <a className="button tertiary" href={`/api/content-assets/${asset.id}/handoff/story`}>Story pack</a>
                   <a className="button tertiary" href={`/api/content-assets/${asset.id}/handoff/email`}>HTML email</a>
@@ -812,7 +832,7 @@ export function GeneratedContentAssets({
                     <a className="button tertiary" href={`/api/content-assets/${asset.id}/guide-pdf`}>Branded PDF</a>
                   ) : null}
                 </div>
-                {asset.files.length > 0 ? (
+                {asset.files.length > 0 && !mediaNeedsRepair ? (
                   <ul className={styles.fileList}>
                     {asset.files.map((file) => (
                       <li key={file.id}>

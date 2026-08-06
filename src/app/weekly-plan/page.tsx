@@ -7,15 +7,23 @@ import {
   type ContentPerformancePost,
 } from "@/lib/contentPerformance";
 import {
+  formatContentPublishingPlatform,
   isVideoClipOpportunityType,
   normalizeSuggestedPostingPlatform,
 } from "@/lib/contentPublishing";
 import { supportsManualContentHandoffWithoutMedia } from "@/lib/contentPublishingPreflight";
 import { hasApprovedAssetPublishingRevision } from "@/lib/contentWorkflowUi";
 import { prisma } from "@/lib/prisma";
-import { deriveSermonPointKey, nextMondayDateInput, type WeeklyPlanCandidate } from "@/lib/weeklyPlan";
+import {
+  deriveSermonPointKey,
+  isWeeklyPlanCopyReady,
+  nextMondayDateInput,
+  type WeeklyPlanCandidate,
+} from "@/lib/weeklyPlan";
 import { WeeklyPlanBuilder } from "@/app/weekly-plan/weekly-plan-builder";
+import { getSermonStoragePath } from "@/server/agents/storage";
 import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { checkContentAssetMediaPresence } from "@/server/contentAssets/contentAssetMediaReadiness";
 import { tenantScope } from "@/server/tenancy/scope";
 import styles from "./weekly-plan.module.css";
 
@@ -31,6 +39,27 @@ function jsonObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+async function mapWithConcurrency<T, Result>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<Result>,
+): Promise<Result[]> {
+  if (items.length === 0) return [];
+  const results = new Array<Result>(items.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from(
+    { length: Math.min(items.length, Math.max(1, Math.trunc(concurrency))) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index]);
+      }
+    },
+  ));
+  return results;
 }
 
 type WeeklyPlanSearchParams = {
@@ -76,6 +105,7 @@ export default async function WeeklyPlanPage({
           take: 30,
           select: {
             id: true,
+            sermonId: true,
             assetType: true,
             title: true,
             caption: true,
@@ -88,8 +118,17 @@ export default async function WeeklyPlanPage({
               select: { approvalState: true },
             },
             files: {
-              select: { id: true },
-              take: 1,
+              orderBy: { sortOrder: "asc" },
+              select: {
+                id: true,
+                fileName: true,
+                mimeType: true,
+                filePath: true,
+                objectKey: true,
+                publicUrl: true,
+                sizeBytes: true,
+                sortOrder: true,
+              },
             },
             contentOpportunity: {
               select: {
@@ -193,6 +232,27 @@ export default async function WeeklyPlanPage({
     }),
   ]);
 
+  const contentAssetRecords = sermonRecords.flatMap((sermon) => sermon.contentAssets);
+  const contentAssetMediaReadinessEntries = await mapWithConcurrency(
+    contentAssetRecords,
+    6,
+    async (asset) => {
+      if (supportsManualContentHandoffWithoutMedia(asset.assetType)) {
+        return [asset.id, true] as const;
+      }
+      const platform = asset.platform
+        ? formatContentPublishingPlatform(asset.platform) as "Instagram" | "Facebook" | "TikTok" | "YouTube Shorts"
+        : null;
+      const result = await checkContentAssetMediaPresence({
+        assetType: asset.assetType,
+        platform,
+        files: asset.files,
+        localFileRoot: getSermonStoragePath(asset.sermonId),
+      });
+      return [asset.id, result.status === "READY"] as const;
+    },
+  );
+  const contentAssetMediaReady = new Map(contentAssetMediaReadinessEntries);
   const clipSchedules = new Map<string, WeeklyPlanCandidate["alreadyScheduled"]>();
   scheduledRecords.forEach((post) => {
     jsonStringArray(post.clipIdsJson).forEach((clipId) => {
@@ -218,7 +278,7 @@ export default async function WeeklyPlanPage({
       }
       if (
         !supportsManualContentHandoffWithoutMedia(asset.assetType)
-        && asset.files.length === 0
+        && contentAssetMediaReady.get(asset.id) !== true
       ) {
         return [];
       }
@@ -258,21 +318,25 @@ export default async function WeeklyPlanPage({
         })),
       }];
     });
-    const clips: WeeklyPlanCandidate[] = sermon.clipCandidates.map((clip) => ({
-      id: clip.id,
-      sourceKind: "CLIP",
-      sermonId: sermon.id,
-      title: clip.title,
-      caption: clip.caption?.trim() || clip.title,
-      contentType: clip.smartClipCategory || clip.qualityClipCategory || "VIDEO_CLIP",
-      pointKey: deriveSermonPointKey({
+    const clips: WeeklyPlanCandidate[] = sermon.clipCandidates.flatMap((clip) => {
+      const caption = clip.caption?.trim() ?? "";
+      if (!isWeeklyPlanCopyReady({ title: clip.title, caption })) return [];
+      return [{
+        id: clip.id,
+        sourceKind: "CLIP",
+        sermonId: sermon.id,
         title: clip.title,
-        contentType: clip.smartClipCategory || clip.qualityClipCategory,
-      }),
-      suggestedPlatform: normalizeSuggestedPostingPlatform(clip.bestPlatform),
-      qualityScore: clip.finalQualityScore ?? clip.overallPostScore ?? clip.score,
-      alreadyScheduled: clipSchedules.get(clip.id) ?? [],
-    }));
+        caption,
+        contentType: clip.smartClipCategory || clip.qualityClipCategory || "VIDEO_CLIP",
+        pointKey: deriveSermonPointKey({
+          title: clip.title,
+          contentType: clip.smartClipCategory || clip.qualityClipCategory,
+        }),
+        suggestedPlatform: normalizeSuggestedPostingPlatform(clip.bestPlatform),
+        qualityScore: clip.finalQualityScore ?? clip.overallPostScore ?? clip.score,
+        alreadyScheduled: clipSchedules.get(clip.id) ?? [],
+      }];
+    });
     return [...assets, ...clips];
   });
 
@@ -346,14 +410,14 @@ export default async function WeeklyPlanPage({
     <main className={styles.shell}>
       <header className={styles.hero}>
         <div>
-          <p className="kicker">Operational weekly plan</p>
-          <h1>One reviewed ministry week</h1>
-          <p className={styles.muted}>Assemble clips and approved sermon material, spot repeated ideas, then place the reviewed week on the mixed-content calendar.</p>
+          <p className="kicker">One sermon → one content week</p>
+          <h1>Your week, ready to review.</h1>
+          <p className={styles.muted}>Sermon Clip selects a balanced mix of your strongest approved clips and branded posts. Keep, change, or replace each piece, then schedule the whole week in one step.</p>
         </div>
-        <nav className={styles.heroActions} aria-label="Weekly plan actions">
-          <Link className="button primary" href="#weekly-plan-builder">Review this week</Link>
+        <nav className={styles.heroActions} aria-label="Content Week actions">
+          <Link className="button primary" href="#weekly-plan-builder">Review my Content Week</Link>
           <Link className="button tertiary" href="/ready-to-post">Publishing desk</Link>
-          <Link className="button tertiary" href="/opportunities">Content ideas</Link>
+          <Link className="button tertiary" href="/week-drafts">Draft archive</Link>
         </nav>
       </header>
       <WeeklyPlanBuilder

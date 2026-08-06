@@ -71,19 +71,20 @@ function renderStudio({
 }
 
 describe("ContentAssetDesignStudio artwork experience", () => {
-  it("starts with twelve finished directions using the approved copy", () => {
+  it("starts with three recommended finished directions using the approved copy", () => {
     const markup = renderStudio();
 
-    expect(markup).toContain("12 options");
+    expect(markup).toContain("3 shown");
+    expect(markup).toContain("The three strongest brand-safe directions for this post.");
     expect(markup).toContain("Church brand starter");
     expect(markup).not.toContain("Best for this message");
-    expect(markup).toContain("All designs");
+    expect(markup).toContain("Recommended");
     expect(markup).toContain("Still waters");
     expect(markup).toContain("New mercies");
-    expect(markup).toContain("Sunday editorial");
-    expect(markup).toContain("Radiant declaration");
-    expect(markup).toContain("Church signature");
-    expect(markup).toContain("Midnight minimal");
+    expect(markup).not.toContain("Sunday editorial");
+    expect(markup).not.toContain("Radiant declaration");
+    expect(markup).not.toContain("Church signature");
+    expect(markup).not.toContain("Midnight minimal");
     expect(markup).toContain("Faith keeps walking when pressure comes.");
     expect(markup).not.toContain("Choose a look");
   });
@@ -169,7 +170,7 @@ describe("ContentAssetDesignStudio artwork experience", () => {
     expect(markup).toContain("Slide type");
     expect(markup).toContain("Move slide earlier");
     expect(markup).toContain("Remove slide");
-    expect(markup).toContain("12 options");
+    expect(markup).toContain("3 shown");
     expect(markup).toContain("SLIDE SERIES");
     expect(markup).toContain("Youth Ministry");
     expect(markup).toMatch(/id="studio-words-editor"[^>]*open/);

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  checkContentAssetMediaPresence,
   checkContentAssetMediaReadiness,
   isContentAssetPublishingObjectKey,
   probeReadableLocalContentAssetFile,
@@ -208,6 +209,29 @@ describe("content asset media readiness", () => {
 
     await expect(probeReadableLocalContentAssetFile(emptyPath)).resolves.toEqual({ byteLength: 0 });
     await expect(probeReadableLocalContentAssetFile(readyPath)).resolves.toEqual({ byteLength: 10 });
+  });
+
+  it("blocks local files that the publishing route cannot serve from the sermon storage root", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "content-asset-presence-"));
+    createdDirectories.push(directory);
+    const sermonRoot = path.join(directory, "sermon-1");
+    const outsidePath = path.join(directory, "legacy-render.jpg");
+    await writeFile(outsidePath, Buffer.from("legacy-jpeg-bytes"));
+
+    const result = await checkContentAssetMediaPresence({
+      assetType: "QUOTE_GRAPHIC",
+      platform: "Instagram",
+      files: [file({ filePath: outsidePath })],
+      localFileRoot: sermonRoot,
+    });
+
+    expect(result).toMatchObject({
+      status: "BLOCKED",
+      reason: "PUBLISHING_FILE_UNAVAILABLE",
+      files: [{
+        reason: "NO_MEDIA_LOCATION",
+      }],
+    });
   });
 
   it("rejects object keys that could escape the content-assets publishing namespace", () => {

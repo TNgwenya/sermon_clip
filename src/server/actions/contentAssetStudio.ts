@@ -26,6 +26,7 @@ import {
   renderApprovedNonVideoAssets,
   toContentAssetFilePersistenceInput,
 } from "@/server/contentAssets/nonVideoAssetRenderer";
+import { uploadContentAssetFilesWhenConfigured } from "@/server/contentAssets/contentAssetPublicStorage";
 import { createAssetRevision } from "@/server/contentRevisionService";
 import { recordContentFunnelEvent } from "@/server/contentFunnelTelemetry";
 import { validateScriptureReference } from "@/lib/contentIntegrity";
@@ -333,6 +334,31 @@ export async function saveContentAssetDesignAction(
       if (renderedFiles.length === 0) {
         return { success: false, message: "No production artwork was rendered. Review the design and try again." };
       }
+      const uploadCandidates = renderedFiles.flatMap((file, index) => {
+        const filePath = file.filePath?.trim();
+        if (!filePath) return [];
+        return [{
+          id: `${renderAttemptId}-${index + 1}`,
+          fileName: file.fileName,
+          filePath,
+          mimeType: file.mimeType,
+        }];
+      });
+      const uploadedFiles = await uploadContentAssetFilesWhenConfigured({
+        contentAssetId: asset.id,
+        files: uploadCandidates,
+      });
+      renderedFiles = renderedFiles.map((file, index) => {
+        const uploaded = uploadedFiles.get(`${renderAttemptId}-${index + 1}`);
+        return uploaded
+          ? {
+              ...file,
+              objectKey: uploaded.objectKey,
+              publicUrl: uploaded.publicUrl,
+              sizeBytes: BigInt(uploaded.sizeBytes),
+            }
+          : file;
+      });
     }
 
     const metadataJson = {

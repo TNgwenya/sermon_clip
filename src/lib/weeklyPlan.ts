@@ -1,6 +1,7 @@
 import type { ContentPublishingPlatform } from "@/lib/contentPublishing";
 
 export const WEEKLY_PLAN_OBJECTIVES = [
+  "BALANCED",
   "REACH",
   "DISCIPLESHIP",
   "PRAYER",
@@ -50,6 +51,7 @@ export type WeeklyPlanBuildInput = {
   frequency: number;
   objective: WeeklyPlanObjective;
   timezone?: string;
+  replacedSourceKeys?: string[];
 };
 
 export function resolveWeeklyPlanPlatform(input: {
@@ -85,6 +87,7 @@ export function findExactScheduleDuplicateWarning(input: {
 }
 
 const OBJECTIVE_TERMS: Record<WeeklyPlanObjective, string[]> = {
+  BALANCED: ["clip", "quote", "recap", "scripture", "discussion", "prayer", "invitation", "carousel"],
   REACH: ["clip", "quote", "recap", "story", "testimony", "hook"],
   DISCIPLESHIP: ["devotional", "guide", "teaching", "scripture", "discussion", "application"],
   PRAYER: ["prayer", "healing", "encouragement", "faith", "hope"],
@@ -130,6 +133,26 @@ export function normalizeWeeklyPlanFrequency(value: unknown): number {
   const number = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(number)) return 5;
   return Math.max(1, Math.min(7, Math.round(number)));
+}
+
+export function isWeeklyPlanCopyReady(input: {
+  title: string | null | undefined;
+  caption: string | null | undefined;
+}): boolean {
+  const title = input.title?.trim() ?? "";
+  const caption = input.caption?.trim() ?? "";
+  const titleWords = title.split(/\s+/u).filter(Boolean);
+  const startsLikeEditedCopy = /^[“"'([{]*[\p{Lu}\p{N}]/u.test(caption);
+  const endsLikeEditedCopy = /[.!?…]["'”’)\]}]*$/u.test(caption);
+
+  return title.length >= 8
+    && title.length <= 100
+    && titleWords.length >= 2
+    && titleWords.length <= 12
+    && caption.length >= 30
+    && caption.length <= 650
+    && startsLikeEditedCopy
+    && endsLikeEditedCopy;
 }
 
 type LocalCalendarDateTime = {
@@ -336,7 +359,10 @@ export function buildWeeklyPlan(input: WeeklyPlanBuildInput): WeeklyPlanItem[] {
   if (!weekStart || !isValidIanaTimeZone(timezone) || platforms.length === 0 || !input.sermonId.trim()) return [];
 
   const candidates = mixCandidateKinds(
-    input.candidates.filter((candidate) => candidate.sermonId === input.sermonId),
+    input.candidates.filter((candidate) => (
+      candidate.sermonId === input.sermonId
+      && !(input.replacedSourceKeys ?? []).includes(`${candidate.sourceKind}:${candidate.id}`)
+    )),
     input.objective,
   );
   const dayIndexes = evenlySpacedDayIndexes(frequency);

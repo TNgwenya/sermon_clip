@@ -149,6 +149,9 @@ describe("weekly publishing board", () => {
     expect(snapshot.attentionCount).toBe(1);
     expect(snapshot.decision.title).toBe("Check the Instagram result");
     expect(snapshot.decision.href).toBe("#posting-calendar");
+    expect(snapshot.automaticPublishingReady).toBe(false);
+    expect(snapshot.automaticPublishingLabel).toBe("Automatic publishing needs attention");
+    expect(snapshot.automaticPublishingAttentionPlatforms).toEqual(["Instagram"]);
   });
 
   it("distinguishes platform receipts from manual confirmations and retry states", () => {

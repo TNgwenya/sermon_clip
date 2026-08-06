@@ -26,13 +26,13 @@
 }
 
 .hero h1 {
-  max-width: 13ch;
+  max-width: 18ch;
   margin-top: 6px;
   font-family: var(--font-display, "Iowan Old Style", Georgia, serif);
-  font-size: clamp(2.8rem, 6vw, 5.9rem);
+  font-size: clamp(2.8rem, 5vw, 4.8rem);
   font-weight: 520;
   letter-spacing: -.052em;
-  line-height: .95;
+  line-height: .98;
 }
 
 .hero > div {
@@ -237,6 +237,29 @@
   color: var(--muted, #a9afa9);
 }
 
+.weekShortfall {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 18px;
+  padding: 15px 16px;
+  border: 1px solid rgba(157, 214, 189, .18);
+  border-radius: 13px;
+  background: rgba(157, 214, 189, .055);
+}
+
+.weekShortfall > div {
+  display: grid;
+  gap: 4px;
+}
+
+.weekShortfall span {
+  color: var(--muted, #a9afa9);
+  font-size: .82rem;
+  line-height: 1.5;
+}
+
 .list {
   display: grid;
   gap: 12px;
@@ -307,6 +330,44 @@
 
 .performance {
   margin-top: 20px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.performanceSummary {
+  display: flex;
+  min-height: 6rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 24px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.performanceSummary::-webkit-details-marker {
+  display: none;
+}
+
+.performanceSummary > span:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.performanceSummary strong {
+  font-size: 1.05rem;
+}
+
+.performanceSummary small {
+  color: var(--muted, #a9afa9);
+}
+
+.performance[open] .performanceSummary {
+  border-bottom: 1px solid var(--border, rgba(230, 237, 230, .12));
+}
+
+.performanceBody {
+  padding: 20px 24px 24px;
 }
 
 .performanceGrid {
@@ -355,6 +416,18 @@
   color: #c6cec8;
   font-size: .78rem;
   font-weight: 750;
+}
+
+.itemActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.itemActions button {
+  min-height: 32px;
+  padding: 6px 10px;
 }
 
 .captionPreview {
@@ -437,6 +510,11 @@
 
   .itemSchedule {
     grid-column: 2;
+  }
+
+  .weekShortfall {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

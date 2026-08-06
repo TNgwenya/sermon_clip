@@ -47,11 +47,11 @@ export function ContentIdeasPostingGuide({
     return (
       <aside className="content-ideas-posting-guide-refresher" aria-label="Content ideas posting guide">
         <div>
-          <p className="kicker">Need a refresher?</p>
-          <strong>Follow the same calm path: review, prepare, then schedule.</strong>
+          <p className="kicker">Working on one piece?</p>
+          <strong>Keep the decision simple: approve it, change it, or replace it.</strong>
           <p className="muted small">Your post is only planned after the final scheduling choice.</p>
         </div>
-        <a className="text-link small" href={`/opportunities#${CONTENT_IDEAS_POSTING_GUIDE_ID}`}>Open the 2-minute guide</a>
+        <a className="text-link small" href="/weekly-plan">Return to Content Week</a>
       </aside>
     );
   }
@@ -68,10 +68,10 @@ export function ContentIdeasPostingGuide({
         <span className="content-ideas-posting-guide-summary">
           <span className="content-ideas-posting-guide-mark" aria-hidden="true">?</span>
           <span>
-            <strong>{startingWithoutIdeas ? "Create your first content plan" : "Your first post in three steps"}</strong>
+            <strong>{startingWithoutIdeas ? "Create your first Content Week" : "Finish this post in three decisions"}</strong>
             <small>{startingWithoutIdeas
-              ? "Start with a weekly pack, then review and plan · about 2 minutes"
-              : "How Content Ideas becomes a planned post · about 2 minutes"}</small>
+              ? "Create seven focused pieces, then keep only what serves the week"
+              : "Approve the message, apply the brand, and choose its place in the week"}</small>
           </span>
           <span className="content-ideas-posting-guide-chevron" aria-hidden="true">⌄</span>
         </span>
@@ -89,9 +89,9 @@ export function ContentIdeasPostingGuide({
             <li>
               <span aria-hidden="true">1</span>
               <div>
-                <strong>Create the weekly pack</strong>
+                <strong>Create the Content Week</strong>
                 <p>
-                  Select <b>Create weekly content pack</b>. The app will create a balanced set of draft ideas from this sermon. Use <b>Create standard idea set</b> only when you want a smaller general set instead.
+                  Select <b>Create my Content Week</b>. The app will create seven distinct, balanced pieces from this sermon. Use the smaller idea set only when you are exploring beyond the week.
                 </p>
               </div>
             </li>

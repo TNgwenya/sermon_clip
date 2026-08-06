@@ -64,6 +64,16 @@ export function WeeklyPublishingBoard({
           <div>
             <strong>{snapshot.automaticPublishingLabel}</strong>
             <p>{snapshot.automaticPublishingDetail}</p>
+            {snapshot.automaticPublishingPlatforms.length > 0 ? (
+              <small className={styles.channelLine}>
+                Ready now: {snapshot.automaticPublishingPlatforms.join(" · ")}
+              </small>
+            ) : null}
+            {snapshot.automaticPublishingAttentionPlatforms.length > 0 ? (
+              <small className={`${styles.channelLine} ${styles.channelAttention}`}>
+                Check first: {snapshot.automaticPublishingAttentionPlatforms.join(" · ")}
+              </small>
+            ) : null}
             <small>
               {snapshot.manualHandoffAvailable
                 ? "Manual video downloads and copy handoff are available."

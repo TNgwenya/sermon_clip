@@ -19,11 +19,13 @@ import { resolveReadyMedia } from "@/lib/readyMedia";
 import { getPublishingServiceHealth } from "@/lib/publishingServiceHealth";
 import { parseClipCoverFrameSelection } from "@/lib/clipCoverFrame";
 import { extractCaptionPackage } from "@/lib/clipStudio";
-import { normalizeContentHashtags } from "@/lib/contentPublishing";
+import { formatContentPublishingPlatform, normalizeContentHashtags } from "@/lib/contentPublishing";
 import { isEditoriallyPostReady } from "@/app/ready-to-post/readiness-display";
 import { supportsManualContentHandoffWithoutMedia } from "@/lib/contentPublishingPreflight";
 import { hasApprovedAssetPublishingRevision } from "@/lib/contentWorkflowUi";
 import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import { checkContentAssetMediaPresence } from "@/server/contentAssets/contentAssetMediaReadiness";
+import { getSermonStoragePath } from "@/server/agents/storage";
 import { tenantScope } from "@/server/tenancy/scope";
 
 export const dynamic = "force-dynamic";
@@ -407,9 +409,13 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
             id: true,
             fileName: true,
             mimeType: true,
+            filePath: true,
+            objectKey: true,
             publicUrl: true,
             width: true,
             height: true,
+            sizeBytes: true,
+            sortOrder: true,
           },
         },
         scheduledPostLinks: {
@@ -536,6 +542,29 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
           || post.contentAssets?.some((asset) => scopedContentAssetIdSet.has(asset.id))
         ))
       : scheduledPosts;
+  const contentAssetMediaReadinessEntries = await mapWithConcurrency(
+    contentAssetRecords,
+    6,
+    async (asset) => {
+      if (supportsManualContentHandoffWithoutMedia(asset.assetType)) {
+        return [asset.id, null] as const;
+      }
+      const platform = asset.platform
+        ? formatContentPublishingPlatform(asset.platform) as "Instagram" | "Facebook" | "TikTok" | "YouTube Shorts"
+        : null;
+      const readiness = await checkContentAssetMediaPresence({
+        assetType: asset.assetType,
+        platform,
+        files: asset.files,
+        localFileRoot: getSermonStoragePath(asset.sermonId),
+      });
+      return [asset.id, {
+        status: readiness.status,
+        message: readiness.message,
+      }] as const;
+    },
+  );
+  const contentAssetMediaReadiness = new Map(contentAssetMediaReadinessEntries);
   const contentAssets = contentAssetRecords.map((asset) => ({
     id: asset.id,
     sermonId: asset.sermonId,
@@ -557,7 +586,15 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
       approvedAt: asset.currentRevision.approvedAt?.toISOString() ?? null,
     } : null,
     sourceOpportunityStatus: asset.contentOpportunity?.status ?? null,
-    files: asset.files,
+    mediaReadiness: contentAssetMediaReadiness.get(asset.id) ?? null,
+    files: asset.files.map((file) => ({
+      id: file.id,
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+      publicUrl: file.publicUrl,
+      width: file.width,
+      height: file.height,
+    })),
     scheduledPosts: asset.scheduledPostLinks.map((link) => ({
       id: link.scheduledPost.id,
       platform: link.scheduledPost.platform,
@@ -619,7 +656,10 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
       approvedRevisionId: asset.approvedRevisionId,
       currentRevisionApprovalState: asset.currentRevision?.approvalState,
     })
-    && (supportsManualContentHandoffWithoutMedia(asset.assetType) || asset.files.length > 0)
+    && (
+      supportsManualContentHandoffWithoutMedia(asset.assetType)
+      || asset.mediaReadiness?.status === "READY"
+    )
   )).length;
   const preparedItemCount = downloadableClipCount + preparedGeneratedPostCount;
   const readyToPostItemCount = editoriallyPostReadyClipCount + readyGeneratedPostCount;

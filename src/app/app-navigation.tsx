@@ -65,22 +65,16 @@ const primaryItems: NavigationItem[] = [
 
 const contentPlanItems: NavigationItem[] = [
   {
+    href: "/weekly-plan",
+    label: "Content Week",
+    icon: "plan",
+    isActive: (pathname) => pathname.startsWith("/weekly-plan") || pathname.startsWith("/week-drafts"),
+  },
+  {
     href: "/events",
     label: "Events",
     icon: "events",
     isActive: (pathname) => pathname.startsWith("/events"),
-  },
-  {
-    href: "/week-drafts",
-    label: "Week drafts",
-    icon: "plan",
-    isActive: (pathname) => pathname.startsWith("/week-drafts"),
-  },
-  {
-    href: "/weekly-plan",
-    label: "Weekly plan",
-    icon: "plan",
-    isActive: (pathname) => pathname.startsWith("/weekly-plan"),
   },
   {
     href: "/sermons",
@@ -90,7 +84,7 @@ const contentPlanItems: NavigationItem[] = [
   },
   {
     href: "/opportunities",
-    label: "Content ideas",
+    label: "Content library",
     icon: "ideas",
     isActive: (pathname) => pathname.startsWith("/opportunities"),
   },

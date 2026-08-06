@@ -331,6 +331,13 @@ export async function listConnectorCredentialSummaries(
     by: ["provider"],
     where: {
       status: "CONNECTED",
+      lastError: null,
+      AND: [{
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { gt: new Date() } },
+        ],
+      }],
       ...tenantVisibilityWhere(normalizedScope),
     },
     _count: { provider: true },

@@ -56,6 +56,7 @@ const PLATFORM_OPTIONS: Array<{ value: ContentPublishingPlatform; label: string 
 ];
 
 const OBJECTIVE_OPTIONS: Array<{ value: WeeklyPlanObjective; label: string; detail: string }> = [
+  { value: "BALANCED", label: "Balanced", detail: "A recommended mix of reach, discipleship, prayer, engagement, and invitation." },
   { value: "REACH", label: "Reach", detail: "Lead with high-quality clips, recaps, and shareable moments." },
   { value: "DISCIPLESHIP", label: "Discipleship", detail: "Prioritise teaching, Scripture, guides, and application." },
   { value: "PRAYER", label: "Prayer", detail: "Build the week around prayer, hope, and encouragement." },
@@ -98,11 +99,12 @@ export function WeeklyPlanBuilder({
       : sermons[0]?.id ?? "",
   );
   const [weekStart, setWeekStart] = useState(defaultWeekStart);
-  const [frequency, setFrequency] = useState(5);
-  const [objective, setObjective] = useState<WeeklyPlanObjective>("DISCIPLESHIP");
+  const [frequency, setFrequency] = useState(6);
+  const [objective, setObjective] = useState<WeeklyPlanObjective>("BALANCED");
   const [timezone, setTimezone] = useState("Africa/Johannesburg");
   const [platforms, setPlatforms] = useState<ContentPublishingPlatform[]>(["INSTAGRAM", "FACEBOOK"]);
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
+  const [replacedIds, setReplacedIds] = useState<Set<string>>(new Set());
   const [platformOverrides, setPlatformOverrides] = useState<Record<string, ContentPublishingPlatform>>({});
   const [resultMessage, setResultMessage] = useState<{
     tone: "success" | "error";
@@ -122,6 +124,7 @@ export function WeeklyPlanBuilder({
     frequency,
     objective,
     timezone,
+    replacedSourceKeys: Array.from(replacedIds),
   }).map((item) => {
     const platform = resolveWeeklyPlanPlatform({
       planned: item.platform,
@@ -144,18 +147,38 @@ export function WeeklyPlanBuilder({
         ...(exactWarning ? [exactWarning] : []),
       ],
     };
-  }), [candidates, frequency, objective, platformOverrides, platforms, sermonId, timezone, weekStart]);
+  }), [candidates, frequency, objective, platformOverrides, platforms, replacedIds, sermonId, timezone, weekStart]);
   const selectedPlan = plan.filter((item) => !excludedIds.has(`${item.sourceKind}:${item.sourceId}`));
   const exactDuplicateCount = selectedPlan.filter((item) => item.duplicateWarnings.some((warning) => warning.includes("exact item"))).length;
   const repeatedPointCount = selectedPlan.filter((item) => item.duplicateWarnings.some((warning) => warning.includes("same sermon point"))).length;
   const selectedAssets = selectedPlan.filter((item) => item.sourceKind === "CONTENT_ASSET").length;
   const selectedClips = selectedPlan.length - selectedAssets;
+  const availableCandidateCount = candidates.filter((candidate) => (
+    candidate.sermonId === sermonId
+    && !replacedIds.has(`${candidate.sourceKind}:${candidate.id}`)
+  )).length;
+  const canReplace = availableCandidateCount > plan.length;
   const timezoneValid = isValidIanaTimeZone(timezone);
 
   function togglePlatform(platform: ContentPublishingPlatform) {
     setPlatforms((current) => current.includes(platform)
       ? current.filter((item) => item !== platform)
       : [...current, platform]);
+  }
+
+  function replaceItem(selectionKey: string) {
+    setReplacedIds((current) => new Set(current).add(selectionKey));
+    setExcludedIds((current) => {
+      const next = new Set(current);
+      next.delete(selectionKey);
+      return next;
+    });
+  }
+
+  function resetChoices() {
+    setExcludedIds(new Set());
+    setReplacedIds(new Set());
+    setPlatformOverrides({});
   }
 
   function scheduleWeek() {
@@ -215,10 +238,10 @@ export function WeeklyPlanBuilder({
   if (sermons.length === 0) {
     return (
       <section className={styles.section}>
-        <h2>No publishing-ready sermon content yet</h2>
-        <p className={styles.muted}>Review one sermon idea, approve it, and prepare it for publishing. It will then appear here automatically.</p>
+        <h2>Your first Content Week is one review away</h2>
+        <p className={styles.muted}>Create a focused seven-piece pack from a sermon, approve the strongest pieces, and they will appear here automatically.</p>
         <div className={styles.actions}>
-          <Link href="/opportunities" className="button primary">Review content ideas</Link>
+          <Link href="/opportunities" className="button primary">Create a Content Week</Link>
           <Link href="/sermons" className="button tertiary">Check sermon clips</Link>
         </div>
       </section>
@@ -231,7 +254,7 @@ export function WeeklyPlanBuilder({
         <details className={`${styles.section} ${styles.settings}`}>
           <summary className={styles.settingsSummary}>
             <span>
-              <span className="kicker">Plan settings</span>
+              <span className="kicker">Content Week settings</span>
               <strong>{selectedSermon?.title ?? "Choose a sermon"}</strong>
               <small>{frequency} posts · {OBJECTIVE_OPTIONS.find((option) => option.value === objective)?.label} · {platforms.length} platform{platforms.length === 1 ? "" : "s"}</small>
             </span>
@@ -249,11 +272,12 @@ export function WeeklyPlanBuilder({
             <input type="date" value={weekStart} onChange={(event) => setWeekStart(event.target.value)} />
           </label>
           <label>
-            Posting frequency
+            Week size
             <select value={frequency} onChange={(event) => setFrequency(Number(event.target.value))}>
-              <option value={3}>3 posts</option>
-              <option value={5}>5 posts</option>
-              <option value={7}>7 posts</option>
+              <option value={3}>3 pieces · Light week</option>
+              <option value={5}>5 pieces</option>
+              <option value={6}>6 pieces · Recommended</option>
+              <option value={7}>7 pieces · Full week</option>
             </select>
           </label>
           <label>
@@ -286,23 +310,34 @@ export function WeeklyPlanBuilder({
             {!timezoneValid ? <span className={styles.error}>Use a valid IANA timezone, such as Africa/Johannesburg.</span> : null}
           </label>
           <div className={styles.warning}>
-            <strong>Safe handoff mode</strong>
-            <p>Every weekly-plan item is added for human review. Generated non-video content is never made automatic by this bulk action.</p>
+            <strong>You stay in control</strong>
+            <p>Nothing publishes from this screen. Approving the week places protected, reviewed versions on the calendar for the media team.</p>
           </div>
           </div>
         </details>
 
         <section className={styles.section} aria-label="Weekly plan preview">
           <div>
-            <p className="kicker">Review before scheduling</p>
+            <p className="kicker">Your recommended Content Week</p>
             <h2>{selectedSermon?.title ?? "Weekly content plan"}</h2>
-            <p className={styles.muted}>{selectedSermon?.centralTheme || "Clips and approved generated material are balanced across the week."}</p>
+            <p className={styles.muted}>{selectedSermon?.centralTheme || "A balanced set of approved clips and branded posts, already placed across the week."}</p>
           </div>
           <div className={styles.summary} aria-label="Weekly plan summary">
             <div><strong>{selectedPlan.length}</strong><span>selected posts</span></div>
             <div><strong>{selectedClips}</strong><span>video clips</span></div>
             <div><strong>{selectedAssets}</strong><span>generated assets</span></div>
           </div>
+          {plan.length < frequency ? (
+            <div className={styles.weekShortfall}>
+              <div>
+                <strong>{plan.length} of {frequency} {plan.length === 1 ? "piece is" : "pieces are"} ready</strong>
+                <span>Sermon Clip only uses approved, production-ready content. Create the missing pieces without padding the week with weak drafts.</span>
+              </div>
+              <Link className="button secondary" href={`/opportunities?sermonId=${encodeURIComponent(sermonId)}`}>
+                Create missing pieces
+              </Link>
+            </div>
+          ) : null}
           {exactDuplicateCount > 0 ? (
             <div className={styles.error}><strong>Duplicate schedule blocked</strong><br />Remove the {exactDuplicateCount} item{exactDuplicateCount === 1 ? "" : "s"} already scheduled on the same platform.</div>
           ) : repeatedPointCount > 0 ? (
@@ -334,6 +369,7 @@ export function WeeklyPlanBuilder({
                         return next;
                       })}
                     />
+                    <span>{selected ? "Keep" : "Removed"}</span>
                   </label>
                   <div>
                     <div className={styles.pills}>
@@ -344,7 +380,7 @@ export function WeeklyPlanBuilder({
                     <p className={styles.meta}>{dateTimeLabel(item.scheduledFor, timezone)} · {timezone}</p>
                     {item.duplicateWarnings.map((warning) => <p key={warning} className={styles.warning}>{warning}</p>)}
                     <details className={styles.itemDetails}>
-                      <summary>Preview &amp; source</summary>
+                      <summary>Preview post &amp; sermon source</summary>
                       <p className={styles.captionPreview}>{item.caption}</p>
                       <div className={styles.handoffs}>
                         <Link className="text-link small" href={item.sourceKind === "CONTENT_ASSET"
@@ -359,6 +395,23 @@ export function WeeklyPlanBuilder({
                         ) : null}
                       </div>
                     </details>
+                    <div className={styles.itemActions}>
+                      <Link className="text-link small" href={item.sourceKind === "CONTENT_ASSET"
+                        ? `/ready-to-post?contentAssetId=${encodeURIComponent(item.sourceId)}#generated-content-assets`
+                        : `/ready-to-post?clipId=${encodeURIComponent(item.sourceId)}#ready-clips`}
+                      >
+                        Change
+                      </Link>
+                      <button
+                        type="button"
+                        className="button tertiary"
+                        disabled={!canReplace}
+                        onClick={() => replaceItem(selectionKey)}
+                        title={canReplace ? "Use the next strongest distinct piece from this sermon" : "No other prepared piece is available yet"}
+                      >
+                        Replace
+                      </button>
+                    </div>
                   </div>
                   <label className={styles.itemSchedule}>
                     Platform
@@ -392,16 +445,26 @@ export function WeeklyPlanBuilder({
               disabled={isPending || selectedPlan.length === 0 || exactDuplicateCount > 0 || platforms.length === 0 || !timezoneValid}
               onClick={scheduleWeek}
             >
-              {isPending ? "Checking & scheduling..." : `Approve & schedule ${selectedPlan.length || ""} post${selectedPlan.length === 1 ? "" : "s"}`}
+              {isPending ? "Checking & scheduling..." : `Approve & schedule my ${selectedPlan.length}-piece week`}
             </button>
-            <Link className="text-link small" href="/ready-to-post#posting-calendar">Open the mixed calendar</Link>
+            {replacedIds.size > 0 || excludedIds.size > 0 ? (
+              <button type="button" className="button tertiary" onClick={resetChoices}>Start over</button>
+            ) : null}
+            <Link className="text-link small" href="/ready-to-post#posting-calendar">Open publishing calendar</Link>
           </div>
         </section>
       </div>
 
-      <section className={`${styles.section} ${styles.performance}`} aria-label="Sermon content performance">
-        <p className="kicker">Traceable performance</p>
-        <h2>What published sermon content is teaching us</h2>
+      <details className={`${styles.section} ${styles.performance}`} aria-label="Sermon content performance">
+        <summary className={styles.performanceSummary}>
+          <span>
+            <span className="kicker">Learn from published content</span>
+            <strong>Performance and recommended follow-ups</strong>
+            <small>Open when you want to review results; it stays out of the weekly scheduling flow.</small>
+          </span>
+          <span className={styles.settingsAction}>Open</span>
+        </summary>
+        <div className={styles.performanceBody}>
         <p className={styles.muted}>Metrics are matched to the scheduled post, then traced back to its clip or generated asset and source sermon.</p>
         {recentPublishedPosts.length > 0 ? (
           <details className={styles.performanceRecorder}>
@@ -479,7 +542,8 @@ export function WeeklyPlanBuilder({
             ))}
           </div>
         ) : null}
-      </section>
+        </div>
+      </details>
     </>
   );
 }

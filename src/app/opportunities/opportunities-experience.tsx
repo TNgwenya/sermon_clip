@@ -1048,7 +1048,7 @@ export function OpportunitiesExperience({
             <p className="kicker">Start here</p>
             <h2>Create a useful week from this sermon</h2>
             <p className="muted">
-              Create quote posts, captions, a recap, a prayer resource, an invitation, and engagement ideas for {activeSermonTitle ?? "this sermon"}. Every draft waits for your review.
+              Sermon Clip will create seven distinct, sermon-grounded pieces for {activeSermonTitle ?? "this sermon"}—enough for a balanced week without a review backlog.
             </p>
           </div>
           <div className="opportunities-empty-cta stack-sm">
@@ -1061,7 +1061,7 @@ export function OpportunitiesExperience({
                 () => generateContentPackAction(activeSermonId, "WEEKLY_CONTENT_PACK"),
               )}
             >
-              {pendingAction === "pack:WEEKLY_CONTENT_PACK" ? "Creating the week…" : "Create weekly content pack"}
+              {pendingAction === "pack:WEEKLY_CONTENT_PACK" ? "Creating your Content Week…" : "Create my Content Week"}
             </button>
             <button
               type="button"
@@ -1069,7 +1069,7 @@ export function OpportunitiesExperience({
               disabled={isPending}
               onClick={() => runAction("ideas:default", () => generateContentOpportunitiesAction(activeSermonId))}
             >
-              {pendingAction === "ideas:default" ? "Creating ideas…" : "Create standard idea set"}
+              {pendingAction === "ideas:default" ? "Creating ideas…" : "Create a smaller idea set"}
             </button>
           </div>
         </section>
@@ -1086,9 +1086,9 @@ export function OpportunitiesExperience({
       ) : null}
 
       <ol className="opportunities-journey" aria-label="Content planning steps">
-        <li className={journeyStep === 1 ? "is-active" : "is-complete"} aria-current={journeyStep === 1 ? "step" : undefined}><strong>1</strong> Preview & approve</li>
-        <li className={journeyStep === 2 ? "is-active" : journeyStep > 2 ? "is-complete" : ""} aria-current={journeyStep === 2 ? "step" : undefined}><strong>2</strong> Prepare content</li>
-        <li className={journeyStep === 3 ? "is-active" : ""} aria-current={journeyStep === 3 ? "step" : undefined}><strong>3</strong> Design & schedule</li>
+        <li className={journeyStep === 1 ? "is-active" : "is-complete"} aria-current={journeyStep === 1 ? "step" : undefined}><strong>1</strong> Keep, change, or replace</li>
+        <li className={journeyStep === 2 ? "is-active" : journeyStep > 2 ? "is-complete" : ""} aria-current={journeyStep === 2 ? "step" : undefined}><strong>2</strong> Apply your brand</li>
+        <li className={journeyStep === 3 ? "is-active" : ""} aria-current={journeyStep === 3 ? "step" : undefined}><strong>3</strong> Schedule the week</li>
       </ol>
 
       {featuredOpportunity ? (

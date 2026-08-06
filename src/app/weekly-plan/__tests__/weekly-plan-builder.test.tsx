@@ -43,12 +43,14 @@ describe("WeeklyPlanBuilder focused flow", () => {
       />,
     );
 
-    expect(markup).toContain("Plan settings");
-    expect(markup).toContain("5 posts · Discipleship · 2 platforms");
+    expect(markup).toContain("Content Week settings");
+    expect(markup).toContain("6 posts · Balanced · 2 platforms");
     expect(markup).not.toMatch(/<details[^>]*open/);
-    expect(markup).toContain("Preview &amp; source");
+    expect(markup).toContain("Preview post &amp; sermon source");
     expect(markup).toContain("/ready-to-post?contentAssetId=asset-1#generated-content-assets");
-    expect(markup).toContain("Approve &amp; schedule 1 post");
+    expect(markup).toContain(">Keep</span>");
+    expect(markup).toContain(">Replace</button>");
+    expect(markup).toContain("Approve &amp; schedule my 1-piece week");
     expect(markup.match(/button primary/g)).toHaveLength(1);
   });
 });

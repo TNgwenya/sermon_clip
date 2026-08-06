@@ -29,6 +29,8 @@ export type PublishingBoardSnapshot = {
   attentionCount: number;
   postedCount: number;
   verifiedChannelCount: number;
+  automaticPublishingPlatforms: string[];
+  automaticPublishingAttentionPlatforms: string[];
   automaticPublishingReady: boolean;
   automaticPublishingLabel: string;
   automaticPublishingDetail: string;
@@ -46,6 +48,49 @@ const ATTENTION_STATUSES = new Set<ScheduledPost["status"]>([
   "FAILED",
   "PRIVATE_ONLY_UNVERIFIED",
 ]);
+
+const ATTEMPTED_STATUSES = new Set<ScheduledPost["status"]>([
+  "FAILED",
+  "PRIVATE_ONLY_UNVERIFIED",
+  "POSTED",
+  "SKIPPED",
+]);
+
+function uniqueSorted(values: string[]): string[] {
+  return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
+}
+
+function postResultTime(post: ScheduledPost): number {
+  for (const value of [post.lastAttemptAt, post.scheduledFor, post.createdAt]) {
+    const timestamp = value ? new Date(value).getTime() : Number.NaN;
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return 0;
+}
+
+function latestAutomaticAttentionPlatforms(posts: ScheduledPost[]): string[] {
+  const latestByPlatform = new Map<string, ScheduledPost>();
+  posts
+    .filter((post) => post.automationMode === "AUTOMATIC" && ATTEMPTED_STATUSES.has(post.status))
+    .forEach((post) => {
+      const current = latestByPlatform.get(post.platform);
+      if (!current || postResultTime(post) > postResultTime(current)) {
+        latestByPlatform.set(post.platform, post);
+      }
+    });
+  return uniqueSorted(
+    Array.from(latestByPlatform.values())
+      .filter((post) => ATTENTION_STATUSES.has(post.status))
+      .map((post) => post.platform),
+  );
+}
+
+function platformListLabel(platforms: string[]): string {
+  if (platforms.length === 0) return "";
+  if (platforms.length === 1) return platforms[0];
+  if (platforms.length === 2) return `${platforms[0]} and ${platforms[1]}`;
+  return `${platforms.slice(0, -1).join(", ")}, and ${platforms.at(-1)}`;
+}
 
 function findNextScheduledPost(posts: ScheduledPost[]): ScheduledPost | null {
   return posts
@@ -173,18 +218,30 @@ export function buildPublishingBoardSnapshot(input: {
   const verifiedChannelCount = input.accounts.filter((account) => (
     account.status === "CONNECTED" && account.credentialReady
   )).length;
+  const verifiedPlatforms = uniqueSorted(input.accounts
+    .filter((account) => account.status === "CONNECTED" && account.credentialReady)
+    .map((account) => account.platform));
+  const automaticPublishingAttentionPlatforms = latestAutomaticAttentionPlatforms(input.posts)
+    .filter((platform) => verifiedPlatforms.includes(platform));
+  const automaticPublishingPlatforms = verifiedPlatforms
+    .filter((platform) => !automaticPublishingAttentionPlatforms.includes(platform));
   const automaticPublishingReady = input.serviceHealth.status === "ONLINE"
     && !input.serviceHealth.dryRun
-    && verifiedChannelCount > 0;
+    && automaticPublishingPlatforms.length > 0;
 
   let automaticPublishingLabel = "Manual handoff";
   let automaticPublishingDetail = "Downloadable media and copy remain available even without an automatic connection.";
   if (automaticPublishingReady) {
-    automaticPublishingLabel = "Automatic publishing ready";
-    automaticPublishingDetail = `${verifiedChannelCount} verified channel${verifiedChannelCount === 1 ? "" : "s"} and a live publishing service are available.`;
+    automaticPublishingLabel = `Automatic: ${platformListLabel(automaticPublishingPlatforms)}`;
+    automaticPublishingDetail = automaticPublishingAttentionPlatforms.length > 0
+      ? `${platformListLabel(automaticPublishingAttentionPlatforms)} needs a result check before it is treated as healthy.`
+      : "These channels have verified credentials, a live publishing service, and no newer unresolved delivery result.";
   } else if (input.serviceHealth.status === "ONLINE" && input.serviceHealth.dryRun) {
     automaticPublishingLabel = "Automatic publishing in test mode";
     automaticPublishingDetail = "The service is online, but it will not make a live platform post.";
+  } else if (automaticPublishingAttentionPlatforms.length > 0) {
+    automaticPublishingLabel = "Automatic publishing needs attention";
+    automaticPublishingDetail = `${platformListLabel(automaticPublishingAttentionPlatforms)} has a failed or unverified latest result. Review it before scheduling another automatic post.`;
   } else if (verifiedChannelCount > 0) {
     automaticPublishingLabel = "Automatic publishing waiting";
     automaticPublishingDetail = "Verified channels are saved, but the publishing service is not currently live.";
@@ -200,6 +257,8 @@ export function buildPublishingBoardSnapshot(input: {
     attentionCount,
     postedCount,
     verifiedChannelCount,
+    automaticPublishingPlatforms,
+    automaticPublishingAttentionPlatforms,
     automaticPublishingReady,
     automaticPublishingLabel,
     automaticPublishingDetail,

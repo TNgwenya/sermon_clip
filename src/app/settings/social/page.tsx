@@ -2,11 +2,15 @@ import Link from "next/link";
 import { headers } from "next/headers";
 
 import { SectionCard, StatusBadge } from "@/components/ui";
+import { buildPublishingBoardSnapshot } from "@/app/ready-to-post/publishing-board";
 import {
   buildOAuthRedirectUri,
   buildRequestBaseUrl,
   listSocialAnalyticsConnectors,
 } from "@/lib/socialAnalyticsConnectors";
+import { getPublishingServiceHealth } from "@/lib/publishingServiceHealth";
+import { listScheduledPosts } from "@/lib/scheduledPosts";
+import { listSocialAccounts } from "@/lib/socialAccounts";
 import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 
 export const dynamic = "force-dynamic";
@@ -68,13 +72,27 @@ function oauthFailureMessage(provider: string | undefined, reason: string | unde
   }
 }
 
-function platformStatus(input: { authHref: string | null; connectedAccounts?: number; missingEnv?: string[] }): {
+function platformStatus(input: {
+  authHref: string | null;
+  connectedAccounts?: number;
+  missingEnv?: string[];
+  publishingReady?: boolean;
+  publishingNeedsAttention?: boolean;
+}): {
   label: string;
   tone: "success" | "warning" | "neutral";
   priority: number;
 } {
+  if ((input.connectedAccounts ?? 0) > 0 && input.publishingNeedsAttention) {
+    return { label: "Connected · result check", tone: "warning", priority: 1 };
+  }
+
+  if ((input.connectedAccounts ?? 0) > 0 && input.publishingReady) {
+    return { label: "Ready to publish", tone: "success", priority: 0 };
+  }
+
   if ((input.connectedAccounts ?? 0) > 0) {
-    return { label: "Connected", tone: "success", priority: 1 };
+    return { label: "Connected for analytics", tone: "neutral", priority: 1 };
   }
 
   if (input.authHref) {
@@ -119,9 +137,21 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
     tiktok: buildOAuthRedirectUri("tiktok", requestBaseUrl),
     threads: buildOAuthRedirectUri("threads", requestBaseUrl),
   };
-  const connectors = await listSocialAnalyticsConnectors({
+  const persistenceScope = {
     organizationId: requestContext.organizationId,
     campusId: requestContext.campusId,
+  };
+  const [connectors, socialAccounts, scheduledPosts, publishingServiceHealth] = await Promise.all([
+    listSocialAnalyticsConnectors(persistenceScope),
+    listSocialAccounts(persistenceScope),
+    listScheduledPosts(persistenceScope),
+    getPublishingServiceHealth(),
+  ]);
+  const publishingSnapshot = buildPublishingBoardSnapshot({
+    clips: [],
+    posts: scheduledPosts,
+    accounts: socialAccounts,
+    serviceHealth: publishingServiceHealth,
   });
   const youtubeClientId = process.env.YOUTUBE_CLIENT_ID?.trim();
   const metaAppId = process.env.META_APP_ID?.trim();
@@ -149,6 +179,7 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
       actionLabel: "Connect YouTube",
       description: "Use YouTube analytics and approved Shorts uploads.",
       setupDescription: "Uses analytics, readonly channel identity, and YouTube upload scopes.",
+      publishingPlatforms: ["YouTube Shorts"],
       connector: connectorByPlatform.get("YouTube"),
     },
     {
@@ -158,6 +189,7 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
       actionLabel: "Connect Meta",
       description: "Use Meta Pages, Instagram business insights, and approved posting.",
       setupDescription: "Uses Meta Pages, posting, and Instagram business insights permissions.",
+      publishingPlatforms: ["Instagram", "Facebook"],
       connector: connectorByPlatform.get("Instagram / Facebook"),
     },
     {
@@ -167,6 +199,7 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
       actionLabel: "Connect TikTok",
       description: "Use TikTok publishing and analytics when app review allows.",
       setupDescription: "Uses basic profile plus video publishing/list scopes where TikTok app review allows.",
+      publishingPlatforms: ["TikTok"],
       connector: connectorByPlatform.get("TikTok"),
     },
     {
@@ -176,6 +209,7 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
       actionLabel: "Connect Threads",
       description: "Use Threads profile and insights data.",
       setupDescription: "Uses Threads basic profile and insights scopes.",
+      publishingPlatforms: [],
       connector: connectorByPlatform.get("Threads"),
     },
   ]
@@ -185,6 +219,8 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
         authHref: card.authHref,
         connectedAccounts: card.connector?.connectedAccounts,
         missingEnv: card.connector?.missingEnv,
+        publishingReady: card.publishingPlatforms.some((platform) => publishingSnapshot.automaticPublishingPlatforms.includes(platform)),
+        publishingNeedsAttention: card.publishingPlatforms.some((platform) => publishingSnapshot.automaticPublishingAttentionPlatforms.includes(platform)),
       }),
     }))
     .sort((a, b) => a.status.priority - b.status.priority || a.platform.localeCompare(b.platform));
@@ -208,6 +244,28 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
           <span>{banner.message}</span>
         </div>
       ) : null}
+
+      <SectionCard title="Publishing health" description="A saved connection is not the same as a verified live publishing path. This status also checks the worker and the latest automatic result for each channel.">
+        <div className="growth-connector-row social-readiness-row">
+          <div>
+            <div className="clip-badge-row">
+              <strong>{publishingSnapshot.automaticPublishingLabel}</strong>
+              <StatusBadge tone={publishingSnapshot.automaticPublishingReady ? "success" : "warning"}>
+                {publishingSnapshot.automaticPublishingReady ? "Ready now" : "Check setup"}
+              </StatusBadge>
+            </div>
+            <p className="muted small">{publishingSnapshot.automaticPublishingDetail}</p>
+            {publishingSnapshot.automaticPublishingPlatforms.length > 0 ? (
+              <p className="muted small">Ready for automatic publishing: {publishingSnapshot.automaticPublishingPlatforms.join(" · ")}</p>
+            ) : null}
+            {publishingSnapshot.automaticPublishingAttentionPlatforms.length > 0 ? (
+              <p className="muted small">Latest result needs attention: {publishingSnapshot.automaticPublishingAttentionPlatforms.join(" · ")}</p>
+            ) : null}
+            <p className="muted small">Worker: {publishingServiceHealth.summary}</p>
+          </div>
+          <Link className="button secondary" href="/ready-to-post#posting-calendar">Review results</Link>
+        </div>
+      </SectionCard>
 
       <SectionCard title="Account connections" description="Connect each platform once. Sermon Clip stores account access securely for analytics sync and approved publishing.">
         <div className="growth-connector-list social-connection-list">

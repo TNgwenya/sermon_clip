@@ -92,11 +92,16 @@ export async function listSocialAccounts(options: {
     include: {
       credentials: {
         where: { status: "CONNECTED" },
-        select: { provider: true },
+        select: {
+          provider: true,
+          expiresAt: true,
+          lastError: true,
+        },
       },
     },
   });
 
+  const now = Date.now();
   return accounts.map((account) => {
     const expectedProvider = account.platform === "YOUTUBE_SHORTS"
       ? "YOUTUBE"
@@ -107,7 +112,11 @@ export async function listSocialAccounts(options: {
           : "META_INSTAGRAM";
     return toSocialAccount({
       ...account,
-      credentialReady: account.credentials.some((credential) => credential.provider === expectedProvider)
+      credentialReady: account.credentials.some((credential) => (
+        credential.provider === expectedProvider
+        && !credential.lastError?.trim()
+        && (!credential.expiresAt || credential.expiresAt.getTime() > now)
+      ))
         && (account.platform !== "TIKTOK" || process.env.TIKTOK_DIRECT_POST_EXPERIMENTAL === "true"),
     });
   });

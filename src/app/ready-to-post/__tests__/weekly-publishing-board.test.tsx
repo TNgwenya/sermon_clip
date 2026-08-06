@@ -12,6 +12,8 @@ const snapshot = {
   attentionCount: 1,
   postedCount: 4,
   verifiedChannelCount: 0,
+  automaticPublishingPlatforms: [],
+  automaticPublishingAttentionPlatforms: [],
   automaticPublishingReady: false,
   automaticPublishingLabel: "No verified automatic channel",
   automaticPublishingDetail: "Use manual downloads before choosing automatic publishing.",

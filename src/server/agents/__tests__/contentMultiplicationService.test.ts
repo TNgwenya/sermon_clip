@@ -47,6 +47,7 @@ vi.mock("@/server/weekDraft/assembler", () => ({
 }));
 
 import {
+  DEFAULT_CONTENT_OPPORTUNITY_QUANTITIES,
   contentOpportunityResponseSchema,
   contentOpportunitySchema,
   type ContentOpportunityRecord,
@@ -195,6 +196,30 @@ describe("content opportunity schema", () => {
   it("accepts a valid content opportunity record", () => {
     const parsed = contentOpportunitySchema.safeParse(sampleOpportunity);
     expect(parsed.success).toBe(true);
+  });
+
+  it("accepts a complete publishing package and keeps the default set focused", () => {
+    const parsed = contentOpportunitySchema.parse({
+      ...sampleOpportunity,
+      publishingCopy: {
+        caption: "Faith can take the next step even when fear is loud.",
+        hashtags: ["#Faith", "#Church"],
+        callToAction: {
+          type: "WATCH",
+          text: "Watch the full message",
+          url: null,
+        },
+        platforms: ["INSTAGRAM", "FACEBOOK"],
+      },
+      creativeDirection: {
+        visualMood: "Hopeful and calm",
+        imageDirection: "Warm morning light with clear space for the quote",
+        emphasisWords: ["faith"],
+      },
+    });
+
+    expect(parsed.publishingCopy?.hashtags).toEqual(["#Faith", "#Church"]);
+    expect(Object.values(DEFAULT_CONTENT_OPPORTUNITY_QUANTITIES).reduce((sum, quantity) => sum + quantity, 0)).toBe(7);
   });
 
   it("normalizes human-friendly category and type formatting from the model", () => {

@@ -88,7 +88,7 @@ const DISPLAY_LOCALE = "en-ZA";
 const DISPLAY_TIME_ZONE = "Africa/Johannesburg";
 const SAVED_STYLE_STORAGE_KEY = "melusi:content-artwork-styles:v1";
 const GALLERY_FILTERS: Array<{ id: GalleryFilter; label: string }> = [
-  { id: "RECOMMENDED", label: "All designs" },
+  { id: "RECOMMENDED", label: "Recommended" },
   { id: "PHOTO", label: "Photo" },
   { id: "MINIMAL", label: "Minimal" },
   { id: "BOLD", label: "Bold" },
@@ -337,9 +337,11 @@ export function ContentAssetDesignStudio({
     initialAsset.assetType,
     activeSlide?.templateId ?? templateId,
   ), [activeSlide?.templateId, initialAsset.assetType, templateId]);
-  const visibleRecommendations = artworkRecommendations.filter((recommendation) => (
-    filterMatchesCategory(galleryFilter, recommendation.category)
-  ));
+  const visibleRecommendations = galleryFilter === "RECOMMENDED"
+    ? artworkRecommendations.slice(0, 3)
+    : artworkRecommendations.filter((recommendation) => (
+      filterMatchesCategory(galleryFilter, recommendation.category)
+    ));
   const previewDimensions = isCarousel
     ? { width: 1080, height: 1350 }
     : PREVIEW_FORMATS[previewFormat];
@@ -792,17 +794,17 @@ export function ContentAssetDesignStudio({
         ) : null}
 
         <div className={styles.editorIntro}>
-          <strong>Choose a finished direction first</strong>
-          <p>Every option uses your real words and church brand. Pick the closest fit, then fine-tune only what matters.</p>
+          <strong>Choose one of the recommended finished looks</strong>
+          <p>Your words, logo, colours, and safe areas are already applied. Most posts only need one choice here; detailed controls are optional.</p>
         </div>
 
         <section className={styles.designChooser} aria-labelledby="design-directions-heading">
           <div className={styles.sectionHeading}>
             <div>
               <h3 id="design-directions-heading">Artwork directions</h3>
-              <p>Twelve distinct starting points, with no extra AI calls.</p>
+              <p>{galleryFilter === "RECOMMENDED" ? "The three strongest brand-safe directions for this post." : "More brand-safe directions when you want a different feel."}</p>
             </div>
-            <span>{artworkRecommendations.length} options</span>
+            <span>{visibleRecommendations.length} shown</span>
           </div>
           <div className={styles.galleryFilters} aria-label="Filter artwork directions">
             {GALLERY_FILTERS.map((filter) => (
@@ -1319,7 +1321,7 @@ export function ContentAssetDesignStudio({
             title={renderBlockReason}
             aria-describedby={scriptureApprovalBlocked ? "scripture-approval-blocker" : undefined}
           >
-            {isPending ? "Approving artwork…" : "Approve & render final artwork"}
+            {isPending ? "Creating every size…" : "Approve & create all sizes"}
           </button>
         </div>
         {saveDraftBlockReason ? <p id="save-draft-help" className="muted small" role="status">{saveDraftBlockReason}</p> : null}

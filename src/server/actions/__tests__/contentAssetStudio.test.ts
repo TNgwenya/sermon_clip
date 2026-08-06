@@ -12,6 +12,7 @@ const prismaMock = vi.hoisted(() => ({
 const revisionMock = vi.hoisted(() => vi.fn());
 
 const renderMock = vi.hoisted(() => vi.fn());
+const uploadMock = vi.hoisted(() => vi.fn());
 const persistenceMock = vi.hoisted(() => vi.fn((file: { name: string; order: number }) => ({
   fileName: file.name,
   mimeType: "image/png",
@@ -43,6 +44,9 @@ vi.mock("@/server/branding/artworkLogo", () => ({
 vi.mock("@/server/contentAssets/nonVideoAssetRenderer", () => ({
   renderApprovedNonVideoAssets: renderMock,
   toContentAssetFilePersistenceInput: persistenceMock,
+}));
+vi.mock("@/server/contentAssets/contentAssetPublicStorage", () => ({
+  uploadContentAssetFilesWhenConfigured: uploadMock,
 }));
 vi.mock("@/server/contentRevisionService", () => ({
   createAssetRevision: revisionMock,
@@ -76,6 +80,7 @@ const coverTextOverrides = {
 
 describe("content asset Design Studio actions", () => {
   beforeEach(() => {
+    uploadMock.mockResolvedValue(new Map());
     requireContentAssetResourceMock.mockResolvedValue({
       id: "asset-1",
       organizationId: "org-1",
@@ -223,6 +228,13 @@ describe("content asset Design Studio actions", () => {
     });
 
     expect(result).toMatchObject({ success: true, renderedFileCount: 2 });
+    expect(uploadMock).toHaveBeenCalledWith(expect.objectContaining({
+      contentAssetId: "asset-1",
+      files: expect.arrayContaining([
+        expect.objectContaining({ fileName: "slide-01.png" }),
+        expect.objectContaining({ fileName: "slide-02.png" }),
+      ]),
+    }));
     expect(renderMock).toHaveBeenCalledWith(expect.objectContaining({
       opportunityType: "CAROUSEL_IDEA",
       carouselSlides: slidesWithTextOverrides,
