@@ -72,7 +72,9 @@ enum ProcessingJobType {
   EXTRACT_AUDIO
   TRANSCRIBE_AUDIO
   GENERATE_CLIPS
+  GENERATE_TEACHING_VIDEOS
   EXPORT_CLIPS
+  EXPORT_TEACHING_VIDEOS
   GENERATE_SUBTITLES
   BURN_SUBTITLES
   PROCESS_SERMON
@@ -120,6 +122,43 @@ enum BoundaryQuality {
   GOOD
   NEEDS_REVIEW
   BAD
+}
+
+enum TeachingVideoAnalysisStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum TeachingVideoStatus {
+  SUGGESTED
+  NEEDS_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum TeachingBoundaryQuality {
+  GOOD
+  NEEDS_REVIEW
+  BLOCKED
+}
+
+enum TeachingVideoType {
+  SCRIPTURE_EXPOSITION
+  DOCTRINAL_EXPLANATION
+  PRACTICAL_APPLICATION
+  PASTORAL_COUNSEL
+  LEADERSHIP_TEACHING
+  OTHER
+}
+
+enum TeachingVideoExportStatus {
+  QUEUED
+  EXPORTING
+  COMPLETED
+  FAILED
+  STALE
 }
 
 enum ClipQualityRecommendedAction {
@@ -1475,49 +1514,52 @@ model ApprovalDecision {
 }
 
 model Sermon {
-  id                    String                   @id @default(cuid())
-  organizationId        String?                  @default("org_local_default")
-  campusId              String?
-  youtubeUrl            String
-  title                 String
-  speakerName           String
-  churchName            String
-  language              String
-  sourceDurationSeconds Float?
-  sermonStartSeconds    Float?
-  sermonEndSeconds      Float?
-  analyzeFullRecording  Boolean                  @default(false)
-  includeWorshipMoments Boolean                  @default(false)
-  sermonDate            DateTime?
-  status                SermonStatus             @default(CREATED)
-  rightsConfirmed       Boolean
-  sourceVideoPath       String?
-  audioPath             String?
-  transcriptJsonPath    String?
-  createdAt             DateTime                 @default(now())
-  updatedAt             DateTime                 @updatedAt
-  transcript            Transcript?
-  transcriptSegments    TranscriptSegment[]
-  clipCandidates        ClipCandidate[]
-  ministryMoments       MinistryMoment[]
-  processingJobs        ProcessingJob[]
-  intelligence          SermonIntelligence?
-  scriptureRefs         SermonScriptureRef[]
-  structureSections     SermonStructureSection[]
-  topicTags             SermonTopicTag[]
-  subjectTracks         SermonSubjectTrack[]
-  speakerTracks         SermonSpeakerTrack[]
-  contentOpportunities  ContentOpportunity[]
-  contentAssets         ContentAsset[]
-  clipEditPlans         ClipEditPlan[]
-  clipArtifacts         ClipArtifact[]
-  aiInvocations         AiInvocation[]
-  weekDrafts            WeekDraft[]
-  publicPage            SermonPublicPage?
-  sourceAsset           SermonSourceAsset?
-  eventSession          EventSession?
-  organization          Organization?            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  campus                Campus?                  @relation(fields: [campusId], references: [id], onDelete: SetNull)
+  id                        String                     @id @default(cuid())
+  organizationId            String?                    @default("org_local_default")
+  campusId                  String?
+  youtubeUrl                String
+  title                     String
+  speakerName               String
+  churchName                String
+  language                  String
+  sourceDurationSeconds     Float?
+  sermonStartSeconds        Float?
+  sermonEndSeconds          Float?
+  analyzeFullRecording      Boolean                    @default(false)
+  includeWorshipMoments     Boolean                    @default(false)
+  sermonDate                DateTime?
+  status                    SermonStatus               @default(CREATED)
+  rightsConfirmed           Boolean
+  sourceVideoPath           String?
+  audioPath                 String?
+  transcriptJsonPath        String?
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  transcript                Transcript?
+  transcriptSegments        TranscriptSegment[]
+  clipCandidates            ClipCandidate[]
+  ministryMoments           MinistryMoment[]
+  processingJobs            ProcessingJob[]
+  intelligence              SermonIntelligence?
+  scriptureRefs             SermonScriptureRef[]
+  structureSections         SermonStructureSection[]
+  topicTags                 SermonTopicTag[]
+  subjectTracks             SermonSubjectTrack[]
+  speakerTracks             SermonSpeakerTrack[]
+  contentOpportunities      ContentOpportunity[]
+  contentAssets             ContentAsset[]
+  clipEditPlans             ClipEditPlan[]
+  clipArtifacts             ClipArtifact[]
+  aiInvocations             AiInvocation[]
+  weekDrafts                WeekDraft[]
+  publicPage                SermonPublicPage?
+  sourceAsset               SermonSourceAsset?
+  eventSession              EventSession?
+  teachingVideoAnalysisRuns TeachingVideoAnalysisRun[]
+  teachingVideos            TeachingVideo[]
+  teachingVideoExports      TeachingVideoExport[]
+  organization              Organization?              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus                    Campus?                    @relation(fields: [campusId], references: [id], onDelete: SetNull)
 
   @@unique([id, organizationId])
   @@index([organizationId, createdAt])
@@ -1719,6 +1761,131 @@ model TranscriptSegment {
 
   @@index([sermonId])
   @@index([transcriptId])
+}
+
+model TeachingVideoAnalysisRun {
+  id                    String                      @id @default(cuid())
+  sermonId              String
+  organizationId        String
+  campusId              String?
+  status                TeachingVideoAnalysisStatus @default(PENDING)
+  transcriptFingerprint String
+  model                 String
+  promptVersion         String
+  configJson            Json?
+  errorMessage          String?
+  startedAt             DateTime?
+  completedAt           DateTime?
+  createdAt             DateTime                    @default(now())
+  updatedAt             DateTime                    @updatedAt
+  sermon                Sermon                      @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  teachingVideos        TeachingVideo[]
+
+  @@index([sermonId, createdAt])
+  @@index([organizationId, status, createdAt])
+  @@index([campusId, createdAt])
+  @@index([transcriptFingerprint])
+}
+
+model TeachingVideo {
+  id                      String                   @id @default(cuid())
+  analysisRunId           String
+  sermonId                String
+  organizationId          String
+  campusId                String?
+  status                  TeachingVideoStatus      @default(SUGGESTED)
+  teachingType            TeachingVideoType        @default(OTHER)
+  aiTitle                 String
+  title                   String
+  suggestedStartSeconds   Float
+  suggestedEndSeconds     Float
+  startTimeSeconds        Float
+  endTimeSeconds          Float
+  durationSeconds         Float
+  startAnchorId           String
+  endAnchorId             String
+  boundaryQuality         TeachingBoundaryQuality  @default(NEEDS_REVIEW)
+  standaloneScore         Float
+  boundaryConfidence      Float
+  titleEvidence           String?
+  startReason             String
+  endReason               String
+  durationExceptionReason String?
+  contextDependenciesJson Json?
+  riskFlagsJson           Json?
+  completenessJson        Json
+  boundaryValidationJson  Json?
+  transcriptExcerpt       String
+  transcriptFingerprint   String
+  revisionVersion         Int                      @default(1)
+  approvedRevisionVersion Int?
+  approvedByUserId        String?
+  approvedAt              DateTime?
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  analysisRun             TeachingVideoAnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+  sermon                  Sermon                   @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+  revisions               TeachingVideoRevision[]
+  exports                 TeachingVideoExport[]
+
+  @@index([sermonId, status, startTimeSeconds])
+  @@index([analysisRunId])
+  @@index([organizationId, status, createdAt])
+  @@index([campusId, createdAt])
+}
+
+model TeachingVideoRevision {
+  id                     String                  @id @default(cuid())
+  teachingVideoId        String
+  version                Int
+  title                  String
+  startTimeSeconds       Float
+  endTimeSeconds         Float
+  durationSeconds        Float
+  startAnchorId          String
+  endAnchorId            String
+  boundaryQuality        TeachingBoundaryQuality
+  boundaryValidationJson Json?
+  transcriptFingerprint  String
+  createdByUserId        String?
+  approvedByUserId       String?
+  approvedAt             DateTime?
+  createdAt              DateTime                @default(now())
+  teachingVideo          TeachingVideo           @relation(fields: [teachingVideoId], references: [id], onDelete: Cascade)
+  exports                TeachingVideoExport[]
+
+  @@unique([teachingVideoId, version])
+  @@index([teachingVideoId, createdAt])
+}
+
+model TeachingVideoExport {
+  id              String                    @id @default(cuid())
+  teachingVideoId String
+  revisionId      String
+  sermonId        String
+  organizationId  String
+  campusId        String?
+  status          TeachingVideoExportStatus @default(QUEUED)
+  format          String                    @default("SOURCE_ASPECT")
+  filePath        String?
+  objectKey       String?
+  sizeBytes       BigInt?
+  checksumSha256  String?
+  durationSeconds Float?
+  metadataJson    Json?
+  errorMessage    String?
+  generatedAt     DateTime?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+  teachingVideo   TeachingVideo             @relation(fields: [teachingVideoId], references: [id], onDelete: Cascade)
+  revision        TeachingVideoRevision     @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  sermon          Sermon                    @relation(fields: [sermonId], references: [id], onDelete: Cascade)
+
+  @@unique([revisionId])
+  @@index([teachingVideoId, status])
+  @@index([sermonId, status, createdAt])
+  @@index([organizationId, status, createdAt])
+  @@index([campusId, createdAt])
 }
 
 model ClipCandidate {

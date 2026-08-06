@@ -163,6 +163,29 @@ export function getClipExportFolderPath(sermonId: string): string {
   return path.join(getClipFolderPath(sermonId), "exports");
 }
 
+export function getTeachingVideoFolderPath(sermonId: string): string {
+  return path.join(getSermonStoragePath(sermonId), "teaching-videos");
+}
+
+export function getTeachingVideoExportFolderPath(sermonId: string): string {
+  return path.join(getTeachingVideoFolderPath(sermonId), "exports");
+}
+
+export function getTeachingVideoExportPath(
+  sermonId: string,
+  teachingVideoId: string,
+  revisionVersion: number,
+): string {
+  const safeTeachingVideoId = assertPathSegment(teachingVideoId, "teachingVideoId");
+  if (!Number.isInteger(revisionVersion) || revisionVersion < 1) {
+    throw new Error("Invalid teaching video revision version.");
+  }
+  return path.join(
+    getTeachingVideoExportFolderPath(sermonId),
+    `${safeTeachingVideoId}-v${revisionVersion}-source.mp4`,
+  );
+}
+
 export function getClipThumbnailFolderPath(sermonId: string): string {
   return path.join(getClipFolderPath(sermonId), "thumbnails");
 }

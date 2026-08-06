@@ -522,6 +522,17 @@ async function runJob(job: ProcessingJob): Promise<string> {
       await restoreCompletedClipGenerationStatus(sermonId);
       return summary;
     }
+    case "GENERATE_TEACHING_VIDEOS": {
+      const { generateTeachingVideos } = await import("../src/server/agents/teachingVideoAnalysisService");
+      const summary = generationSummary(job);
+      const result = await generateTeachingVideos(sermonId, {
+        force: summary?.force === true,
+        processingJobId: job.id,
+      });
+      return result.reusedExisting
+        ? `Reused ${result.suggestionCount} existing teaching-video suggestion(s).`
+        : `Generated ${result.suggestionCount} teaching-video suggestion(s).`;
+    }
     case "EXPORT_CLIPS": {
       const { renderApprovedClipsForSermon } = await import("../src/server/agents/clipRenderService");
       const result = await renderApprovedClipsForSermon(sermonId, {
@@ -529,6 +540,18 @@ async function runJob(job: ProcessingJob): Promise<string> {
         ...(mediaAssetRequest.clipIds ? { clipIds: mediaAssetRequest.clipIds } : {}),
       });
       return summarizeRenderBatch(result);
+    }
+    case "EXPORT_TEACHING_VIDEOS": {
+      const { exportApprovedTeachingVideos } = await import("../src/server/agents/teachingVideoExportService");
+      const summary = generationSummary(job);
+      const ids = Array.isArray(summary?.teachingVideoIds)
+        ? summary.teachingVideoIds.filter((value): value is string => typeof value === "string")
+        : undefined;
+      const result = await exportApprovedTeachingVideos(sermonId, {
+        teachingVideoIds: ids,
+        processingJobId: job.id,
+      });
+      return `Teaching-video exports: ${result.exported} created, ${result.reused} reused, ${result.failed} failed.`;
     }
     case "GENERATE_SUBTITLES": {
       const { generateCaptionsForApprovedClips } = await import("../src/server/agents/captionService");

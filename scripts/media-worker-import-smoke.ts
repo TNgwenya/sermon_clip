@@ -9,6 +9,8 @@ const workerJobModules = [
   "../src/server/agents/clipIntelligenceAgent.ts",
   "../src/server/agents/worshipMomentService.ts",
   "../src/server/agents/clipReviewAssetService.ts",
+  "../src/server/agents/teachingVideoAnalysisService.ts",
+  "../src/server/agents/teachingVideoExportService.ts",
   "../src/server/agents/clipRenderService.ts",
   "../src/server/agents/captionService.ts",
   "../src/server/agents/clipQualityRefreshService.ts",

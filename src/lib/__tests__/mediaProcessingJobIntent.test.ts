@@ -48,6 +48,16 @@ describe("durable media processing job intent", () => {
     });
   });
 
+  it("preserves teaching-video targets when an export job is retried", () => {
+    expect(buildForcedMediaAssetRetrySummary("EXPORT_TEACHING_VIDEOS", {
+      teachingVideoIds: [" teaching-b ", "teaching-a", "teaching-b"],
+    })).toEqual({
+      intentKey: "teaching-video-exports:EXPORT_TEACHING_VIDEOS:force:teaching-a,teaching-b",
+      teachingVideoIds: ["teaching-a", "teaching-b"],
+      forceMediaAssets: true,
+    });
+  });
+
   it("waits for an ordered media predecessor and proceeds only after success", () => {
     const generationSummary = { mediaAssetDependsOnJobId: "caption-job" };
 

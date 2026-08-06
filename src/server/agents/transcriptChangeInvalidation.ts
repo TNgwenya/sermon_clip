@@ -161,6 +161,7 @@ export async function invalidateTranscriptDerivedClipWork(input: {
   clipsReviewedAgain: number;
   clipsWithChangedExcerpt: number;
   clipsWithChangedEvidence: number;
+  teachingVideosReviewedAgain: number;
 }> {
   const transcriptChanged = transcriptTextChanged(input.previousFullText, input.nextFullText);
   const transcriptEvidenceChanged = transcriptSegmentEvidenceChanged(input.previousSegments, input.segments);
@@ -170,6 +171,7 @@ export async function invalidateTranscriptDerivedClipWork(input: {
       clipsReviewedAgain: 0,
       clipsWithChangedExcerpt: 0,
       clipsWithChangedEvidence: 0,
+      teachingVideosReviewedAgain: 0,
     };
   }
 
@@ -230,10 +232,58 @@ export async function invalidateTranscriptDerivedClipWork(input: {
     }
   }
 
+  const teachingVideos = await prisma.teachingVideo.findMany({
+    where: {
+      sermonId: input.sermonId,
+      status: { not: "REJECTED" },
+    },
+    select: {
+      id: true,
+      startTimeSeconds: true,
+      endTimeSeconds: true,
+      riskFlagsJson: true,
+    },
+  });
+  for (const teachingVideo of teachingVideos) {
+    const transcriptExcerpt = transcriptExcerptForRange(
+      input.segments,
+      teachingVideo.startTimeSeconds,
+      teachingVideo.endTimeSeconds,
+    );
+    await prisma.$transaction([
+      prisma.teachingVideo.update({
+        where: { id: teachingVideo.id },
+        data: {
+          status: "NEEDS_REVIEW",
+          boundaryQuality: "NEEDS_REVIEW",
+          transcriptExcerpt,
+          riskFlagsJson: Array.from(new Set([
+            ...stringArray(teachingVideo.riskFlagsJson),
+            "TRANSCRIPT_CHANGED_REVIEW_REQUIRED",
+          ])),
+          approvedRevisionVersion: null,
+          approvedByUserId: null,
+          approvedAt: null,
+        },
+      }),
+      prisma.teachingVideoExport.updateMany({
+        where: {
+          teachingVideoId: teachingVideo.id,
+          status: { not: "STALE" },
+        },
+        data: {
+          status: "STALE",
+          errorMessage: "The source transcript changed after this teaching video was reviewed.",
+        },
+      }),
+    ]);
+  }
+
   return {
     transcriptChanged: true,
     clipsReviewedAgain: clips.length,
     clipsWithChangedExcerpt,
     clipsWithChangedEvidence,
+    teachingVideosReviewedAgain: teachingVideos.length,
   };
 }

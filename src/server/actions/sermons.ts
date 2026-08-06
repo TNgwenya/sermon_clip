@@ -464,8 +464,12 @@ function processingJobTypeLabel(type: ProcessingJobType): string {
       return "Transcription";
     case "GENERATE_CLIPS":
       return "Clip generation";
+    case "GENERATE_TEACHING_VIDEOS":
+      return "Teaching video analysis";
     case "EXPORT_CLIPS":
       return "Clip export";
+    case "EXPORT_TEACHING_VIDEOS":
+      return "Teaching video export";
     case "GENERATE_SUBTITLES":
       return "Caption generation";
     case "BURN_SUBTITLES":

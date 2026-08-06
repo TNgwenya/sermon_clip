@@ -18,6 +18,16 @@ function normalizedClipIds(value: unknown): string[] {
   )).sort();
 }
 
+function normalizedTeachingVideoIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(
+    value
+      .filter((id): id is string => typeof id === "string")
+      .map((id) => id.trim())
+      .filter(Boolean),
+  )).sort();
+}
+
 export function buildForcedProcessingJobSummary(
   type: "DOWNLOAD_VIDEO" | "EXTRACT_AUDIO" | "TRANSCRIBE_AUDIO",
 ): Prisma.InputJsonObject {
@@ -96,6 +106,17 @@ export function buildForcedMediaAssetRetrySummary(
   failedGenerationSummary: unknown,
 ): Prisma.InputJsonObject {
   const failedSummary = asRecord(failedGenerationSummary);
+  if (type === "EXPORT_TEACHING_VIDEOS") {
+    const hasTeachingVideoScope = failedSummary !== null
+      && Object.prototype.hasOwnProperty.call(failedSummary, "teachingVideoIds");
+    const teachingVideoIds = normalizedTeachingVideoIds(failedSummary?.["teachingVideoIds"]);
+    const scopeKey = hasTeachingVideoScope ? teachingVideoIds.join(",") || "none" : "all";
+    return {
+      intentKey: `teaching-video-exports:${type}:force:${scopeKey}`,
+      ...(hasTeachingVideoScope ? { teachingVideoIds } : {}),
+      forceMediaAssets: true,
+    };
+  }
   const hasClipScope = failedSummary !== null
     && Object.prototype.hasOwnProperty.call(failedSummary, "mediaAssetClipIds");
   const clipIds = normalizedClipIds(failedSummary?.["mediaAssetClipIds"]);

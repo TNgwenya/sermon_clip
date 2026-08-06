@@ -454,7 +454,7 @@ async function replaceTranscriptRecords(input: {
   if (invalidation?.transcriptChanged) {
     await appendPipelineLog(
       input.sermonId,
-      `Transcript evidence changed: ${invalidation.clipsReviewedAgain} existing clip(s) need fresh quality guidance; ${invalidation.clipsWithChangedEvidence} clip range(s) were safety-blocked and marked for media regeneration (${invalidation.clipsWithChangedExcerpt} with changed wording).`,
+      `Transcript evidence changed: ${invalidation.clipsReviewedAgain} existing clip(s) need fresh quality guidance; ${invalidation.clipsWithChangedEvidence} clip range(s) were safety-blocked and marked for media regeneration (${invalidation.clipsWithChangedExcerpt} with changed wording); ${invalidation.teachingVideosReviewedAgain} teaching video(s) require fresh review.`,
     );
   }
 }

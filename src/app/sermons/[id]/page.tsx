@@ -1527,6 +1527,23 @@ export default async function SermonDetailPage({
         />
       ) : null}
 
+      {sermon.transcript ? (
+        <section className="panel stack-md">
+          <div className="split-header">
+            <div>
+              <p className="kicker">Long-form YouTube</p>
+              <h2>Teaching videos</h2>
+              <p className="muted">
+                Find complete, standalone teachings and export each one as a continuous cut from the original sermon.
+              </p>
+            </div>
+            <Link href={`/sermons/${sermon.id}/teaching-videos`} className="button secondary">
+              Open Teaching Videos
+            </Link>
+          </div>
+        </section>
+      ) : null}
+
       {previewClips.length > 0 ? (
         <section className="sermon-preview-strip" aria-label="Strongest sermon moments">
           <div className="sermon-preview-strip-heading">

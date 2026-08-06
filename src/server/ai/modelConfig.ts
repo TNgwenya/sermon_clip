@@ -1,6 +1,7 @@
 export type OpenAIChatTask =
   | "clipSelection"
   | "clipRepair"
+  | "teachingVideoSelection"
   | "sermonIntelligence"
   | "ministryMoment"
   | "contentMultiplication"
@@ -12,6 +13,7 @@ export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "hig
 const DEFAULT_CHAT_MODEL_BY_TASK: Record<OpenAIChatTask, string> = {
   clipSelection: "gpt-5.6-terra",
   clipRepair: "gpt-5.6-luna",
+  teachingVideoSelection: "gpt-5.6-terra",
   sermonIntelligence: "gpt-5.6-terra",
   ministryMoment: "gpt-5.6-luna",
   contentMultiplication: "gpt-5.6-luna",
@@ -22,6 +24,7 @@ const DEFAULT_CHAT_MODEL_BY_TASK: Record<OpenAIChatTask, string> = {
 const DEFAULT_REASONING_EFFORT_BY_TASK: Record<OpenAIChatTask, OpenAIReasoningEffort> = {
   clipSelection: "medium",
   clipRepair: "low",
+  teachingVideoSelection: "medium",
   sermonIntelligence: "medium",
   ministryMoment: "low",
   contentMultiplication: "low",
@@ -32,6 +35,7 @@ const DEFAULT_REASONING_EFFORT_BY_TASK: Record<OpenAIChatTask, OpenAIReasoningEf
 const ENV_BY_TASK: Record<OpenAIChatTask, string> = {
   clipSelection: "OPENAI_CLIP_SELECTION_MODEL",
   clipRepair: "OPENAI_CLIP_REPAIR_MODEL",
+  teachingVideoSelection: "OPENAI_TEACHING_VIDEO_MODEL",
   sermonIntelligence: "OPENAI_SERMON_INTELLIGENCE_MODEL",
   ministryMoment: "OPENAI_MINISTRY_MOMENT_MODEL",
   contentMultiplication: "OPENAI_CONTENT_MULTIPLICATION_MODEL",
@@ -42,6 +46,7 @@ const ENV_BY_TASK: Record<OpenAIChatTask, string> = {
 const REASONING_ENV_BY_TASK: Record<OpenAIChatTask, string> = {
   clipSelection: "OPENAI_CLIP_SELECTION_MODEL_REASONING_EFFORT",
   clipRepair: "OPENAI_CLIP_REPAIR_MODEL_REASONING_EFFORT",
+  teachingVideoSelection: "OPENAI_TEACHING_VIDEO_MODEL_REASONING_EFFORT",
   sermonIntelligence: "OPENAI_SERMON_INTELLIGENCE_MODEL_REASONING_EFFORT",
   ministryMoment: "OPENAI_MINISTRY_MOMENT_MODEL_REASONING_EFFORT",
   contentMultiplication: "OPENAI_CONTENT_MULTIPLICATION_MODEL_REASONING_EFFORT",

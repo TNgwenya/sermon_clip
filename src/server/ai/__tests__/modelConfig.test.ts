@@ -24,6 +24,21 @@ describe("OpenAI workload model configuration", () => {
     expect(resolveOpenAIReasoningEffort("clipSelection", model)).toBe("medium");
   });
 
+  it("configures teaching-video selection independently from short clips", () => {
+    delete process.env.OPENAI_CHAT_MODEL;
+    delete process.env.OPENAI_REASONING_EFFORT;
+    delete process.env.OPENAI_TEACHING_VIDEO_MODEL;
+    delete process.env.OPENAI_TEACHING_VIDEO_MODEL_REASONING_EFFORT;
+
+    expect(resolveOpenAIChatModel("teachingVideoSelection")).toBe("gpt-5.6-terra");
+    expect(resolveOpenAIReasoningEffort("teachingVideoSelection")).toBe("medium");
+
+    process.env.OPENAI_TEACHING_VIDEO_MODEL = "gpt-5.6-sol";
+    process.env.OPENAI_TEACHING_VIDEO_MODEL_REASONING_EFFORT = "high";
+    expect(resolveOpenAIChatModel("teachingVideoSelection")).toBe("gpt-5.6-sol");
+    expect(resolveOpenAIReasoningEffort("teachingVideoSelection", "gpt-5.6-sol")).toBe("high");
+  });
+
   it("uses the high-volume model and low reasoning for routine structured tasks", () => {
     delete process.env.OPENAI_CHAT_MODEL;
     delete process.env.OPENAI_REASONING_EFFORT;
