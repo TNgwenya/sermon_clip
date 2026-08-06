@@ -1,1 +1,28 @@
+# Local dependencies and build output
+node_modules/
+.next/
+build/
+out/
+coverage/
+blob-report/
+playwright-report/
+test-results/
+
+# Local secrets and runtime state
+.env
+.env.*
+!.env.example
+.vercel/
+storage/
+prisma/dev.db
+
+# Local design, test, and generated artifacts
 design/
+artifacts/
+output/
+tmp/
+*.mp4
+*.mp3
+*.srt
+*.pem
+*.tsbuildinfo
