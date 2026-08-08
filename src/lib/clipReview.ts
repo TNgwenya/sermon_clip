@@ -345,9 +345,14 @@ export function buildClipQualityView(clip: ReviewClipModel, rank: number): {
   nextStep: string;
   hasQualityReview: boolean;
 } {
-  const score = getClipPostScore(clip);
+  const isBasicTimeBasedClip = clip.qualityWarnings?.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE") === true;
+  const score = isBasicTimeBasedClip ? undefined : getClipPostScore(clip);
   const professionalLabel = clip.qualityLabel ?? clip.postReadyStatus ?? null;
-  const hasQualityReview = typeof clip.finalQualityScore === "number" || typeof clip.overallPostScore === "number" || Boolean(clip.recommendedAction || clip.qualitySummary || clip.pastorFriendlyReason);
+  const hasQualityReview = !isBasicTimeBasedClip && (
+    typeof clip.finalQualityScore === "number"
+    || typeof clip.overallPostScore === "number"
+    || Boolean(clip.recommendedAction || clip.qualitySummary || clip.pastorFriendlyReason)
+  );
   const actionTone: "good" | "review" | "weak" | "neutral" =
     professionalLabel === "POST_READY"
       ? "good"
@@ -364,16 +369,20 @@ export function buildClipQualityView(clip: ReviewClipModel, rank: number): {
           : "neutral";
 
   const contextSafety = getReadinessFromScore(
-    clip.contextSafetyScore ?? (clip.contextWarning ? 5 : clip.riskLevel === "HIGH" ? 4 : clip.riskLevel === "MEDIUM" ? 6.5 : undefined),
+    isBasicTimeBasedClip
+      ? undefined
+      : clip.contextSafetyScore ?? (clip.contextWarning ? 5 : clip.riskLevel === "HIGH" ? 4 : clip.riskLevel === "MEDIUM" ? 6.5 : undefined),
     "Safe to post",
     "May need more context",
     "Context needs review",
   );
 
   const qualityView = {
-    rankLabel: rank === 0 ? "Best first post" : `Post pick #${rank + 1}`,
+    rankLabel: isBasicTimeBasedClip ? `Basic time-based cut #${rank + 1}` : rank === 0 ? "Best first post" : `Post pick #${rank + 1}`,
     scoreLabel: formatScore(score),
-    scoreSourceLabel: typeof clip.finalQualityScore === "number"
+    scoreSourceLabel: isBasicTimeBasedClip
+      ? "Not assessed"
+      : typeof clip.finalQualityScore === "number"
       ? "Quality score"
       : typeof clip.overallPostScore === "number"
         ? "Post score"
@@ -392,8 +401,16 @@ export function buildClipQualityView(clip: ReviewClipModel, rank: number): {
     completeness: getReadinessFromScore(clip.arcCompletenessScore, "Thought lands completely", "Check the ending", "Thought may feel unfinished"),
     socialFit: getReadinessFromScore(clip.socialShareabilityScore ?? clip.shareabilityScore, "Strong sharing potential", "Channel fit is worth checking", "Social fit may be limited"),
     platformFit: getPlatformFit(clip),
-    freshness: getQualityFreshness(clip, hasQualityReview),
-    nextStep: getRecommendedNextStep(clip),
+    freshness: isBasicTimeBasedClip
+      ? {
+          state: "unassessed" as const,
+          label: "No content intelligence applied",
+          detail: "This cut was placed by time only. Listen through it and make every content decision in Clip Studio.",
+        }
+      : getQualityFreshness(clip, hasQualityReview),
+    nextStep: isBasicTimeBasedClip
+      ? "Open Clip Studio and edit the title, start, end, captions, framing, and context before approval."
+      : getRecommendedNextStep(clip),
     hasQualityReview,
   };
 
@@ -432,7 +449,13 @@ export function buildClipWarnings(clip: ReviewClipModel): string[] {
   }
 
   for (const warning of clip.qualityWarnings ?? []) {
-    if (warning === "CONTEXT_RISK") {
+    if (warning === "BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE") {
+      warnings.push("No transcript or content intelligence was applied");
+    } else if (warning === "TRANSCRIPT_UNAVAILABLE") {
+      warnings.push("No reliable transcript is available");
+    } else if (warning === "TIME_BASED_BOUNDARIES") {
+      warnings.push("Start and end times are time-based and must be edited");
+    } else if (warning === "CONTEXT_RISK") {
       warnings.push("May need more context");
     } else if (warning === "INCOMPLETE_THOUGHT") {
       warnings.push("Clip may not stand alone clearly");

@@ -4,6 +4,7 @@ import type { AssetFreshness, ClipRenderStatus, ClipStatus, Prisma } from "@pris
 
 import { prisma } from "@/lib/prisma";
 import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
+import { BASIC_CLIP_FALLBACK_WARNING } from "@/server/agents/basicClipFallbackService";
 import { appendPipelineLog } from "@/server/agents/storage";
 import { renderApprovedClip } from "@/server/agents/clipRenderService";
 import {
@@ -22,6 +23,8 @@ type ReviewAssetClip = {
   id: string;
   status: ClipStatus;
   isAiGenerated: boolean;
+  clipType: string;
+  qualityWarnings: Prisma.JsonValue | null;
   renderStatus: ClipRenderStatus;
   renderedFilePath: string | null;
   captionedVideoPath: string | null;
@@ -62,14 +65,27 @@ function buildReviewAssetWhere(input: {
     ...(input.onlyFailed
       ? {
           status: { in: ["SUGGESTED", "APPROVED"] },
-          isAiGenerated: true,
           renderStatus: "FAILED",
+          OR: [
+            { isAiGenerated: true },
+            {
+              isAiGenerated: false,
+              clipType: "basic",
+              qualityWarnings: { array_contains: [BASIC_CLIP_FALLBACK_WARNING] },
+            },
+          ],
         }
       : {
           OR: [
             {
               status: { in: ["SUGGESTED", "APPROVED"] },
               isAiGenerated: true,
+            },
+            {
+              status: { in: ["SUGGESTED", "APPROVED"] },
+              isAiGenerated: false,
+              clipType: "basic",
+              qualityWarnings: { array_contains: [BASIC_CLIP_FALLBACK_WARNING] },
             },
             {
               status: { in: ["SUGGESTED", "APPROVED", "EXPORTED"] },
@@ -92,13 +108,21 @@ function shouldPreparePreview(
 }
 
 function shouldRenderReviewPreview(
-  clip: Pick<ReviewAssetClip, "status" | "isAiGenerated" | "renderStatus">,
+  clip: Pick<ReviewAssetClip, "status" | "isAiGenerated" | "renderStatus">
+    & Partial<Pick<ReviewAssetClip, "clipType" | "qualityWarnings">>,
   force?: boolean,
   previewMediaIsUsable?: boolean,
 ): boolean {
   return (
     (clip.status === "SUGGESTED" || clip.status === "APPROVED") &&
-    clip.isAiGenerated &&
+    (
+      clip.isAiGenerated
+      || (
+        clip.clipType === "basic"
+        && Array.isArray(clip.qualityWarnings)
+        && clip.qualityWarnings.includes(BASIC_CLIP_FALLBACK_WARNING)
+      )
+    ) &&
     shouldPreparePreview(clip, force, previewMediaIsUsable)
   );
 }
@@ -273,6 +297,8 @@ export async function prepareGeneratedClipReviewAssets(input: {
       id: true,
       status: true,
       isAiGenerated: true,
+      clipType: true,
+      qualityWarnings: true,
       renderStatus: true,
       renderedFilePath: true,
       captionedVideoPath: true,

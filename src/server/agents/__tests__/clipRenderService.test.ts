@@ -57,6 +57,34 @@ describe("clip render service validation", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("allows only an explicitly labelled basic fallback render to omit transcript text", () => {
+    const basicFallback = validateRenderEligibility({
+      status: "SUGGESTED",
+      renderStatus: "NOT_RENDERED",
+      startTimeSeconds: 12,
+      endTimeSeconds: 72,
+      sermonDurationSeconds: 600,
+      transcriptText: "",
+      allowMissingTranscript: true,
+      sourceVideoExists: true,
+      allowRerender: false,
+    });
+    const ordinaryClip = validateRenderEligibility({
+      status: "SUGGESTED",
+      renderStatus: "NOT_RENDERED",
+      startTimeSeconds: 12,
+      endTimeSeconds: 72,
+      sermonDurationSeconds: 600,
+      transcriptText: "",
+      sourceVideoExists: true,
+      allowRerender: false,
+    });
+
+    expect(basicFallback.ok).toBe(true);
+    expect(ordinaryClip.ok).toBe(false);
+    expect(ordinaryClip.reason).toContain("Transcript text is missing");
+  });
+
   it("blocks rejected clips", () => {
     const result = validateRenderEligibility({
       status: "REJECTED",

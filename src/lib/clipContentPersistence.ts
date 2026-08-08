@@ -205,6 +205,32 @@ export function canChooseClipForProduction(
   return transcriptSafetyStatus !== "REVIEW_REQUIRED";
 }
 
+export function shouldBlockStudioBoundarySaveForMissingTranscript(input: {
+  boundariesChanged: boolean;
+  selectedTranscriptText: string;
+  isBasicTimeBasedClip: boolean;
+}): boolean {
+  return input.boundariesChanged
+    && input.selectedTranscriptText.trim().length === 0
+    && !input.isBasicTimeBasedClip;
+}
+
+export function hasSavedClipStudioDraft(captionData: unknown): boolean {
+  return Boolean(
+    captionData
+    && typeof captionData === "object"
+    && !Array.isArray(captionData)
+    && (captionData as Record<string, unknown>)["manuallyEdited"] === true,
+  );
+}
+
+export function basicClipTitleNeedsEditing(input: {
+  title: string;
+  isBasicTimeBasedClip: boolean;
+}): boolean {
+  return input.isBasicTimeBasedClip && /^Basic clip \d+$/i.test(input.title.trim());
+}
+
 /**
  * Transcript review is a human safety decision, not a side effect of saving
  * generated or existing caption cues. Keep this explicit so default-on

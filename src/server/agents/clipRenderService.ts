@@ -99,6 +99,8 @@ type ClipWithSermon = Pick<
   | "adjustedStartTimeSeconds"
   | "adjustedEndTimeSeconds"
   | "durationSeconds"
+  | "clipType"
+  | "qualityWarnings"
   | "transcriptText"
   | "captionData"
   | "captionStatus"
@@ -124,6 +126,7 @@ type RenderEligibilityInput = {
   endTimeSeconds: number;
   sermonDurationSeconds: number;
   transcriptText: string;
+  allowMissingTranscript?: boolean;
   sourceVideoExists: boolean;
   allowRerender: boolean;
 };
@@ -404,6 +407,7 @@ export function validateRenderEligibility(input: RenderEligibilityInput): Render
     endTimeSeconds: input.endTimeSeconds,
     sermonDurationSeconds: input.sermonDurationSeconds,
     transcriptText: input.transcriptText,
+    allowMissingTranscript: input.allowMissingTranscript,
   });
 
   if (!validation.isValid) {
@@ -892,6 +896,8 @@ async function loadClipForRender(clipCandidateId: string): Promise<ClipWithSermo
       adjustedStartTimeSeconds: true,
       adjustedEndTimeSeconds: true,
       durationSeconds: true,
+      clipType: true,
+      qualityWarnings: true,
       transcriptText: true,
       captionData: true,
       captionStatus: true,
@@ -1010,6 +1016,9 @@ export async function renderApprovedClip(
     endTimeSeconds: boundaries.endTimeSeconds,
     sermonDurationSeconds,
     transcriptText: clip.transcriptText,
+    allowMissingTranscript: clip.clipType === "basic"
+      && Array.isArray(clip.qualityWarnings)
+      && clip.qualityWarnings.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE"),
     sourceVideoExists,
     allowRerender: Boolean(options?.allowRerender),
   });

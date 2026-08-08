@@ -23,7 +23,11 @@ import { downloadSermonVideo } from "@/server/agents/videoDownloadAgent";
 import { materializeS3SermonSource } from "@/server/agents/sourceMaterializationAgent";
 import { extractSermonAudio } from "@/server/agents/audioExtractionAgent";
 import { generateClipSuggestions } from "@/server/agents/clipIntelligenceAgent";
-import { transcribeSermonAudio } from "@/server/agents/transcriptionAgent";
+import {
+  isLowTranscriptQualityError,
+  transcribeSermonAudio,
+} from "@/server/agents/transcriptionAgent";
+import { generateBasicFallbackClips } from "@/server/agents/basicClipFallbackService";
 import { generateSermonIntelligence } from "@/server/agents/sermonIntelligenceService";
 import { generateContentOpportunities } from "@/server/agents/contentMultiplicationService";
 import { generateWorshipMomentClips } from "@/server/agents/worshipMomentService";
@@ -63,10 +67,13 @@ class PipelinePartialCompletionError extends Error {
   constructor(steps: PipelineStepResult[]) {
     const failedSteps = steps.filter((step) => step.status === "FAILED");
     const failedLabels = failedSteps.map((step) => step.label);
+    const usedBasicClipFallback = steps.some((step) => step.label === "Create basic clips");
     const summary = [
       "Core sermon processing completed, but premium outputs need attention.",
       `Failed: ${failedLabels.join(", ")}.`,
-      "The completed transcript and clips were preserved; retry only the failed steps.",
+      usedBasicClipFallback
+        ? "The basic time-based clips were preserved; no reliable transcript or content intelligence is available. Retry only the failed media steps."
+        : "The completed transcript and clips were preserved; retry only the failed steps.",
     ].join(" ");
     super(summary);
     this.name = "PipelinePartialCompletionError";
@@ -407,6 +414,7 @@ export async function processSermonPipeline(
     }
 
     activeStepLabel = "Transcribe audio";
+    let basicClipFallbackReason: string | null = null;
     const transcriptSkipped = shouldReuseExistingTranscript({
       force: options?.force,
       transcriptId: afterAudio.transcript?.id,
@@ -422,100 +430,133 @@ export async function processSermonPipeline(
       });
       await appendJobLog(parentJob.id, "Transcribe audio skipped because a usable transcript already exists.");
     } else {
-      const transcribeResult = await transcribeSermonAudio(sermon.id, { force: options?.force });
+      try {
+        const transcribeResult = await transcribeSermonAudio(sermon.id, { force: options?.force });
+        steps.push({
+          label: "Transcribe audio",
+          status: "SUCCEEDED",
+          message: transcribeResult.reusedExistingTranscript ? "Existing transcript reused." : "Audio transcribed.",
+        });
+        await appendJobLog(parentJob.id, "Transcribe audio completed.");
+      } catch (error) {
+        if (!isLowTranscriptQualityError(error)) {
+          throw error;
+        }
+
+        basicClipFallbackReason = error.reason;
+        const message = "The transcript was too unreliable for content analysis. Continuing with clearly labelled basic time-based clips.";
+        steps.push({ label: "Transcribe audio", status: "SKIPPED", message });
+        await appendJobLog(parentJob.id, `${message} Reason: ${error.reason}`);
+        await appendPipelineLog(sermon.id, `${message} No sermon intelligence will be generated.`);
+      }
+    }
+
+    if (basicClipFallbackReason) {
+      activeStepLabel = "Create basic clips";
+      const basicClipResult = await generateBasicFallbackClips({
+        sermonId: sermon.id,
+        transcriptFailureReason: basicClipFallbackReason,
+      });
       steps.push({
-        label: "Transcribe audio",
-        status: "SUCCEEDED",
-        message: transcribeResult.reusedExistingTranscript ? "Existing transcript reused." : "Audio transcribed.",
+        label: "Create basic clips",
+        status: basicClipResult.reusedExistingSuggestions ? "SKIPPED" : "SUCCEEDED",
+        message: basicClipResult.reusedExistingSuggestions
+          ? `Reused ${basicClipResult.clipCount} existing basic time-based clips.`
+          : `Created ${basicClipResult.clipCount} basic time-based clips. Every clip requires Clip Studio editing.`,
       });
-      await appendJobLog(parentJob.id, "Transcribe audio completed.");
-    }
-
-    const afterTranscript = await loadSermon(sermon.id);
-    if (!afterTranscript) {
-      throw new Error(`Sermon ${sermon.id} disappeared during processing.`);
-    }
-
-    // Generate sermon intelligence immediately after transcription so clip selection can reuse it.
-    if (afterTranscript.transcript?.id) {
-      activeStepLabel = "Generate sermon intelligence";
-      const intelligenceResult = await generateSermonIntelligence(sermon.id, {
-        force: options?.force,
-        parentJobId: parentJob.id,
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : "Unknown error";
-        return { intelligenceId: sermon.id, status: "FAILED" as const, failureReason: msg };
-      });
-
       steps.push({
         label: "Generate sermon intelligence",
-        status: intelligenceResult.status === "COMPLETED" ? "SUCCEEDED" : "FAILED",
-        message: intelligenceResult.status === "COMPLETED"
-          ? "Sermon intelligence generated."
-          : `Intelligence generation skipped or failed: ${intelligenceResult.failureReason ?? "unknown"}.`,
-      });
-      await appendJobLog(parentJob.id, `Sermon intelligence: ${intelligenceResult.status}.`);
-    }
-
-    const afterIntelligence = await loadSermon(sermon.id);
-    if (!afterIntelligence) {
-      throw new Error(`Sermon ${sermon.id} disappeared during processing.`);
-    }
-
-    activeStepLabel = "Generate clip suggestions";
-    const clipGuardMessage = advancedAtStart && afterIntelligence._count.clipCandidates === 0
-      ? "This advanced sermon no longer has durable clip records. Repair the sermon data before retrying; automatic clip generation was stopped to preserve the workflow state."
-      : advancedSermonPipelineGuardMessage({
-          force: options?.force,
-          sermonStatus: afterIntelligence.status,
-          clipCandidateCount: afterIntelligence._count.clipCandidates,
-        });
-    if (clipGuardMessage) {
-      await appendJobLog(parentJob.id, clipGuardMessage);
-      throw new Error(clipGuardMessage);
-    }
-
-    const clipsReused = shouldReuseDurableClipCandidates({
-      force: options?.force,
-      sermonStatus: afterIntelligence.status,
-      clipCandidateCount: afterIntelligence._count.clipCandidates,
-    });
-    if (clipsReused) {
-      if (afterIntelligence.status === "FAILED") {
-        await updateSermonStatus(sermon.id, "CLIPS_GENERATED");
-      }
-      steps.push({
-        label: "Generate clip suggestions",
         status: "SKIPPED",
-        message: `Existing durable clip suggestions reused (${afterIntelligence._count.clipCandidates} available).`,
+        message: "Skipped because the transcript was not reliable enough for content intelligence.",
       });
-      await appendJobLog(parentJob.id, "Generate clip suggestions skipped because durable clips already exist.");
+      await appendJobLog(parentJob.id, "Sermon intelligence, title generation, message ranking, and transcript-based boundary selection were skipped.");
     } else {
-      const clipResult = await generateClipSuggestions(sermon.id, { force: options?.force });
-      steps.push({
-        label: "Generate clip suggestions",
-        status: "SUCCEEDED",
-        message: clipResult.reusedExistingSuggestions ? "Existing clip suggestions reused." : `Generated ${clipResult.clipCount} clip suggestions.`,
-      });
-      await appendJobLog(parentJob.id, "Generate clip suggestions completed.");
-    }
+      const afterTranscript = await loadSermon(sermon.id);
+      if (!afterTranscript) {
+        throw new Error(`Sermon ${sermon.id} disappeared during processing.`);
+      }
 
-    if (afterIntelligence.includeWorshipMoments) {
-      activeStepLabel = "Find praise and worship moments";
-      const worshipResult = await generateWorshipMomentClips(sermon.id, { force: options?.force });
-      steps.push({
-        label: "Find praise and worship moments",
-        status: worshipResult.reusedExistingClips ? "SKIPPED" : "SUCCEEDED",
-        message: worshipResult.reusedExistingClips
-          ? `Existing worship suggestions reused (${worshipResult.clipCount} available).`
-          : worshipResult.clipCount > 0
-            ? `Found ${worshipResult.clipCount} lyric-led worship moment${worshipResult.clipCount === 1 ? "" : "s"}.`
-            : "No confident lyric-led worship moments were found. Instrumental-only detection is not included in this beta.",
+      // Generate sermon intelligence immediately after transcription so clip selection can reuse it.
+      if (afterTranscript.transcript?.id) {
+        activeStepLabel = "Generate sermon intelligence";
+        const intelligenceResult = await generateSermonIntelligence(sermon.id, {
+          force: options?.force,
+          parentJobId: parentJob.id,
+        }).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          return { intelligenceId: sermon.id, status: "FAILED" as const, failureReason: msg };
+        });
+
+        steps.push({
+          label: "Generate sermon intelligence",
+          status: intelligenceResult.status === "COMPLETED" ? "SUCCEEDED" : "FAILED",
+          message: intelligenceResult.status === "COMPLETED"
+            ? "Sermon intelligence generated."
+            : `Intelligence generation skipped or failed: ${intelligenceResult.failureReason ?? "unknown"}.`,
+        });
+        await appendJobLog(parentJob.id, `Sermon intelligence: ${intelligenceResult.status}.`);
+      }
+
+      const afterIntelligence = await loadSermon(sermon.id);
+      if (!afterIntelligence) {
+        throw new Error(`Sermon ${sermon.id} disappeared during processing.`);
+      }
+
+      activeStepLabel = "Generate clip suggestions";
+      const clipGuardMessage = advancedAtStart && afterIntelligence._count.clipCandidates === 0
+        ? "This advanced sermon no longer has durable clip records. Repair the sermon data before retrying; automatic clip generation was stopped to preserve the workflow state."
+        : advancedSermonPipelineGuardMessage({
+            force: options?.force,
+            sermonStatus: afterIntelligence.status,
+            clipCandidateCount: afterIntelligence._count.clipCandidates,
+          });
+      if (clipGuardMessage) {
+        await appendJobLog(parentJob.id, clipGuardMessage);
+        throw new Error(clipGuardMessage);
+      }
+
+      const clipsReused = shouldReuseDurableClipCandidates({
+        force: options?.force,
+        sermonStatus: afterIntelligence.status,
+        clipCandidateCount: afterIntelligence._count.clipCandidates,
       });
-      await appendJobLog(
-        parentJob.id,
-        `Praise and worship discovery completed with ${worshipResult.clipCount} clip suggestion(s).`,
-      );
+      if (clipsReused) {
+        if (afterIntelligence.status === "FAILED") {
+          await updateSermonStatus(sermon.id, "CLIPS_GENERATED");
+        }
+        steps.push({
+          label: "Generate clip suggestions",
+          status: "SKIPPED",
+          message: `Existing durable clip suggestions reused (${afterIntelligence._count.clipCandidates} available).`,
+        });
+        await appendJobLog(parentJob.id, "Generate clip suggestions skipped because durable clips already exist.");
+      } else {
+        const clipResult = await generateClipSuggestions(sermon.id, { force: options?.force });
+        steps.push({
+          label: "Generate clip suggestions",
+          status: "SUCCEEDED",
+          message: clipResult.reusedExistingSuggestions ? "Existing clip suggestions reused." : `Generated ${clipResult.clipCount} clip suggestions.`,
+        });
+        await appendJobLog(parentJob.id, "Generate clip suggestions completed.");
+      }
+
+      if (afterIntelligence.includeWorshipMoments) {
+        activeStepLabel = "Find praise and worship moments";
+        const worshipResult = await generateWorshipMomentClips(sermon.id, { force: options?.force });
+        steps.push({
+          label: "Find praise and worship moments",
+          status: worshipResult.reusedExistingClips ? "SKIPPED" : "SUCCEEDED",
+          message: worshipResult.reusedExistingClips
+            ? `Existing worship suggestions reused (${worshipResult.clipCount} available).`
+            : worshipResult.clipCount > 0
+              ? `Found ${worshipResult.clipCount} lyric-led worship moment${worshipResult.clipCount === 1 ? "" : "s"}.`
+              : "No confident lyric-led worship moments were found. Instrumental-only detection is not included in this beta.",
+        });
+        await appendJobLog(
+          parentJob.id,
+          `Praise and worship discovery completed with ${worshipResult.clipCount} clip suggestion(s).`,
+        );
+      }
     }
 
     activeStepLabel = "Prepare generated clip review assets";
@@ -530,33 +571,43 @@ export async function processSermonPipeline(
       `Generated clip review asset preparation complete: ${previewResult.prepared} prepared, ${previewResult.skipped} skipped, ${previewResult.failed} failed.`,
     );
 
-    try {
-      activeStepLabel = "Generate content opportunities";
-      const contentResult = await generateContentOpportunities(sermon.id, { force: options?.force });
+    if (basicClipFallbackReason) {
       steps.push({
         label: "Generate content opportunities",
-        status: contentResult.reusedExistingOpportunities ? "SKIPPED" : "SUCCEEDED",
-        message: contentResult.reusedExistingOpportunities
-          ? "Existing content opportunities reused."
-          : `Generated ${contentResult.opportunityCount} content opportunities.`,
+        status: "SKIPPED",
+        message: "Skipped because no reliable transcript or content intelligence is available.",
       });
-      await appendJobLog(parentJob.id, "Generate content opportunities completed.");
-    } catch (contentError) {
-      const message = contentError instanceof Error ? contentError.message : "Unknown content opportunity generation error.";
-      steps.push({
-        label: "Generate content opportunities",
-        status: "FAILED",
-        message: `Failed: ${message}`,
-      });
-      await appendJobLog(parentJob.id, `Generate content opportunities skipped: ${message}`);
-      await appendPipelineLog(sermon.id, `Content opportunities generation skipped: ${message}`);
+    } else {
+      try {
+        activeStepLabel = "Generate content opportunities";
+        const contentResult = await generateContentOpportunities(sermon.id, { force: options?.force });
+        steps.push({
+          label: "Generate content opportunities",
+          status: contentResult.reusedExistingOpportunities ? "SKIPPED" : "SUCCEEDED",
+          message: contentResult.reusedExistingOpportunities
+            ? "Existing content opportunities reused."
+            : `Generated ${contentResult.opportunityCount} content opportunities.`,
+        });
+        await appendJobLog(parentJob.id, "Generate content opportunities completed.");
+      } catch (contentError) {
+        const message = contentError instanceof Error ? contentError.message : "Unknown content opportunity generation error.";
+        steps.push({
+          label: "Generate content opportunities",
+          status: "FAILED",
+          message: `Failed: ${message}`,
+        });
+        await appendJobLog(parentJob.id, `Generate content opportunities skipped: ${message}`);
+        await appendPipelineLog(sermon.id, `Content opportunities generation skipped: ${message}`);
+      }
     }
 
     if (steps.some((step) => step.status === "FAILED")) {
       throw new PipelinePartialCompletionError(steps);
     }
 
-    const summary = buildSummary(steps);
+    const summary = basicClipFallbackReason
+      ? `${buildSummary(steps)} Basic clips only: transcription was not reliable, no content intelligence was applied, and every clip must be edited and checked in Clip Studio.`
+      : buildSummary(steps);
     await markJobSucceeded(parentJob.id, summary);
     await appendPipelineLog(sermon.id, summary);
 

@@ -25,8 +25,15 @@ describe("clip review asset service", () => {
       sermonId: "sermon-1",
       id: { in: ["clip-target"] },
       status: { in: ["SUGGESTED", "APPROVED"] },
-      isAiGenerated: true,
       renderStatus: "FAILED",
+      OR: [
+        { isAiGenerated: true },
+        {
+          isAiGenerated: false,
+          clipType: "basic",
+          qualityWarnings: { array_contains: ["BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE"] },
+        },
+      ],
     });
   });
 
@@ -55,6 +62,23 @@ describe("clip review asset service", () => {
       isAiGenerated: true,
       renderStatus: "NOT_RENDERED",
     })).toBe(true);
+  });
+
+  it("renders explicitly labelled basic fallback cuts without widening to other manual clips", () => {
+    expect(__clipReviewAssetServiceTestUtils.shouldRenderReviewPreview({
+      status: "SUGGESTED",
+      isAiGenerated: false,
+      clipType: "basic",
+      qualityWarnings: ["BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE"],
+      renderStatus: "NOT_RENDERED",
+    })).toBe(true);
+    expect(__clipReviewAssetServiceTestUtils.shouldRenderReviewPreview({
+      status: "SUGGESTED",
+      isAiGenerated: false,
+      clipType: "manual",
+      qualityWarnings: [],
+      renderStatus: "NOT_RENDERED",
+    })).toBe(false);
   });
 
   it("does not rerender completed generated suggestions unless forced", () => {

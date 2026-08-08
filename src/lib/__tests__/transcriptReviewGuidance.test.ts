@@ -47,4 +47,25 @@ describe("transcript review guidance", () => {
     expect(guidance.summary).toContain("has not translated");
     expect(guidance.actionLabel).toContain("listened");
   });
+
+  it("clearly identifies basic clips that received no transcript intelligence", () => {
+    const guidance = buildTranscriptReviewGuidance({
+      transcriptSafetyReasons: [
+        "TRANSCRIPT_UNAVAILABLE",
+        "NO_CONTENT_INTELLIGENCE",
+        "TIME_BASED_BOUNDARIES",
+      ],
+      boundaryQuality: "NEEDS_REVIEW",
+    });
+
+    expect(guidance.title).toContain("basic clip");
+    expect(guidance.summary).toContain("placed by time only");
+    expect(guidance.summary).toContain("edit the title, start, end, captions, and context");
+    expect(guidance.actionLabel).toBe("I edited and checked this clip");
+    expect(guidance.reasonLabels).toEqual([
+      "No reliable transcript is available",
+      "No content intelligence was applied",
+      "Start and end times were placed by time only",
+    ]);
+  });
 });

@@ -204,6 +204,22 @@ describe("pastor workflow", () => {
     ).toBe("post");
   });
 
+  it("routes basic fallback clips to review even when no transcript was saved", () => {
+    const workflow = derivePastorSermonWorkflow({
+      sourceVideoReady: true,
+      transcriptReady: false,
+      clipGenerationComplete: true,
+      suggestedClipCount: 6,
+      approvedOrReadyClipCount: 0,
+      preparedClipCount: 0,
+      failedStepCount: 0,
+      staleClipCount: 0,
+    });
+
+    expect(workflow.nextAction).toBe("Approve at least one clip");
+    expect(workflow.primaryAction).toBe("review");
+  });
+
   it("keeps recovery guidance pastor-friendly", () => {
     const workflow = derivePastorSermonWorkflow({
       sourceVideoReady: true,

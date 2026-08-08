@@ -43,6 +43,19 @@ describe("process sermon pipeline review asset preparation", () => {
     ]);
   });
 
+  it("does not claim a transcript exists when basic clip preview preparation is partial", () => {
+    const PartialFailure = __processSermonPipelineTestUtils.PipelinePartialCompletionError;
+    const failure = new PartialFailure([
+      { label: "Transcribe audio", status: "SKIPPED", message: "Transcript was unreliable." },
+      { label: "Create basic clips", status: "SUCCEEDED", message: "Created basic clips." },
+      { label: "Prepare generated clip review assets", status: "FAILED", message: "One preview failed." },
+    ]);
+
+    expect(failure.summary).toContain("basic time-based clips were preserved");
+    expect(failure.summary).toContain("no reliable transcript or content intelligence");
+    expect(failure.summary).not.toContain("completed transcript");
+  });
+
   it("does not increment an already-claimed parent job attempt a second time", () => {
     expect(__processSermonPipelineTestUtils.shouldMarkParentJobRunning({
       status: "RUNNING",

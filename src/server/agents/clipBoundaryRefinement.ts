@@ -372,6 +372,7 @@ export function validateBoundaryTimes(input: {
   endTimeSeconds: number;
   sermonDurationSeconds: number;
   transcriptText: string;
+  allowMissingTranscript?: boolean;
 }): BoundaryValidationResult {
   const reasons: string[] = [];
   const { startTimeSeconds, endTimeSeconds, sermonDurationSeconds, transcriptText } = input;
@@ -405,7 +406,7 @@ export function validateBoundaryTimes(input: {
     reasons.push("End time is outside sermon duration.");
   }
 
-  if (!transcriptText.trim()) {
+  if (!transcriptText.trim() && !input.allowMissingTranscript) {
     reasons.push("Transcript text is missing for selected range.");
   }
 

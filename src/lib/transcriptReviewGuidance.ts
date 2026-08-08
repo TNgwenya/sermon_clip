@@ -90,6 +90,9 @@ const SAFETY_REASON_LABELS: Record<string, string> = {
   MANUAL_TRANSCRIPT_RESCUE: "Transcript needs a manual wording check",
   LOW_TRANSCRIPT_TIMED_FALLBACK: "Timing came from a transcript fallback",
   TRANSCRIPT_CHANGED_AFTER_CLIP_GENERATION: "Transcript changed after this clip was created",
+  TRANSCRIPT_UNAVAILABLE: "No reliable transcript is available",
+  NO_CONTENT_INTELLIGENCE: "No content intelligence was applied",
+  TIME_BASED_BOUNDARIES: "Start and end times were placed by time only",
 };
 
 export function buildTranscriptReviewGuidance(input: {
@@ -101,6 +104,18 @@ export function buildTranscriptReviewGuidance(input: {
     ...input.transcriptSafetyReasons.map((reason) => SAFETY_REASON_LABELS[reason]).filter(Boolean),
     ...(input.evidence?.reviewReasons.map((reason) => reason.message) ?? []),
   ]));
+
+  if (
+    input.transcriptSafetyReasons.includes("TRANSCRIPT_UNAVAILABLE")
+    || input.transcriptSafetyReasons.includes("NO_CONTENT_INTELLIGENCE")
+  ) {
+    return {
+      title: "Edit and check this basic clip in Studio",
+      summary: "AI could not reliably understand this recording. This cut was placed by time only, so listen through it and edit the title, start, end, captions, and context before approval.",
+      actionLabel: "I edited and checked this clip",
+      reasonLabels,
+    };
+  }
 
   if (input.evidence?.codeSwitchingDetected || input.transcriptSafetyReasons.includes("CODE_SWITCHING_DETECTED")) {
     return {

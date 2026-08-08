@@ -4,7 +4,11 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { __transcriptionTestUtils } from "@/server/agents/transcriptionAgent";
+import {
+  __transcriptionTestUtils,
+  isLowTranscriptQualityError,
+  LowTranscriptQualityError,
+} from "@/server/agents/transcriptionAgent";
 
 const strongSermonLines = [
   "Faith keeps walking when pressure comes because God is still faithful to his people today.",
@@ -37,6 +41,15 @@ const baseTranscript = {
 };
 
 describe("transcription sermon segment filtering", () => {
+  it("distinguishes the safe basic-clip fallback condition from other transcription failures", () => {
+    const lowQuality = new LowTranscriptQualityError("Transcript coverage is sparse (11%).");
+
+    expect(isLowTranscriptQualityError(lowQuality)).toBe(true);
+    expect(lowQuality.code).toBe("TRANSCRIPT_QUALITY_TOO_LOW");
+    expect(lowQuality.reason).toContain("11%");
+    expect(isLowTranscriptQualityError(new Error("OpenAI is unavailable"))).toBe(false);
+  });
+
   it("rejects missing or empty audio before transcription", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "transcription-audio-"));
     const emptyAudioPath = join(tempDir, "audio.mp3");

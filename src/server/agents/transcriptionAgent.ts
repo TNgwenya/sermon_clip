@@ -41,6 +41,27 @@ type TranscribeOptions = {
   processingJobId?: string;
 };
 
+export class LowTranscriptQualityError extends Error {
+  readonly code = "TRANSCRIPT_QUALITY_TOO_LOW";
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(`Transcript is not reliable enough for pastor-grade clip selection: ${reason}`);
+    this.name = "LowTranscriptQualityError";
+    this.reason = reason;
+  }
+}
+
+export function isLowTranscriptQualityError(error: unknown): error is LowTranscriptQualityError {
+  return error instanceof LowTranscriptQualityError
+    || (
+      error !== null
+      && typeof error === "object"
+      && "code" in error
+      && (error as { code?: unknown }).code === "TRANSCRIPT_QUALITY_TOO_LOW"
+    );
+}
+
 const TRANSCRIBED_OR_LATER_STATUSES: ReadonlySet<SermonStatus> = new Set([
   "TRANSCRIBED",
   "GENERATING_CLIPS",
@@ -2332,18 +2353,14 @@ export async function transcribeSermonAudio(
     const degradedTranscriptUsable = isDegradedTranscriptUsableForLocalMultilingualClipping(transcriptQuality, languageHint);
 
     if (!transcriptQuality.ready && !degradedTranscriptUsable) {
-      throw new Error(
-        `Transcript is not reliable enough for pastor-grade clip selection: ${transcriptQuality.reason}`,
-      );
+      throw new LowTranscriptQualityError(transcriptQuality.reason ?? "The transcript failed the clipping reliability checks.");
     }
 
     const reliabilityIssue = finalTranscriptReliabilityIssue(transcriptQuality, {
       expectedDurationSeconds: selectedExpectedDurationSeconds,
     });
     if (reliabilityIssue && !degradedTranscriptUsable) {
-      throw new Error(
-        `Transcript is not reliable enough for pastor-grade clip selection: ${reliabilityIssue}`,
-      );
+      throw new LowTranscriptQualityError(reliabilityIssue);
     }
 
     if (degradedTranscriptUsable) {

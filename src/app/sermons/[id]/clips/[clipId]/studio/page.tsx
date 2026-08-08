@@ -244,6 +244,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       riskLevel: true,
       riskReasons: true,
       contextWarning: true,
+      qualityWarnings: true,
       status: true,
       boundaryQuality: true,
       isManuallyEdited: true,
@@ -627,6 +628,8 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   const latestExportRecords = exportHistoryWithFileState;
   const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
   const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
+  const isBasicTimeBasedClip = Array.isArray(clip.qualityWarnings)
+    && clip.qualityWarnings.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE");
   const previewCanvasState = hasPreview || sourceVideoPreviewAvailable
     ? "Media connected"
     : upstreamPreparing
@@ -714,7 +717,9 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
 
               {transcriptReviewRequired ? (
                 <p className="warning-banner">
-                  Review the local-language wording before preparing. Saving captions does not confirm transcript accuracy—approve it in Review before export.
+                  {isBasicTimeBasedClip
+                    ? "Basic clip only: AI could not reliably understand this recording. No message intelligence, title, captions, or sentence-boundary checks were applied, so the words, meaning, context, and boundaries are not guaranteed. Listen through and edit the title, start, end, captions, and context here before confirming the clip in Review."
+                    : "Review the local-language wording before preparing. Saving captions does not confirm transcript accuracy—approve it in Review before export."}
                 </p>
               ) : null}
             </div>

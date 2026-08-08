@@ -268,7 +268,7 @@ export function derivePastorSermonWorkflow(input: PastorSermonWorkflowInput): Pa
 
   const nextAction = !input.sourceVideoReady
     ? "Start sermon processing"
-    : !input.transcriptReady
+    : !input.clipGenerationComplete && !input.transcriptReady
       ? "Create sermon transcript"
       : !input.clipGenerationComplete
         ? "Find sermon clips"

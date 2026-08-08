@@ -1,16 +1,44 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  basicClipTitleNeedsEditing,
   canChooseClipForProduction,
+  hasSavedClipStudioDraft,
   resolveClipStudioAssetInvalidation,
   resolveClipStudioBoundaryReviewUpdate,
   resolveClipStudioChangeScope,
   resolveClipStudioCompositionReset,
   resolveClipStudioContentValues,
+  shouldBlockStudioBoundarySaveForMissingTranscript,
   shouldRecordExplicitTranscriptReview,
 } from "@/lib/clipContentPersistence";
 
 describe("clip content persistence", () => {
+  it("allows a user to retime an explicitly labelled basic clip without a transcript", () => {
+    expect(shouldBlockStudioBoundarySaveForMissingTranscript({
+      boundariesChanged: true,
+      selectedTranscriptText: "",
+      isBasicTimeBasedClip: true,
+    })).toBe(false);
+    expect(shouldBlockStudioBoundarySaveForMissingTranscript({
+      boundariesChanged: true,
+      selectedTranscriptText: "",
+      isBasicTimeBasedClip: false,
+    })).toBe(true);
+  });
+
+  it("requires a durable Clip Studio save before a basic clip can clear its review gate", () => {
+    expect(hasSavedClipStudioDraft(undefined)).toBe(false);
+    expect(hasSavedClipStudioDraft({ manuallyEdited: false })).toBe(false);
+    expect(hasSavedClipStudioDraft({ manuallyEdited: true })).toBe(true);
+  });
+
+  it("requires a human title for basic clips while leaving normal titles alone", () => {
+    expect(basicClipTitleNeedsEditing({ title: "Basic clip 01", isBasicTimeBasedClip: true })).toBe(true);
+    expect(basicClipTitleNeedsEditing({ title: "Faith When You Cannot See", isBasicTimeBasedClip: true })).toBe(false);
+    expect(basicClipTitleNeedsEditing({ title: "Basic clip 01", isBasicTimeBasedClip: false })).toBe(false);
+  });
+
   it("keeps social post copy independent from on-video transcript captions", () => {
     const values = resolveClipStudioContentValues({
       title: "Courage Before Certainty",

@@ -187,6 +187,11 @@ function isDeterministicFallbackClip(clip: Pick<ClipReviewItem, "qualityWarnings
   );
 }
 
+function isBasicTimeBasedClip(clip: Pick<ClipReviewItem, "qualityWarnings" | "transcriptSafetyReasons">): boolean {
+  return clip.qualityWarnings.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE")
+    || clip.transcriptSafetyReasons.includes("NO_CONTENT_INTELLIGENCE");
+}
+
 function toPastorFriendlyInsight(value: string): string {
   const cleaned = value
     .replace(/\s*Boundary (?:adjusted|kept)[^.]*\.?/gi, "")
@@ -250,6 +255,13 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
     () => normalizedClips.filter((clip) => clip.status !== "REJECTED" && isDeterministicFallbackClip(clip)).length,
     [normalizedClips],
   );
+  const basicClipCount = useMemo(
+    () => normalizedClips.filter((clip) => clip.status !== "REJECTED" && isBasicTimeBasedClip(clip)).length,
+    [normalizedClips],
+  );
+  const hasOnlyBasicClips = basicClipCount > 0 && normalizedClips.every((clip) => (
+    clip.status === "REJECTED" || isBasicTimeBasedClip(clip)
+  ));
   const contentKindCounts = useMemo(
     () => normalizedClips.reduce(
       (counts, clip) => {
@@ -422,7 +434,9 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             <p className="kicker">Pastor review</p>
             <h1>{sermonTitle}</h1>
             <p className="muted premium-review-intro">
-              Watch the moment, verify the message in context, then approve it, edit it, or leave it out.
+              {hasOnlyBasicClips
+                ? "These are time-based cuts, not AI-selected moments. Edit and verify every cut in Clip Studio before approval."
+                : "Watch the moment, verify the message in context, then approve it, edit it, or leave it out."}
             </p>
           </div>
           <div className="review-feed-topbar-actions">
@@ -431,40 +445,44 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                 Publishing desk
               </Link>
             ) : null}
-            <details className="review-topbar-more">
-              <summary>Review tools</summary>
-              <div className="review-topbar-more-menu">
-                <button
-                  type="button"
-                  className="button secondary"
-                  disabled={isPending}
-                  onClick={() => runQualityRefreshJob(false)}
-                >
-                  Check readiness
-                </button>
-                <button
-                  type="button"
-                  className="button tertiary"
-                  disabled={isPending}
-                  onClick={() => runQualityRefreshJob(true)}
-                >
-                  Recheck all
-                </button>
-                <button
-                  type="button"
-                  className="button tertiary"
-                  disabled={isPending}
-                  onClick={curateReviewFeed}
-                >
-                  Refine suggestions
-                </button>
-              </div>
-            </details>
+            {hasOnlyBasicClips ? (
+              <span className="status-pill quality-needs-editing">AI review unavailable</span>
+            ) : (
+              <details className="review-topbar-more">
+                <summary>Review tools</summary>
+                <div className="review-topbar-more-menu">
+                  <button
+                    type="button"
+                    className="button secondary"
+                    disabled={isPending}
+                    onClick={() => runQualityRefreshJob(false)}
+                  >
+                    Check readiness
+                  </button>
+                  <button
+                    type="button"
+                    className="button tertiary"
+                    disabled={isPending}
+                    onClick={() => runQualityRefreshJob(true)}
+                  >
+                    Recheck all
+                  </button>
+                  <button
+                    type="button"
+                    className="button tertiary"
+                    disabled={isPending}
+                    onClick={curateReviewFeed}
+                  >
+                    Refine suggestions
+                  </button>
+                </div>
+              </details>
+            )}
           </div>
         </div>
 
         <ol className="premium-review-journey" aria-label="Sermon clip workflow">
-          <li className="is-complete"><span>1</span><strong>Analyze</strong></li>
+          <li className="is-complete"><span>1</span><strong>{hasOnlyBasicClips ? "Basic cuts" : "Analyze"}</strong></li>
           <li className="is-current" aria-current="step"><span>2</span><strong>Pastor review</strong></li>
           <li><span>3</span><strong>Edit &amp; brand</strong></li>
           <li><span>4</span><strong>Prepare post</strong></li>
@@ -500,6 +518,17 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
           </details>
         </div>
       </header>
+
+      {basicClipCount > 0 ? (
+        <section className="warning-banner stack-sm" role="status" aria-labelledby="basic-clips-warning-title">
+          <strong id="basic-clips-warning-title">Basic clips only — AI could not reliably understand this recording</strong>
+          <p>
+            These {basicClipCount} cuts were placed by time only. They were not ranked by message, given AI titles or captions,
+            or checked for complete sentences and context. Sermon Clip cannot guarantee their words, meaning, context, or boundaries.
+            Open every cut in Clip Studio, listen through it, and edit its title, start, end, captions, and framing before approval.
+          </p>
+        </section>
+      ) : null}
 
       {reviewIsComplete ? (
         <section className="premium-review-complete" aria-labelledby="review-complete-title">
@@ -776,6 +805,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             const isSmartCrop = clip.exportLayoutStrategy === "SMART_CROP";
             const manualFramingApplied = hasManualFraming(clip);
             const isFallbackClip = isDeterministicFallbackClip(clip);
+            const isBasicClip = isBasicTimeBasedClip(clip);
             const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
             const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
             const transcriptGuidance = buildTranscriptReviewGuidance({
@@ -791,7 +821,9 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             });
             const isApprovedState = clip.status === "APPROVED" || clip.status === "EXPORTED";
             const isPostReady = clip.status === "EXPORTED" || clip.exportStatus === "COMPLETED";
-            const contextLabel = clip.riskLevel !== "LOW" || clip.contextWarning
+            const contextLabel = isBasicClip
+              ? "Not assessed"
+              : clip.riskLevel !== "LOW" || clip.contextWarning
               ? `${clip.riskLevel.toLowerCase()} context risk`
               : clip.boundaryQuality === "GOOD"
                 ? "Context intact"
@@ -877,16 +909,20 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                     </div>
 
                     <div className="premium-review-rationale">
-                      <span>Why this moment</span>
+                      <span>{isBasicClip ? "Why this cut exists" : "Why this moment"}</span>
                       <p>{insight}</p>
                     </div>
 
                     <div className={`premium-review-evidence ${transcriptReviewRequired ? "needs-review" : ""}`}>
                       <div className="premium-review-evidence-heading">
-                        <span>Exact words</span>
+                        <span>{isBasicClip ? "Transcript" : "Exact words"}</span>
                         <small>{contextLabel}</small>
                       </div>
-                      <blockquote>&ldquo;{clip.transcriptText}&rdquo;</blockquote>
+                      {isBasicClip ? (
+                        <p>No reliable transcript is available for this time-based cut. Listen to the recording in Clip Studio.</p>
+                      ) : (
+                        <blockquote>&ldquo;{clip.transcriptText}&rdquo;</blockquote>
+                      )}
                       <p>
                         <strong>Context:</strong>{" "}
                         {clip.boundaryAdjustmentReason
@@ -960,7 +996,9 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
 
                         {isFallbackClip ? (
                           <p className="status-help small">
-                            Automatic ranking used the sermon transcript when the full AI review was unavailable. Check the message and boundaries before approving.
+                            {isBasicClip
+                              ? "No transcript or content intelligence was used. This is a time-based cut that must be titled, timed, captioned, and checked in Clip Studio."
+                              : "Automatic ranking used the sermon transcript when the full AI review was unavailable. Check the message and boundaries before approving."}
                           </p>
                         ) : null}
 

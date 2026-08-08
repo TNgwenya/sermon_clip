@@ -54,6 +54,31 @@ describe("clip review summaries", () => {
     })).toContain("Smart crop movement may need review");
   });
 
+  it("does not imply intelligence or safe timing for basic fallback clips", () => {
+    const basicClip = {
+      ...clip("SUGGESTED"),
+      boundaryQuality: "NEEDS_REVIEW" as const,
+      qualityWarnings: [
+        "BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE",
+        "TRANSCRIPT_UNAVAILABLE",
+        "TIME_BASED_BOUNDARIES",
+      ],
+      qualityLabel: "NEEDS_EDITING" as const,
+      recommendedAction: "NEEDS_REVIEW" as const,
+      qualitySummary: "Basic time-based cut only.",
+    };
+    const warnings = buildClipWarnings(basicClip);
+    const quality = buildClipQualityView(basicClip, 0);
+
+    expect(warnings).toContain("No transcript or content intelligence was applied");
+    expect(warnings).toContain("No reliable transcript is available");
+    expect(warnings).toContain("Start and end times are time-based and must be edited");
+    expect(quality.scoreLabel).toBe("-");
+    expect(quality.scoreSourceLabel).toBe("Not assessed");
+    expect(quality.hasQualityReview).toBe(false);
+    expect(quality.freshness.label).toBe("No content intelligence applied");
+  });
+
   it("labels reviewed clip scores as quality scores", () => {
     const qualityView = buildClipQualityView({
       ...clip("SUGGESTED"),

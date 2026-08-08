@@ -181,12 +181,15 @@ import {
   freezeEffectiveCaptionStyleSnapshot,
 } from "@/lib/clipStudioPrepare";
 import {
+  basicClipTitleNeedsEditing,
   canChooseClipForProduction,
+  hasSavedClipStudioDraft,
   resolveClipStudioChangeScope,
   resolveClipStudioAssetInvalidation,
   resolveClipStudioBoundaryReviewUpdate,
   resolveClipStudioCompositionReset,
   resolveClipStudioContentValues,
+  shouldBlockStudioBoundarySaveForMissingTranscript,
   shouldRecordExplicitTranscriptReview,
 } from "@/lib/clipContentPersistence";
 import {
@@ -3412,6 +3415,7 @@ export async function markClipTranscriptReviewedAction(clipId: string): Promise<
       transcriptSafetyReasons: true,
       postReadyBlockers: true,
       qualityWarnings: true,
+      captionData: true,
     },
   });
 
@@ -3419,6 +3423,16 @@ export async function markClipTranscriptReviewedAction(clipId: string): Promise<
     return {
       success: false,
       message: "Clip candidate was not found.",
+    };
+  }
+
+  const isBasicTimeBasedClip = Array.isArray(clip.qualityWarnings)
+    && clip.qualityWarnings.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE");
+  const studioDraftWasSaved = hasSavedClipStudioDraft(clip.captionData);
+  if (isBasicTimeBasedClip && !studioDraftWasSaved) {
+    return {
+      success: false,
+      message: "Open this basic clip in Clip Studio, listen through it, complete the title and post caption, adjust the timing, and save the Studio draft before confirming it.",
     };
   }
 
@@ -4788,6 +4802,12 @@ export async function updateClipStudioEditsAction(
       transcriptSafetyStatus: true,
       transcriptSafetyReasons: true,
       postReadyBlockers: true,
+      qualityWarnings: true,
+      sermon: {
+        select: {
+          sourceDurationSeconds: true,
+        },
+      },
     },
   });
 
@@ -4797,6 +4817,9 @@ export async function updateClipStudioEditsAction(
       message: "Clip candidate was not found.",
     };
   }
+
+  const isBasicTimeBasedClip = Array.isArray(clip.qualityWarnings)
+    && clip.qualityWarnings.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE");
 
   const publishingConflict = await resolveActivePublishingCompositionConflict(clip.id);
   if (publishingConflict) {
@@ -4812,7 +4835,7 @@ export async function updateClipStudioEditsAction(
     select: { endTimeSeconds: true },
   });
 
-  const knownDurationSeconds = durationSegment?.endTimeSeconds ?? null;
+  const knownDurationSeconds = durationSegment?.endTimeSeconds ?? clip.sermon.sourceDurationSeconds ?? null;
   const timing = validateClipStudioTiming({
     startTimestamp: input.startTimestamp,
     endTimestamp: input.endTimestamp,
@@ -4828,12 +4851,22 @@ export async function updateClipStudioEditsAction(
     };
   }
 
-  if (!input.title.trim() || !input.mainCaption.trim()) {
+  const basicPlaceholderTitleNeedsEditing = basicClipTitleNeedsEditing({
+    title: input.title,
+    isBasicTimeBasedClip,
+  });
+  if (!input.title.trim() || !input.mainCaption.trim() || basicPlaceholderTitleNeedsEditing) {
     return {
       success: false,
-      message: "Could not save clip changes. Add the required title and post caption.",
+      message: isBasicTimeBasedClip
+        ? "Could not save this basic clip. Listen through it, replace the placeholder title, and add the post caption."
+        : "Could not save clip changes. Add the required title and post caption.",
       fieldErrors: {
-        title: input.title.trim() ? undefined : "Clip title is required.",
+        title: basicPlaceholderTitleNeedsEditing
+          ? "Replace the basic clip placeholder with a title you chose after watching the cut."
+          : input.title.trim()
+            ? undefined
+            : "Clip title is required.",
         mainCaption: input.mainCaption.trim() ? undefined : "Post caption is required.",
       },
       warnings: timing.warnings,
@@ -4929,7 +4962,11 @@ export async function updateClipStudioEditsAction(
       }))?.wordTimings)
     : [];
 
-  if (boundariesChanged && !selectedTranscriptText) {
+  if (shouldBlockStudioBoundarySaveForMissingTranscript({
+    boundariesChanged,
+    selectedTranscriptText,
+    isBasicTimeBasedClip,
+  })) {
     return {
       success: false,
       message: "Could not save clip changes. The selected timing has no transcript text.",
