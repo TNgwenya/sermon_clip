@@ -360,6 +360,31 @@ function resolveSermonDurationFallback(input: {
   return null;
 }
 
+function resolveSermonDurationForClip(input: {
+  transcriptEndTimeSeconds?: number | null;
+  preferSourceDuration?: boolean;
+  sourceDurationSeconds?: number | null;
+  mediaDurationSeconds?: number | null;
+  clipEndTimeSeconds?: number | null;
+}): number | null {
+  const sourceDuration = resolveSermonDurationFallback({
+    sourceDurationSeconds: input.sourceDurationSeconds,
+    mediaDurationSeconds: input.mediaDurationSeconds,
+    clipEndTimeSeconds: input.clipEndTimeSeconds,
+  });
+  if (input.preferSourceDuration && sourceDuration !== null) {
+    return sourceDuration;
+  }
+  if (
+    typeof input.transcriptEndTimeSeconds === "number"
+    && Number.isFinite(input.transcriptEndTimeSeconds)
+    && input.transcriptEndTimeSeconds > 0
+  ) {
+    return roundSeconds(input.transcriptEndTimeSeconds);
+  }
+  return sourceDuration;
+}
+
 function resolveRenderSpeechCleanupSettings(captionData: unknown): RenderSpeechCleanupSettings {
   if (!captionData || typeof captionData !== "object" || Array.isArray(captionData)) {
     return {
@@ -933,6 +958,7 @@ async function getSermonDurationSeconds(
     sourceVideoExists?: boolean;
     clipEndTimeSeconds?: number | null;
     ffmpegPath?: string;
+    preferSourceDuration?: boolean;
   },
 ): Promise<number> {
   const segment = await prisma.transcriptSegment.findFirst({
@@ -943,25 +969,25 @@ async function getSermonDurationSeconds(
     },
   });
 
-  if (!segment) {
-    const mediaDurationSeconds =
-      fallback?.sourceVideoPath && fallback.sourceVideoExists
-        ? await getMediaDurationSeconds(fallback.sourceVideoPath, fallback.ffmpegPath).catch(() => null)
-        : null;
-    const fallbackDuration = resolveSermonDurationFallback({
-      sourceDurationSeconds: fallback?.sourceDurationSeconds,
-      mediaDurationSeconds,
-      clipEndTimeSeconds: fallback?.clipEndTimeSeconds,
-    });
-
-    if (fallbackDuration !== null) {
-      return fallbackDuration;
-    }
-
-    throw new Error("Cannot determine sermon duration from transcript segments.");
+  const shouldProbeMedia = !fallback?.sourceDurationSeconds
+    && (!segment || fallback?.preferSourceDuration);
+  const mediaDurationSeconds = shouldProbeMedia
+    && fallback?.sourceVideoPath
+    && fallback.sourceVideoExists
+    ? await getMediaDurationSeconds(fallback.sourceVideoPath, fallback.ffmpegPath).catch(() => null)
+    : null;
+  const durationSeconds = resolveSermonDurationForClip({
+    transcriptEndTimeSeconds: segment?.endTimeSeconds,
+    preferSourceDuration: fallback?.preferSourceDuration,
+    sourceDurationSeconds: fallback?.sourceDurationSeconds,
+    mediaDurationSeconds,
+    clipEndTimeSeconds: fallback?.clipEndTimeSeconds,
+  });
+  if (durationSeconds !== null) {
+    return durationSeconds;
   }
 
-  return segment.endTimeSeconds;
+  throw new Error("Cannot determine sermon duration from transcript segments or source media.");
 }
 
 async function failClipRender(guard: ClipEditPlanGuard, message: string): Promise<void> {
@@ -1001,12 +1027,16 @@ export async function renderApprovedClip(
 
   const { sourceVideoPath, sourceVideoExists } = await resolveSourceVideoForRender(clip);
   const boundaries = resolveRenderBoundaries(clip);
+  const basicFallbackClip = clip.clipType === "basic"
+    && Array.isArray(clip.qualityWarnings)
+    && clip.qualityWarnings.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE");
   const sermonDurationSeconds = await getSermonDurationSeconds(clip.sermonId, {
     sourceDurationSeconds: clip.sermon.sourceDurationSeconds,
     sourceVideoPath,
     sourceVideoExists,
     clipEndTimeSeconds: boundaries.endTimeSeconds,
     ffmpegPath: options?.ffmpegPath,
+    preferSourceDuration: basicFallbackClip,
   });
 
   const eligibility = validateRenderEligibility({
@@ -1016,9 +1046,7 @@ export async function renderApprovedClip(
     endTimeSeconds: boundaries.endTimeSeconds,
     sermonDurationSeconds,
     transcriptText: clip.transcriptText,
-    allowMissingTranscript: clip.clipType === "basic"
-      && Array.isArray(clip.qualityWarnings)
-      && clip.qualityWarnings.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE"),
+    allowMissingTranscript: basicFallbackClip,
     sourceVideoExists,
     allowRerender: Boolean(options?.allowRerender),
   });
@@ -1436,6 +1464,7 @@ export const __clipRenderTestUtils = {
   parseSilenceDetectEvents,
   remapSmartCropTimelineForRender,
   resolveDetectedEdgeSilence,
+  resolveSermonDurationForClip,
   resolveSermonDurationFallback,
   resolveRenderSpeechCleanupSettings,
   resolveRenderConcurrency,

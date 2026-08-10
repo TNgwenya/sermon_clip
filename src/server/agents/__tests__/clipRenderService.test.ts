@@ -196,6 +196,26 @@ describe("clip render service validation", () => {
     })).toBe(55);
   });
 
+  it("uses source duration for basic fallback clips when a degraded transcript ends early", () => {
+    expect(__clipRenderTestUtils.resolveSermonDurationForClip({
+      transcriptEndTimeSeconds: 11_500,
+      preferSourceDuration: true,
+      sourceDurationSeconds: 15_112.13,
+      mediaDurationSeconds: null,
+      clipEndTimeSeconds: 14_512.46,
+    })).toBe(15_112.13);
+  });
+
+  it("keeps transcript duration for ordinary transcript-led clips", () => {
+    expect(__clipRenderTestUtils.resolveSermonDurationForClip({
+      transcriptEndTimeSeconds: 11_500,
+      preferSourceDuration: false,
+      sourceDurationSeconds: 15_112.13,
+      mediaDurationSeconds: null,
+      clipEndTimeSeconds: 120,
+    })).toBe(11_500);
+  });
+
   it("uses Apple hardware encoder arguments when requested", () => {
     expect(__clipRenderTestUtils.buildVideoEncoderArgs("h264_videotoolbox")).toContain("h264_videotoolbox");
     expect(__clipRenderTestUtils.buildVideoEncoderArgs("h264_videotoolbox")).toContain("-allow_sw");
