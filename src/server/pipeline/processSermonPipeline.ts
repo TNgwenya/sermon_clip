@@ -25,6 +25,7 @@ import { extractSermonAudio } from "@/server/agents/audioExtractionAgent";
 import { generateClipSuggestions } from "@/server/agents/clipIntelligenceAgent";
 import {
   isLowTranscriptQualityError,
+  readSavedTranscriptClippingReadiness,
   transcribeSermonAudio,
 } from "@/server/agents/transcriptionAgent";
 import { generateBasicFallbackClips } from "@/server/agents/basicClipFallbackService";
@@ -423,21 +424,40 @@ export async function processSermonPipeline(
       sermonStatus: afterAudio.status,
     });
     if (transcriptSkipped) {
-      steps.push({
-        label: "Transcribe audio",
-        status: "SKIPPED",
-        message: "Existing transcript and timed segments reused.",
-      });
-      await appendJobLog(parentJob.id, "Transcribe audio skipped because a usable transcript already exists.");
+      const savedReadiness = await readSavedTranscriptClippingReadiness(afterAudio.transcriptJsonPath);
+      if (savedReadiness?.reliableForClipping === false) {
+        basicClipFallbackReason = savedReadiness.fallbackReason
+          ?? "The saved transcript did not pass the clipping reliability checks.";
+        const message = "The saved transcript is degraded and cannot be used for content analysis. Continuing with clearly labelled basic time-based clips.";
+        steps.push({ label: "Transcribe audio", status: "SKIPPED", message });
+        await appendJobLog(parentJob.id, `${message} Reason: ${basicClipFallbackReason}`);
+        await appendPipelineLog(sermon.id, `${message} No sermon intelligence will be generated.`);
+      } else {
+        steps.push({
+          label: "Transcribe audio",
+          status: "SKIPPED",
+          message: "Existing transcript and timed segments reused.",
+        });
+        await appendJobLog(parentJob.id, "Transcribe audio skipped because a usable transcript already exists.");
+      }
     } else {
       try {
         const transcribeResult = await transcribeSermonAudio(sermon.id, { force: options?.force });
-        steps.push({
-          label: "Transcribe audio",
-          status: "SUCCEEDED",
-          message: transcribeResult.reusedExistingTranscript ? "Existing transcript reused." : "Audio transcribed.",
-        });
-        await appendJobLog(parentJob.id, "Transcribe audio completed.");
+        if (!transcribeResult.reliableForClipping) {
+          basicClipFallbackReason = transcribeResult.fallbackReason
+            ?? "The transcript did not pass the clipping reliability checks.";
+          const message = "The transcript was preserved for review but is too unreliable for content analysis. Continuing with clearly labelled basic time-based clips.";
+          steps.push({ label: "Transcribe audio", status: "SUCCEEDED", message });
+          await appendJobLog(parentJob.id, `${message} Reason: ${basicClipFallbackReason}`);
+          await appendPipelineLog(sermon.id, `${message} No sermon intelligence will be generated.`);
+        } else {
+          steps.push({
+            label: "Transcribe audio",
+            status: "SUCCEEDED",
+            message: transcribeResult.reusedExistingTranscript ? "Existing transcript reused." : "Audio transcribed.",
+          });
+          await appendJobLog(parentJob.id, "Transcribe audio completed.");
+        }
       } catch (error) {
         if (!isLowTranscriptQualityError(error)) {
           throw error;

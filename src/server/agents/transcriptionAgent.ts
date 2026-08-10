@@ -156,6 +156,16 @@ type ReusableTranscriptDecision = {
   quality?: TranscriptQualityAssessment;
 };
 
+export type TranscriptClippingReadiness = {
+  reliableForClipping: boolean;
+  fallbackReason: string | null;
+};
+
+export type TranscribeSermonAudioResult = TranscriptClippingReadiness & {
+  transcriptJsonPath: string;
+  reusedExistingTranscript: boolean;
+};
+
 type AudioTranscriptionReadiness =
   | { ready: true; durationSeconds: number }
   | { ready: false; reason: string };
@@ -1771,6 +1781,65 @@ function isDegradedTranscriptUsableForLocalMultilingualClipping(
   return true;
 }
 
+function parseSavedTranscriptClippingReadiness(payload: unknown): TranscriptClippingReadiness | null {
+  if (!payload || typeof payload !== "object" || !("quality" in payload)) {
+    return null;
+  }
+
+  const quality = (payload as { quality?: unknown }).quality;
+  if (!quality || typeof quality !== "object") {
+    return null;
+  }
+
+  const savedQuality = quality as {
+    readyForClipping?: unknown;
+    degradedButUsable?: unknown;
+    reason?: unknown;
+    reliabilityIssue?: unknown;
+  };
+  const reason = typeof savedQuality.reason === "string" && savedQuality.reason.trim()
+    ? savedQuality.reason.trim()
+    : typeof savedQuality.reliabilityIssue === "string" && savedQuality.reliabilityIssue.trim()
+      ? savedQuality.reliabilityIssue.trim()
+      : "The saved transcript did not pass the clipping reliability checks.";
+
+  if (savedQuality.degradedButUsable === true || savedQuality.readyForClipping === false) {
+    return {
+      reliableForClipping: false,
+      fallbackReason: reason,
+    };
+  }
+
+  if (savedQuality.readyForClipping === true && !savedQuality.reliabilityIssue) {
+    return {
+      reliableForClipping: true,
+      fallbackReason: null,
+    };
+  }
+
+  if (typeof savedQuality.reliabilityIssue === "string" && savedQuality.reliabilityIssue.trim()) {
+    return {
+      reliableForClipping: false,
+      fallbackReason: savedQuality.reliabilityIssue.trim(),
+    };
+  }
+
+  return null;
+}
+
+export async function readSavedTranscriptClippingReadiness(
+  transcriptJsonPath: string | null | undefined,
+): Promise<TranscriptClippingReadiness | null> {
+  const normalizedPath = transcriptJsonPath?.trim();
+  if (!normalizedPath) {
+    return null;
+  }
+
+  return readFile(normalizedPath, "utf8")
+    .then((value) => parseSavedTranscriptClippingReadiness(JSON.parse(value) as unknown))
+    .catch(() => null);
+}
+
 function shouldRetryWithSpeechEnhancedAudio(
   quality: TranscriptQualityAssessment,
   context?: TranscriptReliabilityContext,
@@ -2089,7 +2158,7 @@ async function transcribeAudioWithChunking(
 export async function transcribeSermonAudio(
   sermonId: string,
   options?: TranscribeOptions,
-): Promise<{ transcriptJsonPath: string; reusedExistingTranscript: boolean }> {
+): Promise<TranscribeSermonAudioResult> {
   const sermon = await prisma.sermon.findUnique({
     where: { id: sermonId },
     select: {
@@ -2134,7 +2203,12 @@ export async function transcribeSermonAudio(
       await markJobSucceeded(job.id, `Existing transcript and segments reused; skipped API call. ${reusableTranscript.reason}`);
       await appendPipelineLog(sermon.id, `Existing transcript and segments reused; skipped API call. ${reusableTranscript.reason}`);
 
-      return { transcriptJsonPath, reusedExistingTranscript: true };
+      return {
+        transcriptJsonPath,
+        reusedExistingTranscript: true,
+        reliableForClipping: true,
+        fallbackReason: null,
+      };
     }
 
     if (!options?.force) {
@@ -2480,7 +2554,14 @@ export async function transcribeSermonAudio(
       `Transcription completed with ${storedTranscript.segments.length} stored segments; sermon-quality assessment used ${transcriptWindowed.transcript.segments.length} segments, ${transcriptQuality.wordCount} words, ${Math.round(transcriptQuality.durationSeconds)} seconds, ${Math.round(transcriptQuality.coverageRatio * 100)}% coverage.`,
     );
 
-    return { transcriptJsonPath, reusedExistingTranscript: false };
+    return {
+      transcriptJsonPath,
+      reusedExistingTranscript: false,
+      reliableForClipping: !degradedTranscriptUsable,
+      fallbackReason: degradedTranscriptUsable
+        ? transcriptQuality.reason ?? reliabilityIssue ?? "The transcript was preserved for review but did not pass the clipping reliability checks."
+        : null,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown transcription error.";
     const code = error && typeof error === "object" && "code" in error
@@ -2542,6 +2623,7 @@ export const __transcriptionTestUtils = {
   selectBestTranscriptAttempt,
   finalTranscriptReliabilityIssue,
   isDegradedTranscriptUsableForLocalMultilingualClipping,
+  parseSavedTranscriptClippingReadiness,
   isTranscriptReliableEnoughForClipping,
   shouldRetryWithSpeechEnhancedAudio,
   speechEnhancedRetryEnabled,

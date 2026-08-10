@@ -858,6 +858,32 @@ describe("transcription sermon segment filtering", () => {
     expect(__transcriptionTestUtils.isDegradedTranscriptUsableForLocalMultilingualClipping(quality, englishHint)).toBe(false);
   });
 
+  it("routes a saved degraded transcript to basic clips instead of AI clip selection", () => {
+    expect(__transcriptionTestUtils.parseSavedTranscriptClippingReadiness({
+      quality: {
+        readyForClipping: false,
+        degradedButUsable: true,
+        reason: "Transcript has large unexplained gaps.",
+      },
+    })).toEqual({
+      reliableForClipping: false,
+      fallbackReason: "Transcript has large unexplained gaps.",
+    });
+  });
+
+  it("allows AI clip selection only for a saved transcript with reliable clipping metadata", () => {
+    expect(__transcriptionTestUtils.parseSavedTranscriptClippingReadiness({
+      quality: {
+        readyForClipping: true,
+        degradedButUsable: false,
+        reliabilityIssue: null,
+      },
+    })).toEqual({
+      reliableForClipping: true,
+      fallbackReason: null,
+    });
+  });
+
   it("retries with speech-enhanced audio when transcript timestamps are too coarse for polished captions", () => {
     const coarseTimingSegments = strongSermonLines.map((text, index) => ({
       startTimeSeconds: index * 32,
