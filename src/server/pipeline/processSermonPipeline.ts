@@ -83,6 +83,30 @@ class PipelinePartialCompletionError extends Error {
   }
 }
 
+function basicClipFallbackReasonForTranscriptionError(error: unknown): string | null {
+  if (isLowTranscriptQualityError(error)) {
+    return typeof error.reason === "string" && error.reason.trim()
+      ? error.reason.trim()
+      : "The transcript did not pass the clipping reliability checks.";
+  }
+
+  const code = error !== null && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code ?? "").trim().toLowerCase()
+    : "";
+  const message = error instanceof Error
+    ? error.message
+    : error !== null && typeof error === "object" && "message" in error
+      ? String((error as { message?: unknown }).message ?? "")
+      : "";
+  const creditUnavailable = code === "credit_balance_exhausted"
+    || code === "insufficient_quota"
+    || /\b(no credits? remaining|credit balance exhausted|insufficient[_ ]quota)\b/i.test(message);
+
+  return creditUnavailable
+    ? "AI transcription could not be completed because the transcription service has no available credits."
+    : null;
+}
+
 const SERMON_STATUS_ORDER: SermonStatus[] = [
   "CREATED",
   "DOWNLOADING",
@@ -459,14 +483,17 @@ export async function processSermonPipeline(
           await appendJobLog(parentJob.id, "Transcribe audio completed.");
         }
       } catch (error) {
-        if (!isLowTranscriptQualityError(error)) {
+        const fallbackReason = basicClipFallbackReasonForTranscriptionError(error);
+        if (!fallbackReason) {
           throw error;
         }
 
-        basicClipFallbackReason = error.reason;
-        const message = "The transcript was too unreliable for content analysis. Continuing with clearly labelled basic time-based clips.";
+        basicClipFallbackReason = fallbackReason;
+        const message = isLowTranscriptQualityError(error)
+          ? "The transcript was too unreliable for content analysis. Continuing with clearly labelled basic time-based clips."
+          : "AI transcription could not be completed. Continuing with clearly labelled basic time-based clips so the sermon can still be reviewed.";
         steps.push({ label: "Transcribe audio", status: "SKIPPED", message });
-        await appendJobLog(parentJob.id, `${message} Reason: ${error.reason}`);
+        await appendJobLog(parentJob.id, `${message} Reason: ${fallbackReason}`);
         await appendPipelineLog(sermon.id, `${message} No sermon intelligence will be generated.`);
       }
     }
@@ -677,6 +704,7 @@ export const __processSermonPipelineTestUtils = {
   advancedSermonMissingMediaMessage,
   shouldReuseDurableClipCandidates,
   incompleteLocalUploadMessage,
+  basicClipFallbackReasonForTranscriptionError,
   hasCompleteWorshipSermonRange,
   PipelinePartialCompletionError,
   buildGeneratedClipReviewAssetPlan: (

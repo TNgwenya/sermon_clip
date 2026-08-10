@@ -111,7 +111,7 @@ export function buildTranscriptReviewGuidance(input: {
   ) {
     return {
       title: "Edit and check this basic clip in Studio",
-      summary: "AI could not reliably understand this recording. This cut was placed by time only, so listen through it and edit the title, start, end, captions, and context before approval.",
+      summary: "AI could not complete reliable transcript analysis for this recording. This cut was placed by time only, so listen through it and edit the title, start, end, captions, and context before approval.",
       actionLabel: "I edited and checked this clip",
       reasonLabels,
     };

@@ -28,6 +28,21 @@ describe("process sermon pipeline review asset preparation", () => {
     expect(__processSermonPipelineTestUtils.incompleteLocalUploadMessage()).toContain("Re-upload the video");
   });
 
+  it("routes exhausted transcription credits to clearly labelled basic clips", () => {
+    const fallbackReason = __processSermonPipelineTestUtils.basicClipFallbackReasonForTranscriptionError;
+
+    expect(fallbackReason(new Error("429 You have no credits remaining. Add credits to continue using the API.")))
+      .toContain("no available credits");
+    expect(fallbackReason({ code: "credit_balance_exhausted", message: "Provider quota exhausted." }))
+      .toContain("no available credits");
+  });
+
+  it("does not hide unrelated transcription failures behind basic clips", () => {
+    expect(__processSermonPipelineTestUtils.basicClipFallbackReasonForTranscriptionError(
+      new Error("The source audio file is corrupt."),
+    )).toBeNull();
+  });
+
   it("reports premium output failures as a partial pipeline failure", () => {
     const PartialFailure = __processSermonPipelineTestUtils.PipelinePartialCompletionError;
     const failure = new PartialFailure([

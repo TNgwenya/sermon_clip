@@ -521,7 +521,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
 
       {basicClipCount > 0 ? (
         <section className="warning-banner stack-sm" role="status" aria-labelledby="basic-clips-warning-title">
-          <strong id="basic-clips-warning-title">Basic clips only — AI could not reliably understand this recording</strong>
+          <strong id="basic-clips-warning-title">Basic clips only — AI could not complete reliable transcript analysis</strong>
           <p>
             These {basicClipCount} cuts were placed by time only. They were not ranked by message, given AI titles or captions,
             or checked for complete sentences and context. Sermon Clip cannot guarantee their words, meaning, context, or boundaries.
