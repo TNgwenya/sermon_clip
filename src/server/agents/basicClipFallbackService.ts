@@ -152,6 +152,9 @@ function toClipCreateInput(
     hook: "",
     caption: "",
     hashtags: [],
+    captionData: {
+      applyCaptionsToClip: false,
+    },
     score: 0,
     reasonSelected: BASIC_CLIP_REASON,
     clipType: "basic",

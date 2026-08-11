@@ -259,6 +259,37 @@ describe("production media action queue routing", () => {
     expect(mocks.queue).not.toHaveBeenCalled();
   });
 
+  it("keeps publish metadata required when preparing a basic clip", async () => {
+    mocks.clipFindUnique.mockResolvedValueOnce({
+      id: "clip-1",
+      sermonId: "sermon-1",
+      transcriptSafetyStatus: "REVIEWED",
+      qualityWarnings: ["BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE"],
+    });
+
+    const result = await prepareClipStudioForPostingAction({
+      clipId: "clip-1",
+      editPreview: {
+        title: "Basic clip 01",
+        mainCaption: "",
+      },
+      exportSettings: {
+        primaryFormat: "VERTICAL_9_16",
+        selectedFormats: ["VERTICAL_9_16"],
+      },
+    } as never);
+
+    expect(result).toMatchObject({
+      success: false,
+      fieldErrors: {
+        title: "Replace the basic clip placeholder with a title you chose after watching the cut.",
+        mainCaption: "Post caption is required.",
+      },
+    });
+    expect(mocks.clipUpdate).not.toHaveBeenCalled();
+    expect(mocks.queue).not.toHaveBeenCalled();
+  });
+
   it("queues an approved clip render instead of importing the FFmpeg service", async () => {
     mocks.clipFindUnique.mockResolvedValueOnce(clipSnapshot());
 

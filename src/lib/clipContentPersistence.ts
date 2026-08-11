@@ -228,7 +228,48 @@ export function basicClipTitleNeedsEditing(input: {
   title: string;
   isBasicTimeBasedClip: boolean;
 }): boolean {
-  return input.isBasicTimeBasedClip && /^Basic clip \d+$/i.test(input.title.trim());
+  return input.isBasicTimeBasedClip && /^(?:Basic|Worship) clip \d+$/i.test(input.title.trim());
+}
+
+export type ClipStudioPublishMetadataValidation = {
+  isValid: boolean;
+  fieldErrors: {
+    title?: string;
+    mainCaption?: string;
+  };
+};
+
+/**
+ * Publish metadata may be incomplete while a Studio draft is in progress, but
+ * it must be complete before review approval or final-media preparation.
+ */
+export function validateClipStudioPublishMetadata(input: {
+  title: string;
+  mainCaption: string;
+  isBasicTimeBasedClip: boolean;
+}): ClipStudioPublishMetadataValidation {
+  const title = input.title.trim();
+  const mainCaption = input.mainCaption.trim();
+  const placeholderTitle = basicClipTitleNeedsEditing({
+    title,
+    isBasicTimeBasedClip: input.isBasicTimeBasedClip,
+  });
+  const fieldErrors: ClipStudioPublishMetadataValidation["fieldErrors"] = {};
+
+  if (!title) {
+    fieldErrors.title = "Clip title is required.";
+  } else if (placeholderTitle) {
+    fieldErrors.title = "Replace the basic clip placeholder with a title you chose after watching the cut.";
+  }
+
+  if (!mainCaption) {
+    fieldErrors.mainCaption = "Post caption is required.";
+  }
+
+  return {
+    isValid: Object.keys(fieldErrors).length === 0,
+    fieldErrors,
+  };
 }
 
 /**

@@ -313,6 +313,9 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     notFound();
   }
 
+  const isBasicTimeBasedClip = Array.isArray(clip.qualityWarnings)
+    && clip.qualityWarnings.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE");
+
   const [
     transcriptSegments,
     sermonDurationSegment,
@@ -376,7 +379,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   } satisfies ReturnType<typeof extractCaptionAppearanceSettings>;
   const captionRevealMode = extractCaptionRevealMode(clip.captionData);
   const captionSyncOffsetSeconds = extractCaptionSyncOffsetSeconds(clip.captionData);
-  const applyCaptionsToClip = extractApplyCaptionsToClip(clip.captionData);
+  const applyCaptionsToClip = extractApplyCaptionsToClip(clip.captionData, !isBasicTimeBasedClip);
   const hookOverlay = extractHookOverlayConfig(clip.captionData, clip.hook || clip.suggestedHook);
   const brollLayer = extractBrollLayerConfig(
     clip.captionData,
@@ -628,8 +631,6 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   const latestExportRecords = exportHistoryWithFileState;
   const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
   const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
-  const isBasicTimeBasedClip = Array.isArray(clip.qualityWarnings)
-    && clip.qualityWarnings.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE");
   const previewCanvasState = hasPreview || sourceVideoPreviewAvailable
     ? "Media connected"
     : upstreamPreparing

@@ -403,9 +403,9 @@ export function extractCaptionSyncOffsetSeconds(captionData: unknown): number {
   return normalizeCaptionSyncOffsetSeconds(data?.["captionSyncOffsetSeconds"]);
 }
 
-export function extractApplyCaptionsToClip(captionData: unknown): boolean {
+export function extractApplyCaptionsToClip(captionData: unknown, defaultValue = true): boolean {
   const data = asObject(captionData);
-  return typeof data?.["applyCaptionsToClip"] === "boolean" ? data["applyCaptionsToClip"] : true;
+  return typeof data?.["applyCaptionsToClip"] === "boolean" ? data["applyCaptionsToClip"] : defaultValue;
 }
 
 export function normalizeCaptionAppearanceSettings(value: unknown): CaptionAppearanceSettings {

@@ -374,6 +374,11 @@ describe("Studio on-video caption settings", () => {
     expect(extractApplyCaptionsToClip({ applyCaptionsToClip: false })).toBe(false);
   });
 
+  it("supports a captions-off default for transcript-less basic clips", () => {
+    expect(extractApplyCaptionsToClip(null, false)).toBe(false);
+    expect(extractApplyCaptionsToClip({ applyCaptionsToClip: true }, false)).toBe(true);
+  });
+
   it("extracts caption appearance settings with safe defaults", () => {
     expect(extractCaptionAppearanceSettings(null)).toEqual({
       fontScale: "regular",

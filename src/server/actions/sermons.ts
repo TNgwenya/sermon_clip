@@ -181,7 +181,6 @@ import {
   freezeEffectiveCaptionStyleSnapshot,
 } from "@/lib/clipStudioPrepare";
 import {
-  basicClipTitleNeedsEditing,
   canChooseClipForProduction,
   hasSavedClipStudioDraft,
   resolveClipStudioChangeScope,
@@ -191,6 +190,7 @@ import {
   resolveClipStudioContentValues,
   shouldBlockStudioBoundarySaveForMissingTranscript,
   shouldRecordExplicitTranscriptReview,
+  validateClipStudioPublishMetadata,
 } from "@/lib/clipContentPersistence";
 import {
   normalizeSpeechCleanupEdits,
@@ -3416,6 +3416,8 @@ export async function markClipTranscriptReviewedAction(clipId: string): Promise<
       postReadyBlockers: true,
       qualityWarnings: true,
       captionData: true,
+      title: true,
+      caption: true,
     },
   });
 
@@ -3429,7 +3431,12 @@ export async function markClipTranscriptReviewedAction(clipId: string): Promise<
   const isBasicTimeBasedClip = Array.isArray(clip.qualityWarnings)
     && clip.qualityWarnings.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE");
   const studioDraftWasSaved = hasSavedClipStudioDraft(clip.captionData);
-  if (isBasicTimeBasedClip && !studioDraftWasSaved) {
+  const publishMetadata = validateClipStudioPublishMetadata({
+    title: clip.title,
+    mainCaption: clip.caption,
+    isBasicTimeBasedClip,
+  });
+  if (isBasicTimeBasedClip && (!studioDraftWasSaved || !publishMetadata.isValid)) {
     return {
       success: false,
       message: "Open this basic clip in Clip Studio, listen through it, complete the title and post caption, adjust the timing, and save the Studio draft before confirming it.",
@@ -4772,8 +4779,9 @@ function normalizeClipStudioCaptionPosition(value: unknown): CaptionPosition {
   return value === "top" || value === "middle" || value === "lower" ? value : "lower";
 }
 
-export async function updateClipStudioEditsAction(
+async function persistClipStudioEdits(
   input: UpdateClipStudioEditsInput,
+  options: { requirePublishMetadata: boolean },
 ): Promise<UpdateClipStudioEditsState> {
   const clipId = input.clipId.trim();
   if (!clipId) {
@@ -4851,24 +4859,18 @@ export async function updateClipStudioEditsAction(
     };
   }
 
-  const basicPlaceholderTitleNeedsEditing = basicClipTitleNeedsEditing({
+  const publishMetadata = validateClipStudioPublishMetadata({
     title: input.title,
+    mainCaption: input.mainCaption,
     isBasicTimeBasedClip,
   });
-  if (!input.title.trim() || !input.mainCaption.trim() || basicPlaceholderTitleNeedsEditing) {
+  if (options.requirePublishMetadata && !publishMetadata.isValid) {
     return {
       success: false,
       message: isBasicTimeBasedClip
         ? "Could not save this basic clip. Listen through it, replace the placeholder title, and add the post caption."
         : "Could not save clip changes. Add the required title and post caption.",
-      fieldErrors: {
-        title: basicPlaceholderTitleNeedsEditing
-          ? "Replace the basic clip placeholder with a title you chose after watching the cut."
-          : input.title.trim()
-            ? undefined
-            : "Clip title is required.",
-        mainCaption: input.mainCaption.trim() ? undefined : "Post caption is required.",
-      },
+      fieldErrors: publishMetadata.fieldErrors,
       warnings: timing.warnings,
     };
   }
@@ -5378,6 +5380,12 @@ export async function updateClipStudioEditsAction(
     message: "Clip changes saved.",
     warnings: combinedWarnings,
   };
+}
+
+export async function updateClipStudioEditsAction(
+  input: UpdateClipStudioEditsInput,
+): Promise<UpdateClipStudioEditsState> {
+  return persistClipStudioEdits(input, { requirePublishMetadata: true });
 }
 
 export async function updateClipExportSettingsAction(
@@ -6504,7 +6512,7 @@ export async function saveClipStudioDraftAction(
   const editStep = await runClipStudioDraftSaveStep({
     clipId,
     step: "clip edits",
-    operation: () => updateClipStudioEditsAction({
+    operation: () => persistClipStudioEdits({
       clipId,
       startTimestamp: formatSecondsForTimestampInput(startSeconds),
       endTimestamp: formatSecondsForTimestampInput(endSeconds),
@@ -6528,7 +6536,7 @@ export async function saveClipStudioDraftAction(
       speechCleanup: input.editPreview.speechCleanup,
       speechCleanupEdits: input.editPreview.speechCleanupEdits,
       confirmTranscriptReviewed: false,
-    }),
+    }, { requirePublishMetadata: false }),
   });
   if (!editStep.completed) return editStep.state;
   const editResult = editStep.value;
@@ -6625,7 +6633,12 @@ export async function prepareClipStudioForPostingAction(
 
   const clip = await prisma.clipCandidate.findUnique({
     where: { id: clipId },
-    select: { id: true, sermonId: true, transcriptSafetyStatus: true },
+    select: {
+      id: true,
+      sermonId: true,
+      transcriptSafetyStatus: true,
+      qualityWarnings: true,
+    },
   });
 
   if (!clip) {
@@ -6656,6 +6669,24 @@ export async function prepareClipStudioForPostingAction(
       success: false,
       message: "Multi-format Studio exports are not queued yet. Choose Vertical 9:16 before preparing this clip.",
       results: [],
+    };
+  }
+
+  const isBasicTimeBasedClip = Array.isArray(clip.qualityWarnings)
+    && clip.qualityWarnings.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE");
+  const publishMetadata = validateClipStudioPublishMetadata({
+    title: input.editPreview.title,
+    mainCaption: input.editPreview.mainCaption,
+    isBasicTimeBasedClip,
+  });
+  if (!publishMetadata.isValid) {
+    return {
+      success: false,
+      message: isBasicTimeBasedClip
+        ? "Listen through this basic clip, replace the placeholder title, and add the post caption before preparing the final video."
+        : "Add the required title and post caption before preparing the final video.",
+      results: [],
+      fieldErrors: publishMetadata.fieldErrors,
     };
   }
 

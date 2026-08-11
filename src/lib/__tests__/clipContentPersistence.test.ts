@@ -11,6 +11,7 @@ import {
   resolveClipStudioContentValues,
   shouldBlockStudioBoundarySaveForMissingTranscript,
   shouldRecordExplicitTranscriptReview,
+  validateClipStudioPublishMetadata,
 } from "@/lib/clipContentPersistence";
 
 describe("clip content persistence", () => {
@@ -35,8 +36,32 @@ describe("clip content persistence", () => {
 
   it("requires a human title for basic clips while leaving normal titles alone", () => {
     expect(basicClipTitleNeedsEditing({ title: "Basic clip 01", isBasicTimeBasedClip: true })).toBe(true);
+    expect(basicClipTitleNeedsEditing({ title: "Worship clip 08", isBasicTimeBasedClip: true })).toBe(true);
     expect(basicClipTitleNeedsEditing({ title: "Faith When You Cannot See", isBasicTimeBasedClip: true })).toBe(false);
     expect(basicClipTitleNeedsEditing({ title: "Basic clip 01", isBasicTimeBasedClip: false })).toBe(false);
+  });
+
+  it("identifies incomplete publish copy without preventing an in-progress draft", () => {
+    expect(validateClipStudioPublishMetadata({
+      title: "Basic clip 01",
+      mainCaption: "",
+      isBasicTimeBasedClip: true,
+    })).toEqual({
+      isValid: false,
+      fieldErrors: {
+        title: "Replace the basic clip placeholder with a title you chose after watching the cut.",
+        mainCaption: "Post caption is required.",
+      },
+    });
+
+    expect(validateClipStudioPublishMetadata({
+      title: "What Do You Do When Fear Gets Loud?",
+      mainCaption: "A practical word for choosing faith when fear starts shaping your next step.",
+      isBasicTimeBasedClip: true,
+    })).toEqual({
+      isValid: true,
+      fieldErrors: {},
+    });
   });
 
   it("keeps social post copy independent from on-video transcript captions", () => {
