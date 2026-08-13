@@ -146,6 +146,26 @@ export type ClipStudioExportRecord = {
   brandingSnapshot: Prisma.JsonObject | null;
 };
 
+export type ClipStudioExportArtifactSummary = {
+  id: string;
+  format: ClipExportFormat | null;
+  status: "READY" | "FAILED" | "DELETED";
+  freshness: "UP_TO_DATE" | "OUTDATED" | "NEEDS_REGENERATION" | "FAILED";
+  filePath: string | null;
+  sizeBytes: number | null;
+  errorMessage: string | null;
+  generatedAt: Date | string | null;
+  createdAt: Date | string;
+};
+
+type CanonicalClipStudioExportSummary = {
+  format: ClipExportFormat | null;
+  status: "NOT_EXPORTED" | "QUEUED" | "EXPORTING" | "COMPLETED" | "FAILED" | null;
+  outputPath: string | null;
+  errorMessage: string | null;
+  exportedAt: Date | string | null;
+};
+
 export function isValidPlatformPreset(value: unknown): value is PlatformPreset {
   return typeof value === "string" && Object.keys(PLATFORM_TO_FORMAT).includes(value);
 }
@@ -292,6 +312,148 @@ export function resolveExportHistory(captionData: unknown): ClipStudioExportReco
   }
 
   return markLatestExports(records).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
+function exportRecordFilename(outputPath: string | null): string | null {
+  if (!outputPath?.trim()) {
+    return null;
+  }
+
+  return outputPath.split(/[\\/]/).filter(Boolean).at(-1) ?? null;
+}
+
+function exportRecordTimestamp(value: Date | string | null | undefined): string {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === "string" && !Number.isNaN(Date.parse(value))) {
+    return new Date(value).toISOString();
+  }
+  return new Date(0).toISOString();
+}
+
+/**
+ * Studio export history predates durable ClipArtifact records. Merge both so
+ * a completed worker export remains visible even when legacy caption JSON has
+ * no exportHistory entry (for example after an EC2/local-worker hand-off).
+ */
+export function resolveLatestClipStudioExportRecords(input: {
+  clipId: string;
+  sermonId: string;
+  selectedFormats: ClipExportFormat[];
+  platformPreset: PlatformPreset;
+  framingMode: ClipExportLayoutStrategy;
+  history: ClipStudioExportRecord[];
+  artifacts: ClipStudioExportArtifactSummary[];
+  canonicalExport: CanonicalClipStudioExportSummary;
+}): ClipStudioExportRecord[] {
+  const selectedFormats = Array.from(new Set(input.selectedFormats));
+  const candidates = new Map<ClipExportFormat, ClipStudioExportRecord>();
+  const consider = (record: ClipStudioExportRecord) => {
+    if (!selectedFormats.includes(record.format)) {
+      return;
+    }
+    const current = candidates.get(record.format);
+    if (!current || Date.parse(record.createdAt) > Date.parse(current.createdAt)) {
+      candidates.set(record.format, record);
+    }
+  };
+
+  input.history.filter((record) => record.isLatest).forEach(consider);
+
+  for (const artifact of input.artifacts) {
+    if (
+      !artifact.format ||
+      artifact.status === "DELETED" ||
+      (artifact.status === "READY" && artifact.freshness !== "UP_TO_DATE")
+    ) {
+      continue;
+    }
+    const createdAt = exportRecordTimestamp(artifact.generatedAt ?? artifact.createdAt);
+    consider({
+      id: `artifact-${artifact.id}`,
+      clipId: input.clipId,
+      sermonId: input.sermonId,
+      format: artifact.format,
+      platformPreset: input.platformPreset,
+      framingMode: input.framingMode,
+      status: artifact.status === "READY" ? "COMPLETED" : "FAILED",
+      outputPath: artifact.status === "READY" ? artifact.filePath : null,
+      outputFilename: exportRecordFilename(artifact.filePath),
+      fileSizeBytes: artifact.sizeBytes,
+      errorMessage: artifact.errorMessage,
+      renderVersion: "artifact",
+      captionText: null,
+      captionBurnStatus: null,
+      createdAt,
+      startedAt: null,
+      completedAt: createdAt,
+      isLatest: true,
+      brandingSnapshot: null,
+    });
+  }
+
+  const canonical = input.canonicalExport;
+  if (canonical.format) {
+    const status = canonical.status === "COMPLETED"
+      ? "COMPLETED"
+      : canonical.status === "FAILED"
+        ? "FAILED"
+        : canonical.status === "QUEUED"
+          ? "WAITING"
+          : canonical.status === "EXPORTING"
+            ? "RENDERING"
+            : null;
+    if (status) {
+      const createdAt = exportRecordTimestamp(canonical.exportedAt);
+      consider({
+        id: `canonical-${input.clipId}-${canonical.format}`,
+        clipId: input.clipId,
+        sermonId: input.sermonId,
+        format: canonical.format,
+        platformPreset: input.platformPreset,
+        framingMode: input.framingMode,
+        status,
+        outputPath: canonical.outputPath,
+        outputFilename: exportRecordFilename(canonical.outputPath),
+        fileSizeBytes: null,
+        errorMessage: canonical.errorMessage,
+        renderVersion: "canonical",
+        captionText: null,
+        captionBurnStatus: null,
+        createdAt,
+        startedAt: null,
+        completedAt: status === "COMPLETED" || status === "FAILED" ? createdAt : null,
+        isLatest: true,
+        brandingSnapshot: null,
+      });
+    }
+  }
+
+  return selectedFormats.flatMap((format) => {
+    const record = candidates.get(format);
+    return record ? [{ ...record, isLatest: true }] : [];
+  });
+}
+
+export function toPastorFriendlyExportError(errorMessage: string | null | undefined): string {
+  const normalized = errorMessage?.toLocaleLowerCase() ?? "";
+
+  if (normalized.includes("height not divisible") || normalized.includes("width not divisible")) {
+    return "This format did not fit the selected frame size. Review Format & framing, then rebuild the video.";
+  }
+  if (
+    normalized.includes("no such file") ||
+    normalized.includes("enoent") ||
+    (normalized.includes("source video") && normalized.includes("not"))
+  ) {
+    return "The source video is unavailable to the media worker. Reconnect the original video, then rebuild.";
+  }
+  if (normalized.includes("stale") || normalized.includes("changed while")) {
+    return "The Studio draft changed while this format was preparing. Save the latest draft and rebuild.";
+  }
+
+  return "This format could not be prepared. Rebuild it; if it fails again, check the source video and framing.";
 }
 
 export function markLatestExports(records: ClipStudioExportRecord[]): ClipStudioExportRecord[] {

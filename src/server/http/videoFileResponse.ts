@@ -2,7 +2,6 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
 
 import { NextResponse } from "next/server";
 
@@ -72,7 +71,62 @@ function requestAllowsRange(request: Request, entityTag: string, modifiedTime: D
 
 function streamFile(filePath: string, start?: number, end?: number): BodyInit {
   const fileStream = createReadStream(filePath, { start, end });
-  return Readable.toWeb(fileStream) as unknown as BodyInit;
+  let settled = false;
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      fileStream.on("data", (chunk: Buffer | string) => {
+        if (settled) {
+          return;
+        }
+
+        try {
+          const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+          controller.enqueue(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+          if ((controller.desiredSize ?? 1) <= 0) {
+            fileStream.pause();
+          }
+        } catch {
+          // Browsers routinely cancel obsolete range requests while seeking.
+          // Treat a closed response body as cancellation instead of letting a
+          // late Node stream chunk crash the route with ERR_INVALID_STATE.
+          settled = true;
+          fileStream.destroy();
+        }
+      });
+      fileStream.once("end", () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        try {
+          controller.close();
+        } catch {
+          // The client may have cancelled between the end event and close.
+        }
+      });
+      fileStream.once("error", (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        try {
+          controller.error(error);
+        } catch {
+          // A cancelled response no longer has a controller to notify.
+        }
+      });
+    },
+    pull() {
+      if (!settled) {
+        fileStream.resume();
+      }
+    },
+    cancel() {
+      settled = true;
+      fileStream.destroy();
+    },
+  }) as BodyInit;
 }
 
 export function resolveByteRange(rangeHeader: string, fileSize: number): { start: number; end: number } | null {

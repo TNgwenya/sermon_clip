@@ -572,9 +572,9 @@ function buildVideoFilter(
     }
 
     return [
-      `[0:v]scale=${spec.width}:${spec.height}:force_original_aspect_ratio=increase,boxblur=20:1[bg]`,
-      `[0:v]scale=${spec.width}:${spec.height}:force_original_aspect_ratio=decrease[fg]`,
-      `[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]`,
+      `[0:v]scale=${spec.width}:${spec.height}:force_original_aspect_ratio=increase,crop=${spec.width}:${spec.height},setsar=1,boxblur=20:1[bg]`,
+      `[0:v]scale=${spec.width}:${spec.height}:force_original_aspect_ratio=decrease,setsar=1[fg]`,
+      `[bg][fg]overlay=(W-w)/2:(H-h)/2,scale=${spec.width}:${spec.height},setsar=1,format=yuv420p[v]`,
     ].join(";");
   }
 

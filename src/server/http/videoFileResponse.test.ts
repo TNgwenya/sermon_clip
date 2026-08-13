@@ -106,6 +106,38 @@ describe("resolveByteRange", () => {
 });
 
 describe("videoFileResponse byte serving", () => {
+  it("stops a cancelled browser range stream without affecting later seeks", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "video-response-"));
+    const videoPath = join(tempDir, "preview.mp4");
+
+    try {
+      await writeFile(videoPath, Buffer.alloc(512 * 1024, 7));
+      const cancelledResponse = await videoFileResponse({
+        request: new Request("http://localhost/api/clips/clip-1/preview", {
+          headers: { Range: "bytes=0-262143" },
+        }),
+        filePath: videoPath,
+        disposition: "inline",
+      });
+      const reader = cancelledResponse.body?.getReader();
+      expect(reader).toBeDefined();
+      await reader?.read();
+      await expect(reader?.cancel("new seek")).resolves.toBeUndefined();
+
+      const nextSeek = await videoFileResponse({
+        request: new Request("http://localhost/api/clips/clip-1/preview", {
+          headers: { Range: "bytes=262144-262159" },
+        }),
+        filePath: videoPath,
+        disposition: "inline",
+      });
+      expect(nextSeek.status).toBe(206);
+      expect((await nextSeek.arrayBuffer()).byteLength).toBe(16);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("serves the requested bytes with complete range headers", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "video-response-"));
     const videoPath = join(tempDir, "preview.mp4");

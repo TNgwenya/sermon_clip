@@ -136,6 +136,15 @@ describe("Clip Studio transcript and timing controls", () => {
     }).map((segment) => segment.id)).toEqual(["outside"]);
   });
 
+  it("disables transcript-only timing actions when no transcript exists", () => {
+    const markup = renderToStaticMarkup(
+      <ClipStudioTranscriptPanel {...panelProps} transcriptSegments={[]} />,
+    );
+
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Snap to sentence<\/button>/);
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Reset AI<\/button>/);
+  });
+
   it("resolves bounded transcript keyboard navigation", () => {
     expect(__clipStudioTranscriptPanelTestUtils.resolveAdjacentTranscriptSegmentId({
       segments: panelProps.transcriptSegments,

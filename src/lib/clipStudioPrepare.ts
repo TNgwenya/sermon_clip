@@ -19,6 +19,7 @@ export type ClipStudioPrepareAssetSnapshot = {
   renderedFileReady: boolean;
   captionsEnabled: boolean;
   captionStatus: "NOT_GENERATED" | "GENERATING" | "GENERATED" | "FAILED";
+  captionFreshness?: ClipStudioPrepareFreshness | null;
   captionBurnStatus: "NOT_BURNED" | "BURNING" | "COMPLETED" | "FAILED";
   captionBurnFreshness?: ClipStudioPrepareFreshness | null;
   captionedFileReady: boolean;
@@ -28,6 +29,7 @@ export type ClipStudioPrepareAssetSnapshot = {
 
 export type ClipStudioPrepareAssetPlan = {
   prepareVideo: boolean;
+  writeCaptions: boolean;
   burnCaptions: boolean;
   skipCaptionBurn: boolean;
   exportPreparedVideo: boolean;
@@ -121,7 +123,7 @@ export function buildClipStudioQueuedAssets(
 ): ClipStudioQueuedAsset[] {
   const assets: ClipStudioQueuedAsset[] = [];
 
-  if (snapshot.captionsEnabled && snapshot.captionStatus !== "GENERATED") {
+  if (plan.writeCaptions) {
     assets.push("caption");
   }
   if (plan.prepareVideo) {
@@ -323,9 +325,17 @@ export function buildClipStudioPrepareAssetPlan(
   snapshot: ClipStudioPrepareAssetSnapshot,
   options: { forceRebuild?: boolean } = {},
 ): ClipStudioPrepareAssetPlan {
+  const writeCaptions =
+    snapshot.captionsEnabled &&
+    (
+      snapshot.captionStatus !== "GENERATED" ||
+      !isUpToDate(snapshot.captionFreshness)
+    );
+
   if (options.forceRebuild) {
     return {
       prepareVideo: true,
+      writeCaptions,
       burnCaptions: snapshot.captionsEnabled,
       skipCaptionBurn: !snapshot.captionsEnabled && snapshot.captionBurnStatus !== "NOT_BURNED",
       exportPreparedVideo: true,
@@ -340,7 +350,7 @@ export function buildClipStudioPrepareAssetPlan(
     snapshot.captionsEnabled &&
     (
       prepareVideo ||
-      snapshot.captionStatus !== "GENERATED" ||
+      writeCaptions ||
       snapshot.captionBurnStatus !== "COMPLETED" ||
       !isUpToDate(snapshot.captionBurnFreshness) ||
       !snapshot.captionedFileReady
@@ -355,6 +365,7 @@ export function buildClipStudioPrepareAssetPlan(
 
   return {
     prepareVideo,
+    writeCaptions,
     burnCaptions,
     skipCaptionBurn,
     exportPreparedVideo,

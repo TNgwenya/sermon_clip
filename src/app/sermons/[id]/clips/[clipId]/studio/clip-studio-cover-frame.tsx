@@ -147,7 +147,7 @@ export function ClipStudioCoverFrame({
             {selectionStale ? "Review after clip changes" : `Saved at ${formatMoment(savedSelection.timeSeconds)}`}
           </StatusBadge>
         ) : (
-          <StatusBadge tone="neutral">Not chosen yet</StatusBadge>
+          <StatusBadge tone="neutral">Opening selected by default</StatusBadge>
         )}
       </div>
 

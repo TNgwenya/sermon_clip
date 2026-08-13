@@ -12,6 +12,7 @@ import {
 } from "@/server/actions/sermons";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
 import { shouldForceClipStudioPrepare } from "@/lib/clipStudioPrepare";
+import { toPastorFriendlyExportError } from "@/lib/clipExportSettings";
 
 type ClipStudioPrepareButtonProps = {
   clipId: string;
@@ -266,7 +267,7 @@ export function ClipStudioPrepareButton({
         </span>
       </div>
       <details className="clip-studio-final-summary">
-        <summary>
+        <summary aria-label="Final video checklist">
           <span>
             <strong>Final video checklist</strong>
           </span>
@@ -365,7 +366,7 @@ export function ClipStudioPrepareButton({
             </ul>
           ) : null}
           {result.results.filter((item) => item.status === "FAILED").map((item) => (
-            <p key={item.recordId}>{item.format.replaceAll("_", " ")}: {item.errorMessage ?? "Preparation failed."}</p>
+            <p key={item.recordId}>{item.format.replaceAll("_", " ")}: {toPastorFriendlyExportError(item.errorMessage)}</p>
           ))}
         </div>
       ) : null}

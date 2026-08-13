@@ -6042,6 +6042,7 @@ export async function renderClipStudioExportsAction(input: {
       renderedFilePath: true,
       caption: true,
       captionStatus: true,
+      captionFreshness: true,
       captionBurnStatus: true,
       captionBurnFreshness: true,
       captionedVideoPath: true,
@@ -6130,6 +6131,7 @@ export async function renderClipStudioExportsAction(input: {
       renderedFileReady,
       captionsEnabled: captionPreferences.applyCaptionsToClip,
       captionStatus: clip.captionStatus,
+      captionFreshness: clip.captionFreshness,
       captionBurnStatus: clip.captionBurnStatus,
       captionBurnFreshness: clip.captionBurnFreshness,
       captionedFileReady,
@@ -6202,13 +6204,16 @@ export async function renderClipStudioExportsAction(input: {
     await updateClipStudioExportHistory(clip.id, workingHistory);
   }
 
-  if (preparePlan.prepareVideo || preparePlan.burnCaptions || preparePlan.skipCaptionBurn || queuedRecords.length > 0) {
+  if (preparePlan.prepareVideo || preparePlan.writeCaptions || preparePlan.burnCaptions || preparePlan.skipCaptionBurn || queuedRecords.length > 0) {
     try {
       if (preparePlan.prepareVideo) {
         await renderApprovedClip(clip.id, {
           allowRerender: true,
           force: true,
         });
+      }
+      if (preparePlan.writeCaptions) {
+        await generateCaptionsForClip(clip.id, { force: true });
       }
       if (preparePlan.burnCaptions) {
         await burnCaptionsIntoRenderedClip(clip.id, {
@@ -6709,6 +6714,7 @@ export async function prepareClipStudioForPostingAction(
           renderFreshness: true,
           renderedFilePath: true,
           captionStatus: true,
+          captionFreshness: true,
           captionBurnStatus: true,
           captionBurnFreshness: true,
           captionedVideoPath: true,
@@ -6731,6 +6737,7 @@ export async function prepareClipStudioForPostingAction(
         renderedFileReady: Boolean(queuedClip.renderedFilePath?.trim()),
         captionsEnabled: captionPreferences.applyCaptionsToClip,
         captionStatus: queuedClip.captionStatus,
+        captionFreshness: queuedClip.captionFreshness,
         captionBurnStatus: queuedClip.captionBurnStatus,
         captionBurnFreshness: queuedClip.captionBurnFreshness,
         captionedFileReady: Boolean(queuedClip.captionedVideoPath?.trim()),

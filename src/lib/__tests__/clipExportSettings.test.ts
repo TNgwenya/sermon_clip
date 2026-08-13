@@ -12,9 +12,11 @@ import {
   mapPlatformPresetToFormat,
   orderExportFormatsForCanonicalPrimary,
   resolveExportHistory,
+  resolveLatestClipStudioExportRecords,
   resolveExportSettings,
   summarizeExportSettings,
   toPastorFriendlyExportStatus,
+  toPastorFriendlyExportError,
 } from "@/lib/clipExportSettings";
 
 describe("platform preset mapping", () => {
@@ -367,6 +369,88 @@ describe("pastor-friendly export statuses", () => {
     expect(exportStatusTone("RENDERING")).toBe("accent");
     expect(exportStatusTone("COMPLETED")).toBe("success");
     expect(exportStatusTone("FAILED")).toBe("danger");
+  });
+});
+
+describe("Studio export record recovery", () => {
+  it("recovers a completed selected format from a durable artifact", () => {
+    const records = resolveLatestClipStudioExportRecords({
+      clipId: "clip-1",
+      sermonId: "sermon-1",
+      selectedFormats: ["VERTICAL_9_16"],
+      platformPreset: "INSTAGRAM_REELS",
+      framingMode: "SMART_CROP",
+      history: [],
+      artifacts: [{
+        id: "artifact-1",
+        format: "VERTICAL_9_16",
+        status: "READY",
+        freshness: "UP_TO_DATE",
+        filePath: "/exports/ready.mp4",
+        sizeBytes: 2048,
+        errorMessage: null,
+        generatedAt: new Date("2026-08-01T12:00:00.000Z"),
+        createdAt: new Date("2026-08-01T12:00:00.000Z"),
+      }],
+      canonicalExport: {
+        format: "VERTICAL_9_16",
+        status: "COMPLETED",
+        outputPath: "/exports/ready.mp4",
+        errorMessage: null,
+        exportedAt: new Date("2026-08-01T12:00:00.000Z"),
+      },
+    });
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        id: "artifact-artifact-1",
+        format: "VERTICAL_9_16",
+        status: "COMPLETED",
+        outputFilename: "ready.mp4",
+        fileSizeBytes: 2048,
+      }),
+    ]);
+  });
+
+  it("hides stale records for formats the editor deselected", () => {
+    const history = resolveExportHistory({
+      exportHistory: [{
+        id: "old-horizontal-failure",
+        clipId: "clip-1",
+        sermonId: "sermon-1",
+        format: "HORIZONTAL_16_9",
+        platformPreset: "YOUTUBE_HORIZONTAL",
+        framingMode: "FIT_BLURRED_BACKGROUND",
+        status: "FAILED",
+        errorMessage: "height not divisible by 2",
+        renderVersion: "v1",
+        createdAt: "2026-08-01T11:00:00.000Z",
+      }],
+    });
+
+    expect(resolveLatestClipStudioExportRecords({
+      clipId: "clip-1",
+      sermonId: "sermon-1",
+      selectedFormats: ["VERTICAL_9_16"],
+      platformPreset: "INSTAGRAM_REELS",
+      framingMode: "SMART_CROP",
+      history,
+      artifacts: [],
+      canonicalExport: {
+        format: null,
+        status: "NOT_EXPORTED",
+        outputPath: null,
+        errorMessage: null,
+        exportedAt: null,
+      },
+    })).toEqual([]);
+  });
+
+  it("turns technical exporter failures into an actionable Studio message", () => {
+    expect(toPastorFriendlyExportError("height not divisible by 2 (1920x3413)"))
+      .toBe("This format did not fit the selected frame size. Review Format & framing, then rebuild the video.");
+    expect(toPastorFriendlyExportError("ffmpeg exited with code 1"))
+      .not.toContain("ffmpeg");
   });
 });
 

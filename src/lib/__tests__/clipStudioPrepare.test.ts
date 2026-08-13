@@ -18,6 +18,7 @@ function readySnapshot(overrides: Partial<ClipStudioPrepareAssetSnapshot> = {}):
     renderedFileReady: true,
     captionsEnabled: true,
     captionStatus: "GENERATED",
+    captionFreshness: "UP_TO_DATE",
     captionBurnStatus: "COMPLETED",
     captionBurnFreshness: "UP_TO_DATE",
     captionedFileReady: true,
@@ -31,6 +32,7 @@ describe("buildClipStudioPrepareAssetPlan", () => {
   it("does not rebuild when prepared media is already current", () => {
     expect(buildClipStudioPrepareAssetPlan(readySnapshot())).toEqual({
       prepareVideo: false,
+      writeCaptions: false,
       burnCaptions: false,
       skipCaptionBurn: false,
       exportPreparedVideo: false,
@@ -40,6 +42,7 @@ describe("buildClipStudioPrepareAssetPlan", () => {
   it("rebuilds downstream media when the base render is stale", () => {
     expect(buildClipStudioPrepareAssetPlan(readySnapshot({ renderFreshness: "NEEDS_REGENERATION" }))).toEqual({
       prepareVideo: true,
+      writeCaptions: false,
       burnCaptions: true,
       skipCaptionBurn: false,
       exportPreparedVideo: true,
@@ -52,6 +55,7 @@ describe("buildClipStudioPrepareAssetPlan", () => {
       captionBurnStatus: "COMPLETED",
     }))).toEqual({
       prepareVideo: false,
+      writeCaptions: false,
       burnCaptions: false,
       skipCaptionBurn: true,
       exportPreparedVideo: true,
@@ -61,6 +65,7 @@ describe("buildClipStudioPrepareAssetPlan", () => {
   it("exports again when only the download is stale", () => {
     expect(buildClipStudioPrepareAssetPlan(readySnapshot({ exportFreshness: "OUTDATED" }))).toEqual({
       prepareVideo: false,
+      writeCaptions: false,
       burnCaptions: false,
       skipCaptionBurn: false,
       exportPreparedVideo: true,
@@ -70,6 +75,7 @@ describe("buildClipStudioPrepareAssetPlan", () => {
   it("rebuilds every prepared layer when the user explicitly requests a rebuild", () => {
     expect(buildClipStudioPrepareAssetPlan(readySnapshot(), { forceRebuild: true })).toEqual({
       prepareVideo: true,
+      writeCaptions: false,
       burnCaptions: true,
       skipCaptionBurn: false,
       exportPreparedVideo: true,
@@ -82,8 +88,21 @@ describe("buildClipStudioPrepareAssetPlan", () => {
       captionBurnStatus: "COMPLETED",
     }), { forceRebuild: true })).toEqual({
       prepareVideo: true,
+      writeCaptions: false,
       burnCaptions: false,
       skipCaptionBurn: true,
+      exportPreparedVideo: true,
+    });
+  });
+
+  it("regenerates a stale caption source before burning and exporting", () => {
+    expect(buildClipStudioPrepareAssetPlan(readySnapshot({
+      captionFreshness: "NEEDS_REGENERATION",
+    }))).toEqual({
+      prepareVideo: false,
+      writeCaptions: true,
+      burnCaptions: true,
+      skipCaptionBurn: false,
       exportPreparedVideo: true,
     });
   });
@@ -108,6 +127,7 @@ describe("buildClipStudioQueuedAssets", () => {
       renderFreshness: "OUTDATED",
       captionsEnabled: false,
       captionStatus: "NOT_GENERATED",
+      captionFreshness: "NEEDS_REGENERATION",
       captionBurnStatus: "NOT_BURNED",
       captionedFileReady: false,
       exportFreshness: "OUTDATED",
@@ -117,6 +137,15 @@ describe("buildClipStudioQueuedAssets", () => {
       snapshot,
       buildClipStudioPrepareAssetPlan(snapshot),
     )).toEqual(["render", "export"]);
+  });
+
+  it("queues caption regeneration when generated caption data is stale", () => {
+    const snapshot = readySnapshot({ captionFreshness: "NEEDS_REGENERATION" });
+
+    expect(buildClipStudioQueuedAssets(
+      snapshot,
+      buildClipStudioPrepareAssetPlan(snapshot),
+    )).toEqual(["caption", "captionBurn", "export"]);
   });
 
   it("queues every required stage for an unprepared captioned clip", () => {

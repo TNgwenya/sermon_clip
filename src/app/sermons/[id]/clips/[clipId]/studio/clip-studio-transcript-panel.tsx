@@ -1222,10 +1222,18 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
       <div className="clip-studio-transcript-utility-row">
         <span>↑↓ navigate · Enter plays · / searches</span>
         <div>
-          <button type="button" onClick={() => dispatchTranscriptCommand("snap-to-sentence")}>
+          <button
+            type="button"
+            disabled={transcriptSegments.length === 0}
+            onClick={() => dispatchTranscriptCommand("snap-to-sentence")}
+          >
             Snap to sentence
           </button>
-          <button type="button" onClick={() => dispatchTranscriptCommand("reset-ai")}>
+          <button
+            type="button"
+            disabled={transcriptSegments.length === 0}
+            onClick={() => dispatchTranscriptCommand("reset-ai")}
+          >
             Reset AI
           </button>
         </div>

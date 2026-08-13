@@ -628,6 +628,17 @@ describe("clip export service", () => {
     expect(filter).toContain("crop=1920:1080:iw-ow:0");
   });
 
+  it("constrains blurred backgrounds to the exact horizontal export frame", () => {
+    const filter = __clipExportTestUtils.buildVideoFilter(
+      { format: "HORIZONTAL_16_9", width: 1920, height: 1080 },
+      "FIT_BLURRED_BACKGROUND",
+    );
+
+    expect(filter).toContain("force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,boxblur=20:1[bg]");
+    expect(filter).toContain("overlay=(W-w)/2:(H-h)/2,scale=1920:1080,setsar=1,format=yuv420p[v]");
+    expect(filter).not.toContain("boxblur=20:1[bg];[0:v]scale=1920:1080:force_original_aspect_ratio=decrease[fg]");
+  });
+
   it("flags risky smart-crop filters before FFmpeg export", () => {
     const riskyFilter = `crop=1080:1920:${"if(lte(t,1),".repeat(11)}0${")".repeat(11)}:0,format=yuv420p[v]`;
 

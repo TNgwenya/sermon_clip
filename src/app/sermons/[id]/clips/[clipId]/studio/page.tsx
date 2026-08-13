@@ -50,7 +50,9 @@ import {
   FORMAT_LABELS,
   exportStatusTone,
   resolveExportHistory,
+  resolveLatestClipStudioExportRecords,
   resolveExportSettings,
+  toPastorFriendlyExportError,
   toPastorFriendlyExportStatus,
 } from "@/lib/clipExportSettings";
 import { resolveBrandingConfig } from "@/lib/clipBranding";
@@ -276,11 +278,28 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       overlayFreshness: true,
       exportStatus: true,
       exportedFilePath: true,
+      exportedAt: true,
       exportError: true,
       exportFreshness: true,
       clipNotes: true,
       exportPath: true,
       ministryMomentId: true,
+      artifacts: {
+        where: { kind: "EXPORT" },
+        orderBy: { createdAt: "desc" },
+        take: 12,
+        select: {
+          id: true,
+          format: true,
+          status: true,
+          freshness: true,
+          filePath: true,
+          sizeBytes: true,
+          errorMessage: true,
+          generatedAt: true,
+          createdAt: true,
+        },
+      },
       ministryMoment: {
         select: {
           momentType: true,
@@ -402,7 +421,22 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     ? `/api/branding/logo?v=${appBranding?.updatedAt.getTime() ?? 0}`
     : null;
   const exportHistory = resolveExportHistory(clip.captionData);
-  const latestExportHistory = exportHistory.filter((record) => record.isLatest).slice(0, 4);
+  const latestExportHistory = resolveLatestClipStudioExportRecords({
+    clipId: clip.id,
+    sermonId: clip.sermonId,
+    selectedFormats: exportSettings.selectedFormats,
+    platformPreset: exportSettings.platformPreset,
+    framingMode: exportSettings.framingMode,
+    history: exportHistory,
+    artifacts: clip.artifacts,
+    canonicalExport: {
+      format: clip.exportFormat,
+      status: clip.exportStatus,
+      outputPath: clip.exportedFilePath || clip.exportPath,
+      errorMessage: clip.exportError,
+      exportedAt: clip.exportedAt,
+    },
+  });
   const [exportHistoryWithFileState, currentExportFileExists] = await Promise.all([
     Promise.all(latestExportHistory.map(async (record) => {
       const hasPath = Boolean(record.outputPath);
@@ -650,7 +684,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
     clip.captionGenerationError ? { label: "Captions", message: clip.captionGenerationError } : null,
     clip.captionBurnError ? { label: "Caption burn", message: clip.captionBurnError } : null,
     clip.overlayRenderError ? { label: "Branding", message: clip.overlayRenderError } : null,
-    clip.exportError ? { label: "Export", message: clip.exportError } : null,
+    clip.exportError ? { label: "Export", message: toPastorFriendlyExportError(clip.exportError) } : null,
   ].filter((issue): issue is { label: string; message: string } => Boolean(issue));
 
   return (
@@ -949,7 +983,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                               ? "File verified locally"
                               : "Prepared output confirmed by the media worker"
                             : record.status === "FAILED"
-                              ? record.errorMessage ?? "Export failed"
+                              ? toPastorFriendlyExportError(record.errorMessage)
                               : "Preparing or waiting for a fresh export"}
                         </p>
                       </article>
