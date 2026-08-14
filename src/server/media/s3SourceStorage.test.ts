@@ -1,9 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const presignMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@aws-sdk/s3-request-presigner", () => ({
+  getSignedUrl: presignMock,
+}));
 
 import {
   __s3SourceStorageTestUtils,
   getS3SourceStorageConfig,
   isS3SourceStorageConfigured,
+  presignReadyS3SourcePreview,
 } from "@/server/media/s3SourceStorage";
 
 const originalEnvironment = {
@@ -11,7 +18,12 @@ const originalEnvironment = {
   region: process.env.SOURCE_MEDIA_S3_REGION,
   partSize: process.env.SOURCE_MEDIA_S3_PART_SIZE_MIB,
   keyPrefix: process.env.SOURCE_MEDIA_S3_KEY_PREFIX,
+  presignTtl: process.env.SOURCE_MEDIA_S3_PRESIGN_TTL_SECONDS,
 };
+
+beforeEach(() => {
+  presignMock.mockReset();
+});
 
 afterEach(() => {
   const restore = (name: string, value: string | undefined) => {
@@ -22,6 +34,7 @@ afterEach(() => {
   restore("SOURCE_MEDIA_S3_REGION", originalEnvironment.region);
   restore("SOURCE_MEDIA_S3_PART_SIZE_MIB", originalEnvironment.partSize);
   restore("SOURCE_MEDIA_S3_KEY_PREFIX", originalEnvironment.keyPrefix);
+  restore("SOURCE_MEDIA_S3_PRESIGN_TTL_SECONDS", originalEnvironment.presignTtl);
 });
 
 describe("private S3 sermon source storage", () => {
@@ -86,5 +99,53 @@ describe("private S3 sermon source storage", () => {
         { partNumber: 2, etag: "\"two\"", sizeBytes: 8 },
       ],
     })).toThrow(/part 1/i);
+  });
+
+  it("signs a private inline GET without binding browser Range headers", async () => {
+    process.env.SOURCE_MEDIA_S3_BUCKET = "private-sources";
+    process.env.SOURCE_MEDIA_S3_REGION = "eu-central-1";
+    process.env.SOURCE_MEDIA_S3_PRESIGN_TTL_SECONDS = "600";
+    presignMock.mockResolvedValue("https://private.example/source?signature=test");
+
+    const url = await presignReadyS3SourcePreview({
+      asset: {
+        bucket: "private-sources",
+        objectKey: "sermons/source.mp4",
+        region: "eu-central-1",
+        sizeBytes: BigInt(2048),
+        contentType: "video/mp4",
+        originalFileName: "Sunday \"Service\".mp4",
+        versionId: "version-1",
+        status: "READY",
+      },
+    });
+
+    expect(url).toContain("signature=test");
+    const [, command, options] = presignMock.mock.calls[0];
+    expect(command.input).toMatchObject({
+      Bucket: "private-sources",
+      Key: "sermons/source.mp4",
+      VersionId: "version-1",
+      ResponseContentType: "video/mp4",
+      ResponseContentDisposition: "inline; filename=\"Sunday Service.mp4\"",
+    });
+    expect(command.input.Range).toBeUndefined();
+    expect(options).toEqual({ expiresIn: 600 });
+  });
+
+  it("refuses to sign an asset outside the configured private bucket", async () => {
+    process.env.SOURCE_MEDIA_S3_BUCKET = "private-sources";
+    process.env.SOURCE_MEDIA_S3_REGION = "eu-central-1";
+
+    await expect(presignReadyS3SourcePreview({
+      asset: {
+        bucket: "another-bucket",
+        objectKey: "sermons/source.mp4",
+        region: "eu-central-1",
+        sizeBytes: 2048,
+        status: "READY",
+      },
+    })).rejects.toThrow(/configured private S3 bucket/i);
+    expect(presignMock).not.toHaveBeenCalled();
   });
 });

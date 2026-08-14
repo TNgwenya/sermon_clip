@@ -72,6 +72,8 @@ import {
   persistResolvedFramingRuntimeFallback,
 } from "@/server/agents/resolvedFramingPlanService";
 import { resolvedFramingPlanToSmartCropOptions } from "@/lib/resolvedFramingPlan";
+import { materializeS3SermonSource } from "@/server/agents/sourceMaterializationAgent";
+import { resolvePortableStoragePath } from "@/server/media/portableStoragePath";
 
 type RenderOptions = {
   ffmpegPath?: string;
@@ -116,6 +118,9 @@ type ClipWithSermon = Pick<
     id: string;
     sourceVideoPath: string | null;
     sourceDurationSeconds: number | null;
+    sourceAsset: {
+      status: string;
+    } | null;
   };
 };
 
@@ -324,15 +329,24 @@ async function resolveSourceVideoForRender(clip: Pick<ClipWithSermon, "sermonId"
   }
 
   const storedPath = clip.sermon.sourceVideoPath?.trim();
-  if (storedPath && storedPath !== canonicalPath && await fileExists(storedPath)) {
+  const resolvedStoredPath = storedPath ? resolvePortableStoragePath(storedPath) : null;
+  if (resolvedStoredPath && resolvedStoredPath !== canonicalPath && await fileExists(resolvedStoredPath)) {
     return {
-      sourceVideoPath: storedPath,
+      sourceVideoPath: resolvedStoredPath,
       sourceVideoExists: true,
     };
   }
 
+  if (clip.sermon.sourceAsset?.status === "READY") {
+    const restored = await materializeS3SermonSource(clip.sermonId);
+    return {
+      sourceVideoPath: restored.sourceVideoPath,
+      sourceVideoExists: await fileExists(restored.sourceVideoPath),
+    };
+  }
+
   return {
-    sourceVideoPath: storedPath || canonicalPath,
+    sourceVideoPath: resolvedStoredPath || canonicalPath,
     sourceVideoExists: false,
   };
 }
@@ -938,6 +952,11 @@ async function loadClipForRender(clipCandidateId: string): Promise<ClipWithSermo
           id: true,
           sourceVideoPath: true,
           sourceDurationSeconds: true,
+          sourceAsset: {
+            select: {
+              status: true,
+            },
+          },
         },
       },
     },
@@ -1470,4 +1489,5 @@ export const __clipRenderTestUtils = {
   resolveRenderConcurrency,
   resolveRenderBoundaries,
   resolveManualRenderSmartCrop,
+  resolveSourceVideoForRender,
 };

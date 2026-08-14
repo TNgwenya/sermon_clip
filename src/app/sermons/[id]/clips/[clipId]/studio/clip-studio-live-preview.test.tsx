@@ -9,6 +9,7 @@ vi.mock("@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context", 
 
 import {
   ClipStudioLivePreview,
+  clipStudioPreviewMediaCoversDraft,
   clipStudioPreviewNeedsSourceMedia,
   resolveCanonicalFramingPreviewFrame,
   resolveClipStudioFramingPreview,
@@ -476,12 +477,25 @@ describe("ClipStudioLivePreview media loading", () => {
     });
   });
 
-  it("falls back in either direction when the preferred asset is unavailable", () => {
+  it("blocks a shorter prepared fallback when precise source media is required", () => {
     expect(resolveClipStudioPreviewSource({
       hasPreview: true,
       previewSrc: "/api/clips/clip-1/preview",
       sourcePreviewSrc: "/api/sermons/sermon-1/source-preview",
       preferSourcePreview: true,
+      unavailableSourcePreviewSrc: "/api/sermons/sermon-1/source-preview",
+      unavailablePreparedPreviewSrc: null,
+    })).toEqual({
+      activePreviewSrc: null,
+      canPreview: false,
+      hasSourcePreview: false,
+    });
+
+    expect(resolveClipStudioPreviewSource({
+      hasPreview: true,
+      previewSrc: "/api/clips/clip-1/preview",
+      sourcePreviewSrc: "/api/sermons/sermon-1/source-preview",
+      preferSourcePreview: false,
       unavailableSourcePreviewSrc: "/api/sermons/sermon-1/source-preview",
       unavailablePreparedPreviewSrc: null,
     })).toEqual({
@@ -502,6 +516,27 @@ describe("ClipStudioLivePreview media loading", () => {
       canPreview: true,
       hasSourcePreview: true,
     });
+  });
+
+  it("rejects media that ends before the selected draft range", () => {
+    expect(clipStudioPreviewMediaCoversDraft({
+      mediaDurationSeconds: 60,
+      draftDurationSeconds: 90,
+      draftEndSeconds: 1634,
+      hasSourcePreview: false,
+    })).toBe(false);
+    expect(clipStudioPreviewMediaCoversDraft({
+      mediaDurationSeconds: 15112,
+      draftDurationSeconds: 90,
+      draftEndSeconds: 1634,
+      hasSourcePreview: true,
+    })).toBe(true);
+    expect(clipStudioPreviewMediaCoversDraft({
+      mediaDurationSeconds: Number.POSITIVE_INFINITY,
+      draftDurationSeconds: 90,
+      draftEndSeconds: 1634,
+      hasSourcePreview: true,
+    })).toBe(true);
   });
 
   it("requires source media for boundary changes and source-domain seeks", () => {

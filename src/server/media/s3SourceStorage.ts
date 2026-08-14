@@ -45,6 +45,9 @@ export type ReadyS3SourceAsset = {
   objectKey: string;
   region: string;
   sizeBytes: bigint | number;
+  contentType?: string | null;
+  originalFileName?: string | null;
+  versionId?: string | null;
   status: "READY";
 };
 
@@ -363,6 +366,36 @@ export async function abortS3SourceMultipartUpload(input: {
     Key: input.objectKey,
     UploadId: input.uploadId,
   }));
+}
+
+export async function presignReadyS3SourcePreview(input: {
+  asset: ReadyS3SourceAsset;
+}): Promise<string> {
+  const config = getS3SourceStorageConfig();
+  if (input.asset.bucket !== config.bucket || input.asset.region !== config.region) {
+    throw new Error("The saved source asset does not match the configured private S3 bucket.");
+  }
+
+  const expectedBytes = Number(input.asset.sizeBytes);
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes <= 0) {
+    throw new Error("The saved source asset has an invalid size.");
+  }
+
+  const originalFileName = path
+    .basename(input.asset.originalFileName?.trim() || "sermon-source.mp4")
+    .replace(/["\r\n]/g, "");
+
+  return getSignedUrl(
+    getS3Client(config),
+    new GetObjectCommand({
+      Bucket: input.asset.bucket,
+      Key: input.asset.objectKey,
+      VersionId: input.asset.versionId || undefined,
+      ResponseContentType: input.asset.contentType?.trim() || "video/mp4",
+      ResponseContentDisposition: `inline; filename="${originalFileName || "sermon-source.mp4"}"`,
+    }),
+    { expiresIn: config.presignedUrlTtlSeconds },
+  );
 }
 
 function objectBodyAsReadable(body: unknown): Readable {

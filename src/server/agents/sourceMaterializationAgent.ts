@@ -22,14 +22,21 @@ type MaterializationOptions = {
   processingJobId?: string;
 };
 
+type MaterializationResult = {
+  sourceVideoPath: string;
+  reusedExistingFile: boolean;
+};
+
+const activeMaterializations = new Map<string, Promise<MaterializationResult>>();
+
 function temporaryS3SourcePath(sourceVideoPath: string): string {
   return sourceVideoPath.replace(/\.mp4$/i, ".s3.partial.mp4");
 }
 
-export async function materializeS3SermonSource(
+async function runS3SermonSourceMaterialization(
   sermonId: string,
   options?: MaterializationOptions,
-): Promise<{ sourceVideoPath: string; reusedExistingFile: boolean }> {
+): Promise<MaterializationResult> {
   const sermon = await prisma.sermon.findUnique({
     where: { id: sermonId },
     select: {
@@ -137,6 +144,32 @@ export async function materializeS3SermonSource(
   }
 }
 
+export async function materializeS3SermonSource(
+  sermonId: string,
+  options?: MaterializationOptions,
+): Promise<MaterializationResult> {
+  const normalizedSermonId = sermonId.trim();
+  if (!normalizedSermonId) {
+    throw new Error("Sermon id is required for source restoration.");
+  }
+
+  const existing = activeMaterializations.get(normalizedSermonId);
+  if (existing) {
+    return existing;
+  }
+
+  const materialization = runS3SermonSourceMaterialization(normalizedSermonId, options);
+  activeMaterializations.set(normalizedSermonId, materialization);
+  try {
+    return await materialization;
+  } finally {
+    if (activeMaterializations.get(normalizedSermonId) === materialization) {
+      activeMaterializations.delete(normalizedSermonId);
+    }
+  }
+}
+
 export const __sourceMaterializationTestUtils = {
+  activeMaterializations,
   temporaryS3SourcePath,
 };

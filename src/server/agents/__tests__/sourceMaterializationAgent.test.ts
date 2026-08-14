@@ -107,4 +107,20 @@ describe("S3 sermon source materialization", () => {
     expect(updateStatusMock).toHaveBeenNthCalledWith(2, "sermon-1", "DOWNLOADED");
     expect(processingMock.succeeded).toHaveBeenCalled();
   });
+
+  it("shares one durable download across concurrent render requests", async () => {
+    mediaGuardMock
+      .mockResolvedValueOnce({ usable: false, reason: "missing" })
+      .mockResolvedValueOnce({ usable: true, durationSeconds: 120 })
+      .mockResolvedValueOnce({ usable: true, durationSeconds: 120 });
+
+    const [first, second] = await Promise.all([
+      materializeS3SermonSource("sermon-1"),
+      materializeS3SermonSource("sermon-1"),
+    ]);
+
+    expect(first).toEqual(second);
+    expect(downloadMock).toHaveBeenCalledTimes(1);
+    expect(processingMock.resolve).toHaveBeenCalledTimes(1);
+  });
 });

@@ -6,6 +6,8 @@ import { prisma } from "@/lib/prisma";
 import { requireSermonResource } from "@/server/auth/resourceAuthorization";
 import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 import { videoFileResponse } from "@/server/http/videoFileResponse";
+import { resolvePortableStoragePath } from "@/server/media/portableStoragePath";
+import { presignReadyS3SourcePreview } from "@/server/media/s3SourceStorage";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
 async function fileHasBytes(filePath: string): Promise<boolean> {
@@ -36,34 +38,79 @@ export async function GET(
     throw error;
   }
 
-  if (!canRunLocalMediaProcessing()) {
-    return NextResponse.json(
-      { error: "Sermon previews live on the Mac media worker. Open the local app to preview this file." },
-      { status: 409 },
-    );
-  }
-
   const sermon = await prisma.sermon.findUnique({
     where: { id: sermonId },
-    select: { sourceVideoPath: true },
+    select: {
+      sourceVideoPath: true,
+      sourceAsset: {
+        select: {
+          bucket: true,
+          objectKey: true,
+          region: true,
+          sizeBytes: true,
+          contentType: true,
+          originalFileName: true,
+          versionId: true,
+          status: true,
+        },
+      },
+    },
   });
 
   if (!sermon) {
     return NextResponse.json({ error: "Sermon not found." }, { status: 404 });
   }
 
-  if (!sermon.sourceVideoPath) {
-    return NextResponse.json({ error: "Source video is not available for this sermon." }, { status: 409 });
+  if (canRunLocalMediaProcessing() && sermon.sourceVideoPath) {
+    let localSourcePath: string | null = null;
+    try {
+      localSourcePath = resolvePortableStoragePath(sermon.sourceVideoPath);
+    } catch {
+      // A malformed legacy path must not prevent use of the verified durable source.
+    }
+
+    if (localSourcePath && await fileHasBytes(localSourcePath)) {
+      return videoFileResponse({
+        request,
+        filePath: localSourcePath,
+        disposition: "inline",
+      });
+    }
   }
 
-  const hasSourceVideo = await fileHasBytes(sermon.sourceVideoPath);
-  if (!hasSourceVideo) {
-    return NextResponse.json({ error: "Source video is missing or empty on disk." }, { status: 404 });
+  if (sermon.sourceAsset?.status === "READY") {
+    try {
+      const signedPreviewUrl = await presignReadyS3SourcePreview({
+        asset: {
+          ...sermon.sourceAsset,
+          status: "READY",
+        },
+      });
+      return NextResponse.redirect(signedPreviewUrl, {
+        status: 307,
+        headers: {
+          "Cache-Control": "private, no-store",
+          "Referrer-Policy": "no-referrer",
+        },
+      });
+    } catch (error) {
+      console.error("Unable to create a private sermon source preview URL.", error);
+      return NextResponse.json(
+        { error: "The durable sermon source is available, but secure preview delivery is not configured." },
+        { status: 503 },
+      );
+    }
   }
 
-  return videoFileResponse({
-    request,
-    filePath: sermon.sourceVideoPath,
-    disposition: "inline",
-  });
+  if (!canRunLocalMediaProcessing()) {
+    return NextResponse.json(
+      { error: "Sermon previews live on the media worker, and no durable source preview is available." },
+      { status: 409 },
+    );
+  }
+
+  return NextResponse.json(
+    { error: sermon.sourceVideoPath ? "Source video is missing or empty on disk." : "Source video is not available for this sermon." },
+    { status: sermon.sourceVideoPath ? 404 : 409 },
+  );
 }

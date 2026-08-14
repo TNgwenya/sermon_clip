@@ -185,6 +185,11 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       churchName: true,
       language: true,
       sourceVideoPath: true,
+      sourceAsset: {
+        select: {
+          status: true,
+        },
+      },
       intelligence: {
         select: {
           centralTheme: true,
@@ -459,8 +464,10 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
   ]);
   // Source media is verified by the preview and audio-review endpoints when it
   // is actually requested. Avoid blocking Studio's first paint on disk I/O.
-  const sourceVideoPreviewAvailable = localMediaAvailable && Boolean(sermon.sourceVideoPath);
-  const audioSilenceReviewUrl = sourceVideoPreviewAvailable
+  const localSourceCandidateAvailable = localMediaAvailable && Boolean(sermon.sourceVideoPath);
+  const durableSourcePreviewAvailable = sermon.sourceAsset?.status === "READY";
+  const sourceVideoPreviewAvailable = localSourceCandidateAvailable || durableSourcePreviewAvailable;
+  const audioSilenceReviewUrl = localSourceCandidateAvailable
     ? `/api/clips/${clip.id}/audio-silence-review?start=${clip.startTimeSeconds}&end=${clip.endTimeSeconds}`
     : null;
   const studioTranscriptSegments = transcriptSegments.length > 0

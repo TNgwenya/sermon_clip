@@ -150,17 +150,19 @@ export function resolveClipStudioPreviewSource({
     previewSrc &&
     previewSrc !== unavailablePreparedPreviewSrc,
   );
+  const sourceIsRequiredButUnavailable = preferSourcePreview && !sourceIsAvailable;
   const useSourcePreview = sourceIsAvailable && (
     preferSourcePreview || !preparedPreviewIsAvailable
   );
+  const usePreparedPreview = preparedPreviewIsAvailable && !sourceIsRequiredButUnavailable;
 
   return {
     activePreviewSrc: useSourcePreview
       ? sourcePreviewSrc
-      : preparedPreviewIsAvailable
+      : usePreparedPreview
         ? previewSrc
         : null,
-    canPreview: preparedPreviewIsAvailable || sourceIsAvailable,
+    canPreview: usePreparedPreview || sourceIsAvailable,
     hasSourcePreview: useSourcePreview,
   };
 }
@@ -191,6 +193,29 @@ export function clipStudioPreviewNeedsSourceMedia(input: {
     boundaryChanged(input.initialStartSeconds, input.currentStartSeconds) ||
     boundaryChanged(input.initialEndSeconds, input.currentEndSeconds)
   );
+}
+
+export function clipStudioPreviewMediaCoversDraft(input: {
+  mediaDurationSeconds: number;
+  draftDurationSeconds: number | null;
+  draftEndSeconds: number | null;
+  hasSourcePreview: boolean;
+}): boolean {
+  if (Number.isNaN(input.mediaDurationSeconds) || input.mediaDurationSeconds <= 0) {
+    return false;
+  }
+  if (input.mediaDurationSeconds === Number.POSITIVE_INFINITY) {
+    return true;
+  }
+
+  const requiredEndSeconds = input.hasSourcePreview
+    ? input.draftEndSeconds
+    : input.draftDurationSeconds;
+  if (requiredEndSeconds === null || !Number.isFinite(requiredEndSeconds) || requiredEndSeconds <= 0) {
+    return true;
+  }
+
+  return input.mediaDurationSeconds + 0.25 >= requiredEndSeconds;
 }
 
 function interpolateNumber(start: number, end: number, progress: number): number {
@@ -509,6 +534,7 @@ export function ClipStudioLivePreview({
     unavailablePreparedPreviewSrc,
   });
   const previewError = previewErrorState?.src === activePreviewSrc ? previewErrorState.message : "";
+  const sourcePrecisionUnavailable = sourcePrecisionRequired && !hasSourcePreview;
   const playbackSrc = useMemo(() => {
     if (!activePreviewSrc) {
       return null;
@@ -1038,6 +1064,32 @@ export function ClipStudioLivePreview({
     });
   }, [draftDurationSeconds, draftStartSeconds, hasSourcePreview, isDraftTrimPreview, speechCleanupPreviewPlan, updatePreviewClock]);
 
+  const validatePreviewCoverage = useCallback((): boolean => {
+    const video = videoRef.current;
+    if (!video || clipStudioPreviewMediaCoversDraft({
+      mediaDurationSeconds: video.duration,
+      draftDurationSeconds,
+      draftEndSeconds: editPreview.endSeconds,
+      hasSourcePreview,
+    })) {
+      if (!video) {
+        return false;
+      }
+
+      video.pause();
+      setPreviewReadySrc(null);
+      setIsPreviewPlaying(false);
+      setPlaybackState("error");
+      setPreviewErrorState({
+        src: activePreviewSrc ?? "",
+        message: "This media file does not cover the selected clip range. Restore the full sermon source before previewing or preparing this cut.",
+      });
+      return false;
+    }
+
+    return true;
+  }, [activePreviewSrc, draftDurationSeconds, editPreview.endSeconds, hasSourcePreview]);
+
   const clampVideoToDraftWindow = useCallback((options?: { restartAtEnd?: boolean }) => {
     const video = videoRef.current;
     if (!video || !isDraftTrimPreview || draftStartSeconds === null) {
@@ -1126,7 +1178,7 @@ export function ClipStudioLivePreview({
 
   const startPreviewPlayback = useCallback(async () => {
     const video = videoRef.current;
-    if (!video) {
+    if (!video || !validatePreviewCoverage()) {
       return;
     }
 
@@ -1150,7 +1202,7 @@ export function ClipStudioLivePreview({
     } finally {
       updatePreviewSeconds();
     }
-  }, [clampVideoToDraftWindow, updatePreviewSeconds]);
+  }, [clampVideoToDraftWindow, updatePreviewSeconds, validatePreviewCoverage]);
 
   const togglePreviewPlayback = useCallback(() => {
     const video = videoRef.current;
@@ -1274,14 +1326,23 @@ export function ClipStudioLivePreview({
                   playsInline
                   src={playbackSrc}
                   onLoadedMetadata={() => {
+                    if (!validatePreviewCoverage()) {
+                      return;
+                    }
                     setPreviewErrorState(null);
                     updatePreviewSeconds();
                     syncBackdropVideo(true);
                   }}
                   onLoadedData={() => {
+                    if (!validatePreviewCoverage()) {
+                      return;
+                    }
                     setPreviewErrorState(null);
                   }}
                   onCanPlay={() => {
+                    if (!validatePreviewCoverage()) {
+                      return;
+                    }
                     setPreviewErrorState(null);
                     setPreviewReadySrc(playbackSrc);
                     setPlaybackState(videoRef.current && !videoRef.current.paused ? "playing" : "ready");
@@ -1292,7 +1353,8 @@ export function ClipStudioLivePreview({
                       activePreviewSrc === sourcePreviewSrc &&
                       sourcePreviewSrc &&
                       previewSrc &&
-                      previewSrc !== unavailablePreparedPreviewSrc
+                      previewSrc !== unavailablePreparedPreviewSrc &&
+                      !sourcePrecisionRequired
                     ) {
                       setUnavailableSourcePreviewSrc(sourcePreviewSrc);
                       setPreviewErrorState(null);
@@ -1417,8 +1479,10 @@ export function ClipStudioLivePreview({
               </>
             ) : (
               <EmptyState
-                title="Preview not available yet"
-                description={unavailableDescription ?? "Clip preview is not available yet. Review timing and captions, then render to generate a playable preview."}
+                title={sourcePrecisionUnavailable ? "Full sermon source required" : "Preview not available yet"}
+                description={sourcePrecisionUnavailable
+                  ? "Studio cannot safely preview this adjusted range with the shorter prepared clip. Retry after the full sermon source is available."
+                  : unavailableDescription ?? "Clip preview is not available yet. Review timing and captions, then render to generate a playable preview."}
               />
             )}
 
