@@ -93,6 +93,8 @@ export type ScheduledPost = {
   createdAt: string;
   contentAssets?: Array<{
     id: string;
+    sermonId?: string;
+    sermonTitle?: string;
     revisionId?: string | null;
     revisionApprovalState?: string | null;
     title: string;
@@ -367,6 +369,8 @@ function toScheduledPost(input: {
     } | null;
     contentAsset: {
       id: string;
+      sermonId?: string;
+      sermon?: { title: string };
       title: string;
       assetType: string;
       status: string;
@@ -425,6 +429,8 @@ function toScheduledPost(input: {
     createdAt: input.createdAt.toISOString(),
     contentAssets: (input.contentAssetLinks ?? []).map(({ contentAsset, contentAssetRevision }) => ({
       id: contentAsset.id,
+      sermonId: contentAsset.sermonId,
+      sermonTitle: contentAsset.sermon?.title,
       revisionId: contentAssetRevision?.id ?? null,
       revisionApprovalState: contentAssetRevision?.approvalState ?? null,
       title: contentAssetRevision?.title ?? contentAsset.title,
@@ -538,6 +544,8 @@ export async function listScheduledPosts(
           contentAsset: {
             select: {
               id: true,
+              sermonId: true,
+              sermon: { select: { title: true } },
               title: true,
               assetType: true,
               status: true,

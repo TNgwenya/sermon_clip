@@ -24,7 +24,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     contentAssetId: url.searchParams.get("contentAssetId"),
     organizationId: requestContext.organizationId,
     campusId: requestContext.campusId,
-    includeContentAssetFiles: false,
+    includeContentAssetFiles: true,
   });
   return NextResponse.json({ scheduledPosts });
 }

@@ -650,6 +650,371 @@
   outline-offset: 2px;
 }
 
+#sermon-library,
+#sermon-assets,
+#publishing-operations {
+  scroll-margin-top: 1.25rem;
+}
+
+.sermon-publishing-library,
+.sermon-publishing-focus {
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 18px;
+  padding: clamp(1rem, 2.4vw, 1.75rem);
+  background:
+    radial-gradient(circle at 92% 0%, rgba(140, 229, 206, 0.095), transparent 31%),
+    linear-gradient(145deg, #151719, #0f1112 72%);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.18);
+}
+
+.sermon-library-heading,
+.sermon-focus-header,
+.sermon-focus-toolbar,
+.ready-secondary-operations-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+}
+
+.sermon-library-heading > div,
+.sermon-focus-header > div:first-child,
+.ready-secondary-operations-heading > div:first-child {
+  display: grid;
+  gap: 0.38rem;
+  max-width: 55rem;
+}
+
+.sermon-library-heading h2,
+.sermon-focus-header h2 {
+  color: #f6f6f2;
+  font-size: clamp(1.65rem, 3vw, 2.5rem);
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+}
+
+.sermon-library-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.sermon-library-card {
+  display: grid;
+  align-content: start;
+  gap: 0.9rem;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 14px;
+  padding: 1rem;
+  background: rgba(7, 9, 10, 0.55);
+  transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.sermon-library-card:hover {
+  border-color: rgba(140, 229, 206, 0.3);
+  background: rgba(12, 16, 16, 0.76);
+  transform: translateY(-2px);
+}
+
+.sermon-library-card-head,
+.sermon-library-card-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.9rem;
+}
+
+.sermon-library-card-head > div {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+}
+
+.sermon-library-card h3 {
+  color: #f3f4ef;
+  font-size: clamp(1.15rem, 2vw, 1.45rem);
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+
+.sermon-library-total {
+  display: grid;
+  place-items: center;
+  flex: 0 0 3.35rem;
+  min-height: 3.35rem;
+  border: 1px solid rgba(140, 229, 206, 0.22);
+  border-radius: 50%;
+  color: #dffaf3;
+  font-size: 1.1rem;
+  font-weight: 900;
+  line-height: 0.9;
+  background: rgba(140, 229, 206, 0.055);
+}
+
+.sermon-library-total small {
+  color: #8faaa4;
+  font-size: 0.55rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sermon-library-metrics,
+.sermon-focus-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+}
+
+.sermon-library-metrics > span,
+.sermon-focus-metrics > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 999px;
+  padding: 0.37rem 0.56rem;
+  color: #94989d;
+  font-size: 0.7rem;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.sermon-library-metrics strong,
+.sermon-focus-metrics strong {
+  color: #e9ece8;
+  font-size: 0.82rem;
+}
+
+.sermon-library-preview {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sermon-library-preview li {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, auto) minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: baseline;
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+  padding: 0.55rem 0;
+}
+
+.sermon-library-preview li > span {
+  color: #7f9f97;
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.sermon-library-preview li > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #cfd1cd;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sermon-library-card-footer {
+  align-items: center;
+  margin-top: auto;
+}
+
+.sermon-library-card-footer > span {
+  color: #9da09f;
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.sermon-library-card-footer > span.needs-attention {
+  color: #f6c971;
+}
+
+.sermon-library-card-footer > span.is-ready {
+  color: #9ee8d5;
+}
+
+.sermon-publishing-empty {
+  display: grid;
+  justify-items: start;
+  gap: 0.65rem;
+  min-height: 13rem;
+  align-content: center;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 1.25rem;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.sermon-focus-toolbar {
+  align-items: center;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.sermon-focus-back,
+.sermon-focus-links a,
+.ready-secondary-operation-links a {
+  color: #b6ede1;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.sermon-focus-links,
+.ready-secondary-operation-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+}
+
+.sermon-focus-links a,
+.ready-secondary-operation-links a {
+  color: #a1a4a7;
+}
+
+.sermon-focus-links a:hover,
+.ready-secondary-operation-links a:hover {
+  color: #e2faf4;
+}
+
+.sermon-focus-header {
+  align-items: end;
+}
+
+.sermon-focus-byline {
+  margin: 0.15rem 0 0;
+  color: #a7bcb7;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.sermon-focus-metrics {
+  max-width: 25rem;
+  justify-content: flex-end;
+}
+
+.sermon-asset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.sermon-asset-card {
+  display: grid;
+  grid-template-columns: 7.4rem minmax(0, 1fr);
+  min-width: 0;
+  min-height: 12rem;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 13px;
+  background: rgba(6, 8, 9, 0.58);
+}
+
+.sermon-asset-visual {
+  position: relative;
+  min-height: 100%;
+  overflow: hidden;
+  background: #0b0d0e;
+}
+
+.sermon-asset-visual > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.sermon-asset-visual > span {
+  position: absolute;
+  left: 0.45rem;
+  bottom: 0.45rem;
+  max-width: calc(100% - 0.9rem);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 0.25rem 0.42rem;
+  color: #eef8f5;
+  font-size: 0.58rem;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: rgba(7, 9, 10, 0.82);
+  backdrop-filter: blur(7px);
+}
+
+.sermon-asset-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 35% 25%, rgba(140, 229, 206, 0.22), transparent 30%),
+    linear-gradient(145deg, #19221f, #111416);
+}
+
+.sermon-asset-placeholder > span {
+  color: rgba(223, 250, 243, 0.85);
+  font-size: 1.75rem;
+  font-weight: 900;
+  letter-spacing: -0.06em;
+}
+
+.sermon-asset-copy {
+  display: grid;
+  align-content: start;
+  gap: 0.62rem;
+  min-width: 0;
+  padding: 0.85rem;
+}
+
+.sermon-asset-copy h3 {
+  color: #eef0ec;
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.sermon-asset-copy > p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.sermon-asset-copy > .button {
+  align-self: end;
+  margin-top: auto;
+}
+
+.sermon-asset-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.ready-secondary-operations {
+  padding-top: clamp(1rem, 2vw, 1.5rem);
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.ready-secondary-operations-heading {
+  align-items: end;
+  padding-inline: 0.2rem;
+}
+
+.ready-secondary-operations-heading h2 {
+  color: #e8e9e5;
+  font-size: clamp(1.3rem, 2.3vw, 1.8rem);
+}
+
+.ready-secondary-operation-links {
+  justify-content: flex-end;
+}
+
 .premium-ready-prep {
   border-radius: 16px;
   border-color: rgba(140, 229, 206, 0.16);
@@ -995,6 +1360,291 @@
   font-size: clamp(1.25rem, 2vw, 1.75rem);
 }
 
+.premium-ready-calendar .social-calendar-post {
+  width: 100%;
+  appearance: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.premium-ready-calendar .social-calendar-post:hover,
+.premium-ready-calendar .social-calendar-post.is-selected {
+  border-color: rgba(140, 229, 206, 0.5);
+  background: rgba(140, 229, 206, 0.055);
+}
+
+.premium-ready-calendar .social-calendar-post.is-selected {
+  box-shadow: 0 0 0 1px rgba(140, 229, 206, 0.12);
+}
+
+.social-calendar-post-essential {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.2rem 0.45rem;
+  margin-top: 0.18rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.social-calendar-post-essential > span {
+  color: #92969a;
+  font-size: 0.64rem;
+  font-weight: 850;
+}
+
+.social-calendar-post-essential > span.needs-attention {
+  color: #f6c971;
+}
+
+.calendar-selected-review {
+  display: grid;
+  grid-template-columns: minmax(11rem, 15rem) minmax(0, 1fr);
+  gap: 1rem;
+  overflow: hidden;
+  border: 1px solid rgba(140, 229, 206, 0.2);
+  border-radius: 14px;
+  padding: 0.85rem;
+  background:
+    radial-gradient(circle at 94% 0%, rgba(140, 229, 206, 0.07), transparent 32%),
+    #151719;
+}
+
+.calendar-selected-media {
+  min-height: 16rem;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 11px;
+  background: #0b0d0e;
+}
+
+.calendar-selected-media > img {
+  width: 100%;
+  height: 100%;
+  max-height: 25rem;
+  object-fit: cover;
+}
+
+.calendar-selected-media-placeholder {
+  width: 100%;
+  height: 100%;
+  min-height: 16rem;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 0.8rem;
+  color: #dff8f1;
+  background: linear-gradient(145deg, rgba(140, 229, 206, 0.12), rgba(13, 15, 16, 0.92));
+}
+
+.calendar-selected-media-placeholder .social-platform-icon {
+  width: 2rem;
+  height: 2rem;
+}
+
+.calendar-selected-media-placeholder > span {
+  color: #9aa7a3;
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.calendar-selected-main {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.calendar-selected-heading,
+.calendar-selected-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.calendar-selected-heading > div {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.calendar-selected-heading h3 {
+  color: #f3f4f0;
+  font-size: clamp(1.2rem, 2.2vw, 1.65rem);
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+}
+
+.calendar-selected-sermon {
+  margin: 0;
+  color: #b0c9c3;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.calendar-selected-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.calendar-selected-meta > div {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 9px;
+  padding: 0.55rem;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.calendar-selected-meta dt {
+  color: #7f8388;
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.calendar-selected-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #dfe1dd;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.calendar-selected-copy {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 10px;
+  padding: 0.7rem;
+  background: rgba(3, 5, 6, 0.3);
+}
+
+.calendar-selected-section-heading {
+  align-items: center;
+}
+
+.calendar-selected-section-heading > strong {
+  color: #e9ebe7;
+  font-size: 0.78rem;
+}
+
+.calendar-selected-section-heading .button {
+  min-height: 2rem;
+  padding-inline: 0.55rem;
+  font-size: 0.7rem;
+}
+
+.calendar-selected-copy > p {
+  max-height: 11rem;
+  overflow: auto;
+  margin: 0;
+  color: #c2c5c1;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.calendar-selected-copy > small {
+  color: #8f9397;
+  font-size: 0.72rem;
+}
+
+.calendar-selected-lock-note {
+  margin: 0;
+  border-left: 2px solid #60a5fa;
+  padding: 0.5rem 0.65rem;
+  color: #bfdbfe;
+  font-size: 0.75rem;
+  background: rgba(59, 130, 246, 0.055);
+}
+
+.calendar-selected-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.calendar-selected-actions .social-calendar-reschedule-field {
+  grid-column: span 2;
+}
+
+.calendar-selected-actions .button {
+  width: 100%;
+  min-height: 2.45rem;
+  padding-inline: 0.45rem;
+  font-size: 0.72rem;
+}
+
+.calendar-selected-empty {
+  display: grid;
+  place-items: center;
+  gap: 0.25rem;
+  min-height: 7rem;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  color: #dedfdb;
+  text-align: center;
+}
+
+.calendar-selected-empty > span {
+  color: #8e9196;
+  font-size: 0.76rem;
+}
+
+.calendar-unscheduled-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.calendar-unscheduled-card {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 9px;
+  padding: 0.55rem;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.018);
+  cursor: pointer;
+}
+
+.calendar-unscheduled-card:hover,
+.calendar-unscheduled-card.is-selected {
+  border-color: rgba(140, 229, 206, 0.38);
+  background: rgba(140, 229, 206, 0.045);
+}
+
+.calendar-unscheduled-card > div:nth-child(2) {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.calendar-unscheduled-card > div:nth-child(2) > strong {
+  overflow: hidden;
+  color: #e6e8e4;
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-unscheduled-card > div:nth-child(2) > span {
+  color: #8e9296;
+  font-size: 0.7rem;
+}
+
 .publishing-service-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1236,6 +1886,15 @@
 }
 
 @media (max-width: 1120px) {
+  .sermon-asset-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .calendar-selected-meta,
+  .calendar-selected-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .premium-review-card .review-feed-card-layout {
     grid-template-columns: minmax(210px, 235px) minmax(0, 1fr);
   }
@@ -1288,6 +1947,93 @@
 }
 
 @media (max-width: 760px) {
+  .sermon-publishing-library,
+  .sermon-publishing-focus {
+    border-radius: 14px;
+    padding: 0.9rem;
+  }
+
+  .sermon-library-heading,
+  .sermon-focus-header,
+  .sermon-focus-toolbar,
+  .ready-secondary-operations-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sermon-library-heading > .button {
+    width: 100%;
+  }
+
+  .sermon-library-grid,
+  .sermon-asset-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sermon-focus-links,
+  .ready-secondary-operation-links {
+    width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 0.2rem;
+    scrollbar-width: none;
+  }
+
+  .sermon-focus-links a,
+  .ready-secondary-operation-links a {
+    flex: 0 0 auto;
+  }
+
+  .sermon-focus-metrics {
+    max-width: none;
+    justify-content: flex-start;
+  }
+
+  .sermon-asset-card {
+    grid-template-columns: 6.7rem minmax(0, 1fr);
+  }
+
+  .sermon-library-card-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sermon-library-card-footer > .button {
+    width: 100%;
+  }
+
+  .calendar-selected-review {
+    grid-template-columns: 1fr;
+  }
+
+  .calendar-selected-media {
+    min-height: 12rem;
+    max-height: 22rem;
+  }
+
+  .calendar-selected-meta,
+  .calendar-selected-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .calendar-selected-actions .social-calendar-reschedule-field {
+    grid-column: 1;
+  }
+
+  .calendar-selected-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .calendar-unscheduled-card {
+    grid-template-columns: 2.5rem minmax(0, 1fr);
+  }
+
+  .calendar-unscheduled-card > .status-pill {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
   .premium-review-shell {
     padding-inline: 0.75rem;
   }

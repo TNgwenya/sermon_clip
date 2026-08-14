@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildScheduledPostSermonLabel,
+  buildScheduledPostTypeLabel,
   ReadyQueueExperience,
   type ReadyQueueClip,
   selectVisibleCalendarPosts,
@@ -110,8 +112,23 @@ describe("ready-to-post compact planner", () => {
 
     expect(markup.match(/class="social-calendar-day /g)).toHaveLength(7);
     expect(markup).toContain("aria-pressed=\"true\">7 days");
-    expect(markup.match(/class="social-calendar-post is-planned"/g)).toHaveLength(2);
+    expect(markup.match(/class="social-calendar-post is-planned[^\"]*"/g)).toHaveLength(2);
     expect(markup).toContain("Show 1 more");
+  });
+
+  it("keeps calendar cards concise and moves copy and actions to one selected review surface", () => {
+    const markup = renderPlanner();
+    const firstEvent = markup.match(/<button[^>]*class="social-calendar-post[^>]*>[\s\S]*?<\/button>/)?.[0] ?? "";
+
+    expect(firstEvent).toContain("Planned message 0");
+    expect(firstEvent).toContain("Instagram");
+    expect(firstEvent).toContain("Planned");
+    expect(firstEvent).not.toContain("Caption 0");
+    expect(firstEvent).not.toContain("Manage post");
+    expect(markup.match(/Selected calendar item/g)).toHaveLength(1);
+    expect(markup).toContain("Caption 0");
+    expect(markup).toContain("Save new time");
+    expect(markup).toContain("Mark posted");
   });
 
   it("returns every post when a calendar day is expanded", () => {
@@ -136,6 +153,8 @@ describe("ready-to-post compact planner", () => {
     post.title = "Grace for today";
     post.contentAssets = [{
       id: "asset-1",
+      sermonId: "sermon-1",
+      sermonTitle: "Grace Under Pressure",
       title: "Grace for today",
       assetType: "QUOTE_GRAPHIC",
       status: "SCHEDULED",
@@ -167,6 +186,9 @@ describe("ready-to-post compact planner", () => {
     );
 
     expect(markup).toContain("Grace for today");
+    expect(markup).toContain("Grace Under Pressure");
+    expect(buildScheduledPostSermonLabel(post, [])).toBe("Grace Under Pressure");
+    expect(buildScheduledPostTypeLabel(post)).toBe("Quote Graphic");
   });
 
   it("gives every planned post a programmatic calendar focus target", () => {
@@ -175,7 +197,7 @@ describe("ready-to-post compact planner", () => {
     expect(markup).toContain('id="posting-calendar"');
     expect(markup).toContain('tabindex="-1"');
     expect(markup).toContain('id="scheduled-post-post-0"');
-    expect(markup).toContain("Instagram: Planned message 0. Manual media-team handoff.");
+    expect(markup).toContain("Instagram: Planned message 0. Sermon not linked. Planned.");
   });
 
   it("keeps a directly focused clip visible after it has moved into the publishing plan", () => {

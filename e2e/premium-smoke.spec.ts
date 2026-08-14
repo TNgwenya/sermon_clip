@@ -31,6 +31,8 @@ test("pastor can reach the core content workflow", async ({ page }) => {
   await expect(page.getByRole("navigation", { name: "Weekly plan actions" })).toBeVisible();
 
   await openWorkspaceRoute(page, "/ready-to-post");
+  await expect(page.getByRole("heading", { name: "Your sermons, ready to share." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Choose a sermon. See everything it created." })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Publishing desk sections" })).toBeVisible();
 
   await openWorkspaceRoute(page, "/growth");

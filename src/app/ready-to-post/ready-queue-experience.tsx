@@ -291,6 +291,39 @@ function buildScheduledPostTitle(post: ScheduledPost, clips: ReadyQueueClip[]): 
   return post.clipIds.length === 1 ? handoffTitle : `${handoffTitle} + ${post.clipIds.length - 1} more`;
 }
 
+export function buildScheduledPostSermonLabel(post: ScheduledPost, clips: ReadyQueueClip[]): string {
+  const clipsById = new Map(clips.map((clip) => [clip.id, clip]));
+  const sermonTitles = new Set<string>();
+  post.clipIds.forEach((clipId) => {
+    const sermonTitle = clipsById.get(clipId)?.sermon.title.trim();
+    if (sermonTitle) sermonTitles.add(sermonTitle);
+  });
+  (post.contentAssets ?? []).forEach((asset) => {
+    const sermonTitle = asset.sermonTitle?.trim();
+    if (sermonTitle) sermonTitles.add(sermonTitle);
+  });
+
+  const titles = Array.from(sermonTitles);
+  if (titles.length === 0) return "Sermon not linked";
+  if (titles.length === 1) return titles[0];
+  return `${titles[0]} + ${titles.length - 1} more sermon${titles.length === 2 ? "" : "s"}`;
+}
+
+export function buildScheduledPostTypeLabel(post: ScheduledPost): string {
+  const assetTypes = Array.from(new Set((post.contentAssets ?? []).map((asset) => asset.assetType)));
+  if (assetTypes.length > 0) {
+    const firstType = assetTypes[0]
+      .toLowerCase()
+      .split("_")
+      .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
+      .join(" ");
+    return assetTypes.length === 1 ? firstType : `${firstType} + ${assetTypes.length - 1} more`;
+  }
+  if (post.clipIds.length === 1) return "Sermon clip";
+  if (post.clipIds.length > 1) return `${post.clipIds.length} sermon clips`;
+  return "Social post";
+}
+
 function getPlatformClass(platform: ScheduledPost["platform"]): string {
   return platform.toLowerCase().replace(/\s+/g, "-");
 }
@@ -540,6 +573,180 @@ function PublishingTechnicalDetails({ post }: { post: ScheduledPost }) {
         <div><dt>Support reference</dt><dd>{post.id.slice(-10)}</dd></div>
       </dl>
     </details>
+  );
+}
+
+function CalendarPostReview({
+  post,
+  clips,
+  pending,
+  controlPanelMode,
+  rescheduleValue,
+  onRescheduleValue,
+  onReschedule,
+  onRequestAction,
+}: {
+  post: ScheduledPost;
+  clips: ReadyQueueClip[];
+  pending: boolean;
+  controlPanelMode: boolean;
+  rescheduleValue: string | undefined;
+  onRescheduleValue: (value: string) => void;
+  onReschedule: () => void;
+  onRequestAction: (action: PublishingConfirmationAction) => void;
+}) {
+  const title = buildScheduledPostTitle(post, clips);
+  const captionText = buildScheduledPostCaption(post, clips);
+  const sermonLabel = buildScheduledPostSermonLabel(post, clips);
+  const typeLabel = buildScheduledPostTypeLabel(post);
+  const firstClip = post.clipIds.map((clipId) => clips.find((clip) => clip.id === clipId)).find(Boolean) ?? null;
+  const firstContentAsset = post.contentAssets?.[0] ?? null;
+  const previewFile = firstContentAsset?.files.find((file) => file.mimeType.startsWith("image/")) ?? null;
+  const platformHandoff = firstClip ? getPlatformHandoff(firstClip, post.platform) : null;
+  const downloadHref = buildPackageHistoryDownloadHref(post.clipIds);
+  const publishingLocked = isPublishingInFlight(post);
+  const canReschedule = canReschedulePublishingPost(post);
+  const canCancel = canCancelPublishingPost(post);
+  const canQueueForPublishing = post.automationMode === "AUTOMATIC"
+    && (post.status === "PLANNED" || post.status === "FAILED")
+    && !post.externalPostId
+    && !post.publishedUrl
+    && !post.finalPrivacyStatus;
+
+  return (
+    <aside className="calendar-selected-review" aria-label={`Review scheduled post: ${title}`}>
+      <div className="calendar-selected-media">
+        {previewFile && firstContentAsset ? (
+          <Image
+            src={`/api/content-assets/${firstContentAsset.id}/files/${previewFile.id}`}
+            alt={`Preview of ${title}`}
+            width={previewFile.width ?? 720}
+            height={previewFile.height ?? 720}
+            unoptimized
+          />
+        ) : firstClip ? (
+          <Image
+            src={`/api/clips/${firstClip.id}/thumbnail`}
+            alt={`Preview of ${title}`}
+            width={360}
+            height={640}
+            unoptimized
+          />
+        ) : (
+          <div className="calendar-selected-media-placeholder">
+            <PlatformIcon platform={post.platform} />
+            <span>{typeLabel}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="calendar-selected-main">
+        <div className="calendar-selected-heading">
+          <div>
+            <p className="kicker">Selected calendar item</p>
+            <h3>{title}</h3>
+            <p className="calendar-selected-sermon">{sermonLabel}</p>
+          </div>
+          <span className={`status-pill ${post.status === "POSTED" ? "status-exported" : ATTENTION_CALENDAR_STATUSES.has(post.status) ? "tone-warning" : ""}`}>
+            {SCHEDULED_POST_STATUS_LABELS[post.status]}
+          </span>
+        </div>
+
+        <dl className="calendar-selected-meta">
+          <div><dt>Type</dt><dd>{typeLabel}</dd></div>
+          <div><dt>Platform</dt><dd>{post.platform}</dd></div>
+          <div><dt>Scheduled</dt><dd>{post.scheduledFor ? formatCalendarTime(post.scheduledFor, post.timezone ?? DEFAULT_DISPLAY_TIME_ZONE) : "Time pending"}</dd></div>
+          <div><dt>Handoff</dt><dd>{post.automationMode === "AUTOMATIC" ? "Automatic" : "Manual"}</dd></div>
+        </dl>
+
+        <div className="calendar-selected-copy">
+          <div className="calendar-selected-section-heading">
+            <strong>{post.platform === "YouTube Shorts" ? "Title and description" : "Post copy"}</strong>
+            <CopyCaptionButton
+              label={post.platform === "YouTube Shorts" ? "Copy title" : "Copy copy"}
+              text={post.platform === "YouTube Shorts" ? title : captionText || "Copy pending"}
+            />
+          </div>
+          <p>{captionText || "No post copy has been saved yet."}</p>
+          {post.note ? <small>Team note: {post.note}</small> : null}
+        </div>
+
+        {post.publishError ? (
+          <div className="error-banner stack-sm">
+            <span>{formatPublishingError(post.publishError)}</span>
+            <Link href="/settings/social" className="text-link small">Review social channels</Link>
+          </div>
+        ) : null}
+
+        {publishingLocked ? (
+          <p className="calendar-selected-lock-note">Publishing is in progress. Schedule and status changes stay locked until the current attempt finishes.</p>
+        ) : null}
+
+        <div className="calendar-selected-actions">
+          <label className="social-calendar-reschedule-field" htmlFor={`selected-reschedule-${post.id}`}>
+            <span>Date and time</span>
+            <input
+              id={`selected-reschedule-${post.id}`}
+              type="datetime-local"
+              value={rescheduleValue ?? (post.scheduledFor
+                ? toDateTimeInputValueInTimeZone(new Date(post.scheduledFor), post.timezone ?? DEFAULT_DISPLAY_TIME_ZONE)
+                : "")}
+              onChange={(event) => onRescheduleValue(event.target.value)}
+              disabled={pending || publishingLocked || !canReschedule}
+            />
+          </label>
+          <button type="button" className="button secondary" onClick={onReschedule} disabled={pending || publishingLocked || !canReschedule}>
+            {pending ? "Saving..." : "Save new time"}
+          </button>
+          {canQueueForPublishing ? (
+            <button type="button" className="button primary" onClick={() => onRequestAction("QUEUE")} disabled={pending}>
+              {pending ? "Queuing..." : post.status === "FAILED" ? "Retry publishing" : "Queue for publishing"}
+            </button>
+          ) : null}
+          {post.automationMode === "MANUAL" && post.clipIds.length > 0 && !controlPanelMode ? (
+            <a className="button secondary" href={downloadHref}>Download media</a>
+          ) : null}
+          {firstContentAsset ? (
+            <Link
+              className="button tertiary"
+              href={`/ready-to-post?${firstContentAsset.sermonId ? `sermonId=${encodeURIComponent(firstContentAsset.sermonId)}&` : ""}contentAssetId=${encodeURIComponent(firstContentAsset.id)}#generated-content-assets`}
+            >
+              Review post asset
+            </Link>
+          ) : null}
+          {post.automationMode === "MANUAL" && platformHandoff ? (
+            <a className="button tertiary" href={platformHandoff.uploadUrl} target="_blank" rel="noreferrer">
+              {getPlatformUploadActionLabel(post.platform)}
+            </a>
+          ) : null}
+          <button
+            type="button"
+            className={canQueueForPublishing ? "button tertiary" : "button primary"}
+            onClick={() => onRequestAction("MARK_POSTED")}
+            disabled={pending || publishingLocked || post.status === "POSTED"}
+          >
+            {pending ? "Updating..." : "Mark posted"}
+          </button>
+          {post.status !== "POSTED" ? (
+            <button type="button" className="button tertiary" onClick={() => onRequestAction("SKIP")} disabled={pending || publishingLocked || post.status === "SKIPPED"}>
+              Skip
+            </button>
+          ) : null}
+          {canCancel ? (
+            <button type="button" className="button tertiary" onClick={() => onRequestAction("CANCEL")} disabled={pending || publishingLocked}>
+              Remove from plan
+            </button>
+          ) : null}
+        </div>
+
+        {post.publishedUrl ? (
+          <a className="text-link small" href={post.publishedUrl} target="_blank" rel="noreferrer">
+            {post.status === "POSTED" ? "View published post" : "Review platform result"}
+          </a>
+        ) : null}
+        {post.automationMode === "AUTOMATIC" ? <PublishingTechnicalDetails post={post} /> : null}
+      </div>
+    </aside>
   );
 }
 
@@ -875,6 +1082,9 @@ export function ReadyQueueExperience({
   const [focusedClipId, setFocusedClipId] = useState<string | null>(
     clips.some((clip) => clip.id === initialFocusedClipId) ? initialFocusedClipId : clips[0]?.id ?? null,
   );
+  const [selectedCalendarPostId, setSelectedCalendarPostId] = useState<string | null>(
+    initialFocusedScheduledPostId ?? initialScheduledPosts[0]?.id ?? null,
+  );
   const [activeCaptionPlatform, setActiveCaptionPlatform] = useState<ScheduledPost["platform"]>("TikTok");
   const [videoPreviewStates, setVideoPreviewStates] = useState<Record<string, VideoPreviewState>>({});
   const [calendarStartDate, setCalendarStartDate] = useState(() => {
@@ -1020,6 +1230,9 @@ export function ReadyQueueExperience({
     )),
     [clipScopeIdSet, contentAssetScopeIdSet, scheduledPosts],
   );
+  const selectedCalendarPost = scopedScheduledPosts.find((post) => post.id === selectedCalendarPostId)
+    ?? scopedScheduledPosts[0]
+    ?? null;
   const postedCount = scopedScheduledPosts.filter((post) => post.status === "POSTED").length;
   const filteredScheduledPosts = scopedScheduledPosts.filter((post) => post.status === publishingFilter);
   const groupedScheduledPosts = Array.from(
@@ -1206,6 +1419,7 @@ export function ReadyQueueExperience({
         }
 
         setPublishingMessage(`${methodLabel}. ${detail.title} is now focused in the calendar.`);
+        setSelectedCalendarPostId(detail.scheduledPostId);
         window.requestAnimationFrame(() => focusScheduledPostEntry(detail.scheduledPostId));
       })();
     };
@@ -1239,6 +1453,7 @@ export function ReadyQueueExperience({
     if (Number.isNaN(scheduledDate.getTime())) return;
     const calendarDayKey = resolveCalendarDayKey(scheduledDate);
     const frame = window.requestAnimationFrame(() => {
+      setSelectedCalendarPostId(initialFocusedScheduledPostId);
       setCalendarStartDate(startOfCalendarDay(scheduledDate));
       setPlannerExpanded(false);
       setCalendarPlatformFilter("ALL");
@@ -1289,7 +1504,13 @@ export function ReadyQueueExperience({
         setPublishingMessage(data.error ?? "Could not update this scheduled post.");
         return false;
       }
-      setScheduledPosts((current) => current.map((post) => (post.id === postId ? data.scheduledPost : post)));
+      setScheduledPosts((current) => current.map((post) => (post.id === postId
+        ? {
+            ...post,
+            ...data.scheduledPost,
+            contentAssets: data.scheduledPost.contentAssets ?? post.contentAssets,
+          }
+        : post)));
       if ("action" in body && body.action === "POST_NOW") {
         const previousPost = scheduledPosts.find((post) => post.id === postId);
         setPublishingMessage(previousPost?.status === "FAILED"
@@ -2038,28 +2259,19 @@ export function ReadyQueueExperience({
                   <p className="social-calendar-open-slot">Nothing planned yet.</p>
                 ) : visiblePosts.map((post) => {
                   const title = buildScheduledPostTitle(post, clips);
-                  const captionText = buildScheduledPostCaption(post, clips);
-                  const isPending = pendingScheduledPostId === post.id;
-                  const publishingLocked = isPublishingInFlight(post);
-                  const canReschedule = canReschedulePublishingPost(post);
-                  const canCancel = canCancelPublishingPost(post);
-                  const canQueueForPublishing = post.automationMode === "AUTOMATIC"
-                    && (post.status === "PLANNED" || post.status === "FAILED")
-                    && !post.externalPostId
-                    && !post.publishedUrl
-                    && !post.finalPrivacyStatus;
-                  const queueActionLabel = post.status === "FAILED" ? "Retry publishing" : "Queue for publishing";
-                  const queuePendingLabel = post.status === "FAILED" ? "Retrying..." : "Queuing...";
-                  const receipt = buildPublishingReceipt(post);
+                  const sermonLabel = buildScheduledPostSermonLabel(post, clips);
+                  const typeLabel = buildScheduledPostTypeLabel(post);
+                  const isSelected = selectedCalendarPost?.id === post.id;
 
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={post.id}
                       id={scheduledPostElementId(post.id)}
-                      className={`social-calendar-post ${getCalendarPostToneClass(post)}`}
-                      role="group"
-                      aria-label={`${formatCalendarTime(post.scheduledFor, post.timezone ?? DEFAULT_DISPLAY_TIME_ZONE)} ${post.platform}: ${title}. ${post.automationMode === "AUTOMATIC" ? "Automatic publishing" : "Manual media-team handoff"}.`}
-                      tabIndex={-1}
+                      className={`social-calendar-post ${getCalendarPostToneClass(post)} ${isSelected ? "is-selected" : ""}`}
+                      aria-label={`${formatCalendarTime(post.scheduledFor, post.timezone ?? DEFAULT_DISPLAY_TIME_ZONE)} ${post.platform}: ${title}. ${sermonLabel}. ${SCHEDULED_POST_STATUS_LABELS[post.status]}.`}
+                      aria-pressed={isSelected}
+                      onClick={() => setSelectedCalendarPostId(post.id)}
                     >
                       <div className={`platform-mark platform-${getPlatformClass(post.platform)}`} aria-hidden="true">
                         <PlatformIcon platform={post.platform} />
@@ -2067,86 +2279,15 @@ export function ReadyQueueExperience({
                       <div className="social-calendar-post-copy">
                         <strong>{formatCalendarTime(post.scheduledFor, post.timezone ?? DEFAULT_DISPLAY_TIME_ZONE)} · {post.platform}</strong>
                         <span>{title}</span>
-                        <small>{post.socialAccountLabel ?? "Media team handoff"}</small>
-                        <div className="clip-badge-row">
-                          <span className={`status-pill ${post.status === "POSTED" ? "status-exported" : ""}`}>
+                        <small>{sermonLabel}</small>
+                        <div className="social-calendar-post-essential">
+                          <span>{typeLabel}</span>
+                          <span className={ATTENTION_CALENDAR_STATUSES.has(post.status) ? "needs-attention" : ""}>
                             {SCHEDULED_POST_STATUS_LABELS[post.status]}
                           </span>
-                          <span className="status-pill">{post.automationMode === "AUTOMATIC" ? "Automatic" : "Manual"}</span>
-                          {(post.contentAssets ?? []).slice(0, 2).map((asset) => (
-                            <span key={asset.id} className="status-pill">{asset.assetType.replace(/_/g, " ").toLowerCase()}</span>
-                          ))}
                         </div>
-                        {post.publishError ? (
-                          <div className="error-banner stack-sm">
-                            <span>{formatPublishingError(post.publishError)}</span>
-                            <Link href="/settings/social" className="text-link small">Review social channels</Link>
-                          </div>
-                        ) : null}
-                        <div className={`${boardStyles.receipt} ${getReceiptToneClass(receipt.tone)}`}>
-                          <span>{receipt.label}</span>
-                          <small>{receipt.detail}</small>
-                        </div>
-                        {post.automationMode === "AUTOMATIC" ? <PublishingTechnicalDetails post={post} /> : null}
                       </div>
-                      <details className="social-calendar-post-details">
-                        <summary>{publishingLocked ? "Publishing in progress" : "Manage post"}</summary>
-                        <div className="social-calendar-post-actions">
-                          <label className="social-calendar-reschedule-field" htmlFor={`reschedule-${post.id}`}>
-                            <span>Date and time</span>
-                            <input
-                              id={`reschedule-${post.id}`}
-                              type="datetime-local"
-                              value={rescheduleValues[post.id] ?? (post.scheduledFor
-                                ? toDateTimeInputValueInTimeZone(
-                                    new Date(post.scheduledFor),
-                                    post.timezone ?? DEFAULT_DISPLAY_TIME_ZONE,
-                                  )
-                                : "")}
-                              onChange={(event) => updateRescheduleValue(post, event.target.value)}
-                              disabled={isPending || publishingLocked || !canReschedule}
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            className="button tertiary"
-                            onClick={() => reschedulePost(post)}
-                            disabled={isPending || publishingLocked || !canReschedule}
-                          >
-                            {isPending ? "Saving..." : "Save new time"}
-                          </button>
-                          {canQueueForPublishing ? (
-                            <button
-                              type="button"
-                              className="button tertiary"
-                              onClick={() => requestPublishingConfirmation(post, "QUEUE")}
-                              disabled={isPending}
-                            >
-                              {isPending ? queuePendingLabel : queueActionLabel}
-                            </button>
-                          ) : null}
-                          <CopyCaptionButton label="Copy caption" text={captionText || "Caption pending"} />
-                          <button
-                            type="button"
-                            className="button tertiary"
-                            onClick={() => requestPublishingConfirmation(post, "MARK_POSTED")}
-                            disabled={isPending || publishingLocked || post.status === "POSTED"}
-                          >
-                            {isPending ? "Updating..." : "Mark posted"}
-                          </button>
-                          {canCancel ? (
-                            <button
-                              type="button"
-                              className="button tertiary"
-                              onClick={() => requestPublishingConfirmation(post, "CANCEL")}
-                              disabled={isPending || publishingLocked}
-                            >
-                              Remove from plan
-                            </button>
-                          ) : null}
-                        </div>
-                      </details>
-                    </div>
+                    </button>
                   );
                 })}
                 {day.posts.length > COLLAPSED_CALENDAR_POST_LIMIT ? (
@@ -2167,32 +2308,45 @@ export function ReadyQueueExperience({
           })}
         </div>
 
+        {selectedCalendarPost ? (
+          <CalendarPostReview
+            post={selectedCalendarPost}
+            clips={clips}
+            pending={pendingScheduledPostId === selectedCalendarPost.id}
+            controlPanelMode={controlPanelMode}
+            rescheduleValue={rescheduleValues[selectedCalendarPost.id]}
+            onRescheduleValue={(value) => updateRescheduleValue(selectedCalendarPost, value)}
+            onReschedule={() => reschedulePost(selectedCalendarPost)}
+            onRequestAction={(action) => requestPublishingConfirmation(selectedCalendarPost, action)}
+          />
+        ) : (
+          <div className="calendar-selected-empty">
+            <strong>Select a calendar item to review it</strong>
+            <span>Full copy, media, and publishing actions stay outside the at-a-glance calendar.</span>
+          </div>
+        )}
+
         {unscheduledCalendarPosts.length > 0 ? (
           <details className="social-calendar-unscheduled">
             <summary>{unscheduledCalendarPosts.length} post{unscheduledCalendarPosts.length === 1 ? "" : "s"} without exact calendar time</summary>
-            <div className="manual-publishing-list">
+            <div className="calendar-unscheduled-list">
               {unscheduledCalendarPosts.slice(0, 6).map((post) => (
-                <article key={post.id} className="manual-publishing-card compact-calendar-card">
+                <button
+                  type="button"
+                  key={post.id}
+                  className={`calendar-unscheduled-card ${selectedCalendarPost?.id === post.id ? "is-selected" : ""}`}
+                  onClick={() => setSelectedCalendarPostId(post.id)}
+                  aria-pressed={selectedCalendarPost?.id === post.id}
+                >
                   <div className={`platform-mark platform-${getPlatformClass(post.platform)}`} aria-hidden="true">
                     <PlatformIcon platform={post.platform} />
                   </div>
-                  <div className="manual-publishing-copy">
-                    <h3>{post.platform} · {post.postingSlot}</h3>
-                    <p className="muted small">{buildScheduledPostTitle(post, clips)}</p>
-                    <span className="status-pill">{SCHEDULED_POST_STATUS_LABELS[post.status]}</span>
+                  <div>
+                    <strong>{buildScheduledPostTitle(post, clips)}</strong>
+                    <span>{buildScheduledPostSermonLabel(post, clips)} · {post.platform} · {buildScheduledPostTypeLabel(post)}</span>
                   </div>
-                  <div className="manual-publishing-actions">
-                    <CopyCaptionButton label="Copy caption" text={buildScheduledPostCaption(post, clips) || "Caption pending"} />
-                    <button
-                      type="button"
-                      className="button tertiary"
-                      onClick={() => requestPublishingConfirmation(post, "MARK_POSTED")}
-                      disabled={pendingScheduledPostId === post.id || isPublishingInFlight(post) || post.status === "POSTED"}
-                    >
-                      Mark posted
-                    </button>
-                  </div>
-                </article>
+                  <span className="status-pill">{SCHEDULED_POST_STATUS_LABELS[post.status]}</span>
+                </button>
               ))}
             </div>
           </details>

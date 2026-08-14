@@ -57,7 +57,7 @@ describe("scheduled-post publishing route tenant isolation", () => {
       contentAssetId: null,
       organizationId: "org-1",
       campusId: "campus-1",
-      includeContentAssetFiles: false,
+      includeContentAssetFiles: true,
     });
   });
 
