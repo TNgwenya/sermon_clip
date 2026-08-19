@@ -10,6 +10,8 @@ import { resolvePortableStoragePath } from "@/server/media/portableStoragePath";
 import { presignReadyS3SourcePreview } from "@/server/media/s3SourceStorage";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 
+const PRIVATE_SOURCE_PREVIEW_CACHE_CONTROL = "private, max-age=300, must-revalidate";
+
 async function fileHasBytes(filePath: string): Promise<boolean> {
   try {
     const fileStat = await stat(/* turbopackIgnore: true */ filePath);
@@ -89,7 +91,10 @@ export async function GET(
       return NextResponse.redirect(signedPreviewUrl, {
         status: 307,
         headers: {
-          "Cache-Control": "private, no-store",
+          // The presigned URL remains browser-private and expires shortly, but
+          // a small fresh window lets Studio's source warmup and visible player
+          // reuse the same authorized media ranges during boundary edits.
+          "Cache-Control": PRIVATE_SOURCE_PREVIEW_CACHE_CONTROL,
           "Referrer-Policy": "no-referrer",
         },
       });

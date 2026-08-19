@@ -104,7 +104,7 @@ describe("sermon source preview route tenant authorization", () => {
 
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toContain("signature=test");
-    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("cache-control")).toBe("private, max-age=300, must-revalidate");
     expect(response.headers.get("referrer-policy")).toBe("no-referrer");
     expect(mocks.presignReadyS3SourcePreview).toHaveBeenCalledWith({
       asset: sourceAsset,
