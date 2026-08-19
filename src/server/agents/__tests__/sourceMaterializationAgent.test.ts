@@ -59,6 +59,7 @@ describe("S3 sermon source materialization", () => {
     prismaMock.sermon.findUnique.mockResolvedValue({
       id: "sermon-1",
       title: "Sunday Service",
+      status: "CREATED",
       sourceVideoPath: null,
       sourceAsset: {
         bucket: "private-sources",
@@ -122,5 +123,32 @@ describe("S3 sermon source materialization", () => {
     expect(first).toEqual(second);
     expect(downloadMock).toHaveBeenCalledTimes(1);
     expect(processingMock.resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores retained media without regressing a sermon that already reached clip review", async () => {
+    prismaMock.sermon.findUnique.mockResolvedValueOnce({
+      id: "sermon-1",
+      title: "Sunday Service",
+      status: "CLIPS_GENERATED",
+      sourceVideoPath: null,
+      sourceAsset: {
+        bucket: "private-sources",
+        objectKey: "source.mp4",
+        region: "eu-central-1",
+        sizeBytes: BigInt(13),
+        status: "READY",
+      },
+    });
+    mediaGuardMock
+      .mockResolvedValueOnce({ usable: false, reason: "missing" })
+      .mockResolvedValueOnce({ usable: true, durationSeconds: 120 })
+      .mockResolvedValueOnce({ usable: true, durationSeconds: 120 });
+
+    await expect(materializeS3SermonSource("sermon-1")).resolves.toMatchObject({
+      reusedExistingFile: false,
+    });
+
+    expect(updateStatusMock).not.toHaveBeenCalled();
+    expect(processingMock.succeeded).toHaveBeenCalled();
   });
 });

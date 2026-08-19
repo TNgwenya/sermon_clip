@@ -43,6 +43,11 @@ const BEST_PREVIEW_CANDIDATES: ClipPreviewCandidateConfig[] = [
 
 export const BEST_PREVIEW_ORDER = BEST_PREVIEW_CANDIDATES.map((candidate) => candidate.pathKey);
 
+// The compact preview upload and the final render metadata are persisted in
+// separate operations. On a fast worker their timestamps can land a few
+// milliseconds out of order even though they describe the same render.
+export const REMOTE_PREVIEW_TIMESTAMP_TOLERANCE_MS = 1_000;
+
 function isFreshPreviewAsset(value: ClipPreviewAssetFreshness): boolean {
   return value === undefined || value === null || value === "UP_TO_DATE";
 }
@@ -78,7 +83,7 @@ export function isFreshRemotePreview(paths: Pick<
     return false;
   }
 
-  return uploadedAt >= renderedAt;
+  return uploadedAt >= renderedAt - REMOTE_PREVIEW_TIMESTAMP_TOLERANCE_MS;
 }
 
 export function resolveFreshRemotePreviewUrl(paths: Pick<

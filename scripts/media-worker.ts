@@ -10,6 +10,7 @@ import {
   formatDuration,
 } from "./worker-log.ts";
 import {
+  buildFailedMediaPreparationUpdate,
   runCaptionBurnBatch,
   runClipGenerationWorkerJob,
   runOverlayAndExportBatch,
@@ -74,6 +75,33 @@ const logger = createWorkerLogger("media");
 let processing = false;
 let scanningYoutube = false;
 
+async function markTargetedMediaPreparationFailed(
+  job: Pick<ProcessingJob, "sermonId" | "generationSummary">,
+  message: string,
+): Promise<void> {
+  const request = resolveMediaAssetWorkerRequest(job.generationSummary);
+  if (!request.clipIds || request.clipIds.length === 0) {
+    return;
+  }
+
+  try {
+    await prisma.clipCandidate.updateMany({
+      where: {
+        sermonId: job.sermonId,
+        id: { in: request.clipIds },
+        exportStatus: { not: "COMPLETED" },
+      },
+      data: buildFailedMediaPreparationUpdate(message),
+    });
+  } catch (error) {
+    logger.warn("could not persist targeted clip preparation failure", {
+      sermon: job.sermonId,
+      clips: request.clipIds.join(","),
+      ...errorFields(error),
+    });
+  }
+}
+
 const SERMON_STAGE_ORDER = [
   "CREATED",
   "DOWNLOADING",
@@ -124,6 +152,7 @@ async function failExhaustedStaleJobs(): Promise<void> {
   for (const job of staleJobs) {
     const message = `Media worker lease expired after ${job.attemptCount}/${maxWorkerAttempts} claim attempt(s).`;
     await markJobFailed(job.id, message, `${message} Start a new retry from the sermon recovery tools.`);
+    await markTargetedMediaPreparationFailed(job, message);
     logger.warn("stale job marked failed", {
       job: job.id,
       sermon: job.sermonId,
@@ -331,6 +360,7 @@ async function claimNextJob(): Promise<ProcessingJob | null> {
         message,
         `${message} Retry preparation to create a fresh ordered stage chain.`,
       );
+      await markTargetedMediaPreparationFailed(next, message);
       logger.warn("dependent media job failed closed", {
         job: next.id,
         sermon: next.sermonId,
@@ -632,6 +662,7 @@ async function processNextJob(): Promise<void> {
 
       logger.error("job failed", diagnosticFields);
       await markJobFailed(job.id, message, diagnosticLog);
+      await markTargetedMediaPreparationFailed(job, message);
     } finally {
       stopHeartbeat();
     }

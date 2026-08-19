@@ -42,6 +42,7 @@ async function runS3SermonSourceMaterialization(
     select: {
       id: true,
       title: true,
+      status: true,
       sourceVideoPath: true,
       sourceAsset: {
         select: {
@@ -77,11 +78,16 @@ async function runS3SermonSourceMaterialization(
 
   const job = await resolveProcessingJob(sermon.id, "DOWNLOAD_VIDEO", options?.processingJobId);
   const temporaryPath = temporaryS3SourcePath(sourceVideoPath);
+  const ownsEarlyPipelineStatus = sermon.status === "CREATED"
+    || sermon.status === "DOWNLOADING"
+    || sermon.status === "FAILED";
   try {
     await ensureProcessingJobRunning(job);
     await appendJobLog(job.id, "Private S3 source materialization started.");
     await appendPipelineLog(sermon.id, "Restoring the durable private S3 source to the media worker.");
-    await updateSermonStatus(sermon.id, "DOWNLOADING");
+    if (ownsEarlyPipelineStatus) {
+      await updateSermonStatus(sermon.id, "DOWNLOADING");
+    }
 
     const incomingBytes = Number(sermon.sourceAsset.sizeBytes);
     if (!Number.isSafeInteger(incomingBytes) || incomingBytes <= 0) {
@@ -115,7 +121,9 @@ async function runS3SermonSourceMaterialization(
         sourceDurationSeconds: finalizedSource.durationSeconds,
       },
     });
-    await updateSermonStatus(sermon.id, "DOWNLOADED");
+    if (ownsEarlyPipelineStatus) {
+      await updateSermonStatus(sermon.id, "DOWNLOADED");
+    }
     await markJobSucceeded(
       job.id,
       `Private S3 source restored and validated (${incomingBytes} bytes, ${finalizedSource.durationSeconds.toFixed(2)} seconds).`,
@@ -139,7 +147,9 @@ async function runS3SermonSourceMaterialization(
         objectKey: sermon.sourceAsset.objectKey,
       },
     });
-    await updateSermonStatus(sermon.id, "FAILED").catch(() => undefined);
+    if (ownsEarlyPipelineStatus) {
+      await updateSermonStatus(sermon.id, "FAILED").catch(() => undefined);
+    }
     throw error;
   }
 }

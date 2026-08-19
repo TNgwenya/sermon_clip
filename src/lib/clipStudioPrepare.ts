@@ -17,6 +17,7 @@ export type ClipStudioPrepareAssetSnapshot = {
   renderStatus: "NOT_RENDERED" | "QUEUED" | "RENDERING" | "COMPLETED" | "FAILED";
   renderFreshness?: ClipStudioPrepareFreshness | null;
   renderedFileReady: boolean;
+  framingPlanReady?: boolean;
   captionsEnabled: boolean;
   captionStatus: "NOT_GENERATED" | "GENERATING" | "GENERATED" | "FAILED";
   captionFreshness?: ClipStudioPrepareFreshness | null;
@@ -345,7 +346,8 @@ export function buildClipStudioPrepareAssetPlan(
   const prepareVideo =
     snapshot.renderStatus !== "COMPLETED" ||
     !isUpToDate(snapshot.renderFreshness) ||
-    !snapshot.renderedFileReady;
+    !snapshot.renderedFileReady ||
+    snapshot.framingPlanReady === false;
   const burnCaptions =
     snapshot.captionsEnabled &&
     (

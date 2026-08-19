@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildFailedMediaPreparationUpdate,
   runCaptionBurnBatch,
   runClipGenerationWorkerJob,
   runOverlayAndExportBatch,
@@ -14,6 +15,16 @@ import {
   summarizeRenderBatch,
   type OverlayExportClip,
 } from "../media-worker-jobs";
+
+describe("media preparation failure state", () => {
+  it("turns a failed targeted job into a retryable final-video failure", () => {
+    expect(buildFailedMediaPreparationUpdate("Source restoration failed.")).toEqual({
+      exportStatus: "FAILED",
+      exportFreshness: "NEEDS_REGENERATION",
+      exportError: "Source restoration failed.",
+    });
+  });
+});
 
 describe("media worker render outcomes", () => {
   it("returns a success summary only when every attempted render succeeds", () => {
