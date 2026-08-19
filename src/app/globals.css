@@ -16673,6 +16673,106 @@ textarea::placeholder {
   padding: 0.34rem 0.28rem;
 }
 
+.clip-studio-visible-range-editor {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid rgba(117, 217, 184, 0.34);
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, rgba(117, 217, 184, 0.1), rgba(126, 141, 255, 0.07)),
+    rgba(8, 12, 18, 0.86);
+  padding: 0.72rem;
+}
+
+.clip-studio-visible-range-heading,
+.clip-studio-visible-range-labels,
+.clip-studio-visible-range-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.clip-studio-visible-range-heading > div {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.clip-studio-visible-range-heading strong {
+  font-size: 0.86rem;
+}
+
+.clip-studio-visible-range-editor > p {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.clip-studio-visible-range-track {
+  height: 2.8rem;
+  min-height: 2.8rem;
+  overflow: hidden;
+  border-color: rgba(248, 250, 252, 0.2);
+  background:
+    repeating-linear-gradient(90deg, rgba(148, 163, 184, 0.12) 0 1px, transparent 1px 10%),
+    rgba(2, 6, 23, 0.74);
+}
+
+.clip-studio-visible-range-track .clip-studio-timeline-selection {
+  top: 0.42rem;
+  bottom: 0.42rem;
+  border: 1px solid rgba(201, 247, 232, 0.32);
+  border-radius: 7px;
+  background: linear-gradient(90deg, rgba(126, 141, 255, 0.84), rgba(117, 217, 184, 0.9));
+}
+
+.clip-studio-visible-range-track .clip-studio-timeline-handle {
+  z-index: 3;
+  width: 0.5rem;
+  height: 2.35rem;
+  border: 1px solid rgba(2, 6, 23, 0.82);
+  border-radius: 999px;
+  background: #f8fafc;
+  box-shadow: 0 0 0 3px rgba(117, 217, 184, 0.2);
+  pointer-events: none;
+}
+
+.clip-studio-visible-range-track .clip-studio-timeline-slider {
+  z-index: 4;
+  height: 2.8rem;
+}
+
+.clip-studio-visible-range-track .clip-studio-timeline-slider::-webkit-slider-thumb {
+  width: 1.35rem;
+  height: 2.5rem;
+  border: 0;
+  border-radius: 0.4rem;
+  background: transparent;
+  box-shadow: none;
+  margin-top: -0.95rem;
+}
+
+.clip-studio-visible-range-labels {
+  font-size: 0.63rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.clip-studio-visible-range-actions .button {
+  min-height: 2.15rem;
+  padding: 0.42rem 0.58rem;
+  font-size: 0.69rem;
+}
+
+@media (max-width: 520px) {
+  .clip-studio-visible-range-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .clip-studio-visible-range-actions .button {
+    width: 100%;
+  }
+}
+
 .clip-studio-transcript-rail .clip-studio-transcript-range article > span {
   color: #6f7b8e;
   font-size: 0.57rem;

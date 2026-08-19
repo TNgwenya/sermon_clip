@@ -93,6 +93,13 @@ describe("Clip Studio transcript and timing controls", () => {
     expect(markup).toContain("Selected line");
     expect(markup.match(/Check wording/g)).toHaveLength(1);
     expect(markup).toContain("Follow playback");
+    expect(markup).toContain("Edit clip range");
+    expect(markup).toContain("Drag the white edges");
+    expect(markup).toContain('aria-label="Clip start. Drag left to start earlier."');
+    expect(markup).toContain('aria-label="Clip end. Drag right to end later."');
+    expect(markup).toContain('min="0"');
+    expect(markup).toContain(">Extend 5s earlier</button>");
+    expect(markup).toContain(">Extend 5s later</button>");
     expect(markup).toContain("Caption edits change on-screen text only—not the spoken audio.");
     expect(markup).toContain('type="checkbox" checked=""');
     expect(markup).toContain('aria-label="Play selected transcript line"');

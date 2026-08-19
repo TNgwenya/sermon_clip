@@ -52,6 +52,7 @@ type ClipStudioTranscriptPanelProps = {
   clipStartSeconds: number;
   clipEndSeconds: number;
   clipDurationSeconds: number | null;
+  sourceDurationSeconds?: number | null;
   captionCues: EditableCaptionCue[];
   speechCleanup: SpeechCleanupSettings;
   momentType: string | null;
@@ -678,6 +679,7 @@ function useClipStudioTranscriptState({
   clipStartSeconds,
   clipEndSeconds,
   clipDurationSeconds,
+  sourceDurationSeconds,
   captionCues,
   speechCleanup,
 }: ClipStudioTranscriptPanelProps) {
@@ -691,11 +693,24 @@ function useClipStudioTranscriptState({
   const activeClipStartSeconds = editPreview.startSeconds ?? clipStartSeconds;
   const activeClipEndSeconds = editPreview.endSeconds ?? clipEndSeconds;
   const durationSeconds = Math.max(0.1, editPreview.durationSeconds ?? clipDurationSeconds ?? activeClipEndSeconds - activeClipStartSeconds);
-  const timelineStart = Math.max(0, Math.min(activeClipStartSeconds, transcriptSegments[0]?.startTimeSeconds ?? activeClipStartSeconds));
-  const timelineEnd = Math.max(
-    timelineStart + 1,
-    Math.max(activeClipEndSeconds, transcriptSegments.at(-1)?.endTimeSeconds ?? activeClipEndSeconds),
+  const timelineStart = Math.max(
+    0,
+    Math.min(
+      activeClipStartSeconds - STUDIO_BOUNDARY_CONTEXT_SECONDS,
+      transcriptSegments[0]?.startTimeSeconds ?? activeClipStartSeconds,
+    ),
   );
+  const uncappedTimelineEnd = Math.max(
+    timelineStart + 1,
+    activeClipEndSeconds + STUDIO_BOUNDARY_CONTEXT_SECONDS,
+    transcriptSegments.at(-1)?.endTimeSeconds ?? activeClipEndSeconds,
+  );
+  const timelineEnd = sourceDurationSeconds !== null
+    && sourceDurationSeconds !== undefined
+    && Number.isFinite(sourceDurationSeconds)
+    && sourceDurationSeconds > 0
+      ? Math.max(timelineStart + 1, Math.min(sourceDurationSeconds, uncappedTimelineEnd))
+      : uncappedTimelineEnd;
   const timelineDuration = timelineEnd - timelineStart;
   const absolutePlayheadSeconds = activeClipStartSeconds + previewClock.sourceCurrentSeconds;
   const playheadPercent = markerPercent(absolutePlayheadSeconds, timelineStart, timelineDuration);
@@ -798,7 +813,12 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     previewClock,
     requestPreviewPlayback,
     seekToAbsolute,
+    selectedEndPercent,
     selectedSegmentIds,
+    selectedStartPercent,
+    selectedWidthPercent,
+    timelineEnd,
+    timelineStart,
   } = useClipStudioTranscriptState(props);
   const currentSegment = useMemo(
     () =>
@@ -944,6 +964,29 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     );
   }
 
+  function updateVisibleClipBoundary(
+    command: "set-start-seconds" | "set-end-seconds",
+    seconds: number,
+  ) {
+    const nextSeconds = resolveTimelineBoundarySeconds({
+      command,
+      seconds,
+      timelineStart,
+      timelineEnd,
+      activeClipStartSeconds,
+      activeClipEndSeconds,
+    });
+    if (nextSeconds === null) {
+      return;
+    }
+
+    window.dispatchEvent(
+      new CustomEvent(CLIP_STUDIO_TRANSCRIPT_COMMAND_EVENT, {
+        detail: { command, seconds: nextSeconds },
+      }),
+    );
+  }
+
   function openCaptionWordingEditor() {
     if (!editPreview.applyCaptionsToClip) {
       window.dispatchEvent(
@@ -1039,6 +1082,82 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
           <strong>{formatSecondsForPastorView(durationSeconds)}</strong>
         </article>
       </div>
+
+      <section className="clip-studio-visible-range-editor" aria-labelledby="clip-studio-visible-range-heading">
+        <div className="clip-studio-visible-range-heading">
+          <div>
+            <span className="kicker">Edit clip range</span>
+            <strong id="clip-studio-visible-range-heading">Drag the white edges</strong>
+          </div>
+          <span className="status-pill">Draft</span>
+        </div>
+        <p id="clip-studio-visible-range-help" className="muted small">
+          Drag the left edge toward Earlier to include more of the sermon. Drag the right edge for a later ending.
+        </p>
+        <div
+          className="clip-studio-timeline-track clip-studio-timeline-track-interactive clip-studio-visible-range-track"
+          aria-label="Quick clip boundary editor"
+        >
+          <span
+            className="clip-studio-timeline-selection"
+            style={{ left: `${selectedStartPercent}%`, width: `${selectedWidthPercent}%` }}
+          />
+          <span
+            className="clip-studio-timeline-handle is-start"
+            style={{ left: `${selectedStartPercent}%` }}
+            aria-hidden="true"
+          />
+          <span
+            className="clip-studio-timeline-handle is-end"
+            style={{ left: `${selectedEndPercent}%` }}
+            aria-hidden="true"
+          />
+          <input
+            className="clip-studio-timeline-slider clip-studio-timeline-slider-start"
+            type="range"
+            min={timelineStart}
+            max={timelineEnd}
+            step={0.1}
+            value={activeClipStartSeconds}
+            onChange={(event) => updateVisibleClipBoundary("set-start-seconds", event.currentTarget.valueAsNumber)}
+            aria-label="Clip start. Drag left to start earlier."
+            aria-describedby="clip-studio-visible-range-help"
+          />
+          <input
+            className="clip-studio-timeline-slider clip-studio-timeline-slider-end"
+            type="range"
+            min={timelineStart}
+            max={timelineEnd}
+            step={0.1}
+            value={activeClipEndSeconds}
+            onChange={(event) => updateVisibleClipBoundary("set-end-seconds", event.currentTarget.valueAsNumber)}
+            aria-label="Clip end. Drag right to end later."
+            aria-describedby="clip-studio-visible-range-help"
+          />
+        </div>
+        <div className="clip-studio-visible-range-labels muted small" aria-hidden="true">
+          <span>Earlier · {formatSecondsForPastorView(timelineStart)}</span>
+          <span>{formatSecondsForPastorView(timelineEnd)} · Later</span>
+        </div>
+        <div className="clip-studio-visible-range-actions">
+          <button
+            type="button"
+            className="button secondary"
+            disabled={activeClipStartSeconds <= timelineStart}
+            onClick={() => updateVisibleClipBoundary("set-start-seconds", activeClipStartSeconds - 5)}
+          >
+            Extend 5s earlier
+          </button>
+          <button
+            type="button"
+            className="button tertiary"
+            disabled={activeClipEndSeconds >= timelineEnd}
+            onClick={() => updateVisibleClipBoundary("set-end-seconds", activeClipEndSeconds + 5)}
+          >
+            Extend 5s later
+          </button>
+        </div>
+      </section>
 
       {focusedSegment ? (
         <div
