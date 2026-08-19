@@ -178,20 +178,24 @@ export function clipStudioPreviewNeedsSourceMedia(input: {
     return true;
   }
 
-  const boundaryChanged = (
-    initial: number | null,
-    current: number | null,
-  ): boolean => {
-    if (initial === null || current === null) {
-      return initial !== current;
-    }
+  if (
+    input.initialStartSeconds === null
+    || input.initialEndSeconds === null
+    || input.currentStartSeconds === null
+    || input.currentEndSeconds === null
+  ) {
+    return (
+      input.initialStartSeconds !== input.currentStartSeconds
+      || input.initialEndSeconds !== input.currentEndSeconds
+    );
+  }
 
-    return Math.abs(initial - current) > 0.01;
-  };
-
+  // The prepared clip already contains trims made inside its saved range.
+  // Switch to the much larger sermon source only when the draft extends past
+  // that range and genuinely needs surrounding media.
   return (
-    boundaryChanged(input.initialStartSeconds, input.currentStartSeconds) ||
-    boundaryChanged(input.initialEndSeconds, input.currentEndSeconds)
+    input.currentStartSeconds < input.initialStartSeconds - 0.01
+    || input.currentEndSeconds > input.initialEndSeconds + 0.01
   );
 }
 
@@ -435,11 +439,14 @@ export function ClipStudioLivePreview({
   const frameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const backdropVideoRef = useRef<HTMLVideoElement | null>(null);
+  const sourceWarmupVideoRef = useRef<HTMLVideoElement | null>(null);
+  const playbackIntentRef = useRef(false);
   const [overlayDragState, setOverlayDragState] = useState<OverlayDragState | null>(null);
   const [previewSeconds, setPreviewSeconds] = useState(0);
   const [sourcePreviewSeconds, setSourcePreviewSeconds] = useState(0);
   const [previewDurationSeconds, setPreviewDurationSeconds] = useState<number | null>(null);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+  const [isPreviewMuted, setIsPreviewMuted] = useState(false);
   const [previewErrorState, setPreviewErrorState] = useState<{ src: string; message: string } | null>(null);
   const [unavailableSourcePreviewSrc, setUnavailableSourcePreviewSrc] = useState<string | null>(null);
   const [unavailablePreparedPreviewSrc, setUnavailablePreparedPreviewSrc] = useState<string | null>(null);
@@ -542,6 +549,40 @@ export function ClipStudioLivePreview({
 
     return buildRetryablePreviewUrl(activePreviewSrc, retryNonce);
   }, [activePreviewSrc, retryNonce]);
+
+  useEffect(() => {
+    if (!sourcePreviewSrc) {
+      return undefined;
+    }
+
+    // Preload only the sermon metadata and nearby byte ranges while the fast
+    // prepared clip is displayed. If a user extends a boundary, the browser
+    // can switch to the source without appearing to lose audio during a long
+    // cold load of the full recording.
+    const warmupVideo = document.createElement("video");
+    warmupVideo.preload = "metadata";
+    warmupVideo.muted = true;
+    warmupVideo.playsInline = true;
+    warmupVideo.src = sourcePreviewSrc;
+    sourceWarmupVideoRef.current = warmupVideo;
+    const warmNearbySource = () => {
+      if (initialDraftWindow.startSeconds === null) {
+        return;
+      }
+      warmupVideo.currentTime = Math.max(0, initialDraftWindow.startSeconds - 15);
+    };
+    warmupVideo.addEventListener("loadedmetadata", warmNearbySource, { once: true });
+    warmupVideo.load();
+
+    return () => {
+      warmupVideo.removeEventListener("loadedmetadata", warmNearbySource);
+      if (sourceWarmupVideoRef.current === warmupVideo) {
+        sourceWarmupVideoRef.current = null;
+      }
+      warmupVideo.removeAttribute("src");
+      warmupVideo.load();
+    };
+  }, [initialDraftWindow.startSeconds, sourcePreviewSrc]);
   const previewMediaReady = Boolean(playbackSrc && previewReadySrc === playbackSrc && !previewError);
   const previewBuffering = playbackState === "waiting" || playbackState === "stalled";
   const draftDurationSeconds = editPreview.durationSeconds;
@@ -1182,6 +1223,11 @@ export function ClipStudioLivePreview({
       return;
     }
 
+    playbackIntentRef.current = true;
+    // A previous browser autoplay fallback may have muted this same element.
+    // Every deliberate Play action should try audible playback again.
+    video.muted = false;
+    setIsPreviewMuted(false);
     clampVideoToDraftWindow({ restartAtEnd: true });
     if (video.readyState < 3) {
       setPlaybackState("waiting");
@@ -1194,9 +1240,11 @@ export function ClipStudioLivePreview({
     } catch {
       try {
         video.muted = true;
+        setIsPreviewMuted(true);
         await video.play();
         setPlaybackNotice("Preview started muted because the browser blocked audio playback.");
       } catch {
+        playbackIntentRef.current = false;
         setPlaybackNotice("Preview playback is blocked by the browser. Try again or reload the Studio.");
       }
     } finally {
@@ -1211,6 +1259,7 @@ export function ClipStudioLivePreview({
     }
 
     if (!video.paused && !video.ended) {
+      playbackIntentRef.current = false;
       video.pause();
       setPlaybackState("paused");
       setPlaybackNotice(null);
@@ -1220,6 +1269,23 @@ export function ClipStudioLivePreview({
 
     void startPreviewPlayback();
   }, [startPreviewPlayback, updatePreviewSeconds]);
+
+  const resumePreviewAfterMediaSwap = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || !playbackIntentRef.current || !video.paused) {
+      return;
+    }
+
+    video.muted = false;
+    setIsPreviewMuted(false);
+    try {
+      await video.play();
+      setPlaybackNotice(null);
+    } catch {
+      playbackIntentRef.current = false;
+      setPlaybackNotice("The adjusted range is ready. Press Play to continue with sound.");
+    }
+  }, []);
 
   useEffect(() => {
     if (!isPreviewPlaying) {
@@ -1252,6 +1318,7 @@ export function ClipStudioLivePreview({
       }
 
       if (playbackRequest.action === "pause") {
+        playbackIntentRef.current = false;
         video.pause();
         setPlaybackState("paused");
         setPlaybackNotice(null);
@@ -1346,7 +1413,11 @@ export function ClipStudioLivePreview({
                     setPreviewErrorState(null);
                     setPreviewReadySrc(playbackSrc);
                     setPlaybackState(videoRef.current && !videoRef.current.paused ? "playing" : "ready");
-                    setPlaybackNotice(null);
+                    if (playbackIntentRef.current && videoRef.current?.paused) {
+                      void resumePreviewAfterMediaSwap();
+                    } else {
+                      setPlaybackNotice(null);
+                    }
                   }}
                   onError={() => {
                     if (
@@ -1397,6 +1468,7 @@ export function ClipStudioLivePreview({
                     setPlaybackNotice("The preview connection paused. Retrying the video stream…");
                   }}
                   onPlaying={() => {
+                    playbackIntentRef.current = true;
                     setPlaybackState("playing");
                     setPlaybackNotice(null);
                   }}
@@ -1415,6 +1487,7 @@ export function ClipStudioLivePreview({
                     syncBackdropVideo(true);
                   }}
                   onPlay={() => {
+                    playbackIntentRef.current = true;
                     clampVideoToDraftWindow();
                     updatePreviewSeconds();
                     syncBackdropVideo(true);
@@ -1425,6 +1498,7 @@ export function ClipStudioLivePreview({
                     syncBackdropVideo(true);
                   }}
                   onEnded={() => {
+                    playbackIntentRef.current = false;
                     setPlaybackState("ready");
                     clampVideoToDraftWindow();
                     updatePreviewSeconds();
@@ -1608,6 +1682,26 @@ export function ClipStudioLivePreview({
               <div className="clip-studio-player-controls" aria-label="Live preview playback controls">
                 <button type="button" className="button secondary" onClick={togglePreviewPlayback}>
                   {isPreviewPlaying ? "Pause" : "Play"}
+                </button>
+                <button
+                  type="button"
+                  className="button tertiary"
+                  aria-label={isPreviewMuted ? "Turn preview sound on" : "Mute preview"}
+                  aria-pressed={isPreviewMuted}
+                  onClick={() => {
+                    const video = videoRef.current;
+                    if (!video) {
+                      return;
+                    }
+                    const nextMuted = !video.muted;
+                    video.muted = nextMuted;
+                    setIsPreviewMuted(nextMuted);
+                    if (!nextMuted) {
+                      setPlaybackNotice(null);
+                    }
+                  }}
+                >
+                  {isPreviewMuted ? "Sound on" : "Mute"}
                 </button>
                 <input
                   aria-label="Preview position"

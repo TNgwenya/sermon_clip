@@ -284,6 +284,57 @@ describe("Clip Studio transcript and timing controls", () => {
     })).toBe(10.1);
   });
 
+  it("keeps the boundary ruler fixed while the draft start moves", () => {
+    const initialWindow = __clipStudioTranscriptPanelTestUtils.resolveStudioBoundaryTimelineWindow({
+      clipStartSeconds: 6201.25,
+      clipEndSeconds: 6261.25,
+      transcriptSegments: [],
+      sourceDurationSeconds: 7770.16,
+    });
+    const unchangedWindow = __clipStudioTranscriptPanelTestUtils.resolveStudioBoundaryTimelineWindow({
+      clipStartSeconds: 6201.25,
+      clipEndSeconds: 6261.25,
+      transcriptSegments: [],
+      sourceDurationSeconds: 7770.16,
+    });
+
+    expect(initialWindow).toEqual({
+      timelineStart: 6111.25,
+      timelineEnd: 6351.25,
+      timelineDuration: 240,
+    });
+    expect(unchangedWindow).toEqual(initialWindow);
+
+    const originalEndPercent = (6261.25 - initialWindow.timelineStart) / initialWindow.timelineDuration;
+    const endPercentAfterEarlierStart = (6261.25 - unchangedWindow.timelineStart) / unchangedWindow.timelineDuration;
+    expect(endPercentAfterEarlierStart).toBe(originalEndPercent);
+  });
+
+  it("renders the same ruler limits after moving only the draft start", () => {
+    previewState.editPreview.startSeconds = 115;
+    previewState.editPreview.endSeconds = 150;
+    previewState.editPreview.durationSeconds = 35;
+
+    const markup = renderToStaticMarkup(
+      <ClipStudioTranscriptPanel
+        {...panelProps}
+        clipStartSeconds={120}
+        clipEndSeconds={150}
+        clipDurationSeconds={30}
+        sourceDurationSeconds={500}
+        transcriptSegments={[]}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Clip start. Drag left to start earlier."');
+    expect(markup).toMatch(/min="30"[^>]*max="240"[^>]*aria-label="Clip start\. Drag left to start earlier\."[^>]*value="115"/);
+    expect(markup).toMatch(/min="30"[^>]*max="240"[^>]*aria-label="Clip end\. Drag right to end later\."[^>]*value="150"/);
+
+    previewState.editPreview.startSeconds = 10;
+    previewState.editPreview.endSeconds = 40;
+    previewState.editPreview.durationSeconds = 30;
+  });
+
   it("renders one aligned playhead across spoken, caption, hook, B-roll, pacing, and clip rows", () => {
     previewState.editPreview.hookOverlay = {
       ...previewState.editPreview.hookOverlay,

@@ -674,6 +674,46 @@ function resolveTimelineBoundarySeconds({
   return Number(nextSeconds.toFixed(3));
 }
 
+function resolveStudioBoundaryTimelineWindow({
+  clipStartSeconds,
+  clipEndSeconds,
+  transcriptSegments,
+  sourceDurationSeconds,
+}: {
+  clipStartSeconds: number;
+  clipEndSeconds: number;
+  transcriptSegments: TranscriptSegment[];
+  sourceDurationSeconds?: number | null;
+}): { timelineStart: number; timelineEnd: number; timelineDuration: number } {
+  // Keep the ruler anchored to the saved clip window while either draft edge
+  // moves. Recomputing this context from the draft start made the unchanged
+  // end handle shift on screen, which looked like both handles were linked.
+  const timelineStart = Math.max(
+    0,
+    Math.min(
+      clipStartSeconds - STUDIO_BOUNDARY_CONTEXT_SECONDS,
+      transcriptSegments[0]?.startTimeSeconds ?? clipStartSeconds,
+    ),
+  );
+  const uncappedTimelineEnd = Math.max(
+    timelineStart + 1,
+    clipEndSeconds + STUDIO_BOUNDARY_CONTEXT_SECONDS,
+    transcriptSegments.at(-1)?.endTimeSeconds ?? clipEndSeconds,
+  );
+  const timelineEnd = sourceDurationSeconds !== null
+    && sourceDurationSeconds !== undefined
+    && Number.isFinite(sourceDurationSeconds)
+    && sourceDurationSeconds > 0
+      ? Math.max(timelineStart + 1, Math.min(sourceDurationSeconds, uncappedTimelineEnd))
+      : uncappedTimelineEnd;
+
+  return {
+    timelineStart,
+    timelineEnd,
+    timelineDuration: timelineEnd - timelineStart,
+  };
+}
+
 function useClipStudioTranscriptState({
   transcriptSegments,
   clipStartSeconds,
@@ -693,25 +733,16 @@ function useClipStudioTranscriptState({
   const activeClipStartSeconds = editPreview.startSeconds ?? clipStartSeconds;
   const activeClipEndSeconds = editPreview.endSeconds ?? clipEndSeconds;
   const durationSeconds = Math.max(0.1, editPreview.durationSeconds ?? clipDurationSeconds ?? activeClipEndSeconds - activeClipStartSeconds);
-  const timelineStart = Math.max(
-    0,
-    Math.min(
-      activeClipStartSeconds - STUDIO_BOUNDARY_CONTEXT_SECONDS,
-      transcriptSegments[0]?.startTimeSeconds ?? activeClipStartSeconds,
-    ),
-  );
-  const uncappedTimelineEnd = Math.max(
-    timelineStart + 1,
-    activeClipEndSeconds + STUDIO_BOUNDARY_CONTEXT_SECONDS,
-    transcriptSegments.at(-1)?.endTimeSeconds ?? activeClipEndSeconds,
-  );
-  const timelineEnd = sourceDurationSeconds !== null
-    && sourceDurationSeconds !== undefined
-    && Number.isFinite(sourceDurationSeconds)
-    && sourceDurationSeconds > 0
-      ? Math.max(timelineStart + 1, Math.min(sourceDurationSeconds, uncappedTimelineEnd))
-      : uncappedTimelineEnd;
-  const timelineDuration = timelineEnd - timelineStart;
+  const {
+    timelineStart,
+    timelineEnd,
+    timelineDuration,
+  } = resolveStudioBoundaryTimelineWindow({
+    clipStartSeconds,
+    clipEndSeconds,
+    transcriptSegments,
+    sourceDurationSeconds,
+  });
   const absolutePlayheadSeconds = activeClipStartSeconds + previewClock.sourceCurrentSeconds;
   const playheadPercent = markerPercent(absolutePlayheadSeconds, timelineStart, timelineDuration);
   const selectedStartPercent = markerPercent(activeClipStartSeconds, timelineStart, timelineDuration);
@@ -3327,6 +3358,7 @@ export const __clipStudioTranscriptPanelTestUtils = {
   resolveVisualLayerTimingDrag,
   resolveTimelinePointerSeconds,
   resolveTranscriptSegmentClipStatus,
+  resolveStudioBoundaryTimelineWindow,
   resolveTimelineBoundarySeconds,
   snapTimelineSeconds,
 };
