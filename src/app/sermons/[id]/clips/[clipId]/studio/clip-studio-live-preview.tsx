@@ -1066,16 +1066,16 @@ export function ClipStudioLivePreview({
 
   const validatePreviewCoverage = useCallback((): boolean => {
     const video = videoRef.current;
-    if (!video || clipStudioPreviewMediaCoversDraft({
+    if (!video) {
+      return false;
+    }
+
+    if (!clipStudioPreviewMediaCoversDraft({
       mediaDurationSeconds: video.duration,
       draftDurationSeconds,
       draftEndSeconds: editPreview.endSeconds,
       hasSourcePreview,
     })) {
-      if (!video) {
-        return false;
-      }
-
       video.pause();
       setPreviewReadySrc(null);
       setIsPreviewPlaying(false);

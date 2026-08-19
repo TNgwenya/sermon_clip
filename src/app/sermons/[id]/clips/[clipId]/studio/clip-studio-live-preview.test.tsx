@@ -521,6 +521,12 @@ describe("ClipStudioLivePreview media loading", () => {
   it("rejects media that ends before the selected draft range", () => {
     expect(clipStudioPreviewMediaCoversDraft({
       mediaDurationSeconds: 60,
+      draftDurationSeconds: 60,
+      draftEndSeconds: 7980,
+      hasSourcePreview: false,
+    })).toBe(true);
+    expect(clipStudioPreviewMediaCoversDraft({
+      mediaDurationSeconds: 60,
       draftDurationSeconds: 90,
       draftEndSeconds: 1634,
       hasSourcePreview: false,

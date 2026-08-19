@@ -304,6 +304,12 @@
   font-weight: 760;
 }
 
+.review-published-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.9rem;
+}
+
 .premium-review-rationale {
   display: grid;
   gap: 0.38rem;

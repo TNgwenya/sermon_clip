@@ -4,6 +4,7 @@ import { Suspense } from "react";
 
 import { prisma } from "@/lib/prisma";
 import { hasPreviewMetadata, resolveFreshRemotePreviewUrl } from "@/lib/clipPreview";
+import { fromPrismaPostingPlatform } from "@/lib/postingDrafts";
 import { ReviewExperience } from "@/app/sermons/[id]/review/review-experience";
 import { requireRequestCapability } from "@/server/auth/requestAuthorization";
 import { tenantResourceScope } from "@/server/tenancy/scope";
@@ -266,6 +267,34 @@ async function SermonReviewContent({
     notFound();
   }
 
+  const clipIds = sermon.clipCandidates.map((clip) => clip.id);
+  const postedClipRecords = clipIds.length > 0
+    ? await prisma.scheduledPost.findMany({
+        where: {
+          organizationId: requestContext.organizationId,
+          status: "POSTED",
+          AND: [
+            ...(requestContext.campusId
+              ? [{ OR: [{ campusId: requestContext.campusId }, { campusId: null }] }]
+              : []),
+            {
+              OR: clipIds.map((clipId) => ({
+                clipIdsJson: { array_contains: [clipId] },
+              })),
+            },
+          ],
+        },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          id: true,
+          clipIdsJson: true,
+          platform: true,
+          publishedUrl: true,
+          updatedAt: true,
+        },
+      })
+    : [];
+
   const clips = sermon.clipCandidates.map((clip) => {
     const remotePreviewUrl = resolveFreshRemotePreviewUrl(clip);
     const clientClip = { ...clip };
@@ -289,6 +318,16 @@ async function SermonReviewContent({
       suggestedCaption: clip.suggestedCaption ?? null,
       canPreviewVideo: canAttemptClipPreview(clip, localMediaAvailable),
       remotePreviewUrl,
+      publishedPosts: postedClipRecords.flatMap((post) => (
+        normalizeStringArray(post.clipIdsJson).includes(clip.id)
+          ? [{
+              id: post.id,
+              platform: fromPrismaPostingPlatform(post.platform),
+              publishedUrl: post.publishedUrl,
+              recordedAt: post.updatedAt.toISOString(),
+            }]
+          : []
+      )),
       createdAt: clip.createdAt.toISOString(),
     };
   });

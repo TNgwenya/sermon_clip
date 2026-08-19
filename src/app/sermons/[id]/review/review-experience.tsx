@@ -111,6 +111,12 @@ type ClipReviewItem = {
   overlayVideoPath: string | null;
   remotePreviewUrl: string | null;
   canPreviewVideo: boolean;
+  publishedPosts: Array<{
+    id: string;
+    platform: "TikTok" | "Instagram" | "YouTube Shorts" | "Facebook";
+    publishedUrl: string | null;
+    recordedAt: string;
+  }>;
   createdAt: string;
 };
 
@@ -130,8 +136,42 @@ type Draft = {
 };
 
 type ContentKindFilter = "ALL" | ClipReviewItem["contentKind"];
+type PublicationFilter = "ALL" | "POSTED" | "NOT_POSTED";
 
 const REVIEW_INITIAL_VISIBLE_COUNT = 12;
+const REVIEW_SORT_STORAGE_PREFIX = "sermon-clip:pastor-review-sort";
+const REVIEW_SORT_VALUES = new Set<ReviewSort>([
+  "HIGHEST_SCORE",
+  "SERMON_ORDER",
+  "NEWEST",
+  "SHORTEST",
+  "LONGEST",
+]);
+
+function reviewSortStorageKey(sermonId: string): string {
+  return `${REVIEW_SORT_STORAGE_PREFIX}:${sermonId}`;
+}
+
+function isReviewSort(value: string | null): value is ReviewSort {
+  return Boolean(value && REVIEW_SORT_VALUES.has(value as ReviewSort));
+}
+
+function readReviewSortPreference(sermonId: string): ReviewSort {
+  try {
+    const storedSort = window.localStorage.getItem(reviewSortStorageKey(sermonId));
+    return isReviewSort(storedSort) ? storedSort : "HIGHEST_SCORE";
+  } catch {
+    return "HIGHEST_SCORE";
+  }
+}
+
+function writeReviewSortPreference(sermonId: string, sort: ReviewSort): void {
+  try {
+    window.localStorage.setItem(reviewSortStorageKey(sermonId), sort);
+  } catch {
+    // The review remains usable when browser storage is disabled.
+  }
+}
 
 function toDraft(clip: Pick<ClipReviewItem, "title" | "hook" | "caption" | "hashtags" | "clipNotes">): Draft {
   return {
@@ -214,8 +254,10 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
   const [isPending, startTransition] = useTransition();
   const [filter, setFilter] = useState<ReviewFilter>("ALL");
   const [contentKindFilter, setContentKindFilter] = useState<ContentKindFilter>("ALL");
+  const [publicationFilter, setPublicationFilter] = useState<PublicationFilter>("ALL");
   const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
   const [sort, setSort] = useState<ReviewSort>("HIGHEST_SCORE");
+  const [loadedSortPreferenceFor, setLoadedSortPreferenceFor] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"LIST" | "GRID">("LIST");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [showFullFeed, setShowFullFeed] = useState(false);
@@ -249,6 +291,10 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
   );
   const hasPostReadyClip = useMemo(
     () => normalizedClips.some((clip) => clip.status === "EXPORTED" || clip.exportStatus === "COMPLETED"),
+    [normalizedClips],
+  );
+  const postedClipCount = useMemo(
+    () => normalizedClips.filter((clip) => clip.publishedPosts.length > 0).length,
     [normalizedClips],
   );
   const fallbackClipCount = useMemo(
@@ -290,6 +336,12 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
       if (contentKindFilter !== "ALL" && clip.contentKind !== contentKindFilter) {
         return false;
       }
+      if (publicationFilter === "POSTED" && clip.publishedPosts.length === 0) {
+        return false;
+      }
+      if (publicationFilter === "NOT_POSTED" && clip.publishedPosts.length > 0) {
+        return false;
+      }
       if (categoryFilter === "ALL") {
         return true;
       }
@@ -297,7 +349,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
       return (clip.qualityClipCategory ?? clip.smartClipCategory) === categoryFilter;
     });
     return sortClips(filtered, sort);
-  }, [normalizedClips, filter, contentKindFilter, categoryFilter, sort]);
+  }, [normalizedClips, filter, contentKindFilter, publicationFilter, categoryFilter, sort]);
   const isFeedLimited = !showFullFeed && visibleClips.length > REVIEW_INITIAL_VISIBLE_COUNT;
   const renderedClips = isFeedLimited ? visibleClips.slice(0, REVIEW_INITIAL_VISIBLE_COUNT) : visibleClips;
   const filterSummary = [
@@ -307,6 +359,11 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
         ? "Worship clips"
         : "Sermon clips",
     filter === "ALL" ? "All clips" : filter.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase()),
+    publicationFilter === "ALL"
+      ? "All publishing"
+      : publicationFilter === "POSTED"
+        ? "Posted"
+        : "Not yet posted",
     categoryFilter === "ALL" ? "All categories" : getQualityCategoryLabel(categoryFilter),
     sort === "HIGHEST_SCORE"
       ? "Best first"
@@ -314,6 +371,23 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
         ? "Sermon order (first to last)"
       : sort.toLowerCase().replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()),
   ].join(" / ");
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setSort(readReviewSortPreference(sermonId));
+      setLoadedSortPreferenceFor(sermonId);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [sermonId]);
+
+  useEffect(() => {
+    if (loadedSortPreferenceFor !== sermonId) {
+      return;
+    }
+
+    writeReviewSortPreference(sermonId, sort);
+  }, [loadedSortPreferenceFor, sermonId, sort]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 981px)");
@@ -511,6 +585,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               <div><dt>Waiting</dt><dd>{summary.pending}</dd></div>
               <div><dt>Not selected</dt><dd>{summary.rejected}</dd></div>
               <div><dt>Preview ready</dt><dd>{summary.rendered}</dd></div>
+              <div><dt>Posted</dt><dd>{postedClipCount}</dd></div>
               <div><dt>Sermon clips</dt><dd>{contentKindCounts.SERMON}</dd></div>
               <div><dt>Worship clips</dt><dd>{contentKindCounts.WORSHIP}</dd></div>
               {fallbackClipCount > 0 ? <div><dt>Fallback suggestions</dt><dd>{fallbackClipCount}</dd></div> : null}
@@ -624,6 +699,19 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               </label>
 
               <label className="stack-sm review-feed-toolbar-field">
+                Publishing
+                <select
+                  value={publicationFilter}
+                  onChange={(event) => setPublicationFilter(event.target.value as PublicationFilter)}
+                  disabled={isPending}
+                >
+                  <option value="ALL">All publishing</option>
+                  <option value="NOT_POSTED">Not yet posted</option>
+                  <option value="POSTED">Posted</option>
+                </select>
+              </label>
+
+              <label className="stack-sm review-feed-toolbar-field">
                 Category
                 <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} disabled={isPending}>
                   <option value="ALL">All Categories</option>
@@ -732,8 +820,8 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                 onClick={() => {
                   setContentKindFilter("ALL");
                   setFilter("ALL");
+                  setPublicationFilter("ALL");
                   setCategoryFilter("ALL");
-                  setSort("HIGHEST_SCORE");
                 }}
               >
                 Show all moments
@@ -854,7 +942,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                           className="review-video"
                           controls
                           playsInline
-                          preload="none"
+                          preload={index < 3 ? "metadata" : "none"}
                           aria-label={`Preview ${clip.title}`}
                           poster={`/api/clips/${clip.id}/thumbnail`}
                           src={clip.remotePreviewUrl ?? `/api/clips/${clip.id}/preview?variant=best`}
@@ -905,8 +993,24 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                         {workflowLabel}
                       </span>
                       {clip.contentKind === "WORSHIP" ? <span className="status-pill">Worship</span> : null}
+                      {clip.publishedPosts.length > 0 ? (
+                        <span className="status-pill status-exported">
+                          Posted{clip.publishedPosts.length > 1 ? ` · ${clip.publishedPosts.length} posts` : ` · ${clip.publishedPosts[0]?.platform}`}
+                        </span>
+                      ) : (
+                        <span className="status-pill">Not yet posted</span>
+                      )}
                       {transcriptReviewRequired ? <span className="status-pill quality-needs-editing">Transcript review needed</span> : null}
                     </div>
+                    {clip.publishedPosts.some((post) => post.publishedUrl) ? (
+                      <div className="review-published-links" aria-label={`Published posts for ${clip.title}`}>
+                        {clip.publishedPosts.flatMap((post) => post.publishedUrl ? [(
+                          <a key={post.id} className="text-link small" href={post.publishedUrl} target="_blank" rel="noreferrer">
+                            View on {post.platform}
+                          </a>
+                        )] : [])}
+                      </div>
+                    ) : null}
 
                     <div className="premium-review-rationale">
                       <span>{isBasicClip ? "Why this cut exists" : "Why this moment"}</span>
