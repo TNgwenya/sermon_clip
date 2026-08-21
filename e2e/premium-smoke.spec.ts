@@ -1,5 +1,23 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const bootstrapPassword = process.env.BOOTSTRAP_OWNER_PASSWORD?.trim();
+const privateSignInRequired = Boolean(process.env.SCHEDULER_ADMIN_PASSWORD?.trim());
+
+test.beforeEach(async ({ page }) => {
+  if (!privateSignInRequired) return;
+  if (!bootstrapPassword) {
+    throw new Error(
+      "BOOTSTRAP_OWNER_PASSWORD is required when the browser smoke runs with private access enabled.",
+    );
+  }
+
+  await page.goto("/login");
+  await page.getByLabel("Email").fill("owner@local.sermonclip.invalid");
+  await page.getByLabel("Password").fill(bootstrapPassword);
+  await page.getByRole("button", { name: "Sign in securely" }).click();
+  await expect(page).toHaveURL("/");
+});
+
 async function openWorkspaceRoute(page: Page, path: string) {
   const response = await page.goto(path);
 
@@ -19,7 +37,9 @@ test("pastor can reach the core content workflow", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Analyze this sermon" })).toBeVisible();
 
   await openWorkspaceRoute(page, "/opportunities");
-  await expect(page.getByRole("heading", { name: "Plan, preview, then publish" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Shape the pieces behind your Content Week" }),
+  ).toBeVisible();
 
   await openWorkspaceRoute(page, "/week-drafts");
   await expect(page.getByRole("heading", { name: "Your week, already drafted." })).toBeVisible();
@@ -28,12 +48,11 @@ test("pastor can reach the core content workflow", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "What needs me today?" })).toBeVisible();
 
   await openWorkspaceRoute(page, "/weekly-plan");
-  await expect(page.getByRole("navigation", { name: "Weekly plan actions" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Content Week actions" })).toBeVisible();
 
   await openWorkspaceRoute(page, "/ready-to-post");
-  await expect(page.getByRole("heading", { name: "Your sermons, ready to share." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Choose one sermon, then one post." })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Choose a sermon. See everything it created." })).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Publishing desk sections" })).toBeVisible();
 
   await openWorkspaceRoute(page, "/growth");
   await expect(page.getByRole("navigation", { name: "Growth actions" })).toBeVisible();
@@ -74,14 +93,7 @@ test("health reports operational truth", async ({ page }) => {
 });
 
 test("owner can use secure sign-in and reach private account controls", async ({ page }) => {
-  const bootstrapPassword = process.env.BOOTSTRAP_OWNER_PASSWORD?.trim();
-  test.skip(!bootstrapPassword, "BOOTSTRAP_OWNER_PASSWORD is required for secure-login smoke.");
-
-  await page.goto("/login");
-  await page.getByLabel("Email").fill("owner@local.sermonclip.invalid");
-  await page.getByLabel("Password").fill(bootstrapPassword!);
-  await page.getByRole("button", { name: "Sign in securely" }).click();
-  await expect(page).toHaveURL("/");
+  test.skip(!privateSignInRequired, "Private sign-in is not enabled for this local smoke run.");
 
   await openWorkspaceRoute(page, "/settings/account");
   await expect(page.getByRole("heading", { name: "How your team sees you" })).toBeVisible();
@@ -99,9 +111,12 @@ test.describe("mobile navigation", () => {
 
     await expect(mobileNavigation).toBeVisible();
     await mobileNavigation.locator('summary[aria-label="More navigation options"]').click();
-    await expect(mobileNavigation.getByRole("link", { name: "Week drafts", exact: true })).toBeVisible();
-    await expect(mobileNavigation.getByRole("link", { name: "Weekly plan", exact: true })).toBeVisible();
-    await expect(mobileNavigation.getByRole("link", { name: "Content ideas", exact: true })).toBeVisible();
+    await expect(mobileNavigation.getByRole("link", { name: "Content Week", exact: true })).toBeVisible();
+    await expect(mobileNavigation.getByRole("link", { name: "Events", exact: true })).toBeVisible();
+    await expect(mobileNavigation.getByRole("link", { name: "Sermon library", exact: true })).toBeVisible();
+    await expect(mobileNavigation.getByRole("link", { name: "Content library", exact: true })).toBeVisible();
+    await expect(mobileNavigation.getByRole("link", { name: "Growth", exact: true })).toBeVisible();
+    await expect(mobileNavigation.getByRole("link", { name: "Sermon insights", exact: true })).toBeVisible();
     await expect(mobileNavigation.getByRole("link", { name: "Brand kit", exact: true })).toBeVisible();
     await expect(mobileNavigation.getByRole("link", { name: "Social channels", exact: true })).toBeVisible();
     await expect(mobileNavigation.getByRole("link", { name: "Team & access", exact: true })).toBeVisible();

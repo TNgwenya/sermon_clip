@@ -2,7 +2,6 @@ import { defineConfig, devices } from "@playwright/test";
 
 const externalBaseUrl = process.env.PLAYWRIGHT_BASE_URL?.trim();
 const baseURL = externalBaseUrl || "http://localhost:3010";
-const adminPassword = process.env.SCHEDULER_ADMIN_PASSWORD?.trim();
 const localDatabaseUrl =
   process.env.PLAYWRIGHT_DATABASE_URL?.trim()
   || "postgresql://postgres:postgres@localhost:5432/sermon_clip_codex_test";
@@ -24,9 +23,6 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
-    ...(adminPassword
-      ? { httpCredentials: { username: "admin", password: adminPassword } }
-      : {}),
   },
   webServer: externalBaseUrl
     ? undefined
