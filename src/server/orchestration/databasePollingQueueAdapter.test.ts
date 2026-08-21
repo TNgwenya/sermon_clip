@@ -15,7 +15,7 @@ describe("database polling queue adapter", () => {
       organizationId: "org-1",
       sermonId: "sermon-1",
       lane: "INTAKE_MATERIALIZATION",
-      idempotencyKey: "idempotency-1",
+      idempotencyKey: "idem-1",
       intentHash: "intent-1",
       payloadVersion: 1,
       payload: {},

@@ -172,7 +172,7 @@ Suggested delay message:
 ## Escalation thresholds
 
 Invoke [incident response](./pilot-incident-response-and-customer-communications.md)
-immediately for any cross-tenant access, sensitive/unapproved publication,
+immediately for any cross-tenant access, publishing content without approval,
 credential exposure, destructive data loss, or suspected compromise.
 
 Escalate as a service incident when one church cannot receive the agreed core
