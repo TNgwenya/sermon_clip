@@ -76,6 +76,10 @@ jobs:
 
       - name: Unit and integration tests
         run: npm test
+        env:
+          # Integration coverage exercises the persistent local/EC2 media lane.
+          # The production build and browser smoke below remain in control-panel mode.
+          CONTROL_PANEL_MODE: "false"
 
       - name: Production build
         run: npm run build
