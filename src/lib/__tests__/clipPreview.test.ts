@@ -81,6 +81,17 @@ describe("clip preview helpers", () => {
     ).toBe(true);
   });
 
+  it("accepts the same remote render when separate writes land milliseconds out of order", () => {
+    expect(
+      isFreshRemotePreview({
+        remotePreviewUrl: "https://cdn.example.com/clip.mp4",
+        renderedAt: "2026-07-03T08:00:00.500Z",
+        remotePreviewUploadedAt: "2026-07-03T08:00:00.000Z",
+        renderFreshness: "UP_TO_DATE",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects stale remote previews from older renders", () => {
     expect(
       isFreshRemotePreview({

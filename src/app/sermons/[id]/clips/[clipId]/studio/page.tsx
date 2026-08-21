@@ -793,6 +793,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             clipStartSeconds={clip.startTimeSeconds}
             clipEndSeconds={clip.endTimeSeconds}
             clipDurationSeconds={clip.durationSeconds}
+            sourceDurationSeconds={sermonDurationSegment?.endTimeSeconds ?? null}
             captionCues={onVideoCaptionCues}
             speechCleanup={speechCleanupSettings}
             momentType={clip.ministryMoment?.momentType ?? clip.clipType ?? null}
@@ -1050,6 +1051,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             clipStartSeconds={clip.startTimeSeconds}
             clipEndSeconds={clip.endTimeSeconds}
             clipDurationSeconds={clip.durationSeconds}
+            sourceDurationSeconds={sermonDurationSegment?.endTimeSeconds ?? null}
             captionCues={onVideoCaptionCues}
             speechCleanup={speechCleanupSettings}
             momentType={clip.ministryMoment?.momentType ?? clip.clipType ?? null}

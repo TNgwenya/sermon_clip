@@ -168,6 +168,7 @@ describe("ClipStudioLivePreview media loading", () => {
     expect(markup).toContain('playsInline=""');
     expect(markup).toContain('src="https://media.example.com/clip.mp4?v=2"');
     expect(markup).not.toContain('src="/api/sermons/sermon-1/source-preview"');
+    expect(markup).toContain('aria-label="Mute preview"');
     expect(markup).not.toContain("retry=0");
     expect(markup).not.toContain("clip-studio-live-backdrop");
     expect(markup).toContain("Framing pending");
@@ -562,6 +563,14 @@ describe("ClipStudioLivePreview media loading", () => {
       ...initialWindow,
       currentEndSeconds: 136,
     })).toBe(true);
+    expect(clipStudioPreviewNeedsSourceMedia({
+      ...initialWindow,
+      currentStartSeconds: 90.5,
+    })).toBe(false);
+    expect(clipStudioPreviewNeedsSourceMedia({
+      ...initialWindow,
+      currentEndSeconds: 134,
+    })).toBe(false);
     expect(clipStudioPreviewNeedsSourceMedia({
       ...initialWindow,
       seekTimeDomain: "source",

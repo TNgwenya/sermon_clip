@@ -66,6 +66,21 @@ export type MediaAssetWorkerRequest = {
   force: boolean;
 };
 
+export type FailedMediaPreparationUpdate = {
+  exportStatus: "FAILED";
+  exportFreshness: "NEEDS_REGENERATION";
+  exportError: string;
+};
+
+export function buildFailedMediaPreparationUpdate(message: string): FailedMediaPreparationUpdate {
+  const normalized = message.trim() || "Media preparation failed before the final video was ready.";
+  return {
+    exportStatus: "FAILED",
+    exportFreshness: "NEEDS_REGENERATION",
+    exportError: normalized.slice(0, 2_000),
+  };
+}
+
 type ExportLayoutStrategy =
   | "CENTER_CROP"
   | "LEFT_FOCUS"

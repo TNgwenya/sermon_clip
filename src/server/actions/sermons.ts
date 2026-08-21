@@ -6052,6 +6052,12 @@ export async function renderClipStudioExportsAction(input: {
       exportFreshness: true,
       exportFormat: true,
       exportLayoutStrategy: true,
+      editPlans: {
+        where: { status: "ACTIVE" },
+        orderBy: { version: "desc" },
+        take: 1,
+        select: { resolvedFramingPlanHash: true },
+      },
     },
   });
 
@@ -6130,6 +6136,7 @@ export async function renderClipStudioExportsAction(input: {
       renderStatus: clip.renderStatus,
       renderFreshness: clip.renderFreshness,
       renderedFileReady,
+      framingPlanReady: Boolean(clip.editPlans[0]?.resolvedFramingPlanHash),
       captionsEnabled: captionPreferences.applyCaptionsToClip,
       captionStatus: clip.captionStatus,
       captionFreshness: clip.captionFreshness,
@@ -6722,6 +6729,12 @@ export async function prepareClipStudioForPostingAction(
           captionData: true,
           exportStatus: true,
           exportFreshness: true,
+          editPlans: {
+            where: { status: "ACTIVE" },
+            orderBy: { version: "desc" },
+            take: 1,
+            select: { resolvedFramingPlanHash: true },
+          },
         },
       });
       if (!queuedClip) {
@@ -6736,6 +6749,7 @@ export async function prepareClipStudioForPostingAction(
         renderStatus: queuedClip.renderStatus,
         renderFreshness: queuedClip.renderFreshness,
         renderedFileReady: Boolean(queuedClip.renderedFilePath?.trim()),
+        framingPlanReady: Boolean(queuedClip.editPlans[0]?.resolvedFramingPlanHash),
         captionsEnabled: captionPreferences.applyCaptionsToClip,
         captionStatus: queuedClip.captionStatus,
         captionFreshness: queuedClip.captionFreshness,
@@ -6772,14 +6786,11 @@ export async function prepareClipStudioForPostingAction(
         };
       }
 
-      const queued = await queueSermonMediaAssetJobs(
-        clip.sermonId,
-        requestedAssets,
-        buildClipStudioQueuedAssetIntent(clip.id, input.forceRebuild === true),
-      );
       // The control panel cannot observe a Mac worker's in-memory queue. Keep
       // the durable clip state honest so a refresh shows "Preparing" and the
-      // prepare button cannot enqueue the same composition repeatedly.
+      // prepare button cannot enqueue the same composition repeatedly. This
+      // must be persisted before the worker can claim the job, otherwise a
+      // fast failure can be overwritten with QUEUED after it has completed.
       await prisma.clipCandidate.update({
         where: { id: clip.id },
         data: {
@@ -6787,6 +6798,11 @@ export async function prepareClipStudioForPostingAction(
           exportError: null,
         },
       });
+      const queued = await queueSermonMediaAssetJobs(
+        clip.sermonId,
+        requestedAssets,
+        buildClipStudioQueuedAssetIntent(clip.id, input.forceRebuild === true),
+      );
       revalidatePath(`/sermons/${clip.sermonId}`);
       revalidatePath(`/sermons/${clip.sermonId}/review`);
       revalidatePath(`/sermons/${clip.sermonId}/clips/${clip.id}/studio`);
@@ -6804,12 +6820,21 @@ export async function prepareClipStudioForPostingAction(
         warnings: draftResult.warnings,
       };
     } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : "The final video could not be queued.";
+      await prisma.clipCandidate.updateMany({
+        where: { id: clip.id, exportStatus: "QUEUED" },
+        data: {
+          exportStatus: "FAILED",
+          exportFreshness: "NEEDS_REGENERATION",
+          exportError: message.slice(0, 2_000),
+        },
+      }).catch(() => undefined);
       return {
         success: false,
         draftSaved: true,
-        message: error instanceof Error
-          ? `Draft saved, but the final video could not be queued: ${error.message}`
-          : "Draft saved, but the final video could not be queued.",
+        message: `Draft saved, but the final video could not be queued: ${message}`,
         results: [],
         warnings: draftResult.warnings,
       };

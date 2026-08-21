@@ -49,6 +49,16 @@ describe("buildClipStudioPrepareAssetPlan", () => {
     });
   });
 
+  it("rebuilds the base video when an older render has no resolved framing plan", () => {
+    expect(buildClipStudioPrepareAssetPlan(readySnapshot({ framingPlanReady: false }))).toEqual({
+      prepareVideo: true,
+      writeCaptions: false,
+      burnCaptions: true,
+      skipCaptionBurn: false,
+      exportPreparedVideo: true,
+    });
+  });
+
   it("skips caption burn when on-video captions are disabled", () => {
     expect(buildClipStudioPrepareAssetPlan(readySnapshot({
       captionsEnabled: false,
