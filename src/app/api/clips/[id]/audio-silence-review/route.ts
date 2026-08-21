@@ -23,8 +23,9 @@ export async function GET(
     return NextResponse.json({ error: "Clip id is required." }, { status: 400, headers: NO_STORE_HEADERS });
   }
 
+  let authorizedClip: Awaited<ReturnType<typeof requireClipResource>>;
   try {
-    await requireClipResource("content.read", clipId);
+    authorizedClip = await requireClipResource("content.read", clipId);
   } catch (error) {
     const response = resourceAuthorizationErrorResponse(error, "Clip not found.", NO_STORE_HEADERS);
     if (response) return response;
@@ -38,8 +39,11 @@ export async function GET(
     );
   }
 
-  const clip = await prisma.clipCandidate.findUnique({
-    where: { id: clipId },
+  const clip = await prisma.clipCandidate.findFirst({
+    where: {
+      id: clipId,
+      sermon: { organizationId: authorizedClip.organizationId },
+    },
     select: {
       startTimeSeconds: true,
       endTimeSeconds: true,

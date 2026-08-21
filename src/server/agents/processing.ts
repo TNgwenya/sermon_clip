@@ -221,6 +221,19 @@ export async function queueSermonProcessingJob(
   type: ProcessingJobType,
   generationSummary?: Prisma.InputJsonValue,
 ): Promise<QueuedProcessingJobResult> {
+  if (type === "PROCESS_SERMON") {
+    const { durableOrchestrationEnabled } = await import("@/server/orchestration/sermonOrchestrationService");
+    if (durableOrchestrationEnabled()) {
+      const { queueInitialSermonOrchestration } = await import("@/server/orchestration/sermonOrchestrationService");
+      const queued = await queueInitialSermonOrchestration({ sermonId });
+      return {
+        id: queued.job.id,
+        reusedExisting: !queued.created,
+        intentConflict: false,
+      };
+    }
+  }
+
   if (MEDIA_ASSET_ORCHESTRATION_JOB_TYPES.has(type)) {
     return queueMediaAssetProcessingJob(sermonId, type, generationSummary);
   }

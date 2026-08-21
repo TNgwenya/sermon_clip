@@ -91,6 +91,32 @@ enum ProcessingJobStatus {
   FAILED
 }
 
+enum OrchestrationLane {
+  INTAKE_MATERIALIZATION
+  TRANSCRIPTION
+  INTELLIGENCE
+  PREVIEW
+  FINAL_RENDER_EXPORT
+  CONTENT_WEEK
+  PUBLISHING
+}
+
+enum OrchestrationJobStatus {
+  PENDING
+  LEASED
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  DEAD_LETTER
+}
+
+enum OrchestrationOutboxStatus {
+  PENDING
+  PUBLISHING
+  PUBLISHED
+  DEAD_LETTER
+}
+
 enum ContentFunnelEventType {
   GENERATION_REQUESTED
   GENERATION_COMPLETED
@@ -869,6 +895,8 @@ model Organization {
   sermonSourceAssets          SermonSourceAsset[]
   ministryEvents              MinistryEvent[]
   eventSessions               EventSession[]
+  orchestrationJobs           OrchestrationJob[]
+  orchestrationOutboxEvents   OrchestrationOutboxEvent[]
 
   @@index([status])
   @@index([createdAt])
@@ -1540,6 +1568,7 @@ model Sermon {
   clipCandidates            ClipCandidate[]
   ministryMoments           MinistryMoment[]
   processingJobs            ProcessingJob[]
+  orchestrationJobs         OrchestrationJob[]
   intelligence              SermonIntelligence?
   scriptureRefs             SermonScriptureRef[]
   structureSections         SermonStructureSection[]
@@ -2119,6 +2148,81 @@ model ProcessingJob {
   @@index([status, createdAt])
   @@index([workerId])
   @@index([heartbeatAt])
+}
+
+model OrchestrationJob {
+  id                   String                     @id @default(cuid())
+  organizationId       String
+  sermonId             String?
+  lane                 OrchestrationLane
+  status               OrchestrationJobStatus     @default(PENDING)
+  idempotencyKey       String
+  intentHash           String
+  payloadVersion       Int                        @default(1)
+  payloadJson          Json
+  correlationId        String
+  parentJobId          String?
+  priority             Int                        @default(0)
+  availableAt          DateTime                   @default(now())
+  attemptCount         Int                        @default(0)
+  maxAttempts          Int                        @default(3)
+  leaseOwner           String?
+  leaseToken           String?
+  leaseExpiresAt       DateTime?
+  cancelRequestedAt    DateTime?
+  cancellationReason   String?
+  cancelledAt          DateTime?
+  lastFailureCode      String?
+  lastFailureMessage   String?
+  lastFailureRetryable Boolean?
+  deadLetteredAt       DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+  organization         Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  sermon               Sermon?                    @relation(fields: [sermonId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  parentJob            OrchestrationJob?          @relation("OrchestrationJobChildren", fields: [parentJobId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  childJobs            OrchestrationJob[]         @relation("OrchestrationJobChildren")
+  outboxEvents         OrchestrationOutboxEvent[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([id, organizationId])
+  @@index([status, availableAt, priority])
+  @@index([organizationId, status, availableAt])
+  @@index([sermonId, lane, createdAt])
+  @@index([leaseExpiresAt])
+  @@index([parentJobId])
+  @@index([correlationId])
+}
+
+model OrchestrationOutboxEvent {
+  id                  String                    @id @default(cuid())
+  organizationId      String
+  orchestrationJobId  String
+  deliverySequence    Int
+  topic               String
+  messageKey          String                    @unique
+  payloadVersion      Int                       @default(1)
+  payloadJson         Json
+  status              OrchestrationOutboxStatus @default(PENDING)
+  publishAttemptCount Int                       @default(0)
+  maxPublishAttempts  Int                       @default(8)
+  availableAt         DateTime                  @default(now())
+  claimOwner          String?
+  claimToken          String?
+  claimExpiresAt      DateTime?
+  publishedAt         DateTime?
+  providerMessageId   String?
+  lastError           String?
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+  organization        Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  orchestrationJob    OrchestrationJob          @relation(fields: [orchestrationJobId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([orchestrationJobId, deliverySequence])
+  @@index([status, availableAt, createdAt])
+  @@index([organizationId, status, availableAt])
+  @@index([claimExpiresAt])
 }
 
 model WorkerHeartbeat {

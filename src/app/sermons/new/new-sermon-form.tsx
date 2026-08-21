@@ -572,25 +572,14 @@ export function NewSermonForm({
             </div>
           </div>
         ) : null}
-        <div className={styles.quickStartNote} role="note">
-          <span aria-hidden="true">01</span>
-          <div>
-            <strong>Start with the recording</strong>
-            <p>
-              Your saved church, preacher, language, and today’s date are already
-              filled in below. Review them only when this sermon is different.
-            </p>
-          </div>
-        </div>
-        <section className="intake-form-section stack-md" aria-labelledby="sermon-source-heading">
+        <section className={`${styles.sourceSection} intake-form-section stack-md`} aria-labelledby="sermon-source-heading">
           <div className="intake-section-heading">
-            <span className="intake-section-number">01</span>
             <div>
-              <h2 id="sermon-source-heading">Choose the recording</h2>
+              <h2 id="sermon-source-heading">Add the recording</h2>
               <p className="muted">
                 {canUploadMedia
-                  ? "Use a YouTube link or choose a media file from this device."
-                  : "Use a public or unlisted YouTube link to add the sermon to the hosted app."}
+                  ? "A public or unlisted YouTube link is quickest. You can also upload a video or audio file."
+                  : "Paste a public or unlisted YouTube link."}
               </p>
             </div>
           </div>
@@ -606,7 +595,7 @@ export function NewSermonForm({
               />
               <span>
                 <strong>YouTube link</strong>
-                <small>Use a public or unlisted sermon video</small>
+                <small>Fastest</small>
               </span>
             </label>
             <label className={`${sourceMode === "upload" ? "source-mode-option is-selected" : "source-mode-option"}${canUploadMedia ? "" : " is-unavailable"}`}>
@@ -621,7 +610,7 @@ export function NewSermonForm({
               />
               <span>
                 <strong>Upload media</strong>
-                <small>{canUploadMedia ? "Choose the recording from this device" : "Unavailable on the hosted app"}</small>
+                <small>{canUploadMedia ? "Video or audio" : "Unavailable here"}</small>
               </span>
             </label>
           </div>
@@ -638,8 +627,8 @@ export function NewSermonForm({
               <div className="source-method-heading">
                 <span className="source-method-mark" aria-hidden="true">URL</span>
                 <div>
-                  <strong>Paste the YouTube link</strong>
-                  <span className="muted small">YouTube watch and youtu.be links are supported</span>
+                  <strong>YouTube sermon link</strong>
+                  <span className="muted small">Public or unlisted</span>
                 </div>
               </div>
               <label className="sr-only" htmlFor="youtubeUrl">Sermon video link</label>
@@ -698,6 +687,27 @@ export function NewSermonForm({
               {mediaFileError ? <p id="sermonVideoFile-error" className="field-error">{mediaFileError}</p> : null}
             </div>
           </div>
+
+          <div className={styles.firstAction}>
+            <div className={`${styles.compactRights} rights-confirmation stack-sm`}>
+              <label className="checkbox-label" htmlFor="rightsConfirmed">
+                <input id="rightsConfirmed" name="rightsConfirmed" type="checkbox" required />
+                <span>Our church or media team has permission to process this recording, including any music and congregation footage.</span>
+              </label>
+              {displayState.fieldErrors?.rightsConfirmed ? (
+                <p className="field-error">{displayState.fieldErrors.rightsConfirmed}</p>
+              ) : null}
+            </div>
+            <div className={styles.firstActionCta}>
+              <SubmitButton
+                sourceMode={sourceMode}
+                uploadBlocked={sourceMode === "upload" && (!canUploadMedia || Boolean(selectedFileError))}
+                isUploadSubmitting={isUploadSubmitting}
+                uploadProgressPercent={uploadProgressPercent}
+              />
+              <p className="muted small">You can leave once the source is accepted. Progress stays on the sermon page.</p>
+            </div>
+          </div>
         </section>
 
         <details className={`${styles.detailsDisclosure} intake-form-section`} open={Boolean(
@@ -709,8 +719,8 @@ export function NewSermonForm({
         ) || undefined}>
           <summary>
             <span>
-              <span className="kicker">Already filled in</span>
-              <strong id="sermon-details-heading">Review sermon details</strong>
+              <span className="kicker">Optional check</span>
+              <strong id="sermon-details-heading">Change sermon details</strong>
             </span>
             <span className={styles.summaryValue}>{defaults.churchName} · {defaults.speakerName || "Add preacher"}</span>
           </summary>
@@ -756,10 +766,10 @@ export function NewSermonForm({
         >
           <summary>
             <span>
-              <span className="kicker">{includeWorshipMoments ? "Required for worship clips" : "Optional setup"}</span>
-              <strong id="sermon-window-title">Tell us where the sermon begins</strong>
+              <span className="kicker">{includeWorshipMoments ? "Required for worship clips" : "Improve suggestion quality"}</span>
+              <strong id="sermon-window-title">Use only the preaching section</strong>
             </span>
-            <span className="summary-hint">For full service recordings</span>
+            <span className="summary-hint">Helpful for full services</span>
           </summary>
           <div className="review-edit-grid upload-meta-grid">
             <div className="stack-sm">
@@ -774,7 +784,7 @@ export function NewSermonForm({
                 placeholder="Example: 32:15"
                 required={includeWorshipMoments}
               />
-              <p className="muted small">Format: <span className="code-text">MM:SS</span> or <span className="code-text">H:MM:SS</span>.</p>
+              <p className="muted small">This keeps announcements and opening music out of sermon suggestions. Use <span className="code-text">MM:SS</span> or <span className="code-text">H:MM:SS</span>.</p>
               {displayState.fieldErrors?.sermonStartTimestamp ? <p className="field-error">{displayState.fieldErrors.sermonStartTimestamp}</p> : null}
             </div>
 
@@ -814,29 +824,6 @@ export function NewSermonForm({
             </span>
           </label>
         </details>
-
-        <div className="rights-confirmation stack-sm">
-          <label className="checkbox-label" htmlFor="rightsConfirmed">
-            <input id="rightsConfirmed" name="rightsConfirmed" type="checkbox" required />
-            <span>I confirm that our church or media team has permission to process this recording, including its music and congregation footage.</span>
-          </label>
-          {displayState.fieldErrors?.rightsConfirmed ? (
-            <p className="field-error">{displayState.fieldErrors.rightsConfirmed}</p>
-          ) : null}
-        </div>
-
-        <div className="upload-form-footer premium-upload-footer">
-          <SubmitButton
-            sourceMode={sourceMode}
-            uploadBlocked={sourceMode === "upload" && (!canUploadMedia || Boolean(selectedFileError))}
-            isUploadSubmitting={isUploadSubmitting}
-            uploadProgressPercent={uploadProgressPercent}
-          />
-          <p className="muted small">
-            After the source is accepted, analysis continues in the background.
-            Return to the dashboard for completion status; email alerts are not active yet.
-          </p>
-        </div>
 
         <details className="upload-import-options">
           <summary>More import options</summary>

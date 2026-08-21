@@ -44,6 +44,7 @@ import {
   resolveEventSessionForIntake,
 } from "@/server/events/eventSessionLinking";
 import { tenantResourceScope } from "@/server/tenancy/scope";
+import { durableOrchestrationEnabled } from "@/server/orchestration/sermonOrchestrationService";
 
 export const runtime = "nodejs";
 
@@ -106,7 +107,7 @@ function fieldErrorsFromResult(result: ReturnType<typeof createSermonSchema.safe
 }
 
 async function startUploadedSermonPipeline(sermonId: string): Promise<void> {
-  if (!canRunInlineMediaProcessing()) {
+  if (durableOrchestrationEnabled() || !canRunInlineMediaProcessing()) {
     const job = await queueSermonProcessingJob(sermonId, "PROCESS_SERMON");
     await appendPipelineLog(
       sermonId,

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   canRunLocalMediaProcessing: vi.fn(),
-  findUnique: vi.fn(),
+  findFirst: vi.fn(),
   requireClipResource: vi.fn(),
   stat: vi.fn(),
   videoFileResponse: vi.fn(),
@@ -10,7 +10,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", () => ({ stat: mocks.stat }));
 vi.mock("@/lib/prisma", () => ({
-  prisma: { clipCandidate: { findUnique: mocks.findUnique } },
+  prisma: { clipCandidate: { findFirst: mocks.findFirst } },
+}));
+vi.mock("@/server/tenancy/databaseIsolation", () => ({
+  withDatabaseTenantIsolation: (_context: unknown, operation: (transaction: unknown) => unknown) => operation({
+    clipCandidate: { findFirst: mocks.findFirst },
+  }),
 }));
 vi.mock("@/server/runtime/workerRuntime", () => ({
   canRunLocalMediaProcessing: mocks.canRunLocalMediaProcessing,
@@ -49,7 +54,7 @@ describe("clip preview route", () => {
       campusId: "campus-1",
     });
     mocks.canRunLocalMediaProcessing.mockReturnValue(false);
-    mocks.findUnique.mockResolvedValue(baseClip);
+    mocks.findFirst.mockResolvedValue(baseClip);
     mocks.stat.mockResolvedValue({ isFile: () => true, size: 1_024 });
     mocks.videoFileResponse.mockImplementation(({ request }: { request: Request }) => (
       new Response(null, { status: request.method === "HEAD" ? 204 : 200 })
@@ -67,6 +72,12 @@ describe("clip preview route", () => {
     expect(response.headers.get("Cache-Control")).toBe("private, max-age=30, must-revalidate");
     expect(mocks.videoFileResponse).not.toHaveBeenCalled();
     expect(mocks.requireClipResource).toHaveBeenCalledWith("content.read", "clip-1");
+    expect(mocks.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        id: "clip-1",
+        sermon: { organizationId: "org-1" },
+      },
+    }));
   });
 
   it("supports HEAD for a remote preview without proxying its bytes", async () => {

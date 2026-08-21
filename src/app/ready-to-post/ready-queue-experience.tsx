@@ -15,6 +15,7 @@ import boardStyles from "@/app/ready-to-post/publishing-board.module.css";
 import { ReadyQueueActions, SchedulePostButton } from "@/app/ready-to-post/ready-queue-actions";
 import { ScheduleDraftModal, type ScheduleDraftClipSummary } from "@/app/ready-to-post/schedule-draft-modal";
 import { WeeklyPublishingBoard } from "@/app/ready-to-post/weekly-publishing-board";
+import { GovernedPublishingHandoff } from "@/app/ready-to-post/governed-publishing-handoff";
 import { ClipAssetRecoveryButton } from "@/components/clip-asset-recovery-button";
 import { EmptyState } from "@/components/ui";
 import {
@@ -2553,6 +2554,7 @@ export function ReadyQueueExperience({
                         <span className={`posting-check-step ${captionText ? "is-ready" : "needs-attention"}`}>Caption</span>
                         <span className={`posting-check-step ${post.status === "POSTED" ? "is-ready" : ""}`}>Posted</span>
                       </div>
+                      <GovernedPublishingHandoff post={post} />
                     </div>
                     <div className="manual-publishing-actions">
                       {canQueueForPublishing ? (

@@ -1,12 +1,13 @@
 import { stat } from "node:fs/promises";
 
-import type { AssetFreshness, ClipRenderStatus, ClipStatus, Prisma } from "@prisma/client";
+import type { AssetFreshness, ClipOverlayStatus, ClipRenderStatus, ClipStatus, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
 import { BASIC_CLIP_FALLBACK_WARNING } from "@/server/agents/basicClipFallbackService";
 import { appendPipelineLog } from "@/server/agents/storage";
 import { renderApprovedClip } from "@/server/agents/clipRenderService";
+import { renderClipOverlay } from "@/server/agents/clipOverlayService";
 import {
   remotePreviewStorageConfigured,
   uploadClipPreviewToR2,
@@ -29,6 +30,7 @@ type ReviewAssetClip = {
   renderedFilePath: string | null;
   captionedVideoPath: string | null;
   overlayVideoPath: string | null;
+  overlayStatus: ClipOverlayStatus;
   exportedFilePath: string | null;
   renderedSizeBytes: number | null;
   renderedAt: Date | null;
@@ -46,7 +48,35 @@ export type ClipReviewAssetSummary = {
   remoteUploaded: number;
   failed: number;
   skipped: number;
+  selectedClipIds: string[];
+  deferredClipCount: number;
+  firstBrandedClipId: string | null;
+  firstBrandedPreviewReady: boolean;
+  firstBrandedPreviewFailed: boolean;
 };
+
+function normalizePreviewLimit(maxClips: number | undefined, clipCount: number): number {
+  if (maxClips === undefined) {
+    return clipCount;
+  }
+
+  if (!Number.isFinite(maxClips)) {
+    throw new Error("Preview limit must be a finite number.");
+  }
+
+  return Math.min(clipCount, Math.max(0, Math.floor(maxClips)));
+}
+
+function buildPriorityPreviewPlan<T extends { id: string }>(clips: T[], maxClips?: number): {
+  selected: T[];
+  deferred: T[];
+} {
+  const selectedCount = normalizePreviewLimit(maxClips, clips.length);
+  return {
+    selected: clips.slice(0, selectedCount),
+    deferred: clips.slice(selectedCount),
+  };
+}
 
 function buildReviewAssetWhere(input: {
   sermonId: string;
@@ -125,6 +155,14 @@ function shouldRenderReviewPreview(
     ) &&
     shouldPreparePreview(clip, force, previewMediaIsUsable)
   );
+}
+
+function isBasicFallbackReviewClip(
+  clip: Pick<ReviewAssetClip, "clipType" | "qualityWarnings">,
+): boolean {
+  return clip.clipType === "basic"
+    && Array.isArray(clip.qualityWarnings)
+    && clip.qualityWarnings.includes(BASIC_CLIP_FALLBACK_WARNING);
 }
 
 function shouldUploadRemotePreview(
@@ -214,6 +252,34 @@ async function renderReviewPreviewWithFallback(sermonId: string, clip: ReviewAss
   };
 }
 
+async function prepareFirstBrandedReviewPreview(
+  sermonId: string,
+  clip: ReviewAssetClip,
+  force?: boolean,
+): Promise<{ overlayVideoPath: string; fileSizeBytes: number | null }> {
+  if (
+    !force
+    && clip.overlayStatus === "COMPLETED"
+    && clip.overlayFreshness === "UP_TO_DATE"
+    && clip.overlayVideoPath
+  ) {
+    const existingSize = await resolveFileSize(clip.overlayVideoPath, null);
+    if (existingSize) {
+      return { overlayVideoPath: clip.overlayVideoPath, fileSizeBytes: existingSize };
+    }
+  }
+
+  const result = await renderClipOverlay(clip.id, {
+    force,
+    allowRerender: Boolean(force) || clip.overlayStatus === "COMPLETED",
+    reviewPreviewWithoutCaptions: true,
+  });
+  return {
+    overlayVideoPath: result.overlayVideoPath,
+    fileSizeBytes: await resolveFileSize(result.overlayVideoPath, null),
+  };
+}
+
 async function uploadRemotePreviewBestEffort(input: {
   sermonId: string;
   clipId: string;
@@ -289,10 +355,23 @@ export async function prepareGeneratedClipReviewAssets(input: {
   force?: boolean;
   onlyFailed?: boolean;
   clipIds?: string[];
+  /**
+   * Restricts this invocation to the strongest ranked clips. The query order is
+   * deterministic, so a value of three always prepares the first suggestion
+   * before the next two and leaves the rest for a follow-on job.
+   */
+  maxClips?: number;
+  /** Build an actual branding overlay for the first ranked review preview. */
+  prepareFirstBrandedPreview?: boolean;
 }): Promise<ClipReviewAssetSummary> {
   const clips = await prisma.clipCandidate.findMany({
     where: buildReviewAssetWhere(input),
-    orderBy: [{ overallPostScore: "desc" }, { score: "desc" }, { startTimeSeconds: "asc" }],
+    orderBy: [
+      { overallPostScore: "desc" },
+      { score: "desc" },
+      { startTimeSeconds: "asc" },
+      { id: "asc" },
+    ],
     select: {
       id: true,
       status: true,
@@ -303,6 +382,7 @@ export async function prepareGeneratedClipReviewAssets(input: {
       renderedFilePath: true,
       captionedVideoPath: true,
       overlayVideoPath: true,
+      overlayStatus: true,
       exportedFilePath: true,
       renderedSizeBytes: true,
       renderedAt: true,
@@ -317,66 +397,131 @@ export async function prepareGeneratedClipReviewAssets(input: {
   });
 
   if (clips.length === 0) {
-    return { prepared: 0, remoteUploaded: 0, failed: 0, skipped: 0 };
+    return {
+      prepared: 0,
+      remoteUploaded: 0,
+      failed: 0,
+      skipped: 0,
+      selectedClipIds: [],
+      deferredClipCount: 0,
+      firstBrandedClipId: null,
+      firstBrandedPreviewReady: false,
+      firstBrandedPreviewFailed: false,
+    };
   }
+
+  const priorityPlan = buildPriorityPreviewPlan(clips, input.maxClips);
 
   let prepared = 0;
   let remoteUploaded = 0;
   let failed = 0;
   let skipped = 0;
+  let firstBrandedPreviewReady = false;
+  let firstBrandedPreviewFailed = false;
 
-  await appendPipelineLog(input.sermonId, `Preparing preview assets for ${clips.length} clip(s).`);
+  await appendPipelineLog(
+    input.sermonId,
+    `Preparing preview assets for ${priorityPlan.selected.length} highest-ranked clip(s) in order; ${priorityPlan.deferred.length} clip(s) deferred.`,
+  );
 
-  for (const clip of clips) {
+  for (const [index, clip] of priorityPlan.selected.entries()) {
+    // A Brand Kit overlay is a review aid, never an approval signal. Degraded
+    // time-based fallback clips intentionally remain plainly labelled and
+    // unbranded until a pastor has rebuilt them in Studio.
+    const isFirstRankedClip = input.prepareFirstBrandedPreview === true
+      && index === 0
+      && !isBasicFallbackReviewClip(clip);
     const previewIsUsable = await reviewPreviewMediaIsUsable(clip);
-    if (!shouldRenderReviewPreview(clip, input.force, previewIsUsable)) {
-      if (shouldUploadRemotePreview(clip, input.force) && clip.renderedFilePath) {
-        const uploaded = await uploadRemotePreviewBestEffort({
-          sermonId: input.sermonId,
-          clipId: clip.id,
-          renderedFilePath: clip.renderedFilePath,
-          fileSizeBytes: await resolveFileSize(clip.renderedFilePath, clip.renderedSizeBytes),
-        });
-        if (uploaded) {
-          remoteUploaded += 1;
-        }
-      }
-      skipped += 1;
-      continue;
-    }
+    const shouldRender = shouldRenderReviewPreview(clip, input.force, previewIsUsable);
+    let rawPreview: { renderedFilePath: string; fileSizeBytes: number | null } | null = null;
 
-    try {
+    if (shouldRender) {
+      try {
       // A completed database status can outlive its local file after a move or
       // cleanup. Let the renderer repair that stale record instead of skipping
       // it forever and leaving every browser preview blank.
-      const repairStaleCompletedPreview = clip.renderStatus === "COMPLETED" && !previewIsUsable;
-      const renderResult = await renderReviewPreviewWithFallback(
-        input.sermonId,
-        clip,
-        Boolean(input.force) || repairStaleCompletedPreview,
-      );
-      prepared += 1;
-      if (await uploadRemotePreviewBestEffort({
+        const repairStaleCompletedPreview = clip.renderStatus === "COMPLETED" && !previewIsUsable;
+        rawPreview = await renderReviewPreviewWithFallback(
+          input.sermonId,
+          clip,
+          Boolean(input.force) || repairStaleCompletedPreview,
+        );
+        prepared += 1;
+      } catch (error) {
+        failed += 1;
+        const reason = error instanceof Error ? error.message : "Unknown preview render error.";
+        await appendPipelineLog(input.sermonId, `Preview render failed for clip ${clip.id}: ${reason}`);
+        continue;
+      }
+    } else {
+      skipped += 1;
+      if (clip.renderedFilePath) {
+        rawPreview = {
+          renderedFilePath: clip.renderedFilePath,
+          fileSizeBytes: await resolveFileSize(clip.renderedFilePath, clip.renderedSizeBytes),
+        };
+      }
+    }
+
+    if (isFirstRankedClip) {
+      try {
+        const branded = await prepareFirstBrandedReviewPreview(input.sermonId, clip, input.force);
+        firstBrandedPreviewReady = true;
+        if (await uploadRemotePreviewBestEffort({
+          sermonId: input.sermonId,
+          clipId: clip.id,
+          renderedFilePath: branded.overlayVideoPath,
+          fileSizeBytes: branded.fileSizeBytes,
+        })) {
+          remoteUploaded += 1;
+        }
+        await appendPipelineLog(input.sermonId, `First branded review preview prepared for highest-ranked clip ${clip.id}.`);
+      } catch (error) {
+        firstBrandedPreviewFailed = true;
+        const reason = error instanceof Error ? error.message : "Unknown branding error.";
+        await appendPipelineLog(
+          input.sermonId,
+          `First branded review preview failed for clip ${clip.id}; preserving the raw review preview. Reason: ${reason}`,
+        );
+      }
+    }
+
+    const rawRemoteUploadNeeded = shouldRender || shouldUploadRemotePreview(clip, input.force);
+    if (
+      rawPreview
+      && rawRemoteUploadNeeded
+      && (!isFirstRankedClip || !firstBrandedPreviewReady)
+      && await uploadRemotePreviewBestEffort({
         sermonId: input.sermonId,
         clipId: clip.id,
-        renderedFilePath: renderResult.renderedFilePath,
-        fileSizeBytes: renderResult.fileSizeBytes,
-      })) {
-        remoteUploaded += 1;
-      }
-    } catch (error) {
-      failed += 1;
-      const reason = error instanceof Error ? error.message : "Unknown preview render error.";
-      await appendPipelineLog(input.sermonId, `Preview render failed for clip ${clip.id}: ${reason}`);
+        renderedFilePath: rawPreview.renderedFilePath,
+        fileSizeBytes: rawPreview.fileSizeBytes,
+      })
+    ) {
+      remoteUploaded += 1;
     }
   }
 
   await appendPipelineLog(
     input.sermonId,
-    `Preview preparation complete. Prepared: ${prepared}, remote uploaded: ${remoteUploaded}, skipped: ${skipped}, failed: ${failed}.`,
+    `Priority preview preparation complete. Prepared: ${prepared}, remote uploaded: ${remoteUploaded}, skipped: ${skipped}, failed: ${failed}, deferred: ${priorityPlan.deferred.length}, first branded preview: ${firstBrandedPreviewReady ? "ready" : firstBrandedPreviewFailed ? "failed with raw fallback preserved" : "not requested"}.`,
   );
 
-  return { prepared, remoteUploaded, failed, skipped };
+  return {
+    prepared,
+    remoteUploaded,
+    failed,
+    skipped,
+    selectedClipIds: priorityPlan.selected.map((clip) => clip.id),
+    deferredClipCount: priorityPlan.deferred.length,
+    firstBrandedClipId: input.prepareFirstBrandedPreview
+      && priorityPlan.selected[0]
+      && !isBasicFallbackReviewClip(priorityPlan.selected[0])
+      ? priorityPlan.selected[0].id
+      : null,
+    firstBrandedPreviewReady,
+    firstBrandedPreviewFailed,
+  };
 }
 
 export const __clipReviewAssetServiceTestUtils = {
@@ -384,4 +529,6 @@ export const __clipReviewAssetServiceTestUtils = {
   shouldPreparePreview,
   shouldRenderReviewPreview,
   shouldUploadRemotePreview,
+  buildPriorityPreviewPlan,
+  isBasicFallbackReviewClip,
 };

@@ -58,11 +58,12 @@ describe("S3 sermon source materialization", () => {
     await rm(path.dirname(testState.sourcePath), { recursive: true, force: true });
     prismaMock.sermon.findUnique.mockResolvedValue({
       id: "sermon-1",
+      organizationId: "org-1",
       title: "Sunday Service",
       sourceVideoPath: null,
       sourceAsset: {
         bucket: "private-sources",
-        objectKey: "source.mp4",
+        objectKey: "sermon-sources/organizations/org-1/sermons/sermon-1/upload/source.mp4",
         region: "eu-central-1",
         sizeBytes: BigInt(13),
         status: "READY",
@@ -95,6 +96,7 @@ describe("S3 sermon source materialization", () => {
     expect(result).toEqual({ sourceVideoPath: testState.sourcePath, reusedExistingFile: false });
     expect(capacityMock).toHaveBeenCalledWith({ incomingBytes: 13 });
     expect(downloadMock).toHaveBeenCalledWith(expect.objectContaining({
+      owner: { organizationId: "org-1", sermonId: "sermon-1" },
       destinationPath: testState.sourcePath.replace(/\.mp4$/i, ".s3.partial.mp4"),
     }));
     expect(prismaMock.sermon.update).toHaveBeenCalledWith(expect.objectContaining({

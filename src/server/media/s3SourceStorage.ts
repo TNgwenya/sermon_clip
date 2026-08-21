@@ -40,6 +40,11 @@ export type UploadedSourcePart = {
   sizeBytes: number;
 };
 
+export type S3SourceOwner = Readonly<{
+  organizationId: string;
+  sermonId: string;
+}>;
+
 export type ReadyS3SourceAsset = {
   bucket: string;
   objectKey: string;
@@ -160,6 +165,19 @@ export function buildS3SourceObjectKey(input: {
   return `${config.keyPrefix}/organizations/${organization}/sermons/${sermon}/${uploadToken}/source${safeFileExtension(input.fileName)}`;
 }
 
+export function assertS3SourceObjectOwnedBy(
+  owner: S3SourceOwner,
+  objectKey: string,
+  config = getS3SourceStorageConfig(),
+): void {
+  const organization = safeKeySegment(owner.organizationId, "organization");
+  const sermon = safeKeySegment(owner.sermonId, "sermon");
+  const expectedPrefix = `${config.keyPrefix}/organizations/${organization}/sermons/${sermon}/`;
+  if (!objectKey.startsWith(expectedPrefix) || objectKey.length <= expectedPrefix.length) {
+    throw new Error("The source object does not belong to the authorized sermon tenant.");
+  }
+}
+
 export function expectedMultipartPartCount(sizeBytes: number, partSizeBytes: number): number {
   if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
     throw new Error("Source size must be a positive safe integer.");
@@ -220,6 +238,7 @@ export async function presignS3SourcePart(input: {
   region: string;
   uploadId: string;
   partNumber: number;
+  owner: S3SourceOwner;
 }): Promise<string> {
   const config = getS3SourceStorageConfig();
   if (input.bucket !== config.bucket || input.region !== config.region) {
@@ -228,6 +247,7 @@ export async function presignS3SourcePart(input: {
   if (!Number.isSafeInteger(input.partNumber) || input.partNumber < 1 || input.partNumber > 10_000) {
     throw new Error("Upload part number is invalid.");
   }
+  assertS3SourceObjectOwnedBy(input.owner, input.objectKey, config);
 
   return getSignedUrl(
     getS3Client(config),
@@ -246,11 +266,13 @@ export async function listS3SourceParts(input: {
   objectKey: string;
   region: string;
   uploadId: string;
+  owner: S3SourceOwner;
 }): Promise<UploadedSourcePart[]> {
   const config = getS3SourceStorageConfig();
   if (input.bucket !== config.bucket || input.region !== config.region) {
     throw new Error("The source upload does not match the configured private S3 bucket.");
   }
+  assertS3SourceObjectOwnedBy(input.owner, input.objectKey, config);
 
   const parts: UploadedSourcePart[] = [];
   let partNumberMarker: string | undefined;
@@ -316,6 +338,7 @@ export async function completeS3SourceMultipartUpload(input: {
   uploadId: string;
   sizeBytes: number;
   partSizeBytes: number;
+  owner: S3SourceOwner;
 }): Promise<{ etag: string | null; versionId: string | null }> {
   const config = getS3SourceStorageConfig();
   const parts = await listS3SourceParts(input);
@@ -356,11 +379,13 @@ export async function abortS3SourceMultipartUpload(input: {
   objectKey: string;
   region: string;
   uploadId: string;
+  owner: S3SourceOwner;
 }): Promise<void> {
   const config = getS3SourceStorageConfig();
   if (input.bucket !== config.bucket || input.region !== config.region) {
     throw new Error("The source upload does not match the configured private S3 bucket.");
   }
+  assertS3SourceObjectOwnedBy(input.owner, input.objectKey, config);
   await getS3Client(config).send(new AbortMultipartUploadCommand({
     Bucket: input.bucket,
     Key: input.objectKey,
@@ -370,11 +395,13 @@ export async function abortS3SourceMultipartUpload(input: {
 
 export async function presignReadyS3SourcePreview(input: {
   asset: ReadyS3SourceAsset;
+  owner: S3SourceOwner;
 }): Promise<string> {
   const config = getS3SourceStorageConfig();
   if (input.asset.bucket !== config.bucket || input.asset.region !== config.region) {
     throw new Error("The saved source asset does not match the configured private S3 bucket.");
   }
+  assertS3SourceObjectOwnedBy(input.owner, input.asset.objectKey, config);
 
   const expectedBytes = Number(input.asset.sizeBytes);
   if (!Number.isSafeInteger(expectedBytes) || expectedBytes <= 0) {
@@ -413,12 +440,14 @@ function objectBodyAsReadable(body: unknown): Readable {
 
 export async function downloadReadyS3SourceToFile(input: {
   asset: ReadyS3SourceAsset;
+  owner: S3SourceOwner;
   destinationPath: string;
 }): Promise<void> {
   const config = getS3SourceStorageConfig();
   if (input.asset.bucket !== config.bucket || input.asset.region !== config.region) {
     throw new Error("The saved source asset does not match the configured private S3 bucket.");
   }
+  assertS3SourceObjectOwnedBy(input.owner, input.asset.objectKey, config);
   const expectedBytes = Number(input.asset.sizeBytes);
   if (!Number.isSafeInteger(expectedBytes) || expectedBytes <= 0) {
     throw new Error("The saved source asset has an invalid size.");
@@ -452,6 +481,7 @@ export async function downloadReadyS3SourceToFile(input: {
 export const __s3SourceStorageTestUtils = {
   MIN_MULTIPART_PART_BYTES,
   buildS3SourceObjectKey,
+  assertS3SourceObjectOwnedBy,
   expectedMultipartPartCount,
   validateCompletedParts,
 };

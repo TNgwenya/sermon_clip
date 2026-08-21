@@ -2,6 +2,12 @@ import type { Prisma, ProcessingJob } from "@prisma/client";
 import { ZodError } from "zod";
 
 import { buildClipGenerationPreviewCheckpoint } from "@/lib/clipGenerationRetry";
+import {
+  buildStructuredAiTrace,
+  classifyStructuredAiRepair,
+  parseStructuredAiOutput,
+  type StructuredAiFailureKind,
+} from "@/lib/quality/structuredAiContract";
 import { prisma } from "@/lib/prisma";
 import {
   hasCompleteWorshipSermonRange,
@@ -106,6 +112,10 @@ type GenerateClipOptions = {
   processingJobId?: string;
   tenantScope?: TenantScope;
 };
+
+const CLIP_SELECTION_PROMPT_VERSION = "clip-selection-v2-strict-contract";
+const CLIP_SELECTION_REPAIR_PROMPT_VERSION = "clip-selection-repair-v2-strict-contract";
+const CLIP_SELECTION_SCHEMA_VERSION = "clip-json-response-v1";
 
 type SermonContext = {
   id: string;
@@ -2479,24 +2489,28 @@ function resolveAiPromptWindowLimit(): number {
   return Math.min(MAX_AI_PROMPT_WINDOW_LIMIT, Math.max(4, Math.floor(configured)));
 }
 
-function extractJsonObject(rawResponse: string): string {
-  const trimmed = rawResponse.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
+class StructuredClipOutputError extends Error {
+  readonly kind: Exclude<StructuredAiFailureKind, "GROUNDING_FAILURE" | "SAFETY_FAILURE">;
+  readonly repairAllowed: boolean;
 
-  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  if (fencedMatch?.[1]) {
-    return fencedMatch[1].trim();
+  constructor(
+    kind: Exclude<StructuredAiFailureKind, "GROUNDING_FAILURE" | "SAFETY_FAILURE">,
+    message: string,
+    repairAllowed: boolean,
+  ) {
+    super(message);
+    this.name = "StructuredClipOutputError";
+    this.kind = kind;
+    this.repairAllowed = repairAllowed;
   }
+}
 
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    return trimmed.slice(firstBrace, lastBrace + 1);
+function parseStrictStructuredOutput<T>(rawResponse: string, validate: (value: unknown) => T): T {
+  const result = parseStructuredAiOutput({ raw: rawResponse, validate });
+  if (!result.ok) {
+    throw new StructuredClipOutputError(result.kind, result.message, result.repairAllowed);
   }
-
-  return trimmed;
+  return result.value;
 }
 
 function formatClipParseError(error: unknown): string {
@@ -2517,17 +2531,16 @@ function formatClipParseError(error: unknown): string {
 }
 
 function tryParseClipResponse(rawResponse: string): ClipJsonCandidate[] {
-  const parsed = JSON.parse(extractJsonObject(rawResponse)) as unknown;
-  return clipJsonResponseSchema.parse(parsed).clips;
+  return parseStrictStructuredOutput(rawResponse, (value) => clipJsonResponseSchema.parse(value)).clips;
 }
 
 function parseCandidateArray(rawResponse: string): unknown[] {
-  const parsed = JSON.parse(extractJsonObject(rawResponse)) as unknown;
-  if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { clips?: unknown }).clips)) {
-    throw new Error("Response must be a JSON object with a clips array.");
-  }
-
-  return (parsed as { clips: unknown[] }).clips;
+  return parseStrictStructuredOutput(rawResponse, (parsed) => {
+    if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { clips?: unknown }).clips)) {
+      throw new Error("Response must be a JSON object with a clips array.");
+    }
+    return (parsed as { clips: unknown[] }).clips;
+  });
 }
 
 function validateCandidatesIndividually(rawResponse: string): ValidatedClipBatch {
@@ -2586,6 +2599,12 @@ async function callClipModel(
   if (options?.rawResponseOverride === undefined) {
     const model = resolveOpenAIChatModel("clipSelection");
     const reasoningEffort = resolveOpenAIReasoningEffort("clipSelection", model);
+    const trace = buildStructuredAiTrace({
+      schemaVersion: CLIP_SELECTION_SCHEMA_VERSION,
+      promptVersion: CLIP_SELECTION_PROMPT_VERSION,
+      model,
+      canonicalInput: { systemPrompt, userPrompt },
+    });
     try {
       rawResponse = await createLoggedChatCompletion({
         operation: "clip_selection",
@@ -2600,8 +2619,12 @@ async function callClipModel(
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        promptVersion: "clip-selection-v1",
+        promptVersion: CLIP_SELECTION_PROMPT_VERSION,
         metadata: {
+          structuredOutputContract: trace.contractVersion,
+          schemaVersion: trace.schemaVersion,
+          inputFingerprint: trace.inputFingerprint,
+          cacheBoundary: trace.cacheBoundary,
           batchWindowCount: batch.length,
           requestedCount: options?.requestedCount ?? MAX_BATCH_CLIPS,
           transcriptCharacters: batch.reduce((total, window) => total + window.transcriptText.length, 0),
@@ -2635,9 +2658,23 @@ async function callClipModel(
     };
   } catch (error) {
     const validationError = formatClipParseError(error);
+    const repairDecision = classifyStructuredAiRepair({
+      failureKind: error instanceof StructuredClipOutputError ? error.kind : "SCHEMA_MISMATCH",
+      repairsUsed: 0,
+    });
+    if (!repairDecision.allowed) {
+      throw new Error(`Clip AI response was rejected without repair. ${repairDecision.reason} Validation issue: ${validationError}`);
+    }
     const repaired = options?.repairResponseOverride ?? (await (async () => {
       const model = resolveOpenAIChatModel("clipRepair");
       const reasoningEffort = resolveOpenAIReasoningEffort("clipRepair", model);
+      const repairPrompt = buildClipRepairPrompt(rawResponse, validationError, batch);
+      const repairTrace = buildStructuredAiTrace({
+        schemaVersion: CLIP_SELECTION_SCHEMA_VERSION,
+        promptVersion: CLIP_SELECTION_REPAIR_PROMPT_VERSION,
+        model,
+        canonicalInput: { systemPrompt: buildClipSelectionSystemPrompt(), userPrompt: repairPrompt },
+      });
       const repairCompletion = await createLoggedChatCompletion({
         operation: "clip_selection_repair",
         sermonId: sermon.id,
@@ -2649,10 +2686,14 @@ async function callClipModel(
         temperature: 0,
         messages: [
           { role: "system", content: buildClipSelectionSystemPrompt() },
-          { role: "user", content: buildClipRepairPrompt(rawResponse, validationError, batch) },
+          { role: "user", content: repairPrompt },
         ],
-        promptVersion: "clip-selection-repair-v1",
+        promptVersion: CLIP_SELECTION_REPAIR_PROMPT_VERSION,
         metadata: {
+          structuredOutputContract: repairTrace.contractVersion,
+          schemaVersion: repairTrace.schemaVersion,
+          inputFingerprint: repairTrace.inputFingerprint,
+          cacheBoundary: repairTrace.cacheBoundary,
           validationError: validationError.slice(0, 1000),
           batchWindowCount: batch.length,
           rawResponseCharacters: rawResponse.length,

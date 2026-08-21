@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  findUnique: vi.fn(),
+  findFirst: vi.fn(),
   requireSermonResource: vi.fn(),
   stat: vi.fn(),
   videoFileResponse: vi.fn(),
@@ -11,7 +11,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", () => ({ stat: mocks.stat }));
 vi.mock("@/lib/prisma", () => ({
-  prisma: { sermon: { findUnique: mocks.findUnique } },
+  prisma: { sermon: { findFirst: mocks.findFirst } },
+}));
+vi.mock("@/server/tenancy/databaseIsolation", () => ({
+  withDatabaseTenantIsolation: (_context: unknown, operation: (transaction: unknown) => unknown) => operation({
+    sermon: { findFirst: mocks.findFirst },
+  }),
 }));
 vi.mock("@/server/auth/resourceAuthorization", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/server/auth/resourceAuthorization")>(),
@@ -32,7 +37,11 @@ import { GET } from "./route";
 describe("sermon source preview route tenant authorization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.requireSermonResource.mockResolvedValue(undefined);
+    mocks.requireSermonResource.mockResolvedValue({
+      id: "sermon-1",
+      organizationId: "org-1",
+      campusId: "campus-1",
+    });
     mocks.canRunLocalMediaProcessing.mockReturnValue(true);
   });
 
@@ -48,13 +57,13 @@ describe("sermon source preview route tenant authorization", () => {
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Sermon not found." });
     expect(mocks.requireSermonResource).toHaveBeenCalledWith("sermons.read", "sermon-other");
-    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.findFirst).not.toHaveBeenCalled();
     expect(mocks.stat).not.toHaveBeenCalled();
     expect(mocks.videoFileResponse).not.toHaveBeenCalled();
   });
 
   it("resolves portable storage paths before serving a local source", async () => {
-    mocks.findUnique.mockResolvedValue({
+    mocks.findFirst.mockResolvedValue({
       sourceVideoPath: "/srv/sermon-clip/data/sermons/sermon-1/source/source.mp4",
       sourceAsset: null,
     });
@@ -86,7 +95,7 @@ describe("sermon source preview route tenant authorization", () => {
       versionId: "version-1",
       status: "READY",
     };
-    mocks.findUnique.mockResolvedValue({
+    mocks.findFirst.mockResolvedValue({
       sourceVideoPath: "sermon-storage://sermons/sermon-1/source/source.mp4",
       sourceAsset,
     });
@@ -107,14 +116,18 @@ describe("sermon source preview route tenant authorization", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("referrer-policy")).toBe("no-referrer");
     expect(mocks.presignReadyS3SourcePreview).toHaveBeenCalledWith({
+      owner: { organizationId: "org-1", sermonId: "sermon-1" },
       asset: sourceAsset,
     });
+    expect(mocks.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "sermon-1", organizationId: "org-1" },
+    }));
     expect(mocks.videoFileResponse).not.toHaveBeenCalled();
   });
 
   it("can deliver a durable preview from a control-panel runtime", async () => {
     mocks.canRunLocalMediaProcessing.mockReturnValue(false);
-    mocks.findUnique.mockResolvedValue({
+    mocks.findFirst.mockResolvedValue({
       sourceVideoPath: null,
       sourceAsset: {
         bucket: "private-sources",

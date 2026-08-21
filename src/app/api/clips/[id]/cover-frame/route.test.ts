@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   canRunLocalMediaProcessing: vi.fn(),
-  findUnique: vi.fn(),
+  findFirst: vi.fn(),
   requireClipResource: vi.fn(),
   updateMany: vi.fn(),
   resolveSource: vi.fn(),
@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     clipCandidate: {
-      findUnique: mocks.findUnique,
+      findFirst: mocks.findFirst,
       updateMany: mocks.updateMany,
     },
   },
@@ -67,7 +67,7 @@ describe("clip cover frame route", () => {
       campusId: "campus-1",
     });
     mocks.canRunLocalMediaProcessing.mockReturnValue(true);
-    mocks.findUnique.mockResolvedValue(clip);
+    mocks.findFirst.mockResolvedValue(clip);
     mocks.updateMany.mockResolvedValue({ count: 1 });
     mocks.resolveSource.mockResolvedValue({
       videoPath: "/tmp/clip.mp4",
@@ -145,7 +145,7 @@ describe("clip cover frame route", () => {
     );
 
     expect(response.status).toBe(403);
-    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.findFirst).not.toHaveBeenCalled();
   });
 
   it("does not overwrite simultaneous Studio edits", async () => {

@@ -3,6 +3,45 @@ import { describe, expect, it } from "vitest";
 import { __processSermonPipelineTestUtils } from "@/server/pipeline/processSermonPipeline";
 
 describe("process sermon pipeline review asset preparation", () => {
+  it("reports early value without claiming the full content workflow is complete", () => {
+    const summary = __processSermonPipelineTestUtils.buildEarlyValueSummary([
+      { label: "Generate clip suggestions", status: "SUCCEEDED", message: "Ready" },
+      { label: "Generate content opportunities", status: "DEFERRED", message: "Later" },
+    ], {
+      previewClipCount: 7,
+      contentStageCount: 1,
+    });
+
+    expect(summary).toContain("early value ready");
+    expect(summary).toContain("full content workflow is not complete");
+    expect(summary).toContain("7 additional clip preview(s)");
+  });
+
+  it("does not claim the early-value milestone when branding has not completed", () => {
+    const summary = __processSermonPipelineTestUtils.buildEarlyValueSummary([
+      { label: "Generate clip suggestions", status: "SUCCEEDED", message: "Ready" },
+    ], {
+      previewClipCount: 2,
+      contentStageCount: 1,
+    }, false);
+
+    expect(summary).toContain("suggestions are ready");
+    expect(summary).toContain("first branded preview");
+    expect(summary).not.toContain("early value ready");
+  });
+
+  it("does not present degraded fallback cuts as reliable suggestions or branded output", () => {
+    const summary = __processSermonPipelineTestUtils.buildBasicFallbackEarlySummary({
+      previewClipCount: 2,
+      contentStageCount: 0,
+    });
+
+    expect(summary).toContain("basic fallback review cuts");
+    expect(summary).toContain("Reliable suggestions");
+    expect(summary).toContain("branded preview");
+    expect(summary).not.toContain("early value ready");
+  });
+
   it("requires a complete sermon range before processing worship-enabled recordings", () => {
     const hasCompleteRange = __processSermonPipelineTestUtils.hasCompleteWorshipSermonRange;
 

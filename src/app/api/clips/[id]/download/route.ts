@@ -2,13 +2,13 @@ import { stat } from "node:fs/promises";
 
 import { NextResponse } from "next/server";
 
-import { prisma } from "@/lib/prisma";
 import { resolveExportHistory } from "@/lib/clipExportSettings";
 import { buildClipDownloadFileName } from "@/lib/exportNaming";
 import { requireClipResource } from "@/server/auth/resourceAuthorization";
 import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 import { videoFileResponse } from "@/server/http/videoFileResponse";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+import { withDatabaseTenantIsolation } from "@/server/tenancy/databaseIsolation";
 
 async function fileHasBytes(filePath: string): Promise<boolean> {
   try {
@@ -40,8 +40,9 @@ export async function GET(
     return NextResponse.json({ error: "Clip id is required." }, { status: 400 });
   }
 
+  let authorizedClip: Awaited<ReturnType<typeof requireClipResource>>;
   try {
-    await requireClipResource("content.export", clipId);
+    authorizedClip = await requireClipResource("content.export", clipId);
   } catch (error) {
     const response = resourceAuthorizationErrorResponse(error, "Clip not found.");
     if (response) return response;
@@ -58,8 +59,12 @@ export async function GET(
   const url = new URL(request.url);
   const historyId = (url.searchParams.get("historyId") ?? "").trim();
 
-  const clip = await prisma.clipCandidate.findUnique({
-    where: { id: clipId },
+  const clip = await withDatabaseTenantIsolation(authorizedClip, (transaction) => (
+    transaction.clipCandidate.findFirst({
+    where: {
+      id: clipId,
+      sermon: { organizationId: authorizedClip.organizationId },
+    },
     select: {
       exportStatus: true,
       exportFreshness: true,
@@ -85,7 +90,8 @@ export async function GET(
         },
       },
     },
-  });
+    })
+  ));
 
   if (!clip) {
     return NextResponse.json({ error: "Clip not found." }, { status: 404 });

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ensureClipThumbnail: vi.fn(),
-  findUnique: vi.fn(),
+  findFirst: vi.fn(),
   generateClipThumbnailPreview: vi.fn(),
   readFile: vi.fn(),
   requireClipResource: vi.fn(),
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", () => ({ readFile: mocks.readFile }));
 vi.mock("@/lib/prisma", () => ({
-  prisma: { clipCandidate: { findUnique: mocks.findUnique } },
+  prisma: { clipCandidate: { findFirst: mocks.findFirst } },
 }));
 vi.mock("@/server/agents/clipThumbnailService", () => ({
   ensureClipThumbnail: mocks.ensureClipThumbnail,
@@ -42,7 +42,7 @@ describe("clip thumbnail route tenant authorization", () => {
 
     expect(response.status).toBe(404);
     expect(mocks.requireClipResource).toHaveBeenCalledWith("content.read", "clip-other");
-    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.findFirst).not.toHaveBeenCalled();
     expect(mocks.ensureClipThumbnail).not.toHaveBeenCalled();
     expect(mocks.generateClipThumbnailPreview).not.toHaveBeenCalled();
     expect(mocks.readFile).not.toHaveBeenCalled();

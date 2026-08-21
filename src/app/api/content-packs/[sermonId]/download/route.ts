@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 
-import { prisma } from "@/lib/prisma";
 import { createZipArchive } from "@/lib/zipArchive";
 import { slugifyExportName } from "@/lib/exportNaming";
 import { renderBrandedContentSvg, splitCarouselSlides } from "@/lib/contentAssetRenderer";
@@ -8,22 +7,28 @@ import { readBrandingArtworkLogoDataUrl } from "@/server/branding/artworkLogo";
 import { getBrandingSettings } from "@/server/branding/settings";
 import { requireSermonResource } from "@/server/auth/resourceAuthorization";
 import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
+import { withDatabaseTenantIsolation } from "@/server/tenancy/databaseIsolation";
 
 export async function GET(
   _request: Request,
   context: { params: Promise<{ sermonId: string }> },
 ): Promise<NextResponse> {
   const { sermonId } = await context.params;
+  let authorizedSermon: Awaited<ReturnType<typeof requireSermonResource>>;
   try {
-    await requireSermonResource("content.export", sermonId);
+    authorizedSermon = await requireSermonResource("content.export", sermonId);
   } catch (error) {
     const response = resourceAuthorizationErrorResponse(error, "Sermon not found.");
     if (response) return response;
     throw error;
   }
 
-  const sermon = await prisma.sermon.findUnique({
-    where: { id: sermonId },
+  const sermon = await withDatabaseTenantIsolation(authorizedSermon, (transaction) => (
+    transaction.sermon.findFirst({
+    where: {
+      id: sermonId,
+      organizationId: authorizedSermon.organizationId,
+    },
     select: {
       title: true,
       speakerName: true,
@@ -43,14 +48,15 @@ export async function GET(
         },
       },
     },
-  });
+    })
+  ));
 
   if (!sermon) return NextResponse.json({ error: "Sermon not found." }, { status: 404 });
   if (sermon.contentOpportunities.length === 0) {
     return NextResponse.json({ error: "Approve at least one content item before downloading a production pack." }, { status: 409 });
   }
 
-  const branding = await getBrandingSettings();
+  const branding = await getBrandingSettings(authorizedSermon.organizationId);
   const logoDataUrl = await readBrandingArtworkLogoDataUrl(branding.churchLogoPath);
   const artworkBranding = {
     churchName: branding.churchName,

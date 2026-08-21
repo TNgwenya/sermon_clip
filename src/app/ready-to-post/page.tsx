@@ -28,6 +28,7 @@ import { checkContentAssetMediaPresence } from "@/server/contentAssets/contentAs
 import { getSermonStoragePath } from "@/server/agents/storage";
 import { tenantScope } from "@/server/tenancy/scope";
 import { SermonPublishingLibrary } from "@/app/ready-to-post/sermon-publishing-library";
+import { buildPublishingFocus } from "@/lib/publishingFocus";
 
 export const dynamic = "force-dynamic";
 
@@ -698,44 +699,34 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
     approvedWaitingCount: approvedWaitingClipCount,
   });
   const downloadAllHref = buildReadyDownloadHref(clips.filter((clip) => clip.mediaReady).map((clip) => clip.id));
+  const publishingFocus = buildPublishingFocus({
+    sermonId: reviewSermonId,
+    sermonTitle: focusedPublishingAsset?.sermonTitle ?? scopedSermonTitle,
+    clipId: focusedClip?.id ?? (clipId ? clips[0]?.id : null),
+    clipTitle: scopedClipTitle,
+    assetId: focusedPublishingAsset?.id,
+    assetTitle: focusedPublishingAsset?.title,
+    assetNeedsReview: focusedContentAssetNeedsReview,
+  });
 
   return (
     <main className="ready-page-shell premium-ready-page stack-lg">
       <header className="ready-publishing-header premium-ready-header">
         <div className="ready-title-block">
-          <p className="kicker">Publishing desk</p>
-          <h1>{scopedSermonTitle ? `Everything from ${scopedSermonTitle}, together.` : "Your sermons, ready to share."}</h1>
-          <p className="muted">
-            {focusedPublishingAsset
-              ? focusedContentAssetNeedsReview
-                ? `Review ${focusedPublishingAsset.title} from ${focusedPublishingAsset.sermonTitle} and approve its current publishing version before downloading or scheduling it.`
-                : `Prepare ${focusedPublishingAsset.title} from ${focusedPublishingAsset.sermonTitle}, then download it or place it on the calendar.`
-              : scopedClipTitle
-              ? `Review ${scopedClipTitle} alongside every other prepared clip and post asset from this sermon.`
-            : scopedSermonTitle
-              ? `Review all finished clips and generated post assets from ${scopedSermonTitle} before deciding what to publish.`
-              : "Open a sermon to review every finished clip and prepared post asset from that message in one place."}
-          </p>
+          <p className="kicker">{publishingFocus.eyebrow}</p>
+          <h1>{publishingFocus.title}</h1>
+          <p className="muted">{publishingFocus.description}</p>
+          <div>
+            <Link href={publishingFocus.actionHref} className="button primary">
+              {publishingFocus.actionLabel}
+            </Link>
+          </div>
           {focusedPublishingAsset || scopedClipTitle || scopedSermonTitle ? (
             <div className="ready-scope-pill">
               <span>{focusedPublishingAsset ? "Showing generated post" : scopedClipTitle ? "Showing clip" : "Showing sermon"}</span>
               <strong>{focusedPublishingAsset?.title ?? scopedClipTitle ?? scopedSermonTitle}</strong>
             </div>
           ) : null}
-          <div className="premium-ready-summary" aria-label="Publishing summary">
-            <div><strong>{preparedItemCount}</strong><span>Prepared items</span></div>
-            <div><strong>{readyToPostItemCount}</strong><span>Ready to post</span></div>
-            <div><strong>{scheduledItemCount}</strong><span>Scheduled</span></div>
-            <details>
-              <summary>Queue details</summary>
-              <dl>
-                <div><dt>Generated posts</dt><dd>{contentAssets.length}</dd></div>
-                <div><dt>Preparing now</dt><dd>{preparingClipCount}</dd></div>
-                <div><dt>Media needs repair</dt><dd>{blockedReadyClipCount}</dd></div>
-                <div><dt>Preparation issues</dt><dd>{failedPreparationClipCount}</dd></div>
-              </dl>
-            </details>
-          </div>
         </div>
         <nav className="ready-publishing-nav" aria-label="Ready to post actions">
           {scopeIsActive ? <Link href="/ready-to-post" className="button tertiary">All sermons</Link> : null}
@@ -751,29 +742,45 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
           ) : null}
         </nav>
 
-        {!focusedPublishingAsset ? (
-          <ol className="premium-ready-steps" aria-label="Ready-to-post workflow">
-            <li className={clipId ? "is-complete" : "is-current"}>
-              <span>1</span>
-              <div><strong>Choose a sermon</strong><small>Start with the message, not a mixed queue.</small></div>
-            </li>
-            <li className={clipId ? "is-current" : ""}>
-              <span>2</span>
-              <div><strong>Review together</strong><small>Compare its clips, artwork, and written posts.</small></div>
-            </li>
-            <li>
-              <span>3</span>
-              <div><strong>Publish deliberately</strong><small>Use the queue, handoff, or calendar when ready.</small></div>
-            </li>
-          </ol>
-        ) : null}
-
-        <nav className="premium-ready-view-nav" aria-label="Publishing desk sections">
-          <a href={resolvedSermonId ? "#sermon-assets" : "#sermon-library"}>{resolvedSermonId ? "Sermon assets" : "Sermons"}</a>
-          <a href="#publishing-operations">Publishing tools</a>
-          <a href="#posting-calendar">Calendar</a>
-          <a href="#publishing-support">History</a>
-        </nav>
+        <details className="panel stack-md ready-publishing-overview">
+          <summary>Publishing overview and advanced tools</summary>
+          <div className="premium-ready-summary" aria-label="Publishing summary">
+            <div><strong>{preparedItemCount}</strong><span>Prepared items</span></div>
+            <div><strong>{readyToPostItemCount}</strong><span>Ready to post</span></div>
+            <div><strong>{scheduledItemCount}</strong><span>Scheduled</span></div>
+            <details>
+              <summary>Queue details</summary>
+              <dl>
+                <div><dt>Generated posts</dt><dd>{contentAssets.length}</dd></div>
+                <div><dt>Preparing now</dt><dd>{preparingClipCount}</dd></div>
+                <div><dt>Media needs repair</dt><dd>{blockedReadyClipCount}</dd></div>
+                <div><dt>Preparation issues</dt><dd>{failedPreparationClipCount}</dd></div>
+              </dl>
+            </details>
+          </div>
+          {!focusedPublishingAsset ? (
+            <ol className="premium-ready-steps" aria-label="Ready-to-post workflow">
+              <li className={clipId ? "is-complete" : "is-current"}>
+                <span>1</span>
+                <div><strong>Choose a sermon</strong><small>Start with the message, not a mixed queue.</small></div>
+              </li>
+              <li className={clipId ? "is-current" : ""}>
+                <span>2</span>
+                <div><strong>Review one post</strong><small>Check the message, wording, and final media.</small></div>
+              </li>
+              <li>
+                <span>3</span>
+                <div><strong>Publish deliberately</strong><small>Download or schedule only after approval.</small></div>
+              </li>
+            </ol>
+          ) : null}
+          <nav className="premium-ready-view-nav" aria-label="Advanced publishing sections">
+            <a href={resolvedSermonId ? "#sermon-assets" : "#sermon-library"}>{resolvedSermonId ? "Sermon assets" : "Sermons"}</a>
+            <a href="#publishing-operations">Publishing tools</a>
+            <a href="#posting-calendar">Calendar</a>
+            <a href="#publishing-support">History</a>
+          </nav>
+        </details>
       </header>
 
       <SermonPublishingLibrary

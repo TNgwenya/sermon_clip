@@ -40,6 +40,11 @@ import {
   buildTranscriptReviewGuidance,
   type TranscriptReviewEvidenceView,
 } from "@/lib/transcriptReviewGuidance";
+import {
+  buildQuickReviewDisplay,
+  QuickReviewDecisionActions,
+} from "@/app/sermons/[id]/review/clip-review-card";
+import styles from "@/app/sermons/[id]/review/review-local.module.css";
 
 type ClipReviewItem = {
   id: string;
@@ -130,6 +135,7 @@ type Draft = {
 };
 
 type ContentKindFilter = "ALL" | ClipReviewItem["contentKind"];
+type ReviewMode = "QUICK" | "ADVANCED";
 
 const REVIEW_INITIAL_VISIBLE_COUNT = 12;
 
@@ -179,6 +185,12 @@ function toDurationLabel(durationSeconds: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+export function estimateQuickReviewMinutes(pendingClipCount: number): number {
+  // A short, deliberately coarse estimate: watch enough of each clip to make a
+  // decision, with room to open context. It is not a processing-time promise.
+  return Math.max(1, Math.ceil(Math.max(0, pendingClipCount) * 25 / 60));
+}
+
 function isDeterministicFallbackClip(clip: Pick<ClipReviewItem, "qualityWarnings" | "reasonSelected">): boolean {
   return (
     clip.qualityWarnings.includes("FALLBACK_REVIEW") ||
@@ -217,6 +229,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
   const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
   const [sort, setSort] = useState<ReviewSort>("HIGHEST_SCORE");
   const [viewMode, setViewMode] = useState<"LIST" | "GRID">("LIST");
+  const [reviewMode, setReviewMode] = useState<ReviewMode>("QUICK");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [showFullFeed, setShowFullFeed] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
@@ -298,8 +311,15 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
     });
     return sortClips(filtered, sort);
   }, [normalizedClips, filter, contentKindFilter, categoryFilter, sort]);
+  const quickReviewClips = useMemo(
+    () => buildQuickReviewDisplay(sortClips(normalizedClips, "HIGHEST_SCORE")),
+    [normalizedClips],
+  );
+  const activeQuickClip = quickReviewClips[0] ?? null;
   const isFeedLimited = !showFullFeed && visibleClips.length > REVIEW_INITIAL_VISIBLE_COUNT;
-  const renderedClips = isFeedLimited ? visibleClips.slice(0, REVIEW_INITIAL_VISIBLE_COUNT) : visibleClips;
+  const renderedClips = reviewMode === "QUICK"
+    ? quickReviewClips
+    : isFeedLimited ? visibleClips.slice(0, REVIEW_INITIAL_VISIBLE_COUNT) : visibleClips;
   const filterSummary = [
     contentKindFilter === "ALL"
       ? "All moments"
@@ -323,6 +343,11 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
     mediaQuery.addEventListener("change", syncFilterDisclosure);
     return () => mediaQuery.removeEventListener("change", syncFilterDisclosure);
   }, []);
+
+  useEffect(() => {
+    if (reviewMode !== "QUICK" || !activeQuickClip) return;
+    document.getElementById(`clip-heading-${activeQuickClip.id}`)?.focus({ preventScroll: true });
+  }, [activeQuickClip, reviewMode]);
 
   function setStatusMessage(success: boolean, value: string) {
     setMessageSuccess(success);
@@ -484,10 +509,39 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
         <ol className="premium-review-journey" aria-label="Sermon clip workflow">
           <li className="is-complete"><span>1</span><strong>{hasOnlyBasicClips ? "Basic cuts" : "Analyze"}</strong></li>
           <li className="is-current" aria-current="step"><span>2</span><strong>Pastor review</strong></li>
-          <li><span>3</span><strong>Edit &amp; brand</strong></li>
+          <li><span>3</span><strong>Quick Finish</strong></li>
           <li><span>4</span><strong>Prepare post</strong></li>
         </ol>
 
+        <div className={styles.modeSwitch} role="group" aria-label="Review mode">
+          <button
+            type="button"
+            className={reviewMode === "QUICK" ? "button primary" : "button secondary"}
+            aria-pressed={reviewMode === "QUICK"}
+            onClick={() => setReviewMode("QUICK")}
+          >
+            Quick review
+          </button>
+          <button
+            type="button"
+            className={reviewMode === "ADVANCED" ? "button primary" : "button tertiary"}
+            aria-pressed={reviewMode === "ADVANCED"}
+            onClick={() => setReviewMode("ADVANCED")}
+          >
+            Manage all moments
+          </button>
+          <span className="small muted">Advanced queue tools stay available when your communications team needs them.</span>
+        </div>
+
+        {reviewMode === "QUICK" && activeQuickClip ? (
+          <div className={styles.quickStatus} role="status" aria-live="polite">
+            <p>
+              <strong>{decidedCount + 1} of {summary.total}</strong>
+              {" · "}about {estimateQuickReviewMinutes(summary.pending)} minute{estimateQuickReviewMinutes(summary.pending) === 1 ? "" : "s"} left
+            </p>
+            <p className="small muted">Strongest undecided moment first</p>
+          </div>
+        ) : (
         <div className="premium-review-progress">
           <div className="premium-review-progress-copy">
             <strong>{summary.pending > 0 ? `${summary.pending} moment${summary.pending === 1 ? "" : "s"} awaiting a decision` : "Review complete"}</strong>
@@ -517,6 +571,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             </dl>
           </details>
         </div>
+        )}
       </header>
 
       {basicClipCount > 0 ? (
@@ -536,14 +591,14 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             <p className="kicker">Review complete</p>
             <h2 id="review-complete-title">
               {strongestApprovedClip
-                ? "Your approved moments are ready for Clip Studio."
+                ? "Your approved moments are ready for Quick Finish."
                 : hasPostReadyClip
                   ? "Your reviewed clips are ready at the publishing desk."
                   : "You have reviewed every suggested moment."}
             </h2>
             <p className="muted">
               {strongestApprovedClip
-                ? "Start with the strongest approved clip, then shape its captions, framing, and church branding."
+                ? "Start with the strongest approved clip, make the few finishing choices, then hand it to your communications team."
                 : hasPostReadyClip
                   ? "Open the publishing desk to prepare platform copy, download the finished files, or schedule the next post."
                   : "No clips are approved right now. You can return to the sermon to find more moments or reconsider one from this queue."}
@@ -552,7 +607,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
           <div className="premium-review-complete-actions">
             {strongestApprovedClip ? (
               <Link href={`/sermons/${sermonId}/clips/${strongestApprovedClip.id}/studio`} className="button primary">
-                Continue to Clip Studio
+                Continue to Quick Finish
               </Link>
             ) : hasPostReadyClip ? (
               <Link href={`/ready-to-post?sermonId=${sermonId}`} className="button primary">
@@ -570,6 +625,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
         </section>
       ) : null}
 
+      {reviewMode === "ADVANCED" ? (
       <section className="card review-feed-toolbar premium-review-toolbar stack-sm">
         <div className="stack-sm">
           <strong>Moment type</strong>
@@ -708,6 +764,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
           </div>
         </div>
       </section>
+      ) : null}
 
       {message ? (
         <p className={messageSuccess ? "success-banner" : "error-banner"} role="status" aria-live="polite">
@@ -719,8 +776,21 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
         <p className="status-help">Saving your changes. This view will update when they are ready.</p>
       ) : null}
 
-      <section className={viewMode === "GRID" ? "review-feed-grid" : "review-feed-list"}>
-        {visibleClips.length === 0 ? (
+      {reviewMode === "QUICK" && !activeQuickClip && !reviewIsComplete ? (
+        <section className="warning-banner stack-sm" role="status" aria-live="polite">
+          <strong>Your suggestions are safe, but a playable review clip is not ready yet.</strong>
+          <p>
+            Preview preparation may still be running or may need media recovery. No moment was approved,
+            exported, or published. Use Manage all moments to see the exact media state.
+          </p>
+          <button type="button" className="button secondary" onClick={() => setReviewMode("ADVANCED")}>
+            Manage all moments
+          </button>
+        </section>
+      ) : null}
+
+      <section className={reviewMode === "QUICK" ? "review-feed-list" : viewMode === "GRID" ? "review-feed-grid" : "review-feed-list"}>
+        {reviewMode === "QUICK" && !activeQuickClip ? null : visibleClips.length === 0 ? (
           <article className="card premium-review-empty">
             <p className="kicker">Nothing to review here</p>
             <h2>No moments match these filters</h2>
@@ -833,10 +903,11 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               <article
                 key={clip.id}
                 id={`clip-${clip.id}`}
-                className={`card review-feed-card premium-review-card review-feed-card-${clip.status.toLowerCase()} quality-tone-${actionTone}`}
+                className={`card review-feed-card premium-review-card review-feed-card-${clip.status.toLowerCase()} quality-tone-${actionTone} ${reviewMode === "QUICK" ? styles.quickCard : ""}`}
               >
                 <div className="review-feed-card-layout">
                   <div className="review-feed-video-column stack-sm">
+                    {reviewMode === "ADVANCED" ? (
                     <label className="review-checkbox-row premium-review-select">
                       <input
                         type="checkbox"
@@ -846,6 +917,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       />
                       <span>Select</span>
                     </label>
+                    ) : null}
 
                     <div className="review-feed-video-frame">
                       <span className="review-feed-duration-pill">{toDurationLabel(clip.durationSeconds)}</span>
@@ -897,9 +969,16 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                           : ""}
                         {clipCategory} · {toDurationLabel(clip.durationSeconds)}
                       </p>
-                      <h3>{clip.title}</h3>
+                      <h3 id={`clip-heading-${clip.id}`} tabIndex={-1}>{clip.title}</h3>
                       {draft.hook.trim() ? <p className="premium-review-hook">&ldquo;{draft.hook}&rdquo;</p> : null}
                     </div>
+                    {reviewMode === "QUICK" ? (
+                      <p className={styles.sourceWindow}>
+                        <span><strong>Source:</strong> {sermonTitle}</span>
+                        <span><strong>Window:</strong> {toDurationLabel(clip.startTimeSeconds)}–{toDurationLabel(clip.startTimeSeconds + clip.durationSeconds)}</span>
+                        <span><strong>Length:</strong> {toDurationLabel(clip.durationSeconds)}</span>
+                      </p>
+                    ) : null}
                     <div className="clip-badge-row premium-review-primary-status">
                       <span className={`status-pill review-workflow-status status-${clip.status.toLowerCase()}`}>
                         {workflowLabel}
@@ -913,25 +992,51 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       <p>{insight}</p>
                     </div>
 
-                    <div className={`premium-review-evidence ${transcriptReviewRequired ? "needs-review" : ""}`}>
-                      <div className="premium-review-evidence-heading">
-                        <span>{isBasicClip ? "Transcript" : "Exact words"}</span>
-                        <small>{contextLabel}</small>
+                    {reviewMode === "QUICK" ? (
+                      <details className={styles.contextDisclosure} open={transcriptReviewRequired}>
+                        <summary>Message context, exact words &amp; provenance · {contextLabel}</summary>
+                        <div className={`premium-review-evidence ${transcriptReviewRequired ? "needs-review" : ""}`}>
+                          <div className="premium-review-evidence-heading">
+                            <span>{isBasicClip ? "Transcript" : "Exact words from the source"}</span>
+                            <small>{contextLabel}</small>
+                          </div>
+                          {isBasicClip ? (
+                            <p>No reliable transcript is available for this time-based cut. Listen to the recording in Clip Studio.</p>
+                          ) : (
+                            <blockquote>&ldquo;{clip.transcriptText}&rdquo;</blockquote>
+                          )}
+                          <p>
+                            <strong>Context:</strong>{" "}
+                            {clip.boundaryAdjustmentReason
+                              ? clip.boundaryAdjustmentReason
+                              : clip.boundaryQuality === "GOOD"
+                                ? "The opening and ending form a complete thought from the sermon."
+                                : "Listen to the opening and ending before approving this excerpt."}
+                          </p>
+                          <p className="small muted">This excerpt is linked to the sermon and time window shown above.</p>
+                        </div>
+                      </details>
+                    ) : (
+                      <div className={`premium-review-evidence ${transcriptReviewRequired ? "needs-review" : ""}`}>
+                        <div className="premium-review-evidence-heading">
+                          <span>{isBasicClip ? "Transcript" : "Exact words"}</span>
+                          <small>{contextLabel}</small>
+                        </div>
+                        {isBasicClip ? (
+                          <p>No reliable transcript is available for this time-based cut. Listen to the recording in Clip Studio.</p>
+                        ) : (
+                          <blockquote>&ldquo;{clip.transcriptText}&rdquo;</blockquote>
+                        )}
+                        <p>
+                          <strong>Context:</strong>{" "}
+                          {clip.boundaryAdjustmentReason
+                            ? clip.boundaryAdjustmentReason
+                            : clip.boundaryQuality === "GOOD"
+                              ? "The opening and ending form a complete thought from the sermon."
+                              : "Listen to the opening and ending before approving this excerpt."}
+                        </p>
                       </div>
-                      {isBasicClip ? (
-                        <p>No reliable transcript is available for this time-based cut. Listen to the recording in Clip Studio.</p>
-                      ) : (
-                        <blockquote>&ldquo;{clip.transcriptText}&rdquo;</blockquote>
-                      )}
-                      <p>
-                        <strong>Context:</strong>{" "}
-                        {clip.boundaryAdjustmentReason
-                          ? clip.boundaryAdjustmentReason
-                          : clip.boundaryQuality === "GOOD"
-                            ? "The opening and ending form a complete thought from the sermon."
-                            : "Listen to the opening and ending before approving this excerpt."}
-                      </p>
-                    </div>
+                    )}
 
                     {transcriptReviewRequired ? (
                       <div className="warning-banner stack-sm premium-review-safety-gate">
@@ -968,6 +1073,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       </div>
                     ) : null}
 
+                    {reviewMode === "ADVANCED" ? (
                     <details className="review-feed-card-details">
                       <summary>Scores &amp; recommendation</summary>
                       <div className="stack-sm">
@@ -1045,8 +1151,26 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                         ) : null}
                       </div>
                     </details>
+                    ) : null}
                   </div>
 
+                  {reviewMode === "QUICK" ? (
+                    <div className={`review-feed-action-column ${styles.quickActions}`}>
+                      <QuickReviewDecisionActions
+                        sermonId={sermonId}
+                        clipId={clip.id}
+                        clipTitle={clip.title}
+                        canApprove={canApprove}
+                        canReject={canReject}
+                        isPending={isPending}
+                        onApprove={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "APPROVED"))}
+                        onReject={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "REJECTED"))}
+                      />
+                      {transcriptReviewRequired ? (
+                        <p className="status-help small">Approve &amp; use unlocks after the required transcript check above.</p>
+                      ) : null}
+                    </div>
+                  ) : (
                   <div className="review-feed-action-column" aria-label={`Review actions for ${clip.title}`}>
                     <div className="review-feed-action-stack">
                       {isApprovedState ? (
@@ -1150,9 +1274,11 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       </div>
                     </details>
                   </div>
+                  )}
                 </div>
 
-                <details className="review-feed-details stack-sm">
+                {reviewMode === "ADVANCED" ? (
+                <details className={`review-feed-details stack-sm ${styles.advancedDisclosure}`}>
                   <summary>Advanced text &amp; production tools</summary>
 
                   <div className="review-edit-grid">
@@ -1335,11 +1461,12 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                   ) : null}
                   {clip.smartCropDebugError ? <p className="status-help">{clip.smartCropDebugError}</p> : null}
                 </details>
+                ) : null}
               </article>
             );
           })
           }
-          {visibleClips.length > REVIEW_INITIAL_VISIBLE_COUNT ? (
+          {reviewMode === "ADVANCED" && visibleClips.length > REVIEW_INITIAL_VISIBLE_COUNT ? (
             <article className="card review-feed-more-panel">
               <div>
                 <strong>

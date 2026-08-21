@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  findUnique: vi.fn(),
+  findFirst: vi.fn(),
   readFile: vi.fn(),
   requireClipResource: vi.fn(),
   stat: vi.fn(),
@@ -12,7 +12,7 @@ vi.mock("node:fs/promises", () => ({
   stat: mocks.stat,
 }));
 vi.mock("@/lib/prisma", () => ({
-  prisma: { clipCandidate: { findUnique: mocks.findUnique } },
+  prisma: { clipCandidate: { findFirst: mocks.findFirst } },
 }));
 vi.mock("@/server/auth/resourceAuthorization", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/server/auth/resourceAuthorization")>(),
@@ -38,7 +38,7 @@ describe("smart crop debug route tenant authorization", () => {
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Clip not found." });
     expect(mocks.requireClipResource).toHaveBeenCalledWith("content.read", "clip-other");
-    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.findFirst).not.toHaveBeenCalled();
     expect(mocks.stat).not.toHaveBeenCalled();
     expect(mocks.readFile).not.toHaveBeenCalled();
   });

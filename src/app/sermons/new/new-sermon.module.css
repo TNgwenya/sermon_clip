@@ -2,6 +2,32 @@
   align-items: end;
 }
 
+.intakeShell {
+  gap: 1rem;
+  padding-top: 1rem;
+}
+
+.compactHero {
+  align-items: center;
+  padding-bottom: 0.85rem;
+}
+
+.compactHero h1 {
+  max-width: none;
+  font-family: inherit;
+  font-size: clamp(2rem, 4vw, 3.25rem);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  line-height: 1;
+}
+
+.compactHero :global(.muted) {
+  max-width: 54rem;
+  margin-top: 0.35rem;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
 .heroActions {
   display: grid;
   justify-items: end;
@@ -24,6 +50,52 @@
   border: 1px solid rgba(127, 111, 255, 0.24);
   border-radius: 15px;
   background: linear-gradient(135deg, rgba(120, 101, 255, 0.09), rgba(255, 255, 255, 0.018));
+}
+
+.sourceSection {
+  gap: 0.85rem;
+  padding: clamp(1rem, 2vw, 1.35rem);
+}
+
+.sourceSection :global(.intake-section-heading) {
+  display: block;
+}
+
+.sourceSection :global(.source-mode-option) {
+  min-height: 3.35rem;
+  padding: 0.6rem 0.8rem;
+}
+
+.sourceSection :global(.source-method-card) {
+  min-height: 0;
+  padding: 0.8rem;
+}
+
+.firstAction {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(13rem, 0.52fr);
+  gap: 0.85rem;
+  align-items: center;
+}
+
+.compactRights {
+  margin: 0;
+  padding: 0.75rem;
+}
+
+.firstActionCta {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.firstActionCta :global(.command-cta) {
+  width: 100%;
+  min-height: 3.25rem;
+}
+
+.firstActionCta p {
+  margin: 0;
+  line-height: 1.4;
 }
 
 .quickStartNote > span {
@@ -122,9 +194,73 @@
 }
 
 @media (max-width: 680px) {
+  .intakeShell {
+    gap: 0.75rem;
+    padding-top: 0.65rem;
+  }
+
+  .compactHero {
+    gap: 0.45rem;
+    padding: 0 0 0.65rem;
+  }
+
+  .compactHero h1 {
+    font-size: clamp(1.85rem, 9vw, 2.5rem);
+  }
+
+  .compactHero :global(.muted) {
+    display: none;
+  }
+
   .heroActions {
-    width: 100%;
-    justify-items: start;
+    display: none;
+  }
+
+  .sourceSection {
+    gap: 0.7rem;
+    padding: 0.85rem;
+  }
+
+  .sourceSection :global(.source-mode-switch) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .sourceSection :global(.intake-section-heading .muted) {
+    display: none;
+  }
+
+  .sourceSection :global(.source-mode-option) {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+    min-height: 3.5rem;
+    padding: 0.55rem;
+  }
+
+  .sourceSection :global(.source-mode-option small) {
+    display: none;
+  }
+
+  .sourceSection :global(.source-method-heading) {
+    display: none;
+  }
+
+  .firstAction {
+    grid-template-columns: 1fr;
+    gap: 0.6rem;
+  }
+
+  .compactRights {
+    padding: 0.6rem;
+  }
+
+  .compactRights :global(.checkbox-label) {
+    font-size: 0.78rem;
+    line-height: 1.35;
+  }
+
+  .firstActionCta p {
+    display: none;
   }
 
   .detailsDisclosure > summary {

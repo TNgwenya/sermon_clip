@@ -79,6 +79,28 @@ describe("private S3 sermon source storage", () => {
     expect(key).not.toContain("..");
   });
 
+  it("denies an object key outside the authorized organization and sermon prefix", () => {
+    const config = {
+      bucket: "private-sources",
+      region: "eu-central-1",
+      forcePathStyle: false,
+      keyPrefix: "sermon-sources",
+      partSizeBytes: 16 * 1024 * 1024,
+      presignedUrlTtlSeconds: 900,
+    };
+
+    expect(() => __s3SourceStorageTestUtils.assertS3SourceObjectOwnedBy(
+      { organizationId: "org-one", sermonId: "sermon-one" },
+      "sermon-sources/organizations/org-one/sermons/sermon-one/upload/source.mp4",
+      config,
+    )).not.toThrow();
+    expect(() => __s3SourceStorageTestUtils.assertS3SourceObjectOwnedBy(
+      { organizationId: "org-one", sermonId: "sermon-one" },
+      "sermon-sources/organizations/org-two/sermons/sermon-two/upload/source.mp4",
+      config,
+    )).toThrow(/authorized sermon tenant/i);
+  });
+
   it("validates every completed part and the total byte count", () => {
     const partSizeBytes = 5 * 1024 * 1024;
     const sizeBytes = partSizeBytes + 7;
@@ -108,9 +130,10 @@ describe("private S3 sermon source storage", () => {
     presignMock.mockResolvedValue("https://private.example/source?signature=test");
 
     const url = await presignReadyS3SourcePreview({
+      owner: { organizationId: "org-one", sermonId: "sermon-one" },
       asset: {
         bucket: "private-sources",
-        objectKey: "sermons/source.mp4",
+        objectKey: "sermon-sources/organizations/org-one/sermons/sermon-one/upload/source.mp4",
         region: "eu-central-1",
         sizeBytes: BigInt(2048),
         contentType: "video/mp4",
@@ -124,7 +147,7 @@ describe("private S3 sermon source storage", () => {
     const [, command, options] = presignMock.mock.calls[0];
     expect(command.input).toMatchObject({
       Bucket: "private-sources",
-      Key: "sermons/source.mp4",
+      Key: "sermon-sources/organizations/org-one/sermons/sermon-one/upload/source.mp4",
       VersionId: "version-1",
       ResponseContentType: "video/mp4",
       ResponseContentDisposition: "inline; filename=\"Sunday Service.mp4\"",
@@ -138,14 +161,32 @@ describe("private S3 sermon source storage", () => {
     process.env.SOURCE_MEDIA_S3_REGION = "eu-central-1";
 
     await expect(presignReadyS3SourcePreview({
+      owner: { organizationId: "org-one", sermonId: "sermon-one" },
       asset: {
         bucket: "another-bucket",
-        objectKey: "sermons/source.mp4",
+        objectKey: "sermon-sources/organizations/org-one/sermons/sermon-one/upload/source.mp4",
         region: "eu-central-1",
         sizeBytes: 2048,
         status: "READY",
       },
     })).rejects.toThrow(/configured private S3 bucket/i);
+    expect(presignMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses to sign a valid private object owned by another tenant", async () => {
+    process.env.SOURCE_MEDIA_S3_BUCKET = "private-sources";
+    process.env.SOURCE_MEDIA_S3_REGION = "eu-central-1";
+
+    await expect(presignReadyS3SourcePreview({
+      owner: { organizationId: "org-one", sermonId: "sermon-one" },
+      asset: {
+        bucket: "private-sources",
+        objectKey: "sermon-sources/organizations/org-two/sermons/sermon-two/upload/source.mp4",
+        region: "eu-central-1",
+        sizeBytes: 2048,
+        status: "READY",
+      },
+    })).rejects.toThrow(/authorized sermon tenant/i);
     expect(presignMock).not.toHaveBeenCalled();
   });
 });

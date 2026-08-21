@@ -93,6 +93,12 @@ type OverlayOptions = {
   allowRerender?: boolean;
   force?: boolean;
   processingJobId?: string;
+  /**
+   * Build a non-publishing review preview from the current prepared render.
+   * This deliberately leaves the user's caption settings and approval state
+   * untouched; the final export path must still honour those settings.
+   */
+  reviewPreviewWithoutCaptions?: boolean;
 };
 
 type ClipForOverlay = Pick<
@@ -117,6 +123,10 @@ type SermonMetadataForOverlay = {
   speakerName: string;
   churchName: string;
   sermonDate: Date | null;
+};
+
+type TenantScopedSermonMetadataForOverlay = SermonMetadataForOverlay & {
+  organizationId: string;
 };
 
 type BrandingForOverlay = {
@@ -466,6 +476,12 @@ function shouldApplyCaptionsToOverlaySource(captionData: unknown): boolean {
   return typeof value === "boolean" ? value : true;
 }
 
+function brandingSettingsWhereForOrganization(organizationId: string): { organizationId: string } {
+  const normalized = organizationId.trim();
+  if (!normalized) throw new Error("A tenant organization is required to resolve Brand Kit settings.");
+  return { organizationId: normalized };
+}
+
 function resolveOverlaySourceSelection(
   clip: Pick<
     ClipForOverlay,
@@ -477,8 +493,12 @@ function resolveOverlaySourceSelection(
     | "captionedVideoPath"
     | "captionData"
   >,
+  options?: { reviewPreviewWithoutCaptions?: boolean },
 ): { sourcePath: string; sourceWasCaptioned: boolean } {
-  if (shouldApplyCaptionsToOverlaySource(clip.captionData)) {
+  if (
+    shouldApplyCaptionsToOverlaySource(clip.captionData)
+    && options?.reviewPreviewWithoutCaptions !== true
+  ) {
     const captionedPath = clip.captionedVideoPath?.trim();
     if (
       clip.captionBurnStatus !== "COMPLETED"
@@ -816,6 +836,7 @@ export const __clipOverlayTestUtils = {
   extractBrollOverlaySpecs,
   shouldBrandingLowerThirdYieldToCaptions,
   resolveOverlaySourceSelection,
+  brandingSettingsWhereForOrganization,
   buildHookOverlaySvg,
   buildBrollCardSvg,
   buildOverlayFilterComplex,
@@ -880,10 +901,11 @@ async function loadClipForOverlay(clipId: string): Promise<ClipForOverlay> {
   return clip;
 }
 
-async function loadSermonForOverlay(sermonId: string): Promise<SermonMetadataForOverlay> {
+async function loadSermonForOverlay(sermonId: string): Promise<TenantScopedSermonMetadataForOverlay> {
   const sermon = await prisma.sermon.findUnique({
     where: { id: sermonId },
     select: {
+      organizationId: true,
       title: true,
       speakerName: true,
       churchName: true,
@@ -895,12 +917,16 @@ async function loadSermonForOverlay(sermonId: string): Promise<SermonMetadataFor
     throw new Error(`Sermon ${sermonId} was not found.`);
   }
 
-  return sermon;
+  if (!sermon.organizationId) {
+    throw new Error(`Sermon ${sermonId} has no tenant owner, so its Brand Kit cannot be resolved safely.`);
+  }
+
+  return { ...sermon, organizationId: sermon.organizationId };
 }
 
-async function loadBrandingForOverlay(): Promise<BrandingForOverlay> {
+async function loadBrandingForOverlay(organizationId: string): Promise<BrandingForOverlay> {
   const branding = await prisma.brandingSettings.findUnique({
-    where: { id: "local" },
+    where: brandingSettingsWhereForOrganization(organizationId),
     select: {
       primaryBrandColor: true,
       defaultCaptionStyleName: true,
@@ -1100,13 +1126,15 @@ export async function renderClipOverlay(
   }
   await ensureSermonFolders(clip.sermonId);
 
-  const overlaySource = resolveOverlaySourceSelection(clip);
+  const overlaySource = resolveOverlaySourceSelection(clip, {
+    reviewPreviewWithoutCaptions: options?.reviewPreviewWithoutCaptions,
+  });
   const renderedPath = overlaySource.sourcePath;
   const captionedPath = overlaySource.sourceWasCaptioned ? renderedPath : null;
   const renderedClipExists = await fileExists(renderedPath);
 
   const sermon = await loadSermonForOverlay(clip.sermonId);
-  const branding = await loadBrandingForOverlay();
+  const branding = await loadBrandingForOverlay(sermon.organizationId);
 
   const eligibility = validateOverlayEligibility({
     status: clip.status,

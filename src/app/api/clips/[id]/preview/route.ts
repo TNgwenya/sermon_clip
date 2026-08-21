@@ -2,12 +2,12 @@ import { stat } from "node:fs/promises";
 
 import { NextResponse } from "next/server";
 
-import { prisma } from "@/lib/prisma";
 import { isFreshRemotePreview, listBestPreviewCandidates } from "@/lib/clipPreview";
 import { requireClipResource } from "@/server/auth/resourceAuthorization";
 import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 import { videoFileResponse } from "@/server/http/videoFileResponse";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+import { withDatabaseTenantIsolation } from "@/server/tenancy/databaseIsolation";
 
 const REMOTE_PREVIEW_REDIRECT_CACHE_CONTROL = "private, max-age=30, must-revalidate";
 
@@ -40,16 +40,21 @@ export async function GET(
     return NextResponse.json({ error: "Clip id is required." }, { status: 400 });
   }
 
+  let authorizedClip: Awaited<ReturnType<typeof requireClipResource>>;
   try {
-    await requireClipResource("content.read", clipId);
+    authorizedClip = await requireClipResource("content.read", clipId);
   } catch (error) {
     const response = resourceAuthorizationErrorResponse(error, "Clip not found.");
     if (response) return response;
     throw error;
   }
 
-  const clip = await prisma.clipCandidate.findUnique({
-    where: { id: clipId },
+  const clip = await withDatabaseTenantIsolation(authorizedClip, (transaction) => (
+    transaction.clipCandidate.findFirst({
+    where: {
+      id: clipId,
+      sermon: { organizationId: authorizedClip.organizationId },
+    },
     select: {
       renderedFilePath: true,
       overlayVideoPath: true,
@@ -63,7 +68,8 @@ export async function GET(
       overlayFreshness: true,
       exportFreshness: true,
     },
-  });
+    })
+  ));
 
   if (!clip) {
     return NextResponse.json({ error: "Clip not found." }, { status: 404 });

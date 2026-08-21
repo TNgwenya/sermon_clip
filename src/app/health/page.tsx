@@ -18,10 +18,22 @@ import { getDataConsistencySummary, getOperationalMetrics } from "@/server/workf
 import { HealthRecoveryPanel } from "@/app/health/health-recovery-panel";
 import { buildWorkspaceHealthIssueBreakdown } from "@/lib/healthRecovery";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+import { getMediaWorkerHealth } from "@/lib/mediaWorkerHealth";
 import { getPublishingServiceHealth } from "@/lib/publishingServiceHealth";
-import { requireRequestCapability } from "@/server/auth/requestAuthorization";
+import {
+  canPersistedTenantCapability,
+  requireRequestCapability,
+} from "@/server/auth/requestAuthorization";
 import { tenantScope } from "@/server/tenancy/scope";
 import { getCompetitiveQualityReport } from "@/server/quality/competitiveQualityReport";
+import { getOrchestrationHealth } from "@/lib/orchestrationHealth";
+import {
+  formatBytesCompact,
+  formatDurationCompact,
+  formatEstimatedUsdMicros,
+} from "@/lib/costObservability";
+import { MEDIA_COST_SAFETY_POLICY } from "@/lib/mediaCostPolicy";
+import { getWorkspaceCostSafety } from "@/lib/workspaceCostSafety";
 
 export const dynamic = "force-dynamic";
 
@@ -221,9 +233,22 @@ function qualityGateClass(status: "PASS" | "NEEDS_WORK" | "NEEDS_SAMPLE"): strin
   return "status-pending";
 }
 
+function formatAllowanceValue(value: bigint, unit: string): string {
+  if (unit === "bytes") return formatBytesCompact(value);
+  if (unit === "seconds") return formatDurationCompact(Number(value));
+  return value.toLocaleString("en");
+}
+
+function allowanceStatusClass(status: string): string {
+  if (status === "OK" || status === "TRACKING") return "status-approved";
+  if (status === "WARNING" || status === "NO_METER_EVENTS") return "status-pending";
+  if (status === "EXCEEDED" || status === "DISABLED") return "risk-high";
+  return "status-pending";
+}
+
 export default async function HealthPage() {
   const requestContext = await requireRequestCapability("organization.read");
-  const [environmentChecks, consistency, thumbnailReadiness, operationalMetrics, publishingServiceHealth, competitiveQuality] = await Promise.all([
+  const [environmentChecks, consistency, thumbnailReadiness, operationalMetrics, publishingServiceHealth, mediaWorkerHealth, competitiveQuality, orchestrationHealth, costSafety, canViewPilotEvidence] = await Promise.all([
     runHealthChecks(),
     getDataConsistencySummary(
       requestContext.organizationId,
@@ -235,10 +260,14 @@ export default async function HealthPage() {
       requestContext.campusId,
     ),
     getPublishingServiceHealth(),
+    getMediaWorkerHealth(),
     getCompetitiveQualityReport({
       organizationId: requestContext.organizationId,
       campusId: requestContext.campusId,
     }),
+    getOrchestrationHealth(requestContext.organizationId),
+    getWorkspaceCostSafety(requestContext.organizationId),
+    canPersistedTenantCapability(requestContext, "billing.read"),
   ]);
   const publishingWorkerCheck: HealthCheckResult = publishingServiceHealth.status === "ONLINE"
     ? {
@@ -261,6 +290,25 @@ export default async function HealthPage() {
         message: "No publishing worker heartbeat has been recorded. Scheduled automatic posts will remain queued.",
         fix: "Run npm run worker:posting and confirm a heartbeat before relying on automatic publishing.",
       };
+  const mediaWorkerCheck: HealthCheckResult = mediaWorkerHealth.status === "ONLINE"
+    ? {
+      name: "Sermon processing worker",
+      status: "OK",
+      message: "The media worker is online and checking the sermon processing queue.",
+    }
+    : mediaWorkerHealth.status === "STALE"
+      ? {
+        name: "Sermon processing worker",
+        status: "Missing",
+        message: `The media worker is stale${mediaWorkerHealth.ageSeconds === null ? "" : `; its last signal was ${Math.max(1, Math.round(mediaWorkerHealth.ageSeconds / 60))} minutes ago`}. New sermon work will remain queued.`,
+        fix: "Run npm run worker:media and confirm a fresh heartbeat before accepting new sermon processing.",
+      }
+      : {
+        name: "Sermon processing worker",
+        status: "Missing",
+        message: "No media worker heartbeat has been recorded. New sermon work will remain queued.",
+        fix: "Run npm run worker:media and confirm a heartbeat before accepting new sermon processing.",
+      };
   const operationalWorkflowCheck: HealthCheckResult = operationalMetrics.failedOperations > 0
     ? {
       name: "Processing and media jobs",
@@ -273,11 +321,36 @@ export default async function HealthPage() {
       status: "OK",
       message: "No unresolved processing-job or prepared-media failures were detected.",
     };
-  const checks = [...environmentChecks, publishingWorkerCheck, operationalWorkflowCheck];
+  const orchestrationCheck: HealthCheckResult = orchestrationHealth.status === "DISABLED"
+    ? {
+      name: "Staged orchestration worker",
+      status: "OK",
+      message: "The Phase 2 control plane is disabled; existing processing remains active.",
+    }
+    : orchestrationHealth.status === "ONLINE"
+      ? {
+        name: "Staged orchestration worker",
+        status: orchestrationHealth.deadLetters > 0 ? "Failed" : "OK",
+        message: `${orchestrationHealth.pending} queued, ${orchestrationHealth.leased} active, ${orchestrationHealth.deadLetters} dead-lettered job(s).`,
+        fix: orchestrationHealth.deadLetters > 0
+          ? "Review tenant-scoped dead letters and replay only after recording the reason and verifying the failed stage."
+          : undefined,
+      }
+      : {
+        name: "Staged orchestration worker",
+        status: "Missing",
+        message: orchestrationHealth.status === "FAILED"
+          ? "Orchestration health could not be read. Confirm the Phase 2 migration and database role."
+          : "The staged worker has not checked in recently; durable work remains queued.",
+        fix: "Run npm run worker:orchestration and confirm a fresh heartbeat before enabling Phase 2 intake.",
+      };
+  const checks = [...environmentChecks, mediaWorkerCheck, orchestrationCheck, publishingWorkerCheck, operationalWorkflowCheck];
   const okCount = checks.filter((check) => check.status === "OK").length;
   const healthBreakdown = buildWorkspaceHealthIssueBreakdown({
     failedHealthChecks:
       environmentChecks.filter((check) => check.status !== "OK").length
+      + (mediaWorkerCheck.status === "OK" ? 0 : 1)
+      + (orchestrationCheck.status === "OK" ? 0 : 1)
       + (publishingWorkerCheck.status === "OK" ? 0 : 1),
     missingReadyFiles: consistency.issueCount,
     failedOperations: operationalMetrics.failedOperations,
@@ -285,7 +358,10 @@ export default async function HealthPage() {
     missingPosters: thumbnailReadiness.missingPosterCount,
     failedPosters: thumbnailReadiness.failedPosterCount,
   });
-  const canProcessSermons = environmentChecks.every((check) => check.status === "OK");
+  const canProcessSermons =
+    environmentChecks.every((check) => check.status === "OK")
+    && mediaWorkerCheck.status === "OK"
+    && orchestrationCheck.status === "OK";
   const postingNeedsRecovery =
     healthBreakdown.postingBlockers +
     healthBreakdown.retryableFailures +
@@ -305,6 +381,7 @@ export default async function HealthPage() {
           <Link href="/" className="button secondary">Dashboard</Link>
           <Link href="/sermons/new" className="button primary">Add sermon</Link>
           <Link href="/ready-to-post" className="button tertiary">Ready queue</Link>
+          {canViewPilotEvidence ? <Link href="/health/pilot" className="button tertiary">Pilot evidence</Link> : null}
         </div>
       </header>
 
@@ -344,14 +421,185 @@ export default async function HealthPage() {
         </article>
         <article>
           <span className="muted small">Failed jobs needing retry</span>
-          <strong>{operationalMetrics.failedProcessingJobs}</strong>
-          <span className="muted small">Pipeline jobs and media preparation</span>
+          <strong>{operationalMetrics.failedProcessingJobs + orchestrationHealth.failed + orchestrationHealth.deadLetters}</strong>
+          <span className="muted small">Pipeline, staged, and dead-lettered work</span>
         </article>
         <article>
           <span className="muted small">Poster cleanup</span>
           <strong>{healthBreakdown.optionalCleanup}</strong>
           <span className="muted small">{thumbnailReadiness.readyPosterCount}/{thumbnailReadiness.preparedClipCount} ready</span>
         </article>
+      </section>
+
+      <section className="card stack-md" aria-labelledby="cost-safety-title">
+        <div className="stack-xs">
+          <p className="kicker">Pilot cost and media safety</p>
+          <h2 id="cost-safety-title">Usage evidence, allowance coverage, and on-demand safeguards</h2>
+          <p className="muted">
+            This view uses tenant-scoped application records only. Measured usage, stored estimates, and configured allowances are kept separate; no value below is a provider invoice or charged amount.
+          </p>
+        </div>
+
+        {costSafety.status === "UNAVAILABLE" ? (
+          <p className="error-banner" role="status">{costSafety.message}</p>
+        ) : (
+          <>
+            <div className="secondary-command-strip">
+              <article>
+                <span className="muted small">Sermons added this month</span>
+                <strong>{costSafety.report.measured.sermonCount}</strong>
+                <span className="muted small">
+                  {costSafety.report.measured.sourcesWithKnownDuration} with measured source duration
+                </span>
+              </article>
+              <article>
+                <span className="muted small">Recorded source duration</span>
+                <strong>{formatDurationCompact(costSafety.report.measured.sourceDurationSeconds)}</strong>
+                <span className="muted small">
+                  {costSafety.report.measured.boundedSourceCount} bounded preaching window(s)
+                </span>
+              </article>
+              <article>
+                <span className="muted small">AI tokens reported</span>
+                <strong>{costSafety.report.measured.totalTokens.toLocaleString("en")}</strong>
+                <span className="muted small">
+                  {costSafety.report.measured.aiInvocationsWithTokenUsage}/{costSafety.report.measured.aiInvocationCount} invocation(s) reported tokens
+                </span>
+              </article>
+              <article>
+                <span className="muted small">Recorded media inventory</span>
+                <strong>{formatBytesCompact(costSafety.report.measured.inventory.knownBytes)}</strong>
+                <span className="muted small">
+                  {costSafety.report.measured.inventory.coveragePercent === null
+                    ? "No sized artefact records"
+                    : `${costSafety.report.measured.inventory.coveragePercent}% of artefact records have size metadata`}
+                </span>
+              </article>
+              <article>
+                <span className="muted small">Stored AI cost estimate</span>
+                <strong>
+                  {costSafety.report.estimated.aiInvocationsWithCostEstimate === 0
+                    ? "No estimate"
+                    : formatEstimatedUsdMicros(costSafety.report.estimated.aiCostMicros)}
+                </strong>
+                <span className="muted small">
+                  Estimate coverage {costSafety.report.estimated.aiInvocationsWithCostEstimate}/{costSafety.report.measured.aiInvocationCount}; never an invoice
+                </span>
+              </article>
+              <article>
+                <span className="muted small">Sermon attribution</span>
+                <strong>
+                  {costSafety.report.measured.sermonAttributionCoveragePercent === null
+                    ? "No AI activity"
+                    : `${costSafety.report.measured.sermonAttributionCoveragePercent}%`}
+                </strong>
+                <span className="muted small">Invocation counts only; no sermon content is shown</span>
+              </article>
+              <article>
+                <span className="muted small">Measured processing wall time</span>
+                <strong>{formatDurationCompact(costSafety.report.measured.processingRunSeconds)}</strong>
+                <span className="muted small">
+                  {costSafety.report.measured.processingJobsWithRunDuration}/{costSafety.report.measured.processingJobCount} job(s) have complete timing
+                </span>
+              </article>
+            </div>
+
+            <div className="stack-sm">
+              <h3>Configured allowances and meter coverage</h3>
+              <ul className="jobs-list">
+                {costSafety.report.allowances.map((allowance) => (
+                  <li key={allowance.metric} className="stack-xs">
+                    <p>
+                      <strong>{allowance.label}</strong>{" "}
+                      <span className={`status-pill ${allowanceStatusClass(allowance.status)}`}>
+                        {allowance.status.replace(/_/g, " ").toLowerCase()}
+                      </span>
+                    </p>
+                    <p className="muted small">
+                      Recorded meter usage: {formatAllowanceValue(allowance.used, allowance.unit)}
+                      {allowance.limit === null ? " · no configured limit" : ` of ${formatAllowanceValue(allowance.limit, allowance.unit)}`}
+                      {` · ${allowance.eventCount} meter event(s)`}
+                    </p>
+                    <p className="muted small">{allowance.message}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <details className="stack-sm">
+              <summary>AI workload attribution ({costSafety.report.workloadBreakdown.length} stage/model group(s))</summary>
+              {costSafety.report.workloadBreakdown.length === 0 ? (
+                <p className="muted">No AI invocation telemetry was recorded this month.</p>
+              ) : (
+                <ul className="jobs-list">
+                  {costSafety.report.workloadBreakdown.map((workload) => (
+                    <li key={workload.key} className="stack-xs">
+                      <p><strong>{workload.operation}</strong> <span className="muted small">{workload.provider} · {workload.model}</span></p>
+                      <p className="muted small">
+                        {workload.invocationCount} invocation(s) · {workload.totalTokens.toLocaleString("en")} token(s) · {formatDurationCompact(workload.audioDurationSeconds)} audio · {workload.providerRequestCount} provider request attempt(s) · {workload.cacheHitCount} cache reuse(s)
+                      </p>
+                      <p className="muted small">
+                        Stored estimate coverage {workload.costEstimateCoverageCount}/{workload.invocationCount}
+                        {workload.costEstimateCoverageCount > 0 ? ` · ${formatEstimatedUsdMicros(workload.costEstimateMicros)} estimated, not charged` : " · no cost estimate"}
+                        {` · ${workload.sermonAttributionCount}/${workload.invocationCount} attributed to a sermon`}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </details>
+
+            <details className="stack-sm">
+              <summary>Media stage workload ({costSafety.report.processingStageBreakdown.length} job type(s))</summary>
+              {costSafety.report.processingStageBreakdown.length === 0 ? (
+                <p className="muted">No processing jobs were created this month.</p>
+              ) : (
+                <ul className="jobs-list">
+                  {costSafety.report.processingStageBreakdown.map((stage) => (
+                    <li key={stage.jobType} className="stack-xs">
+                      <p><strong>{stage.jobType.replace(/_/g, " ").toLowerCase()}</strong></p>
+                      <p className="muted small">
+                        {stage.jobCount} job(s) · {stage.succeededCount} succeeded · {stage.failedCount} failed · {stage.attemptCount} recorded attempt(s)
+                      </p>
+                      <p className="muted small">
+                        {formatDurationCompact(stage.runDurationSeconds)} measured run wall time across {stage.jobsWithRunDuration}/{stage.jobCount} timed job(s) · {formatDurationCompact(stage.queueDurationSeconds)} measured queue delay
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="muted small">Wall time and queue delay come from job timestamps. They are not CPU time, provider duration, or billed compute.</p>
+            </details>
+
+            <div className="stack-sm">
+              <h3>Media workload policy</h3>
+              <p className="muted">
+                The first {MEDIA_COST_SAFETY_POLICY.eagerPreviewLimit} ranked previews are the eager review path. Remaining previews and Content Week stay on demand; final renders remain approval-gated and publishing requires explicit intent.
+              </p>
+              <p className="muted small">
+                Matching fresh artefacts should be reused before rerendering. Lifecycle enforcement is observe-only and automatic deletion is {MEDIA_COST_SAFETY_POLICY.automaticDeletionEnabled ? "enabled" : "off"}. Recorded inventory is metadata-derived and may omit local files, provider versions, or objects without size metadata.
+              </p>
+              {costSafety.report.estimated.potentialAvoidedMediaSeconds > 0 ? (
+                <p className="muted small">
+                  Complete source windows indicate up to {formatDurationCompact(costSafety.report.estimated.potentialAvoidedMediaSeconds)} outside the preaching sections. This is a potential workload reduction, not measured compute savings.
+                </p>
+              ) : null}
+            </div>
+
+            {costSafety.report.warnings.length > 0 ? (
+              <ul className="jobs-list" aria-label="Cost and media telemetry warnings">
+                {costSafety.report.warnings.map((warning) => (
+                  <li key={warning.code} className="stack-xs">
+                    <p><strong>{warning.severity === "WARNING" ? "Coverage warning" : "Operator note"}</strong></p>
+                    <p className="muted small">{warning.message}</p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="success-banner">No usage-coverage warnings were detected for the current reporting window.</p>
+            )}
+          </>
+        )}
       </section>
 
       <section className="card stack-sm">

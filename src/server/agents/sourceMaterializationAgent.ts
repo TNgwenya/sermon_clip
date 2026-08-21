@@ -41,6 +41,7 @@ async function runS3SermonSourceMaterialization(
     where: { id: sermonId },
     select: {
       id: true,
+      organizationId: true,
       title: true,
       sourceVideoPath: true,
       sourceAsset: {
@@ -90,6 +91,10 @@ async function runS3SermonSourceMaterialization(
     await assertMediaStorageCapacity({ incomingBytes });
     await unlink(temporaryPath).catch(() => undefined);
     await downloadReadyS3SourceToFile({
+      owner: {
+        organizationId: sermon.organizationId ?? "",
+        sermonId: sermon.id,
+      },
       asset: {
         ...sermon.sourceAsset,
         status: "READY",

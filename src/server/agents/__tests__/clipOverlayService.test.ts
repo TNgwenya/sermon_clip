@@ -109,6 +109,20 @@ describe("overlay source selection", () => {
     })).toThrow("captioned video is stale or incomplete");
   });
 
+  it("uses the current raw render for an explicitly uncaptioned review preview", () => {
+    expect(__clipOverlayTestUtils.resolveOverlaySourceSelection({
+      ...currentPreparedSources,
+      captionBurnStatus: "FAILED",
+      captionBurnFreshness: "FAILED",
+      captionData: { applyCaptionsToClip: true },
+    }, {
+      reviewPreviewWithoutCaptions: true,
+    })).toEqual({
+      sourcePath: "/tmp/rendered.mp4",
+      sourceWasCaptioned: false,
+    });
+  });
+
   it("does not use an outdated captioned file when captions are requested", () => {
     expect(() => __clipOverlayTestUtils.resolveOverlaySourceSelection({
       ...currentPreparedSources,
@@ -135,6 +149,27 @@ describe("overlay source selection", () => {
       renderFreshness: "OUTDATED",
       captionData: { applyCaptionsToClip: false },
     })).toThrow("prepared render is stale or incomplete");
+  });
+
+  it("still rejects stale raw media for an uncaptioned review preview", () => {
+    expect(() => __clipOverlayTestUtils.resolveOverlaySourceSelection({
+      ...currentPreparedSources,
+      renderFreshness: "OUTDATED",
+      captionData: { applyCaptionsToClip: true },
+    }, {
+      reviewPreviewWithoutCaptions: true,
+    })).toThrow("prepared render is stale or incomplete");
+  });
+});
+
+describe("tenant Brand Kit selection", () => {
+  it("resolves branding by the sermon's organization, never a shared local id", () => {
+    expect(__clipOverlayTestUtils.brandingSettingsWhereForOrganization(" church-a ")).toEqual({
+      organizationId: "church-a",
+    });
+    expect(() => __clipOverlayTestUtils.brandingSettingsWhereForOrganization(" ")).toThrow(
+      "tenant organization",
+    );
   });
 });
 

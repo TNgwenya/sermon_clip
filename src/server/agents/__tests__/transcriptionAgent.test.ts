@@ -1333,4 +1333,30 @@ describe("transcription sermon segment filtering", () => {
       }),
     ).toThrow("Sermon end time is longer than the video duration.");
   });
+
+  it("prefers a verified saved quality contract over legacy ready flags", () => {
+    const manual = __transcriptionTestUtils.parseSavedTranscriptClippingReadiness({
+      quality: { readyForClipping: true, reliabilityIssue: null },
+      qualityContract: {
+        policyVersion: "transcript-quality-escalation-v1",
+        automationMode: "MANUAL_REVIEW_ONLY",
+        canonicalTranscriptFingerprint: "a".repeat(64),
+        canonicalTranscriptMayBeRewritten: false,
+        reasons: [{ explanation: "Confirm the named person against the audio." }],
+      },
+    });
+    expect(manual).toEqual({
+      reliableForClipping: false,
+      fallbackReason: "Confirm the named person against the audio.",
+    });
+
+    const malformed = __transcriptionTestUtils.parseSavedTranscriptClippingReadiness({
+      quality: { readyForClipping: true, reliabilityIssue: null },
+      qualityContract: { automationMode: "FULL" },
+    });
+    expect(malformed).toMatchObject({
+      reliableForClipping: false,
+      fallbackReason: expect.stringContaining("could not be verified"),
+    });
+  });
 });

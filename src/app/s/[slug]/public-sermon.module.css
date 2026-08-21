@@ -1,19 +1,19 @@
-:global(body:has([data-public-sermon-page]) .app-rail) {
+:global(body):has(.publicPage) :global(.app-rail) {
   display: none;
 }
 
-:global(body:has([data-public-sermon-page]) .app-shell) {
+:global(body):has(.publicPage) :global(.app-shell) {
   display: block;
 }
 
-:global(body:has([data-public-sermon-page]) .app-content) {
+:global(body):has(.publicPage) :global(.app-content) {
   width: 100%;
   max-width: none;
   min-height: 100vh;
   padding: 0;
 }
 
-:global(body:has([data-public-sermon-page])) {
+:global(body):has(.publicPage) {
   color-scheme: light;
   background: #f8f7f3;
 }

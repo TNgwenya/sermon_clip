@@ -145,6 +145,7 @@ import {
   canRunLocalMediaProcessing,
   localMediaProcessingUnavailableMessage,
 } from "@/server/runtime/workerRuntime";
+import { durableOrchestrationEnabled } from "@/server/orchestration/sermonOrchestrationService";
 import { assertMediaStorageCapacity } from "@/server/media/storageCapacity";
 import {
   formatSecondsForTimestampInput,
@@ -493,7 +494,7 @@ function processingJobTypeLabel(type: ProcessingJobType): string {
 }
 
 async function startOneClickSermonPipeline(sermonId: string): Promise<void> {
-  if (!canRunInlineMediaProcessing()) {
+  if (durableOrchestrationEnabled() || !canRunInlineMediaProcessing()) {
     await queueSermonProcessingJob(sermonId, "PROCESS_SERMON");
     return;
   }
@@ -1915,7 +1916,7 @@ export async function downloadVideoAction(
     };
   }
 
-  if (!canRunInlineMediaProcessing()) {
+  if (durableOrchestrationEnabled() || !canRunInlineMediaProcessing()) {
     const job = await queueSermonProcessingJob(
       sermonId,
       "DOWNLOAD_VIDEO",
@@ -2263,8 +2264,8 @@ export async function processSermonAction(
     return {
       success: true,
       message: job.reusedExisting
-        ? "Sermon processing is already queued for your local worker."
-        : "Sermon processing queued for your local worker.",
+        ? "Sermon processing is already queued."
+        : "Sermon processing is queued.",
     };
   }
 

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   canRunInlineMediaProcessing: vi.fn(),
   detect: vi.fn(),
-  findUnique: vi.fn(),
+  findFirst: vi.fn(),
   requireClipResource: vi.fn(),
   stat: vi.fn(),
 }));
@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("node:fs/promises", () => ({ stat: mocks.stat }));
 vi.mock("@/lib/prisma", () => ({
   prisma: {
-    clipCandidate: { findUnique: mocks.findUnique },
+    clipCandidate: { findFirst: mocks.findFirst },
   },
 }));
 vi.mock("@/server/agents/clipStudioAudioReviewService", () => ({
@@ -36,7 +36,7 @@ describe("clip audio silence review route", () => {
       campusId: "campus-1",
     });
     mocks.canRunInlineMediaProcessing.mockReturnValue(true);
-    mocks.findUnique.mockResolvedValue({
+    mocks.findFirst.mockResolvedValue({
       startTimeSeconds: 120,
       endTimeSeconds: 180,
       sermon: { sourceVideoPath: "/tmp/sermon.mp4" },
@@ -66,6 +66,12 @@ describe("clip audio silence review route", () => {
     });
     expect(response.headers.get("Cache-Control")).toBe("private, max-age=300");
     expect(mocks.requireClipResource).toHaveBeenCalledWith("content.read", "clip-1");
+    expect(mocks.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        id: "clip-1",
+        sermon: { organizationId: "org-1" },
+      },
+    }));
   });
 
   it("does not query media or start ffmpeg when local processing is unavailable", async () => {
@@ -77,7 +83,7 @@ describe("clip audio silence review route", () => {
     );
 
     expect(response.status).toBe(409);
-    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.findFirst).not.toHaveBeenCalled();
     expect(mocks.stat).not.toHaveBeenCalled();
     expect(mocks.detect).not.toHaveBeenCalled();
   });
@@ -93,7 +99,7 @@ describe("clip audio silence review route", () => {
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Clip not found." });
-    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.findFirst).not.toHaveBeenCalled();
     expect(mocks.stat).not.toHaveBeenCalled();
     expect(mocks.detect).not.toHaveBeenCalled();
   });

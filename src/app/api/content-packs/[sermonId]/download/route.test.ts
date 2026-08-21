@@ -1,14 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  findUnique: vi.fn(),
+  findFirst: vi.fn(),
   getBrandingSettings: vi.fn(),
   readBrandingArtworkLogoDataUrl: vi.fn(),
   requireSermonResource: vi.fn(),
 }));
 
 vi.mock("@/lib/prisma", () => ({
-  prisma: { sermon: { findUnique: mocks.findUnique } },
+  prisma: { sermon: { findFirst: mocks.findFirst } },
+}));
+vi.mock("@/server/tenancy/databaseIsolation", () => ({
+  withDatabaseTenantIsolation: (_context: unknown, operation: (transaction: unknown) => unknown) => operation({
+    sermon: { findFirst: mocks.findFirst },
+  }),
 }));
 vi.mock("@/server/auth/resourceAuthorization", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/server/auth/resourceAuthorization")>(),
@@ -40,7 +45,7 @@ describe("content production pack route tenant authorization", () => {
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Sermon not found." });
     expect(mocks.requireSermonResource).toHaveBeenCalledWith("content.export", "sermon-other");
-    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.findFirst).not.toHaveBeenCalled();
     expect(mocks.getBrandingSettings).not.toHaveBeenCalled();
     expect(mocks.readBrandingArtworkLogoDataUrl).not.toHaveBeenCalled();
   });

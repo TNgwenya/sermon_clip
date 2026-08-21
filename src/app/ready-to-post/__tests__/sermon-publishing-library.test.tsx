@@ -71,6 +71,10 @@ function buildAsset(overrides: Partial<SermonPublishingAsset> = {}): SermonPubli
       approvedAt: "2026-08-13T09:00:00.000Z",
     },
     sourceOpportunityStatus: "USED",
+    mediaReadiness: {
+      status: "READY",
+      message: "Ready for publishing",
+    },
     files: [],
     scheduledPosts: [],
     ...overrides,

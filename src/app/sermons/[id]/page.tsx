@@ -18,6 +18,7 @@ import { YouTubeRecoveryUpload } from "@/app/sermons/[id]/youtube-recovery-uploa
 import { RepairFailedClipOperationsButton } from "@/app/sermons/[id]/repair-failed-clip-operations-button";
 import { SermonLiveRefresh } from "@/app/sermons/[id]/sermon-live-refresh";
 import { SermonDetailPreviewCard } from "@/app/sermons/[id]/sermon-detail-preview-card";
+import { ProgressMilestones } from "@/app/sermons/[id]/progress-milestones";
 import {
   isFreshRemotePreview,
   listBestPreviewCandidates,
@@ -42,6 +43,7 @@ import {
   resolvePastorProcessingStepStatus,
   selectUnresolvedPastorFailedJobs,
 } from "@/lib/pastorWorkflow";
+import { buildCustomerValueMilestones } from "@/lib/orchestrationProgress";
 
 type ClipStatus = "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
 type BoundaryQuality = "GOOD" | "NEEDS_REVIEW" | "BAD";
@@ -224,6 +226,13 @@ type SermonDetailItem = {
     transcriptSegments: number;
   };
   processingJobs: ProcessingJobListItem[];
+  orchestrationJobs: Array<{
+    lane: string;
+    status: string;
+    createdAt: Date;
+    completedAt: Date | null;
+    lastFailureCode: string | null;
+  }>;
 };
 
 async function doesFileExist(filePath: string): Promise<boolean> {
@@ -938,6 +947,19 @@ export default async function SermonDetailPage({
           generationSummary: true,
         },
       },
+      orchestrationJobs: {
+        orderBy: {
+          createdAt: "desc",
+        },
+        take: 25,
+        select: {
+          lane: true,
+          status: true,
+          createdAt: true,
+          completedAt: true,
+          lastFailureCode: true,
+        },
+      },
     },
   });
 
@@ -1292,6 +1314,25 @@ export default async function SermonDetailPage({
       previewClips.map(async (clip) => (await hasClipPreviewMedia(clip) ? clip.id : null)),
     )).filter((clipId): clipId is string => Boolean(clipId)),
   );
+  const priorityPreviewTargetCount = previewClips.length;
+  const priorityPreviewReadyCount = previewClips.filter((clip) => previewableClipIds.has(clip.id)).length;
+  const strongestClip = previewClips[0] ?? null;
+  const firstBrandedPreviewReady = Boolean(
+    strongestClip
+    && previewableClipIds.has(strongestClip.id)
+    && strongestClip.overlayStatus === "COMPLETED"
+    && strongestClip.overlayFreshness === "UP_TO_DATE",
+  );
+  const customerValueMilestones = buildCustomerValueMilestones(sermon.orchestrationJobs, {
+    rankedSuggestionCount: orderedClipCandidates.filter((clip) => clip.status !== "REJECTED").length,
+    priorityPreviewReadyCount,
+    priorityPreviewTargetCount,
+    firstBrandedPreviewReady,
+    deferredPreviewCount: Math.max(
+      0,
+      orderedClipCandidates.filter((clip) => clip.status !== "REJECTED").length - priorityPreviewTargetCount,
+    ),
+  });
   const refreshItemCount = failedRecoveryCount + operationSummary.clipsNeedingRefresh;
   const displayTitle = sermon.intelligence?.manualTitle?.trim()
     || sermon.intelligence?.generatedTitle?.trim()
@@ -1570,6 +1611,10 @@ export default async function SermonDetailPage({
             ))}
           </div>
         </section>
+      ) : null}
+
+      {sermon.orchestrationJobs.length > 0 || orderedClipCandidates.length > 0 ? (
+        <ProgressMilestones milestones={customerValueMilestones} />
       ) : null}
 
       {hasLiveAnalysisWork && activeProcessingStep && operationProgressView ? (

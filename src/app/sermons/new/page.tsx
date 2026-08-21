@@ -110,35 +110,24 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
   const canUploadMedia = localUploadFallbackEnabled || directSourceUploadEnabled;
 
   return (
-    <main id="main-content" className="upload-page-shell premium-intake-page stack-lg">
-      <header className={`upload-hero premium-intake-hero ${styles.hero}`}>
+    <main id="main-content" className={`upload-page-shell premium-intake-page stack-lg ${styles.intakeShell}`}>
+      <header className={`upload-hero premium-intake-hero ${styles.hero} ${styles.compactHero}`}>
         <div className="stack-sm">
           <Link href={eventContext ? `/events/${eventContext.eventId}` : "/"} className="text-link">
             {eventContext ? `Back to ${eventContext.eventName}` : "Back to your studio"}
           </Link>
           <p className="kicker">{eventContext ? "Add event recording" : "Add a sermon"}</p>
-          <h1>{eventContext ? "Attach this recording to the planned session." : "One sermon in. A week of content underway."}</h1>
+          <h1>{eventContext ? "Add the session recording" : "Start with your sermon"}</h1>
           <p className="muted">
             {eventContext
-              ? `${eventContext.eventName} · ${eventContext.sessionTitle}. The event, day, and speaker context will stay attached through processing.`
-              : "Add the recording. Church details are already filled in, and SermonClip will prepare complete, meaningful moments for your team to review."}
+              ? `${eventContext.eventName} · ${eventContext.sessionTitle}. Its saved event details will stay attached.`
+              : "Paste the YouTube link or upload the recording. We’ll show the strongest moments for your team to review first."}
           </p>
         </div>
         <div className={styles.heroActions}>
-          <span className="intake-step-label">Step 1 of 5</span>
           <Link href="/settings/intake" className={styles.readinessLink}>YouTube automation</Link>
         </div>
       </header>
-
-      <nav className="workflow-spine intake-workflow-spine" aria-label="Sermon Clip workflow">
-        <ol>
-          <li><span className="workflow-spine-step is-current" aria-current="step"><strong>01</strong> Add sermon</span></li>
-          <li><span className="workflow-spine-step"><strong>02</strong> Analyze</span></li>
-          <li><span className="workflow-spine-step"><strong>03</strong> Review clips</span></li>
-          <li><span className="workflow-spine-step"><strong>04</strong> Edit &amp; brand</span></li>
-          <li><span className="workflow-spine-step"><strong>05</strong> Prepare &amp; post</span></li>
-        </ol>
-      </nav>
 
       <div className="premium-intake-layout">
         <NewSermonForm

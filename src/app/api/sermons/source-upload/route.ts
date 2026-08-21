@@ -131,6 +131,7 @@ type ExistingUpload = NonNullable<
 >;
 
 async function resumableUploadResponse(
+  organizationId: string,
   sermonId: string,
   asset: ExistingUpload,
   mode: string,
@@ -161,6 +162,7 @@ async function resumableUploadResponse(
     objectKey: asset.objectKey,
     region: asset.region,
     uploadId: asset.uploadId,
+    owner: { organizationId, sermonId },
   });
   return NextResponse.json({
     success: true,
@@ -252,7 +254,12 @@ async function initiateUpload(context: TenantRequestContext, body: JsonObject): 
       && assetSize === fileSize
       && sermon.sourceAsset.contentType === contentType;
     if (sameFile) {
-      const response = await resumableUploadResponse(sermon.id, sermon.sourceAsset, mode);
+      const response = await resumableUploadResponse(
+        context.organizationId,
+        sermon.id,
+        sermon.sourceAsset,
+        mode,
+      );
       if (response) return response;
     }
   }
@@ -382,7 +389,12 @@ async function initiateUpload(context: TenantRequestContext, body: JsonObject): 
       && sermon.sourceAsset.contentType === contentType;
     if (sameFile) {
       try {
-        const response = await resumableUploadResponse(sermon.id, sermon.sourceAsset, mode);
+        const response = await resumableUploadResponse(
+          context.organizationId,
+          sermon.id,
+          sermon.sourceAsset,
+          mode,
+        );
         if (response) return response;
       } catch (error) {
         const code = error && typeof error === "object" && "name" in error
@@ -399,6 +411,7 @@ async function initiateUpload(context: TenantRequestContext, body: JsonObject): 
       objectKey: sermon.sourceAsset.objectKey,
       region: sermon.sourceAsset.region,
       uploadId: sermon.sourceAsset.uploadId,
+      owner: { organizationId: context.organizationId, sermonId: sermon.id },
     }).catch(() => undefined);
   }
 
@@ -444,7 +457,10 @@ async function initiateUpload(context: TenantRequestContext, body: JsonObject): 
       select: { id: true },
     });
   } catch (error) {
-    await abortS3SourceMultipartUpload(multipart).catch(() => undefined);
+    await abortS3SourceMultipartUpload({
+      ...multipart,
+      owner: { organizationId: context.organizationId, sermonId: sermon.id },
+    }).catch(() => undefined);
     throw error;
   }
 
@@ -530,6 +546,7 @@ async function createPartUrl(context: TenantRequestContext, body: JsonObject): P
     region: asset.region,
     uploadId: asset.uploadId,
     partNumber,
+    owner: { organizationId: context.organizationId, sermonId: asset.sermonId },
   });
   if (asset.status === "INITIATED") {
     await prisma.sermonSourceAsset.updateMany({
@@ -576,6 +593,7 @@ async function completeUpload(context: TenantRequestContext, body: JsonObject): 
     uploadId: asset.uploadId,
     sizeBytes,
     partSizeBytes: asset.partSizeBytes,
+    owner: { organizationId: context.organizationId, sermonId: asset.sermonId },
   });
   const now = new Date();
   await prisma.$transaction(async (tx) => {

@@ -13,6 +13,12 @@ import {
   resolveProcessingJob,
 } from "@/server/agents/processing";
 import { assessTranscriptQualityForClipping, type TranscriptQualityAssessment } from "@/server/agents/transcriptQuality";
+import { analyzeMultilingualTranscript } from "@/server/agents/multilingualTranscriptAnalysis";
+import {
+  decideTranscriptQualityEscalation,
+  detectUncertainSensitiveTerms,
+  fingerprintCanonicalTimestampTranscript,
+} from "@/lib/quality/transcriptEscalation";
 import {
   transcribeAudioWithOpenAI,
   type NormalizedTranscript,
@@ -1786,7 +1792,51 @@ function parseSavedTranscriptClippingReadiness(payload: unknown): TranscriptClip
     return null;
   }
 
-  const quality = (payload as { quality?: unknown }).quality;
+  const savedPayload = payload as { quality?: unknown; qualityContract?: unknown };
+  if ("qualityContract" in savedPayload) {
+    if (!savedPayload.qualityContract || typeof savedPayload.qualityContract !== "object") {
+      return {
+        reliableForClipping: false,
+        fallbackReason: "The saved transcript quality contract is malformed and requires manual review.",
+      };
+    }
+    const contract = savedPayload.qualityContract as {
+      policyVersion?: unknown;
+      automationMode?: unknown;
+      canonicalTranscriptFingerprint?: unknown;
+      canonicalTranscriptMayBeRewritten?: unknown;
+      reasons?: unknown;
+    };
+    const contractValid = (
+      typeof contract.policyVersion === "string"
+      && contract.policyVersion.trim().length > 0
+      && ["FULL", "MANUAL_REVIEW_ONLY", "NONE"].includes(String(contract.automationMode))
+      && typeof contract.canonicalTranscriptFingerprint === "string"
+      && /^[a-f0-9]{64}$/i.test(contract.canonicalTranscriptFingerprint)
+      && contract.canonicalTranscriptMayBeRewritten === false
+    );
+    if (!contractValid) {
+      return {
+        reliableForClipping: false,
+        fallbackReason: "The saved transcript quality contract could not be verified and requires manual review.",
+      };
+    }
+    if (contract.automationMode !== "FULL") {
+      const explanations = Array.isArray(contract.reasons)
+        ? contract.reasons
+          .map((reason) => reason && typeof reason === "object" && "explanation" in reason
+            ? String((reason as { explanation?: unknown }).explanation ?? "").trim()
+            : "")
+          .filter(Boolean)
+        : [];
+      return {
+        reliableForClipping: false,
+        fallbackReason: explanations.join(" ") || "The saved transcript is restricted to manual review by its quality contract.",
+      };
+    }
+  }
+
+  const quality = savedPayload.quality;
   if (!quality || typeof quality !== "object") {
     return null;
   }
@@ -1840,48 +1890,63 @@ export async function readSavedTranscriptClippingReadiness(
     .catch(() => null);
 }
 
+function buildTranscriptEscalationDecision(
+  quality: TranscriptQualityAssessment,
+  segments: NormalizedTranscript["segments"],
+  input: {
+    expectedDurationSeconds?: number | null;
+    knownNames: string[];
+    enhancementAttemptsUsed: number;
+  },
+) {
+  const transcriptEvidence = analyzeMultilingualTranscript(segments);
+  const uncertainSensitiveTerms = detectUncertainSensitiveTerms({
+    uncertainRegions: transcriptEvidence.uncertainRegions,
+    knownNames: input.knownNames,
+  });
+  const expectedDurationCoverageRatio = input.expectedDurationSeconds
+    ? Number((quality.durationSeconds / input.expectedDurationSeconds).toFixed(4))
+    : null;
+  return decideTranscriptQualityEscalation({
+    qualityReady: isTranscriptReliableEnoughForClipping(quality, {
+      expectedDurationSeconds: input.expectedDurationSeconds,
+    }),
+    usableSegmentCount: transcriptEvidence.usableSegmentCount,
+    wordCount: quality.wordCount,
+    coverageRatio: quality.coverageRatio,
+    expectedDurationCoverageRatio,
+    maxGapSeconds: quality.maxGapSeconds,
+    largeGapCount: quality.largeGapCount,
+    languageProfile: transcriptEvidence.languageProfile,
+    confidenceBand: transcriptEvidence.confidenceBand,
+    knownConfidenceCoverageRatio: transcriptEvidence.knownConfidenceCoverageRatio,
+    lowConfidenceCoverageRatio: transcriptEvidence.lowConfidenceCoverageRatio,
+    uncertainNameCount: uncertainSensitiveTerms.uncertainNameCount,
+    uncertainScriptureCount: uncertainSensitiveTerms.uncertainScriptureCount,
+    warningCodes: quality.warnings,
+    enhancementAttemptsUsed: input.enhancementAttemptsUsed,
+    enhancementAvailable: speechEnhancedRetryEnabled(),
+  });
+}
+
+// Retained as a compatibility seam for focused policy tests and callers that
+// only have aggregate quality metrics. The live pipeline uses the richer
+// explainable decision above, including language and confidence evidence.
 function shouldRetryWithSpeechEnhancedAudio(
   quality: TranscriptQualityAssessment,
   context?: TranscriptReliabilityContext,
 ): boolean {
-  if (!quality.ready) {
-    return true;
-  }
-
-  if (!isTranscriptReliableEnoughForClipping(quality, context)) {
-    return true;
-  }
-
+  if (!quality.ready || !isTranscriptReliableEnoughForClipping(quality, context)) return true;
   const warnings = new Set(quality.warnings);
-  if (warnings.has("LOW_TRANSCRIPT_COVERAGE") && quality.coverageRatio < 0.5) {
-    return true;
-  }
-
-  if (warnings.has("LARGE_TRANSCRIPT_GAPS") && quality.largeGapCount > 0) {
-    return true;
-  }
-
-  if (warnings.has("REPEATED_TRANSCRIPT_SEGMENTS") && quality.repeatedSegmentRatio >= 0.05) {
-    return true;
-  }
-
-  if (warnings.has("REPEATED_TRANSCRIPT_PHRASES") && quality.repeatedPhraseRatio >= 0.1) {
-    return true;
-  }
-
-  if (warnings.has("COARSE_TRANSCRIPT_TIMING")) {
-    return true;
-  }
-
-  if (warnings.has("LOW_TIMESTAMP_DENSITY")) {
-    return true;
-  }
-
-  if (warnings.has("LOW_WORD_DENSITY") && quality.durationSeconds >= 10 * 60 && quality.wordsPerMinute < 45) {
-    return true;
-  }
-
-  return false;
+  return (
+    (warnings.has("LOW_TRANSCRIPT_COVERAGE") && quality.coverageRatio < 0.5)
+    || (warnings.has("LARGE_TRANSCRIPT_GAPS") && quality.largeGapCount > 0)
+    || (warnings.has("REPEATED_TRANSCRIPT_SEGMENTS") && quality.repeatedSegmentRatio >= 0.05)
+    || (warnings.has("REPEATED_TRANSCRIPT_PHRASES") && quality.repeatedPhraseRatio >= 0.1)
+    || warnings.has("COARSE_TRANSCRIPT_TIMING")
+    || warnings.has("LOW_TIMESTAMP_DENSITY")
+    || (warnings.has("LOW_WORD_DENSITY") && quality.durationSeconds >= 10 * 60 && quality.wordsPerMinute < 45)
+  );
 }
 
 function speechEnhancedRetryEnabled(): boolean {
@@ -2195,19 +2260,23 @@ export async function transcribeSermonAudio(
       ? { reusable: false, reason: "Force transcription requested." }
       : await getReusableTranscriptDecision(sermon.id, transcriptJsonPath);
     if (reusableTranscript.reusable) {
+      const savedReadiness = await readSavedTranscriptClippingReadiness(transcriptJsonPath);
       await prisma.sermon.update({
         where: { id: sermon.id },
         data: { transcriptJsonPath },
       });
       await markSermonTranscribedUnlessAdvanced(sermon.id);
-      await markJobSucceeded(job.id, `Existing transcript and segments reused; skipped API call. ${reusableTranscript.reason}`);
-      await appendPipelineLog(sermon.id, `Existing transcript and segments reused; skipped API call. ${reusableTranscript.reason}`);
+      const reuseSafetyDetail = savedReadiness?.reliableForClipping === false
+        ? ` Quality contract: manual review only. ${savedReadiness.fallbackReason ?? "Automatic intelligence is disabled."}`
+        : "";
+      await markJobSucceeded(job.id, `Existing transcript and segments reused; skipped API call. ${reusableTranscript.reason}${reuseSafetyDetail}`);
+      await appendPipelineLog(sermon.id, `Existing transcript and segments reused; skipped API call.${reuseSafetyDetail}`);
 
       return {
         transcriptJsonPath,
         reusedExistingTranscript: true,
-        reliableForClipping: true,
-        fallbackReason: null,
+        reliableForClipping: savedReadiness?.reliableForClipping ?? true,
+        fallbackReason: savedReadiness?.fallbackReason ?? null,
       };
     }
 
@@ -2332,6 +2401,15 @@ export async function transcribeSermonAudio(
       );
     }
     const originalQuality = assessTranscriptQualityForClipping(originalWindowed.transcript.segments);
+    const originalEscalationDecision = buildTranscriptEscalationDecision(
+      originalQuality,
+      originalWindowed.transcript.segments,
+      {
+        expectedDurationSeconds: originalExpectedDurationSeconds,
+        knownNames: [sermon.speakerName, sermon.churchName],
+        enhancementAttemptsUsed: 0,
+      },
+    );
     attempts.push({
       source: "original",
       audioPath,
@@ -2343,14 +2421,12 @@ export async function transcribeSermonAudio(
 
     if (
       speechEnhancedRetryEnabled() &&
-      shouldRetryWithSpeechEnhancedAudio(originalQuality, { expectedDurationSeconds: originalExpectedDurationSeconds })
+      originalEscalationDecision.retry === "SPEECH_ENHANCED_AUDIO_ONCE"
     ) {
 	      const enhancedAudioPath = path.join(getSermonStoragePath(sermon.id), "transcript", SPEECH_ENHANCED_AUDIO_NAME);
 	      await appendJobLog(
 	        job.id,
-	        originalQuality.ready
-	          ? `Initial transcript is clipping-ready but has quality warning(s) (${originalQuality.warnings.join(", ")}). Retrying once with speech-enhanced audio for a better transcript.`
-          : `Initial transcript was not ready for clipping (${originalQuality.reason}). Retrying once with speech-enhanced audio.`,
+	        `Transcript quality policy requested its single speech-enhanced retry: ${originalEscalationDecision.reasons.map((reason) => reason.explanation).join(" ")}`,
       );
 
 	      try {
@@ -2424,7 +2500,21 @@ export async function transcribeSermonAudio(
       : transcriptWindowed.transcript;
     const transcriptQuality = selectedAttempt.quality;
     const selectedExpectedDurationSeconds = selectedAttempt.expectedDurationSeconds ?? expectedTranscriptDurationSeconds;
+    const selectedEscalationDecision = buildTranscriptEscalationDecision(
+      transcriptQuality,
+      transcriptWindowed.transcript.segments,
+      {
+        expectedDurationSeconds: selectedExpectedDurationSeconds,
+        knownNames: [sermon.speakerName, sermon.churchName],
+        enhancementAttemptsUsed: selectedAttempt.source === "speech_enhanced" ? 1 : 0,
+      },
+    );
     const degradedTranscriptUsable = isDegradedTranscriptUsableForLocalMultilingualClipping(transcriptQuality, languageHint);
+    const escalationRequiresManualReview = selectedEscalationDecision.automationMode !== "FULL";
+    const escalationFallbackReason = selectedEscalationDecision.reasons
+      .map((reason) => reason.explanation)
+      .join(" ")
+      || "The transcript quality contract requires manual review.";
 
     if (!transcriptQuality.ready && !degradedTranscriptUsable) {
       throw new LowTranscriptQualityError(transcriptQuality.reason ?? "The transcript failed the clipping reliability checks.");
@@ -2445,6 +2535,16 @@ export async function transcribeSermonAudio(
       await appendPipelineLog(
         sermon.id,
         `Saving degraded multilingual transcript with ${transcriptQuality.wordCount} words and ${transcriptQuality.meaningfulSegmentCount} meaningful segments.`,
+      );
+    }
+    if (escalationRequiresManualReview && !degradedTranscriptUsable) {
+      await appendJobLog(
+        job.id,
+        `Transcript preserved as manual-review-only by ${selectedEscalationDecision.policyVersion}: ${escalationFallbackReason}`,
+      );
+      await appendPipelineLog(
+        sermon.id,
+        "Transcript quality escalation stopped automatic intelligence; canonical timestamps remain available for pastor review and basic recovery clips.",
       );
     }
 
@@ -2527,6 +2627,12 @@ export async function transcribeSermonAudio(
           ? Number((transcriptQuality.durationSeconds / selectedExpectedDurationSeconds).toFixed(3))
           : null,
       },
+      qualityContract: {
+        ...selectedEscalationDecision,
+        canonicalTranscriptFingerprint: fingerprintCanonicalTimestampTranscript(storedTranscript.segments),
+        canonicalTranscriptSourceAttempt: selectedAttempt.source,
+        canonicalSegmentCount: storedTranscript.segments.length,
+      },
       raw: normalizedTranscript.raw,
     };
 
@@ -2546,7 +2652,9 @@ export async function transcribeSermonAudio(
     await markJobSucceeded(
       job.id,
       `Transcription saved with ${storedTranscript.segments.length} timestamped segments${sermon.includeWorshipMoments ? " across the full service for worship discovery" : ""}. Readiness: ${
-        degradedTranscriptUsable ? "degraded multilingual transcript saved for review" : transcriptQuality.ready ? "ready for clipping" : transcriptQuality.reason
+        degradedTranscriptUsable || escalationRequiresManualReview
+          ? "manual review only; automatic intelligence disabled"
+          : transcriptQuality.ready ? "ready for clipping" : transcriptQuality.reason
       }.`,
     );
     await appendPipelineLog(
@@ -2557,10 +2665,12 @@ export async function transcribeSermonAudio(
     return {
       transcriptJsonPath,
       reusedExistingTranscript: false,
-      reliableForClipping: !degradedTranscriptUsable,
+      reliableForClipping: !degradedTranscriptUsable && !escalationRequiresManualReview,
       fallbackReason: degradedTranscriptUsable
         ? transcriptQuality.reason ?? reliabilityIssue ?? "The transcript was preserved for review but did not pass the clipping reliability checks."
-        : null,
+        : escalationRequiresManualReview
+          ? escalationFallbackReason
+          : null,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown transcription error.";

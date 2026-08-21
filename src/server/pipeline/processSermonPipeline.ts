@@ -38,13 +38,16 @@ import {
   prepareGeneratedClipReviewAssets,
 } from "@/server/agents/clipReviewAssetService";
 import { updateSermonStatus } from "@/server/status/sermonStatus";
+import { EARLY_VALUE_PREVIEW_LIMIT } from "@/server/orchestration/sermonWorkflow";
 
 export type ProcessSermonPipelineOptions = {
   force?: boolean;
   parentJobId?: string;
+  /** Defaults to the legacy complete workflow for direct callers. */
+  completionTarget?: "FULL_WORKFLOW" | "EARLY_VALUE";
 };
 
-type PipelineStepStatus = "SUCCEEDED" | "SKIPPED" | "FAILED";
+type PipelineStepStatus = "SUCCEEDED" | "SKIPPED" | "DEFERRED" | "FAILED";
 
 type PipelineStepResult = {
   label: string;
@@ -52,12 +55,27 @@ type PipelineStepResult = {
   message: string;
 };
 
-type PipelineResult = {
+export type PipelineResult = {
   sermonId: string;
   sermonTitle: string;
   parentJobId: string;
   steps: PipelineStepResult[];
   summary: string;
+  completionState:
+    | "FULL_WORKFLOW_COMPLETE"
+    | "EARLY_VALUE_READY"
+    | "SUGGESTIONS_READY"
+    | "BASIC_FALLBACK_READY";
+  suggestionKind: "AI_RECOMMENDATION" | "BASIC_FALLBACK";
+  deferredWork: {
+    previewClipCount: number;
+    contentStageCount: number;
+  };
+  firstBrandedPreview: {
+    clipId: string | null;
+    ready: boolean;
+    failed: boolean;
+  };
 };
 
 class PipelinePartialCompletionError extends Error {
@@ -178,6 +196,31 @@ function buildSummary(steps: PipelineStepResult[]): string {
     "Process Sermon complete.",
     `Ran: ${ran.length > 0 ? ran.join(", ") : "none"}.`,
     `Skipped: ${skipped.length > 0 ? skipped.join(", ") : "none"}.`,
+  ].join(" ");
+}
+
+function buildEarlyValueSummary(
+  steps: PipelineStepResult[],
+  deferredWork: PipelineResult["deferredWork"],
+  firstBrandedPreviewReady = true,
+): string {
+  const ran = steps.filter((step) => step.status === "SUCCEEDED").map((step) => step.label);
+  return [
+    firstBrandedPreviewReady
+      ? "Process Sermon early value ready; the full content workflow is not complete."
+      : "Process Sermon suggestions are ready, but the first branded preview and full content workflow are not complete.",
+    `Ran: ${ran.length > 0 ? ran.join(", ") : "none"}.`,
+    `Deferred: ${deferredWork.previewClipCount} additional clip preview(s) and ${deferredWork.contentStageCount} content stage(s).`,
+  ].join(" ");
+}
+
+function buildBasicFallbackEarlySummary(
+  deferredWork: PipelineResult["deferredWork"],
+): string {
+  return [
+    "Process Sermon basic fallback review cuts are ready.",
+    "Reliable suggestions, a branded preview, and the full content workflow are not complete.",
+    `Deferred: ${deferredWork.previewClipCount} additional fallback preview(s).`,
   ].join(" ");
 }
 
@@ -306,6 +349,7 @@ export async function processSermonPipeline(
     throw new Error("The claimed processing job does not match this sermon pipeline.");
   }
   const steps: PipelineStepResult[] = [];
+  const completionTarget = options?.completionTarget ?? "FULL_WORKFLOW";
   let activeStepLabel = "Download video";
 
   // The media worker atomically claims PROCESS_SERMON jobs and increments their
@@ -607,15 +651,20 @@ export async function processSermonPipeline(
     }
 
     activeStepLabel = "Prepare generated clip review assets";
-    const previewResult = await prepareGeneratedClipReviewAssets({ sermonId: sermon.id, force: options?.force });
+    const previewResult = await prepareGeneratedClipReviewAssets({
+      sermonId: sermon.id,
+      force: options?.force,
+      maxClips: completionTarget === "EARLY_VALUE" ? EARLY_VALUE_PREVIEW_LIMIT : undefined,
+      prepareFirstBrandedPreview: completionTarget === "EARLY_VALUE",
+    });
     steps.push({
       label: "Prepare generated clip review assets",
       status: previewResult.failed === 0 ? "SUCCEEDED" : "FAILED",
-      message: `Prepared ${previewResult.prepared} preview video asset(s); ${previewResult.skipped} already ready or in progress; ${previewResult.failed} failed. Caption files are created after approval.`,
+      message: `Prepared ${previewResult.prepared} preview video asset(s) in ranked order; ${previewResult.skipped} already ready or in progress; ${previewResult.failed} failed; ${previewResult.deferredClipCount} deferred. First branded preview: ${previewResult.firstBrandedPreviewReady ? "ready" : previewResult.firstBrandedPreviewFailed ? "failed with raw fallback preserved" : "not available"}. Captions remain approval-aware final-render work.`,
     });
     await appendJobLog(
       parentJob.id,
-      `Generated clip review asset preparation complete: ${previewResult.prepared} prepared, ${previewResult.skipped} skipped, ${previewResult.failed} failed.`,
+      `Generated clip review asset preparation complete: ${previewResult.prepared} prepared, ${previewResult.skipped} skipped, ${previewResult.failed} failed, ${previewResult.deferredClipCount} deferred.`,
     );
 
     if (basicClipFallbackReason) {
@@ -624,6 +673,13 @@ export async function processSermonPipeline(
         status: "SKIPPED",
         message: "Skipped because no reliable transcript or content intelligence is available.",
       });
+    } else if (completionTarget === "EARLY_VALUE") {
+      steps.push({
+        label: "Generate content opportunities",
+        status: "DEFERRED",
+        message: "Deferred until after the strongest review previews are available; full Content Week is not complete.",
+      });
+      await appendJobLog(parentJob.id, "Content opportunities deferred until the follow-on content stage.");
     } else {
       try {
         activeStepLabel = "Generate content opportunities";
@@ -652,9 +708,18 @@ export async function processSermonPipeline(
       throw new PipelinePartialCompletionError(steps);
     }
 
-    const summary = basicClipFallbackReason
-      ? `${buildSummary(steps)} Basic clips only: transcription was not reliable, no content intelligence was applied, and every clip must be edited and checked in Clip Studio.`
+    const deferredWork: PipelineResult["deferredWork"] = {
+      previewClipCount: previewResult.deferredClipCount,
+      contentStageCount: completionTarget === "EARLY_VALUE" && !basicClipFallbackReason ? 1 : 0,
+    };
+    const baseSummary = completionTarget === "EARLY_VALUE"
+      ? basicClipFallbackReason
+        ? buildBasicFallbackEarlySummary(deferredWork)
+        : buildEarlyValueSummary(steps, deferredWork, previewResult.firstBrandedPreviewReady)
       : buildSummary(steps);
+    const summary = basicClipFallbackReason
+      ? `${baseSummary} Basic clips only: transcription was not reliable, no content intelligence was applied, and every clip must be edited and checked in Clip Studio before approval.`
+      : baseSummary;
     await markJobSucceeded(parentJob.id, summary);
     await appendPipelineLog(sermon.id, summary);
 
@@ -664,6 +729,20 @@ export async function processSermonPipeline(
       parentJobId: parentJob.id,
       steps,
       summary,
+      completionState: basicClipFallbackReason
+        ? "BASIC_FALLBACK_READY"
+        : completionTarget === "FULL_WORKFLOW"
+          ? "FULL_WORKFLOW_COMPLETE"
+          : previewResult.firstBrandedPreviewReady
+            ? "EARLY_VALUE_READY"
+            : "SUGGESTIONS_READY",
+      suggestionKind: basicClipFallbackReason ? "BASIC_FALLBACK" : "AI_RECOMMENDATION",
+      deferredWork,
+      firstBrandedPreview: {
+        clipId: previewResult.firstBrandedClipId,
+        ready: previewResult.firstBrandedPreviewReady,
+        failed: previewResult.firstBrandedPreviewFailed,
+      },
     };
   } catch (error) {
     const failureMessage = error instanceof Error ? error.message : "Unknown sermon processing error.";
@@ -707,6 +786,8 @@ export const __processSermonPipelineTestUtils = {
   basicClipFallbackReasonForTranscriptionError,
   hasCompleteWorshipSermonRange,
   PipelinePartialCompletionError,
+  buildEarlyValueSummary,
+  buildBasicFallbackEarlySummary,
   buildGeneratedClipReviewAssetPlan: (
     clip: Parameters<typeof __clipReviewAssetServiceTestUtils.shouldPreparePreview>[0],
     force?: boolean,

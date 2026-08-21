@@ -50,6 +50,7 @@ if (!databaseUrl.startsWith("postgresql://") && !databaseUrl.startsWith("postgre
 }
 
 const { prisma } = await import("../src/lib/prisma");
+const { recordMediaWorkerHeartbeat } = await import("../src/lib/mediaWorkerHealth");
 const {
   appendJobLog,
   markJobFailed,
@@ -73,6 +74,27 @@ const youtubeIntakeIntervalMs = positiveNumber(
 const logger = createWorkerLogger("media");
 let processing = false;
 let scanningYoutube = false;
+let heartbeatWarningLogged = false;
+
+async function sendServiceHeartbeat(): Promise<void> {
+  const recorded = await recordMediaWorkerHeartbeat({
+    workerId,
+    details: {
+      processing,
+      scanningYoutube,
+      pollIntervalSeconds: pollIntervalMs / 1000,
+      staleJobMinutes: staleJobMs / 60_000,
+      maxWorkerAttempts,
+    },
+  });
+
+  if (!recorded && !heartbeatWarningLogged) {
+    logger.warn("service heartbeat was not recorded; processing remains available");
+    heartbeatWarningLogged = true;
+  } else if (recorded) {
+    heartbeatWarningLogged = false;
+  }
+}
 
 const SERMON_STAGE_ORDER = [
   "CREATED",
@@ -676,6 +698,10 @@ async function main(): Promise<void> {
     youtubeIntakeEvery: `${youtubeIntakeIntervalMs / 1000}s`,
   });
 
+  await sendServiceHeartbeat();
+  setInterval(() => {
+    void sendServiceHeartbeat();
+  }, heartbeatIntervalMs);
   await scanAutomaticYoutubeIntake();
   await processNextJob();
   setInterval(() => {

@@ -1,0 +1,123 @@
+.modeSwitch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.modeSwitch button {
+  min-height: 2.75rem;
+}
+
+.quickStatus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.quickStatus p {
+  margin: 0;
+}
+
+.quickCard {
+  scroll-margin-top: 1rem;
+}
+
+.sourceWindow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+  color: #b9bbc2;
+  font-size: 0.82rem;
+}
+
+.sourceWindow strong {
+  color: #f2f3f4;
+}
+
+.contextDisclosure {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.contextDisclosure > summary {
+  min-height: 2.75rem;
+  padding: 0.75rem 0.85rem;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.contextDisclosure > div {
+  margin: 0 0.75rem 0.75rem;
+}
+
+.quickActions {
+  display: grid;
+  gap: 0.8rem;
+  align-content: start;
+}
+
+.quickActions h4,
+.quickActions p {
+  margin: 0;
+}
+
+.quickActions [role="group"] {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.quickActions [role="group"] > * {
+  width: 100%;
+  min-height: 3rem;
+  justify-content: center;
+}
+
+.quickActions :focus-visible,
+.modeSwitch :focus-visible,
+.contextDisclosure > summary:focus-visible {
+  outline: 3px solid #8ce5ce;
+  outline-offset: 3px;
+}
+
+.advancedDisclosure {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 0.9rem;
+}
+
+@media (max-width: 700px) {
+  .modeSwitch,
+  .modeSwitch button {
+    width: 100%;
+  }
+
+  .quickStatus {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .quickActions {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin: 0 -0.75rem -0.75rem;
+    padding: 0.9rem 0.75rem calc(0.9rem + env(safe-area-inset-bottom));
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(12, 13, 14, 0.97);
+    backdrop-filter: blur(14px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quickCard {
+    scroll-behavior: auto;
+  }
+}

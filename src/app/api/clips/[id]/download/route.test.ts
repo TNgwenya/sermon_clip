@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   canRunLocalMediaProcessing: vi.fn(),
-  findUnique: vi.fn(),
+  findFirst: vi.fn(),
   requireClipResource: vi.fn(),
   stat: vi.fn(),
   videoFileResponse: vi.fn(),
@@ -10,7 +10,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", () => ({ stat: mocks.stat }));
 vi.mock("@/lib/prisma", () => ({
-  prisma: { clipCandidate: { findUnique: mocks.findUnique } },
+  prisma: { clipCandidate: { findFirst: mocks.findFirst } },
+}));
+vi.mock("@/server/tenancy/databaseIsolation", () => ({
+  withDatabaseTenantIsolation: (_context: unknown, operation: (transaction: unknown) => unknown) => operation({
+    clipCandidate: { findFirst: mocks.findFirst },
+  }),
 }));
 vi.mock("@/server/runtime/workerRuntime", () => ({
   canRunLocalMediaProcessing: mocks.canRunLocalMediaProcessing,
@@ -58,7 +63,7 @@ describe("clip download route", () => {
       campusId: "campus-1",
     });
     mocks.canRunLocalMediaProcessing.mockReturnValue(true);
-    mocks.findUnique.mockResolvedValue(baseClip);
+    mocks.findFirst.mockResolvedValue(baseClip);
     mocks.stat.mockResolvedValue({ isFile: () => true, size: 1_024 });
     mocks.videoFileResponse.mockImplementation(({ filePath }: { filePath: string }) => (
       Response.json({ filePath })
@@ -66,7 +71,7 @@ describe("clip download route", () => {
   });
 
   it("does not serve a stale vertical export or fall back to another artifact", async () => {
-    mocks.findUnique.mockResolvedValue({
+    mocks.findFirst.mockResolvedValue({
       ...baseClip,
       exportFreshness: "OUTDATED",
     });
@@ -83,10 +88,16 @@ describe("clip download route", () => {
     expect(mocks.stat).not.toHaveBeenCalled();
     expect(mocks.videoFileResponse).not.toHaveBeenCalled();
     expect(mocks.requireClipResource).toHaveBeenCalledWith("content.export", "clip-1");
+    expect(mocks.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        id: "clip-1",
+        sermon: { organizationId: "org-1" },
+      },
+    }));
   });
 
   it("does not treat a plain render as a best prepared download", async () => {
-    mocks.findUnique.mockResolvedValue({
+    mocks.findFirst.mockResolvedValue({
       ...baseClip,
       exportStatus: "FAILED",
       exportFreshness: "FAILED",
@@ -107,7 +118,7 @@ describe("clip download route", () => {
   });
 
   it("skips a stale export and serves the freshest completed polished artifact", async () => {
-    mocks.findUnique.mockResolvedValue({
+    mocks.findFirst.mockResolvedValue({
       ...baseClip,
       exportFreshness: "OUTDATED",
     });

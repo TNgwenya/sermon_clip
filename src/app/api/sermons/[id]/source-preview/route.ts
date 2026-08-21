@@ -2,13 +2,13 @@ import { stat } from "node:fs/promises";
 
 import { NextResponse } from "next/server";
 
-import { prisma } from "@/lib/prisma";
 import { requireSermonResource } from "@/server/auth/resourceAuthorization";
 import { resourceAuthorizationErrorResponse } from "@/server/auth/resourceRouteAuthorization";
 import { videoFileResponse } from "@/server/http/videoFileResponse";
 import { resolvePortableStoragePath } from "@/server/media/portableStoragePath";
 import { presignReadyS3SourcePreview } from "@/server/media/s3SourceStorage";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
+import { withDatabaseTenantIsolation } from "@/server/tenancy/databaseIsolation";
 
 async function fileHasBytes(filePath: string): Promise<boolean> {
   try {
@@ -30,16 +30,21 @@ export async function GET(
     return NextResponse.json({ error: "Sermon id is required." }, { status: 400 });
   }
 
+  let authorizedSermon: Awaited<ReturnType<typeof requireSermonResource>>;
   try {
-    await requireSermonResource("sermons.read", sermonId);
+    authorizedSermon = await requireSermonResource("sermons.read", sermonId);
   } catch (error) {
     const response = resourceAuthorizationErrorResponse(error, "Sermon not found.");
     if (response) return response;
     throw error;
   }
 
-  const sermon = await prisma.sermon.findUnique({
-    where: { id: sermonId },
+  const sermon = await withDatabaseTenantIsolation(authorizedSermon, (transaction) => (
+    transaction.sermon.findFirst({
+    where: {
+      id: sermonId,
+      organizationId: authorizedSermon.organizationId,
+    },
     select: {
       sourceVideoPath: true,
       sourceAsset: {
@@ -55,7 +60,8 @@ export async function GET(
         },
       },
     },
-  });
+    })
+  ));
 
   if (!sermon) {
     return NextResponse.json({ error: "Sermon not found." }, { status: 404 });
@@ -81,6 +87,10 @@ export async function GET(
   if (sermon.sourceAsset?.status === "READY") {
     try {
       const signedPreviewUrl = await presignReadyS3SourcePreview({
+        owner: {
+          organizationId: authorizedSermon.organizationId,
+          sermonId,
+        },
         asset: {
           ...sermon.sourceAsset,
           status: "READY",
