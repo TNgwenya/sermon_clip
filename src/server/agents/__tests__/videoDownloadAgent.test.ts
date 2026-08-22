@@ -24,6 +24,8 @@ describe("videoDownloadAgent helpers", () => {
       expect(args).toContain("--concurrent-fragments");
       expect(args).toContain("8");
       expect(args).toContain("--force-ipv4");
+      expect(args).toContain("--js-runtimes");
+      expect(args).toContain("node");
       expect(format).toBe("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best");
     } finally {
       if (originalMode === undefined) {
@@ -78,6 +80,18 @@ describe("videoDownloadAgent helpers", () => {
     expect(__videoDownloadTestUtils.resolveConcurrentFragments("0")).toBe("8");
     expect(__videoDownloadTestUtils.resolveConcurrentFragments("12")).toBe("12");
     expect(__videoDownloadTestUtils.resolveConcurrentFragments("99")).toBe("16");
+  });
+
+  it("reserves a conservative temporary workspace before a server-side download", () => {
+    expect(__videoDownloadTestUtils.configuredDownloadWorkspaceBytes(undefined)).toBe(16 * 1024 ** 3);
+    expect(__videoDownloadTestUtils.configuredDownloadWorkspaceBytes("24")).toBe(24 * 1024 ** 3);
+    expect(__videoDownloadTestUtils.configuredDownloadWorkspaceBytes("0")).toBe(16 * 1024 ** 3);
+  });
+
+  it("bounds the delay between compatible YouTube retry profiles", () => {
+    expect(__videoDownloadTestUtils.resolveProfileRetryDelayMs(undefined)).toBe(1_500);
+    expect(__videoDownloadTestUtils.resolveProfileRetryDelayMs("3000")).toBe(3_000);
+    expect(__videoDownloadTestUtils.resolveProfileRetryDelayMs("999999")).toBe(10_000);
   });
 
   it("adds an optional external downloader when configured", () => {
@@ -141,7 +155,7 @@ describe("videoDownloadAgent helpers", () => {
     expect(__videoDownloadTestUtils.looksLikeHttp403("network timeout")).toBe(false);
   });
 
-  it("returns guidance-rich failure message for 403", () => {
+  it("returns server-retry guidance for 403 without suggesting cookie handling", () => {
     const message = __videoDownloadTestUtils.toDownloadFailureMessage(
       "ERROR: unable to download video data: HTTP Error 403: Forbidden",
       1,
@@ -149,10 +163,11 @@ describe("videoDownloadAgent helpers", () => {
 
     expect(message).toContain("yt-dlp failed with code 1");
     expect(message).toContain("HTTP 403");
-    expect(message).toContain("browser cookies");
+    expect(message).toContain("server-side import");
+    expect(message).not.toContain("browser cookies");
   });
 
-  it("classifies YouTube bot verification as an upload-recoverable failure", () => {
+  it("classifies YouTube bot verification as a server-retryable failure", () => {
     const stderr = "ERROR: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies.";
     const classification = __videoDownloadTestUtils.classifyYouTubeSourceFailure(stderr);
     const message = __videoDownloadTestUtils.toDownloadFailureMessage(stderr, 1);
@@ -160,9 +175,9 @@ describe("videoDownloadAgent helpers", () => {
     expect(__videoDownloadTestUtils.looksLikeYouTubeAuthFailure(stderr)).toBe(true);
     expect(classification).toEqual({
       code: "YOUTUBE_AUTH_REQUIRED",
-      retryable: false,
-      uploadRecoveryRecommended: true,
+      retryable: true,
+      serverRecoveryRecommended: true,
     });
-    expect(message).toContain("Upload the same recording to this sermon");
+    expect(message).toContain("retry the server-side import");
   });
 });

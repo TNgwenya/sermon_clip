@@ -15,6 +15,7 @@ import {
   getSourceVideoPath,
 } from "@/server/agents/storage";
 import { mediaFileIsUsable } from "@/server/media/fileGuards";
+import { assertMediaStorageCapacity, GIBIBYTE } from "@/server/media/storageCapacity";
 import { updateSermonStatus } from "@/server/status/sermonStatus";
 import {
   classifyYouTubeSourceFailure,
@@ -38,6 +39,8 @@ const SOURCE_DOWNLOAD_FORMATS: Record<SourceDownloadQualityMode, string> = {
 const DEFAULT_SOURCE_DOWNLOAD_QUALITY_MODE: SourceDownloadQualityMode = "BEST";
 const DEFAULT_YT_DLP_CONCURRENT_FRAGMENTS = 8;
 const MAX_YT_DLP_CONCURRENT_FRAGMENTS = 16;
+const DEFAULT_YT_DLP_PROFILE_RETRY_DELAY_MS = 1_500;
+const DEFAULT_DOWNLOAD_WORKSPACE_GIB = 16;
 
 type DownloadAttemptProfile = {
   label: string;
@@ -77,6 +80,21 @@ function resolveConcurrentFragments(value: string | null | undefined): string {
   const fallback = DEFAULT_YT_DLP_CONCURRENT_FRAGMENTS;
   const fragments = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
   return String(Math.min(MAX_YT_DLP_CONCURRENT_FRAGMENTS, Math.max(1, fragments)));
+}
+
+function configuredDownloadWorkspaceBytes(value = process.env.MEDIA_DOWNLOAD_WORKSPACE_GIB): number {
+  const parsed = Number(value);
+  const gibibytes = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_DOWNLOAD_WORKSPACE_GIB;
+  return Math.ceil(gibibytes * GIBIBYTE);
+}
+
+function resolveProfileRetryDelayMs(value = process.env.YT_DLP_PROFILE_RETRY_DELAY_MS): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.min(Math.floor(parsed), 10_000) : DEFAULT_YT_DLP_PROFILE_RETRY_DELAY_MS;
+}
+
+function waitForProfileRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function buildDownloaderArgs(): string[] {
@@ -174,6 +192,11 @@ function buildBaseDownloadArgs(youtubeUrl: string, sourceVideoPath: string): str
     "--concurrent-fragments",
     concurrentFragments,
     "--force-ipv4",
+    // yt-dlp uses this local Node runtime only to complete YouTube's modern
+    // player challenges. It is not browser automation and receives no user
+    // cookie or account credential.
+    "--js-runtimes",
+    process.env.YT_DLP_JS_RUNTIME?.trim() || "node",
     ...buildDownloaderArgs(),
   ];
 }
@@ -196,7 +219,7 @@ function toDownloadFailureMessage(stderr: string, code: number | null): string {
     return [
       `yt-dlp failed with code ${code ?? "unknown"}.`,
       "YouTube asked the server to verify itself before providing this recording.",
-      "Upload the same recording to this sermon to continue without losing its saved details.",
+      "Sermon Clip kept your sermon details safe and can retry the server-side import.",
       tail,
     ]
       .filter((line) => line.length > 0)
@@ -207,7 +230,7 @@ function toDownloadFailureMessage(stderr: string, code: number | null): string {
     return [
       `yt-dlp failed with code ${code ?? "unknown"}.`,
       "YouTube blocked the request (HTTP 403).",
-      "Try updating yt-dlp and retrying, or provide browser cookies if the video is age-restricted/private.",
+      "Sermon Clip kept your sermon details safe and can retry the server-side import.",
       tail,
     ]
       .filter((line) => line.length > 0)
@@ -230,7 +253,8 @@ async function runYtDlpDownload(
 
   let lastErrorMessage = "yt-dlp download failed.";
 
-  for (const profile of getDownloadAttemptProfiles()) {
+  const profiles = getDownloadAttemptProfiles();
+  for (const [index, profile] of profiles.entries()) {
     await appendPipelineLog(sermonId, `yt-dlp attempt profile: ${profile.label}`);
 
     const attempt = await new Promise<
@@ -288,9 +312,16 @@ async function runYtDlpDownload(
 
     lastErrorMessage = attempt.message;
 
-    // Retry only for 403-type failures. Other failures should fail fast.
-    if (!looksLikeHttp403(attempt.stderr)) {
+    // A fresh YouTube client profile can resolve either a 403 or the common
+    // transient verification hold. Other failures should fail fast.
+    if (!looksLikeHttp403(attempt.stderr) && !looksLikeYouTubeAuthFailure(attempt.stderr)) {
       break;
+    }
+
+    if (index < profiles.length - 1) {
+      const delayMs = resolveProfileRetryDelayMs();
+      await appendPipelineLog(sermonId, `YouTube verification retry will use a compatible profile in ${delayMs}ms.`);
+      await waitForProfileRetry(delayMs);
     }
   }
 
@@ -369,6 +400,12 @@ export async function downloadSermonVideo(
     }
 
     await checkYtDlpInstalled(options?.ytDlpPath);
+    await assertMediaStorageCapacity({
+      // A server-side import needs enough temporary room for the source before
+      // FFmpeg can begin. This conservative staging allowance prevents a long
+      // service from consuming the last usable worker disk space.
+      incomingBytes: configuredDownloadWorkspaceBytes(),
+    });
 
     const tempSourceVideoPath = getTempDownloadPath(sourceVideoPath);
     await removeTempDownloadFile(sourceVideoPath);
@@ -420,8 +457,8 @@ export async function downloadSermonVideo(
       retryable: failure.retryable,
       details: {
         forceRequested: options?.force === true,
-        uploadRecoveryRecommended: failure.uploadRecoveryRecommended,
-        recoveryAction: failure.uploadRecoveryRecommended ? "UPLOAD_SOURCE" : null,
+        serverRecoveryRecommended: failure.serverRecoveryRecommended,
+        recoveryAction: failure.serverRecoveryRecommended ? "RETRY_SERVER_IMPORT" : null,
       },
     });
 
@@ -442,6 +479,8 @@ export const __videoDownloadTestUtils = {
   getTempDownloadPath,
   normalizeSourceDownloadQualityMode,
   resolveConcurrentFragments,
+  configuredDownloadWorkspaceBytes,
+  resolveProfileRetryDelayMs,
   looksLikeHttp403,
   looksLikeYouTubeAuthFailure,
   toDownloadFailureMessage,

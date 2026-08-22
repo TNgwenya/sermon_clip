@@ -1,7 +1,7 @@
 export type YouTubeSourceFailureClassification = {
   code: "YOUTUBE_AUTH_REQUIRED" | "YOUTUBE_FORBIDDEN" | "VIDEO_DOWNLOAD_FAILED";
   retryable: boolean;
-  uploadRecoveryRecommended: boolean;
+  serverRecoveryRecommended: boolean;
 };
 
 const YOUTUBE_AUTH_FAILURE_PATTERNS = [
@@ -27,8 +27,11 @@ export function classifyYouTubeSourceFailure(message: string): YouTubeSourceFail
   if (looksLikeYouTubeAuthFailure(message)) {
     return {
       code: "YOUTUBE_AUTH_REQUIRED",
-      retryable: false,
-      uploadRecoveryRecommended: true,
+      // A server-side retry may succeed with a different YouTube client profile
+      // or after YouTube's short-lived verification hold clears. Never make a
+      // phone download the default recovery path.
+      retryable: true,
+      serverRecoveryRecommended: true,
     };
   }
 
@@ -36,18 +39,18 @@ export function classifyYouTubeSourceFailure(message: string): YouTubeSourceFail
     return {
       code: "YOUTUBE_FORBIDDEN",
       retryable: true,
-      uploadRecoveryRecommended: true,
+      serverRecoveryRecommended: true,
     };
   }
 
   return {
     code: "VIDEO_DOWNLOAD_FAILED",
     retryable: true,
-    uploadRecoveryRecommended: true,
+    serverRecoveryRecommended: true,
   };
 }
 
-export function shouldOfferYouTubeUploadRecovery(input: {
+export function shouldOfferYouTubeServerRecovery(input: {
   failureCode?: string | null;
   message?: string | null;
 }): boolean {

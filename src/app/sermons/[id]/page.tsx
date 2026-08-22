@@ -14,7 +14,7 @@ import { SubtitlesButton } from "@/app/sermons/[id]/subtitles-button";
 import { RegenerationControls } from "@/app/sermons/[id]/regeneration-controls";
 import { RedoClipGenerationButton } from "@/app/sermons/[id]/redo-clip-generation-button";
 import { RetryFailedJobButton } from "@/app/sermons/[id]/retry-failed-job-button";
-import { YouTubeRecoveryUpload } from "@/app/sermons/[id]/youtube-recovery-upload";
+import { YouTubeServerRecovery } from "@/app/sermons/[id]/youtube-recovery-upload";
 import { RepairFailedClipOperationsButton } from "@/app/sermons/[id]/repair-failed-clip-operations-button";
 import { SermonLiveRefresh } from "@/app/sermons/[id]/sermon-live-refresh";
 import { SermonDetailPreviewCard } from "@/app/sermons/[id]/sermon-detail-preview-card";
@@ -28,7 +28,6 @@ import {
 import { summarizeSermonClipAttention } from "@/lib/sermonClipAttention";
 import { getAudioPath, getLogPath, getSourceVideoPath } from "@/server/agents/storage";
 import { requireRequestCapability } from "@/server/auth/requestAuthorization";
-import { isS3SourceStorageConfigured } from "@/server/media/s3SourceStorage";
 import { tenantResourceScope } from "@/server/tenancy/scope";
 import { canRunLocalMediaProcessing } from "@/server/runtime/workerRuntime";
 import {
@@ -777,7 +776,6 @@ export default async function SermonDetailPage({
     resource: { kind: "SERMON", id },
   });
   const localMediaAvailable = canRunLocalMediaProcessing();
-  const directSourceUploadEnabled = isS3SourceStorageConfigured();
 
   const sermon: SermonDetailItem | null = await prisma.sermon.findFirst({
     where: tenantResourceScope(requestContext, id),
@@ -1290,7 +1288,7 @@ export default async function SermonDetailPage({
           ? activeProcessingStep?.label ?? "Finding sermon moments"
           : workspaceAction === "recover"
             ? youtubeSourceRecoveryFailure
-              ? "Continue with the owner’s original video"
+              ? "Retry the secure YouTube import"
               : clipQualityGateFailure
               ? "Analysis paused at the transcript"
               : latestFailedJob
@@ -1527,9 +1525,7 @@ export default async function SermonDetailPage({
               />
             ) : null}
             {workspaceAction === "recover" && youtubeSourceRecoveryFailure ? (
-              <a href="#youtube-upload-recovery" className="button primary">
-                Upload recording to continue
-              </a>
+              <RetryFailedJobButton sermonId={sermon.id} jobId={latestFailedJob.id} />
             ) : null}
             {workspaceAction === "recover" && !youtubeSourceRecoveryFailure && (!clipQualityGateFailure || transcriptRefreshedAfterFailure) && latestFailedJob ? (
               <RetryFailedJobButton sermonId={sermon.id} jobId={latestFailedJob.id} />
@@ -1561,10 +1557,9 @@ export default async function SermonDetailPage({
       </section>
 
       {youtubeSourceRecoveryFailure ? (
-        <YouTubeRecoveryUpload
+        <YouTubeServerRecovery
           sermonId={sermon.id}
-          directSourceUploadEnabled={directSourceUploadEnabled}
-          localUploadFallbackEnabled={localMediaAvailable}
+          jobId={latestFailedJob?.id ?? ""}
         />
       ) : null}
 
@@ -1846,7 +1841,7 @@ export default async function SermonDetailPage({
                     <summary>Try importing from YouTube again</summary>
                     <div className="failure-recovery-action">
                       <p className="muted small">
-                        The normal YouTube link import remains available. It may work later if the earlier failure was temporary.
+                        Sermon Clip will retry from the same saved YouTube link. No file needs to be downloaded or uploaded from a phone.
                       </p>
                       <RetryFailedJobButton sermonId={sermon.id} jobId={latestFailedJob.id} />
                     </div>

@@ -16,27 +16,27 @@ describe("pastorFriendlyError", () => {
     expect(pastorFriendlyError("Rendered clip file does not exist.")).toContain("could not find the video file");
   });
 
-  it("offers an in-place upload when YouTube requires server verification", () => {
+  it("keeps YouTube verification recovery on the server", () => {
     const presentation = buildPastorProcessingFailurePresentation({
       message: "yt-dlp failed. Sign in to confirm you're not a bot. Use --cookies-from-browser or --cookies.",
       failureCode: "YOUTUBE_AUTH_REQUIRED",
     });
 
     expect(presentation.kind).toBe("YOUTUBE_SOURCE_UNAVAILABLE");
-    expect(presentation.title).toBe("YouTube could not provide this video");
+    expect(presentation.title).toBe("YouTube needs a server-side retry");
     expect(presentation.summary).toContain("sermon timing");
-    expect(presentation.guidance).toContain("video owner");
-    expect(presentation.guidance).toContain("same sermon");
+    expect(presentation.guidance).toContain("secure worker");
+    expect(presentation.guidance).toContain("no phone download");
   });
 
-  it("offers the owner-upload fallback for a structured general YouTube import failure", () => {
+  it("offers server retry for a structured general YouTube import failure", () => {
     const presentation = buildPastorProcessingFailurePresentation({
       message: "The remote source ended before the video could be prepared.",
       failureCode: "VIDEO_DOWNLOAD_FAILED",
     });
 
     expect(presentation.kind).toBe("YOUTUBE_SOURCE_UNAVAILABLE");
-    expect(presentation.guidance).toContain("YouTube Studio");
+    expect(presentation.guidance).toContain("secure worker");
   });
 
   it("reads a structured processing failure code safely", () => {

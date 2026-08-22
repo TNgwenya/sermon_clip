@@ -4,6 +4,9 @@ After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=5m
 StartLimitBurst=4
+# This legacy worker must remain disabled unless explicitly approved. The staged
+# orchestration worker is the pilot default and prevents competing consumers.
+ConditionPathExists=/etc/sermonclip/enable-legacy-media-worker
 
 [Service]
 Type=simple
@@ -13,9 +16,6 @@ WorkingDirectory=/opt/sermonclip/current
 EnvironmentFile=/etc/sermonclip/worker.env
 Environment=NODE_ENV=production
 Environment=MEDIA_WORKER_ID=%H-media-01
-# This legacy worker must remain disabled unless explicitly approved. The staged
-# orchestration worker is the pilot default and prevents competing consumers.
-ConditionPathExists=/etc/sermonclip/enable-legacy-media-worker
 ExecStart=/usr/bin/npm run worker:media
 Restart=on-failure
 RestartSec=15

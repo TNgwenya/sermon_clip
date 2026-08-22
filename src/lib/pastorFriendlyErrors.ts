@@ -1,5 +1,5 @@
 import { resolveClipReviewAcceptanceFloor } from "@/lib/clipVolumeTargets";
-import { shouldOfferYouTubeUploadRecovery } from "@/lib/youtubeSourceFailure";
+import { shouldOfferYouTubeServerRecovery } from "@/lib/youtubeSourceFailure";
 
 export type TranscriptDiagnosticSegment = {
   startTimeSeconds: number;
@@ -179,12 +179,12 @@ export function buildPastorProcessingFailurePresentation({
 }: PastorProcessingFailureInput): PastorProcessingFailurePresentation {
   const normalizedMessage = message?.trim() ?? "";
 
-  if (shouldOfferYouTubeUploadRecovery({ failureCode, message: normalizedMessage })) {
+  if (shouldOfferYouTubeServerRecovery({ failureCode, message: normalizedMessage })) {
     return {
       kind: "YOUTUBE_SOURCE_UNAVAILABLE",
-      title: "YouTube could not provide this video",
+      title: "YouTube needs a server-side retry",
       summary: "The YouTube link import stopped. Your sermon details, sermon timing, and worship setting are safe.",
-      guidance: "The video owner must download their own video from YouTube Studio, then upload that original file here. Simonclip will attach it to this same sermon and continue automatically.",
+      guidance: "Keep using the YouTube link. Sermon Clip will retry the import from its secure worker; no phone download or file transfer is needed.",
       retryAfterTranscriptRefresh: false,
       metrics: [],
     };
@@ -234,8 +234,8 @@ export function pastorFriendlyError(message: string | null | undefined): string 
 
   const lower = message.toLowerCase();
 
-  if (shouldOfferYouTubeUploadRecovery({ message })) {
-    return "YouTube could not provide this recording to Sermon Clip. Upload the same recording to continue; your saved sermon details will be kept.";
+  if (shouldOfferYouTubeServerRecovery({ message })) {
+    return "YouTube could not provide this recording to Sermon Clip yet. Your saved sermon details are safe; retry the secure server-side import.";
   }
 
   if (lower.includes("drawtext") || lower.includes("filter not found")) {

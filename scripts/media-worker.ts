@@ -52,6 +52,7 @@ if (!databaseUrl.startsWith("postgresql://") && !databaseUrl.startsWith("postgre
 
 const { prisma } = await import("../src/lib/prisma");
 const { recordMediaWorkerHeartbeat } = await import("../src/lib/mediaWorkerHealth");
+const { configuredMinimumFreeBytes, getMediaStorageFreeBytes } = await import("../src/server/media/storageCapacity");
 const {
   appendJobLog,
   markJobFailed,
@@ -77,7 +78,30 @@ let processing = false;
 let scanningYoutube = false;
 let heartbeatWarningLogged = false;
 
+async function readWorkerCapacitySnapshot(): Promise<Record<string, number | null>> {
+  const now = Date.now();
+  const [pendingCount, oldestPendingJob, freeBytes] = await Promise.all([
+    prisma.processingJob.count({ where: { status: "PENDING" } }).catch(() => null),
+    prisma.processingJob.findFirst({
+      where: { status: "PENDING" },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    }).catch(() => null),
+    getMediaStorageFreeBytes().catch(() => null),
+  ]);
+
+  return {
+    pendingJobs: pendingCount,
+    oldestPendingSeconds: oldestPendingJob
+      ? Math.max(0, Math.round((now - oldestPendingJob.createdAt.getTime()) / 1000))
+      : null,
+    freeMediaBytes: freeBytes,
+    mediaReserveBytes: configuredMinimumFreeBytes(),
+  };
+}
+
 async function sendServiceHeartbeat(): Promise<void> {
+  const capacity = await readWorkerCapacitySnapshot();
   const recorded = await recordMediaWorkerHeartbeat({
     workerId,
     details: {
@@ -86,6 +110,7 @@ async function sendServiceHeartbeat(): Promise<void> {
       pollIntervalSeconds: pollIntervalMs / 1000,
       staleJobMinutes: staleJobMs / 60_000,
       maxWorkerAttempts,
+      ...capacity,
     },
   });
 
