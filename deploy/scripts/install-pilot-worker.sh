@@ -31,7 +31,7 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-  ca-certificates curl gpg git ffmpeg python3 python3-pip awscli
+  ca-certificates curl gpg git ffmpeg python3 python3-pip
 
 install -d -m 0755 /etc/apt/keyrings
 curl --fail --silent --show-error --location \
