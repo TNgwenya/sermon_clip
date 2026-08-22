@@ -1,0 +1,40 @@
+[Unit]
+Description=Sermon Clip staged orchestration worker
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=5m
+StartLimitBurst=4
+
+[Service]
+Type=simple
+User=sermonclip
+Group=sermonclip
+WorkingDirectory=/opt/sermonclip/current
+EnvironmentFile=/etc/sermonclip/worker.env
+Environment=NODE_ENV=production
+Environment=ORCHESTRATION_CONTROL_PLANE_ENABLED=true
+Environment=ORCHESTRATION_WORKER_ID=%H-orchestration-01
+ExecStart=/usr/bin/npm run worker:orchestration
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=90
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/sermonclip /var/log/sermonclip
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
