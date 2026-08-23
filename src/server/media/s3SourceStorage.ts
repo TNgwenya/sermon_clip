@@ -9,6 +9,7 @@ import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListPartsCommand,
@@ -54,6 +55,18 @@ export type ReadyS3SourceAsset = {
   originalFileName?: string | null;
   versionId?: string | null;
   status: "READY";
+};
+
+/**
+ * A worker-only upload from a trusted provider. Unlike browser multipart
+ * uploads, this never produces presigned URLs or exposes the source bytes.
+ */
+export type TrustedSourceStreamUpload = {
+  owner: S3SourceOwner;
+  fileName: string;
+  contentType: string;
+  expectedSizeBytes: number;
+  body: Readable;
 };
 
 const clients = new Map<string, S3Client>();
@@ -438,6 +451,116 @@ function objectBodyAsReadable(body: unknown): Readable {
   throw new Error("Amazon S3 returned a source body that cannot be streamed.");
 }
 
+async function* fixedSizeParts(body: Readable, partSizeBytes: number): AsyncGenerator<Buffer> {
+  let remainder = Buffer.alloc(0);
+  for await (const chunk of body) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    remainder = remainder.length === 0 ? buffer : Buffer.concat([remainder, buffer]);
+    while (remainder.length >= partSizeBytes) {
+      yield remainder.subarray(0, partSizeBytes);
+      remainder = remainder.subarray(partSizeBytes);
+    }
+  }
+  if (remainder.length > 0) yield remainder;
+}
+
+/**
+ * Streams a known-size provider recording directly into tenant-owned private
+ * S3. It verifies the received byte count and the stored object length, and
+ * aborts the multipart upload on every failure so partial provider media is
+ * never retained as a usable source.
+ */
+export async function uploadTrustedSourceStream(input: TrustedSourceStreamUpload): Promise<ReadyS3SourceAsset> {
+  if (!Number.isSafeInteger(input.expectedSizeBytes) || input.expectedSizeBytes <= 0) {
+    throw new Error("Trusted source content length must be a positive safe integer.");
+  }
+  const config = getS3SourceStorageConfig();
+  const expectedParts = expectedMultipartPartCount(input.expectedSizeBytes, config.partSizeBytes);
+  const objectKey = buildS3SourceObjectKey({
+    organizationId: input.owner.organizationId,
+    sermonId: input.owner.sermonId,
+    fileName: input.fileName,
+    config,
+  });
+  const client = getS3Client(config);
+  const started = await client.send(new CreateMultipartUploadCommand({
+    Bucket: config.bucket,
+    Key: objectKey,
+    ContentType: input.contentType || "video/mp4",
+    ServerSideEncryption: "AES256",
+    Metadata: {
+      organization: safeKeySegment(input.owner.organizationId, "organization"),
+      sermon: safeKeySegment(input.owner.sermonId, "sermon"),
+      bytes: String(input.expectedSizeBytes),
+      origin: "trusted-live-intake",
+    },
+  }));
+  if (!started.UploadId) throw new Error("Amazon S3 did not return a multipart upload ID.");
+
+  let uploadedBytes = 0;
+  const parts: Array<{ ETag: string; PartNumber: number }> = [];
+  let completedObject = false;
+  try {
+    let partNumber = 1;
+    for await (const part of fixedSizeParts(input.body, config.partSizeBytes)) {
+      uploadedBytes += part.length;
+      if (uploadedBytes > input.expectedSizeBytes || partNumber > expectedParts) {
+        throw new Error("Provider recording exceeded its declared content length.");
+      }
+      const uploaded = await client.send(new UploadPartCommand({
+        Bucket: config.bucket,
+        Key: objectKey,
+        UploadId: started.UploadId,
+        PartNumber: partNumber,
+        Body: part,
+      }));
+      if (!uploaded.ETag) throw new Error(`Amazon S3 did not return an ETag for source part ${partNumber}.`);
+      parts.push({ ETag: uploaded.ETag, PartNumber: partNumber });
+      partNumber += 1;
+    }
+    if (uploadedBytes !== input.expectedSizeBytes || parts.length !== expectedParts) {
+      throw new Error(`Provider recording transferred ${uploadedBytes} bytes; expected ${input.expectedSizeBytes}.`);
+    }
+    const completed = await client.send(new CompleteMultipartUploadCommand({
+      Bucket: config.bucket,
+      Key: objectKey,
+      UploadId: started.UploadId,
+      MultipartUpload: { Parts: parts },
+    }));
+    completedObject = true;
+    const head = await client.send(new HeadObjectCommand({
+      Bucket: config.bucket,
+      Key: objectKey,
+      VersionId: completed.VersionId,
+    }));
+    if (head.ContentLength !== input.expectedSizeBytes) {
+      throw new Error(`Amazon S3 stored ${head.ContentLength ?? 0} bytes; expected ${input.expectedSizeBytes}.`);
+    }
+    return {
+      bucket: config.bucket,
+      objectKey,
+      region: config.region,
+      sizeBytes: input.expectedSizeBytes,
+      contentType: input.contentType || "video/mp4",
+      originalFileName: input.fileName,
+      versionId: completed.VersionId ?? head.VersionId ?? null,
+      status: "READY",
+    };
+  } catch (error) {
+    input.body.destroy();
+    if (completedObject) {
+      await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: objectKey })).catch(() => undefined);
+    } else {
+      await client.send(new AbortMultipartUploadCommand({
+        Bucket: config.bucket,
+        Key: objectKey,
+        UploadId: started.UploadId,
+      })).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
 export async function downloadReadyS3SourceToFile(input: {
   asset: ReadyS3SourceAsset;
   owner: S3SourceOwner;
@@ -484,4 +607,5 @@ export const __s3SourceStorageTestUtils = {
   assertS3SourceObjectOwnedBy,
   expectedMultipartPartCount,
   validateCompletedParts,
+  fixedSizeParts,
 };

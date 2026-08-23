@@ -73,9 +73,14 @@ const youtubeIntakeIntervalMs = positiveNumber(
   process.env.YOUTUBE_AUTOMATION_SCAN_SECONDS,
   5 * 60,
 ) * 1000;
+const liveIntakeIntervalMs = positiveNumber(
+  process.env.LIVE_INTAKE_POLL_SECONDS,
+  60,
+) * 1000;
 const logger = createWorkerLogger("media");
 let processing = false;
 let scanningYoutube = false;
+let scanningLiveIntake = false;
 let heartbeatWarningLogged = false;
 
 async function readWorkerCapacitySnapshot(): Promise<Record<string, number | null>> {
@@ -107,9 +112,11 @@ async function sendServiceHeartbeat(): Promise<void> {
     details: {
       processing,
       scanningYoutube,
+      scanningLiveIntake,
       pollIntervalSeconds: pollIntervalMs / 1000,
       staleJobMinutes: staleJobMs / 60_000,
       maxWorkerAttempts,
+      liveIntakePollSeconds: liveIntakeIntervalMs / 1000,
       ...capacity,
     },
   });
@@ -744,6 +751,23 @@ async function scanAutomaticYoutubeIntake(): Promise<void> {
   }
 }
 
+async function scanLiveIntake(): Promise<void> {
+  if (scanningLiveIntake) return;
+  const { liveIntakeWorkerEnabled, runLiveIntakeWorkerCycle } = await import("../src/server/liveIntake/liveIntakeWorker");
+  if (!liveIntakeWorkerEnabled()) return;
+  scanningLiveIntake = true;
+  try {
+    const result = await runLiveIntakeWorkerCycle();
+    if (result.discovered > 0 || result.materialized > 0 || result.failed > 0 || result.pending > 0 || result.ignored > 0) {
+      logger.info("live intake worker cycle completed", result);
+    }
+  } catch (error) {
+    logger.warn("live intake worker cycle failed", errorFields(error));
+  } finally {
+    scanningLiveIntake = false;
+  }
+}
+
 async function main(): Promise<void> {
   logger.banner("media worker started", {
     workerId,
@@ -759,6 +783,7 @@ async function main(): Promise<void> {
     void sendServiceHeartbeat();
   }, heartbeatIntervalMs);
   await scanAutomaticYoutubeIntake();
+  await scanLiveIntake();
   await processNextJob();
   setInterval(() => {
     void processNextJob();
@@ -766,6 +791,9 @@ async function main(): Promise<void> {
   setInterval(() => {
     void scanAutomaticYoutubeIntake();
   }, youtubeIntakeIntervalMs);
+  setInterval(() => {
+    void scanLiveIntake();
+  }, liveIntakeIntervalMs);
 }
 
 process.on("SIGINT", () => {

@@ -109,6 +109,7 @@ export default async function IntakeSettingsPage() {
             <p>A configured toggle is not treated as proof. Recent scan and import times are shown from persisted worker activity.</p>
           </div>
           <Link className={styles.secondaryButton} href="/sermons/new">Add a sermon manually</Link>
+          <Link className={styles.secondaryButton} href="/settings/live-intake">Set up live intake</Link>
         </div>
 
         <dl className={styles.activityGrid}>

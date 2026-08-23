@@ -12,6 +12,7 @@ import {
   isS3SourceStorageConfigured,
   presignReadyS3SourcePreview,
 } from "@/server/media/s3SourceStorage";
+import { Readable } from "node:stream";
 
 const originalEnvironment = {
   bucket: process.env.SOURCE_MEDIA_S3_BUCKET,
@@ -121,6 +122,15 @@ describe("private S3 sermon source storage", () => {
         { partNumber: 2, etag: "\"two\"", sizeBytes: 8 },
       ],
     })).toThrow(/part 1/i);
+  });
+
+  it("splits trusted server streams into bounded multipart buffers without changing bytes", async () => {
+    const parts: Buffer[] = [];
+    for await (const part of __s3SourceStorageTestUtils.fixedSizeParts(
+      Readable.from([Buffer.from("abc"), Buffer.from("defgh")]),
+      4,
+    )) parts.push(part);
+    expect(parts.map((part) => part.toString())).toEqual(["abcd", "efgh"]);
   });
 
   it("signs a private inline GET without binding browser Range headers", async () => {

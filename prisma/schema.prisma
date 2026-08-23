@@ -35,6 +35,21 @@ enum SermonSourceAssetStatus {
   FAILED
 }
 
+enum LiveIntakeStatus {
+  PROVISIONING
+  READY
+  DISABLED
+  ERROR
+}
+
+enum LiveRecordingStatus {
+  RECEIVED
+  MATERIALIZING
+  QUEUED
+  FAILED
+  IGNORED
+}
+
 enum MinistryEventType {
   CONFERENCE
   REVIVAL
@@ -893,10 +908,12 @@ model Organization {
   automationSettings          OrganizationAutomationSettings?
   publicSermonPages           SermonPublicPage[]
   sermonSourceAssets          SermonSourceAsset[]
+  liveIntakes                 LiveIntake[]
   ministryEvents              MinistryEvent[]
   eventSessions               EventSession[]
   orchestrationJobs           OrchestrationJob[]
   orchestrationOutboxEvents   OrchestrationOutboxEvent[]
+  liveRecordings              LiveRecording[]
 
   @@index([status])
   @@index([createdAt])
@@ -953,6 +970,7 @@ model Campus {
   publicSermonPages           SermonPublicPage[]
   ministryEvents              MinistryEvent[]
   eventSessions               EventSession[]
+  liveIntakes                 LiveIntake[]
 
   @@unique([organizationId, slug])
   @@unique([id, organizationId])
@@ -1583,6 +1601,7 @@ model Sermon {
   weekDrafts                WeekDraft[]
   publicPage                SermonPublicPage?
   sourceAsset               SermonSourceAsset?
+  liveRecording             LiveRecording?
   eventSession              EventSession?
   teachingVideoAnalysisRuns TeachingVideoAnalysisRun[]
   teachingVideos            TeachingVideo[]
@@ -1621,6 +1640,63 @@ model SermonSourceAsset {
   @@unique([bucket, objectKey])
   @@index([organizationId, status, createdAt])
   @@index([campusId, status, createdAt])
+}
+
+/// A church-owned, private live input. The provider stream key is deliberately
+/// never persisted here: it is returned once when provisioned and can be rotated.
+model LiveIntake {
+  id                     String           @id @default(cuid())
+  organizationId         String
+  campusId               String?
+  provider               String
+  providerInputId        String           @unique
+  status                 LiveIntakeStatus @default(PROVISIONING)
+  label                  String
+  recordingRetentionDays Int              @default(30)
+  lastStreamStartedAt    DateTime?
+  lastStreamEndedAt      DateTime?
+  lastError              String?
+  rotatedAt              DateTime?
+  disabledAt             DateTime?
+  createdByUserId        String?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+  organization           Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campus                 Campus?          @relation(fields: [campusId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  recordings             LiveRecording[]
+
+  @@unique([organizationId, campusId])
+  @@unique([id, organizationId])
+  @@index([organizationId, status])
+}
+
+/// Provider recording callbacks are immutable/idempotent. A recording becomes
+/// a normal Sermon only after its completed source is available to the worker.
+model LiveRecording {
+  id                  String              @id @default(cuid())
+  organizationId      String
+  liveIntakeId        String
+  providerRecordingId String
+  status              LiveRecordingStatus @default(RECEIVED)
+  title               String?
+  durationSeconds     Int?
+  sourceUrl           String?
+  sermonId            String?             @unique
+  failureReason       String?
+  materializationAttemptCount Int          @default(0)
+  lastMaterializationAttemptAt DateTime?
+  nextMaterializationAttemptAt DateTime?
+  receivedAt          DateTime            @default(now())
+  queuedAt            DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  liveIntake          LiveIntake          @relation(fields: [liveIntakeId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  sermon              Sermon?             @relation(fields: [sermonId], references: [id], onDelete: SetNull)
+
+  @@unique([liveIntakeId, providerRecordingId])
+  @@index([organizationId, status, createdAt])
+  @@index([status, nextMaterializationAttemptAt])
 }
 
 model MinistryEvent {
