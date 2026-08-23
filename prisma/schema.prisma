@@ -1673,26 +1673,26 @@ model LiveIntake {
 /// Provider recording callbacks are immutable/idempotent. A recording becomes
 /// a normal Sermon only after its completed source is available to the worker.
 model LiveRecording {
-  id                  String              @id @default(cuid())
-  organizationId      String
-  liveIntakeId        String
-  providerRecordingId String
-  status              LiveRecordingStatus @default(RECEIVED)
-  title               String?
-  durationSeconds     Int?
-  sourceUrl           String?
-  sermonId            String?             @unique
-  failureReason       String?
-  materializationAttemptCount Int          @default(0)
+  id                           String              @id @default(cuid())
+  organizationId               String
+  liveIntakeId                 String
+  providerRecordingId          String
+  status                       LiveRecordingStatus @default(RECEIVED)
+  title                        String?
+  durationSeconds              Int?
+  sourceUrl                    String?
+  sermonId                     String?             @unique
+  failureReason                String?
+  materializationAttemptCount  Int                 @default(0)
   lastMaterializationAttemptAt DateTime?
   nextMaterializationAttemptAt DateTime?
-  receivedAt          DateTime            @default(now())
-  queuedAt            DateTime?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
-  organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  liveIntake          LiveIntake          @relation(fields: [liveIntakeId, organizationId], references: [id, organizationId], onDelete: Cascade)
-  sermon              Sermon?             @relation(fields: [sermonId], references: [id], onDelete: SetNull)
+  receivedAt                   DateTime            @default(now())
+  queuedAt                     DateTime?
+  createdAt                    DateTime            @default(now())
+  updatedAt                    DateTime            @updatedAt
+  organization                 Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  liveIntake                   LiveIntake          @relation(fields: [liveIntakeId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  sermon                       Sermon?             @relation(fields: [sermonId], references: [id], onDelete: SetNull)
 
   @@unique([liveIntakeId, providerRecordingId])
   @@index([organizationId, status, createdAt])
