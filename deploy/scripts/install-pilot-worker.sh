@@ -73,9 +73,12 @@ install -o root -g root -m 0644 deploy/systemd/sermonclip-orchestration-worker.s
   /etc/systemd/system/sermonclip-orchestration-worker.service
 install -o root -g root -m 0644 deploy/systemd/sermonclip-media-worker.service \
   /etc/systemd/system/sermonclip-media-worker.service
+install -o root -g root -m 0644 deploy/systemd/sermonclip-live-intake-worker.service \
+  /etc/systemd/system/sermonclip-live-intake-worker.service
 ln -sfn "$RELEASE_ROOT" /opt/sermonclip/current
 systemctl daemon-reload
 systemctl disable --now sermonclip-orchestration-worker.service || true
 systemctl disable --now sermonclip-media-worker.service || true
+systemctl disable --now sermonclip-live-intake-worker.service || true
 
-echo "Pinned release installed with both workers disabled: $RELEASE_SHA"
+echo "Pinned release installed with all workers disabled: $RELEASE_SHA"
