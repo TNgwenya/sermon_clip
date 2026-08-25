@@ -86,7 +86,7 @@ test("health reports operational truth", async ({ page }) => {
   await openWorkspaceRoute(page, "/health");
   await expect(
     page.getByRole("heading", {
-      name: /^(Workspace needs attention|Sermon Clip is operational)$/,
+      name: /^(Some work needs a retry|Your workspace is ready)$/,
     }),
   ).toBeVisible();
   await expect(page.getByText("Automatic publishing worker", { exact: true })).toBeVisible();
