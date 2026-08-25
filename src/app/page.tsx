@@ -280,8 +280,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
       topClips.map(async (clip) => (await canPreviewClipVideo(clip) ? clip.id : null)),
     )).filter((clipId): clipId is string => Boolean(clipId)),
   );
-  const firstFailedSermon = failedSermons[0] ?? null;
-  const firstActionableSermon = sermons.find((sermon) => sermon.status !== "FAILED") ?? sermons[0] ?? null;
   const currentSermon = sermons[0] ?? null;
   const currentSermonTitle = currentSermon?.intelligence?.generatedTitle ?? currentSermon?.title ?? "Your next Sunday message";
   const currentSermonDate = currentSermon?.sermonDate ?? currentSermon?.createdAt ?? null;
@@ -300,51 +298,55 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
     || clip.exportStatus === "COMPLETED"
     || clip.status === "EXPORTED"
   )).length;
-  const priorityState = needsAttentionCount > 0
+  const currentIssueCount = (currentSermon?.status === "FAILED" ? 1 : 0) + currentClips.filter((clip) => (
+    clip.renderStatus === "FAILED"
+    || clip.exportStatus === "FAILED"
+    || (
+      (clip.status === "APPROVED" || clip.status === "EXPORTED")
+      && [
+        clip.renderFreshness,
+        clip.captionBurnFreshness,
+        clip.overlayFreshness,
+        clip.exportFreshness,
+      ].some((freshness) => freshness === "FAILED" || freshness === "OUTDATED")
+    )
+  )).length;
+  const priorityState = currentIssueCount > 0
     ? "attention"
-    : exportedCount > 0 || metrics.clipsExported > 0
+    : currentReadyCount > 0
       ? "ready"
-      : firstActionableSermon
+      : currentSermon
         ? "resume"
         : "empty";
   const priorityActionHref = priorityState === "attention"
-    ? failedSermonCount > 0 && firstFailedSermon
-      ? `/sermons/${firstFailedSermon.id}`
-      : "/health"
+    ? currentSermon
+      ? `/sermons/${currentSermon.id}`
+      : "/sermons/new"
     : priorityState === "ready"
-    ? "/ready-to-post"
-    : firstActionableSermon
-      ? `/sermons/${firstActionableSermon.id}`
+    ? `/ready-to-post?sermonId=${currentSermon?.id ?? ""}`
+    : currentSermon
+      ? `/sermons/${currentSermon.id}`
       : "/sermons/new";
   const priorityActionLabel = priorityState === "attention"
-    ? failedSermonCount > 0
-      ? "Open sermon"
-      : "Review recovery steps"
+    ? "Open this sermon"
     : priorityState === "ready"
-      ? "Open publishing desk"
+      ? "Open ready clips"
       : priorityState === "resume"
-        ? "Continue sermon"
+        ? "Continue this sermon"
         : "Create clips";
-  const attentionDetail = failedOperationCount > 0
-    ? outdatedAssetCount > 0
-      ? "A failed job and stale clip media need recovery before posting."
-      : "A background job or clip file failed. Open the recovery view to inspect and retry it."
-    : outdatedAssetCount > 0
-      ? "Some approved clip media is stale. Refresh it before posting."
-      : "A sermon failed while processing. Open it to retry the failed step.";
   const priorityTitle = priorityState === "attention"
-    ? `${needsAttentionCount} ${needsAttentionCount === 1 ? "item needs" : "items need"} attention.`
+    ? `${currentIssueCount} ${currentIssueCount === 1 ? "item needs" : "items need"} attention in this sermon.`
     : priorityState === "ready"
-      ? "Share the next prepared clip."
+      ? `${currentReadyCount} ${currentReadyCount === 1 ? "clip is" : "clips are"} ready to share.`
       : priorityState === "resume"
-        ? workflowStatusText(firstActionableSermon.status)
+        ? workflowStatusText(currentSermon.status)
         : "Bring in your first sermon.";
   const priorityDetail = priorityState === "attention"
-    ? attentionDetail
+    ? "Open this sermon to see what needs a retry or a quick check."
     : priorityState === "ready"
-      ? "Download, copy captions, or schedule the next post."
+      ? "Download, copy a caption, or plan a post for this message."
       : priorityState === "resume"
-        ? `Continue ${firstActionableSermon.intelligence?.generatedTitle ?? firstActionableSermon.title} where your team left off.`
+        ? `Continue ${currentSermon.intelligence?.generatedTitle ?? currentSermon.title} where your team left off.`
         : "Paste a sermon link or upload a service recording to begin.";
   const weekStageIndex = !currentSermon
     ? 0

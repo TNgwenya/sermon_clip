@@ -854,6 +854,36 @@
   .clip-studio-shell .clip-studio-bottom-timeline {
     max-height: none;
   }
+
+  body[data-clip-studio-mobile-task="preview"] .clip-studio-shell .clip-studio-transcript-rail,
+  body[data-clip-studio-mobile-task="preview"] .clip-studio-shell .clip-studio-timeline-disclosure,
+  body[data-clip-studio-mobile-task="transcript"] .clip-studio-shell .clip-studio-preview-column,
+  body[data-clip-studio-mobile-task="transcript"] .clip-studio-shell .clip-studio-timeline-disclosure,
+  body[data-clip-studio-mobile-task="edit"] .clip-studio-shell .clip-studio-preview-column,
+  body[data-clip-studio-mobile-task="edit"] .clip-studio-shell .clip-studio-transcript-rail,
+  body[data-clip-studio-mobile-task="format"] .clip-studio-shell .clip-studio-preview-column,
+  body[data-clip-studio-mobile-task="format"] .clip-studio-shell .clip-studio-transcript-rail,
+  body[data-clip-studio-mobile-task="branding"] .clip-studio-shell .clip-studio-preview-column,
+  body[data-clip-studio-mobile-task="branding"] .clip-studio-shell .clip-studio-transcript-rail,
+  body[data-clip-studio-mobile-task="post"] .clip-studio-shell .clip-studio-preview-column,
+  body[data-clip-studio-mobile-task="post"] .clip-studio-shell .clip-studio-transcript-rail,
+  body[data-clip-studio-mobile-task="advanced"] .clip-studio-shell .clip-studio-preview-column,
+  body[data-clip-studio-mobile-task="advanced"] .clip-studio-shell .clip-studio-transcript-rail {
+    display: none !important;
+  }
+
+  body[data-clip-studio-mobile-task="preview"] .clip-studio-shell .clip-studio-main-column,
+  body[data-clip-studio-mobile-task="transcript"] .clip-studio-shell .clip-studio-main-column {
+    min-height: 0;
+    border: 0;
+    background: transparent;
+    padding: 0;
+  }
+
+  body[data-clip-studio-mobile-task="preview"] .clip-studio-shell .clip-studio-workbench > :not(.clip-studio-mobile-taskbar),
+  body[data-clip-studio-mobile-task="transcript"] .clip-studio-shell .clip-studio-workbench > :not(.clip-studio-mobile-taskbar) {
+    display: none !important;
+  }
 }
 
 @media (max-width: 560px) {
@@ -866,7 +896,7 @@
   }
 
   .clip-studio-shell .clip-studio-mobile-task {
-    min-height: 42px;
+    min-height: 44px;
     border-radius: 8px;
     font-size: 0.61rem;
   }

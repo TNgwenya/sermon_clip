@@ -687,10 +687,10 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
         ? "error"
         : "empty";
   const studioMediaIssues = [
-    clip.renderError ? { label: "Render", message: clip.renderError } : null,
-    clip.captionGenerationError ? { label: "Captions", message: clip.captionGenerationError } : null,
-    clip.captionBurnError ? { label: "Caption burn", message: clip.captionBurnError } : null,
-    clip.overlayRenderError ? { label: "Branding", message: clip.overlayRenderError } : null,
+    clip.renderError ? { label: "Video", message: "The preview could not be prepared. Try preparing it again." } : null,
+    clip.captionGenerationError ? { label: "Captions", message: "Captions could not be prepared. Review the wording, then try again." } : null,
+    clip.captionBurnError ? { label: "Captions", message: "Captions could not be added to the video. Try preparing it again." } : null,
+    clip.overlayRenderError ? { label: "Branding", message: "Church branding could not be added. Check the Brand Kit, then try again." } : null,
     clip.exportError ? { label: "Export", message: toPastorFriendlyExportError(clip.exportError) } : null,
   ].filter((issue): issue is { label: string; message: string } => Boolean(issue));
 
@@ -731,7 +731,11 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                   </span>
                   <span className={pageStyles.liveProjectCue}>
                     <span aria-hidden="true" />
-                    Preview updates live
+                    {hasPreview || sourceVideoPreviewAvailable
+                      ? "Preview updates live"
+                      : upstreamPreparing
+                        ? "Preview is being prepared"
+                        : "Preview not ready yet"}
                   </span>
                   <details className={`clip-studio-status-details ${pageStyles.qualityDetails}`}>
                     <summary>
@@ -760,7 +764,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
               {transcriptReviewRequired ? (
                 <p className="warning-banner">
                   {isBasicTimeBasedClip
-                    ? "Basic clip only: AI could not complete reliable transcript analysis for this recording. No message intelligence, title, captions, or sentence-boundary checks were applied, so the words, meaning, context, and boundaries are not guaranteed. Listen through and edit the title, start, end, captions, and context here before confirming the clip in Review."
+                    ? "This starter cut needs a listen-through. Check the title, spoken words, beginning, ending, captions, and context here before confirming it in Review."
                     : "Review the local-language wording before preparing. Saving captions does not confirm transcript accuracy—approve it in Review before export."}
                 </p>
               ) : null}
@@ -851,6 +855,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
 
           <div className={`clip-studio-main-column stack-md ${pageStyles.inspectorColumn}`}>
             <ClipStudioWorkbenchTabs
+            previewAvailable={hasPreview || sourceVideoPreviewAvailable}
             edit={
               <ClipStudioEditor
                 initialStartTimeSeconds={clip.startTimeSeconds}
@@ -1046,18 +1051,24 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             />
           </div>
 
-          <ClipStudioTimeline
-            transcriptSegments={studioTranscriptSegments}
-            clipStartSeconds={clip.startTimeSeconds}
-            clipEndSeconds={clip.endTimeSeconds}
-            clipDurationSeconds={clip.durationSeconds}
-            sourceDurationSeconds={sermonDurationSegment?.endTimeSeconds ?? null}
-            captionCues={onVideoCaptionCues}
-            speechCleanup={speechCleanupSettings}
-            momentType={clip.ministryMoment?.momentType ?? clip.clipType ?? null}
-            momentTitle={clip.ministryMoment?.title ?? null}
-            smartClipCategory={clip.smartClipCategory}
-          />
+          <details className={`clip-studio-timeline-disclosure ${pageStyles.timelineDisclosure}`}>
+            <summary>
+              <span>Precise timeline</span>
+              <small>Open advanced timing and layer controls</small>
+            </summary>
+            <ClipStudioTimeline
+              transcriptSegments={studioTranscriptSegments}
+              clipStartSeconds={clip.startTimeSeconds}
+              clipEndSeconds={clip.endTimeSeconds}
+              clipDurationSeconds={clip.durationSeconds}
+              sourceDurationSeconds={sermonDurationSegment?.endTimeSeconds ?? null}
+              captionCues={onVideoCaptionCues}
+              speechCleanup={speechCleanupSettings}
+              momentType={clip.ministryMoment?.momentType ?? clip.clipType ?? null}
+              momentTitle={clip.ministryMoment?.title ?? null}
+              smartClipCategory={clip.smartClipCategory}
+            />
+          </details>
         </div>
       </main>
     </ClipStudioPreviewProvider>

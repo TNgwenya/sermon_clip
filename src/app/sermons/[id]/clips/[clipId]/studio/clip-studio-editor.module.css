@@ -908,11 +908,26 @@
 
 @media (max-width: 560px) {
   .workspaceNav {
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
+    gap: 0.3rem;
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+    scrollbar-width: thin;
+  }
+
+  .workspaceNav button {
+    flex: 0 0 9.5rem;
+    min-height: 2.75rem;
+    padding: 0.48rem 0.56rem;
   }
 
   .workspaceNav button:last-child {
     grid-column: auto;
+  }
+
+  .workspaceCopy span,
+  .workspaceShortcut {
+    display: none;
   }
 
   .workspaceHeading {

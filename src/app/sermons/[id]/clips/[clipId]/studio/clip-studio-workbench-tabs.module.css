@@ -454,7 +454,13 @@
   }
 
   .modeSwitch button {
+    min-height: 2.75rem !important;
     white-space: normal;
+  }
+
+  .primaryAction,
+  .nextAction {
+    min-height: 2.75rem !important;
   }
 }
 

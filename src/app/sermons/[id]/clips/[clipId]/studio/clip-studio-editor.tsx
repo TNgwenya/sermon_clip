@@ -3841,7 +3841,7 @@ export function ClipStudioEditor({
             </div>
           </section>
 
-          <details id="clip-studio-caption-lines" className="clip-studio-caption-dropdown" open>
+          <details id="clip-studio-caption-lines" className="clip-studio-caption-dropdown">
             <summary aria-label={`Caption lines, ${captionLineLabel}, captions ${applyCaptionsToClip ? "on" : "off"}`}>
               <span className="clip-studio-caption-dropdown-copy">
                 <span className="kicker">Caption lines</span>

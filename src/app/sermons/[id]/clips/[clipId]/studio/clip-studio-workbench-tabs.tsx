@@ -3,6 +3,7 @@
 import {
   type KeyboardEvent,
   type ReactNode,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -38,6 +39,7 @@ type ClipStudioWorkbenchTabsProps = {
   branding: ReactNode;
   post: ReactNode;
   advanced?: ReactNode;
+  previewAvailable?: boolean;
 };
 
 const STUDIO_MODES: StudioMode[] = ["quick", "advanced"];
@@ -276,6 +278,7 @@ export function ClipStudioWorkbenchTabs({
   branding,
   post,
   advanced,
+  previewAvailable = false,
 }: ClipStudioWorkbenchTabsProps) {
   const [studioMode, setStudioMode] = useState<StudioMode>("quick");
   const [activeTab, setActiveTab] = useState<StudioTabId>("edit");
@@ -340,6 +343,16 @@ export function ClipStudioWorkbenchTabs({
     { id: "transcript", label: "Script" },
     ...tabs.map((tab) => ({ id: tab.id, label: tab.label })),
   ];
+
+  useEffect(() => {
+    document.body.dataset.clipStudioMobileTask = activeMobileTask;
+
+    return () => {
+      if (document.body.dataset.clipStudioMobileTask === activeMobileTask) {
+        delete document.body.dataset.clipStudioMobileTask;
+      }
+    };
+  }, [activeMobileTask]);
 
   function selectTab(index: number) {
     const nextTab = tabs[index];
@@ -497,7 +510,7 @@ export function ClipStudioWorkbenchTabs({
           </div>
           <span className={styles.liveCue}>
             <span aria-hidden="true" />
-            Preview updates live
+            {previewAvailable ? "Preview updates live" : "Preview will appear when ready"}
           </span>
         </div>
       </header>

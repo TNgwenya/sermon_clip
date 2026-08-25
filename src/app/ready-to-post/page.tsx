@@ -708,6 +708,11 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
     assetTitle: focusedPublishingAsset?.title,
     assetNeedsReview: focusedContentAssetNeedsReview,
   });
+  const hasPublishingActivity = clips.length > 0
+    || contentAssets.length > 0
+    || visibleDrafts.length > 0
+    || visiblePackageHistory.length > 0
+    || visibleScheduledPosts.length > 0;
 
   return (
     <main className="ready-page-shell premium-ready-page stack-lg">
@@ -742,7 +747,7 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
           ) : null}
         </nav>
 
-        <details className="panel stack-md ready-publishing-overview">
+        {hasPublishingActivity ? <details className="panel stack-md ready-publishing-overview">
           <summary>Publishing overview and advanced tools</summary>
           <div className="premium-ready-summary" aria-label="Publishing summary">
             <div><strong>{preparedItemCount}</strong><span>Prepared items</span></div>
@@ -780,7 +785,7 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
             <a href="#posting-calendar">Calendar</a>
             <a href="#publishing-support">History</a>
           </nav>
-        </details>
+        </details> : null}
       </header>
 
       <SermonPublishingLibrary
@@ -795,7 +800,7 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
         } : null}
       />
 
-      <section id="publishing-operations" className="ready-secondary-operations stack-lg" aria-label="Publishing operations">
+      {hasPublishingActivity ? <section id="publishing-operations" className="ready-secondary-operations stack-lg" aria-label="Publishing operations">
         <header className="ready-secondary-operations-heading">
           <div>
             <p className="kicker">Supporting publishing tools</p>
@@ -935,7 +940,7 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
           }}
         />
         </div>
-      </section>
+      </section> : null}
     </main>
   );
 }

@@ -372,57 +372,57 @@ export default async function HealthPage() {
   return (
     <main className="secondary-media-shell stack-lg">
       <header className="page-header stack-sm">
-        <p className="kicker">Workspace Readiness</p>
-        <h1>{workspaceNeedsAttention ? "Workspace needs attention" : "Sermon Clip is operational"}</h1>
+        <p className="kicker">Workspace readiness</p>
+        <h1>{workspaceNeedsAttention ? "Some work needs a retry" : "Your workspace is ready"}</h1>
         <p className="muted">
-          Video tools, storage, AI, clip media, and the publishing worker are checked together. {okCount}/{checks.length} system checks are passing; {healthBreakdown.actionRequired} issue{healthBreakdown.actionRequired === 1 ? "" : "s"} currently require action.
+          Sermon Clip checks whether your team can add sermons, prepare clips, and finish posts. {okCount} of {checks.length} checks are ready; {healthBreakdown.actionRequired} {healthBreakdown.actionRequired === 1 ? "item needs" : "items need"} a next step below.
         </p>
         <div className="page-header-actions">
           <Link href="/" className="button secondary">Dashboard</Link>
           <Link href="/sermons/new" className="button primary">Add sermon</Link>
-          <Link href="/ready-to-post" className="button tertiary">Ready queue</Link>
+          <Link href="/ready-to-post" className="button tertiary">Ready to post</Link>
           {canViewPilotEvidence ? <Link href="/health/pilot" className="button tertiary">Pilot evidence</Link> : null}
         </div>
       </header>
 
       {workspaceNeedsAttention ? (
         <div className="error-banner stack-sm" role="status">
-          <strong>The workspace is not fully healthy yet.</strong>
+          <strong>Your saved work is safe, but some steps need attention.</strong>
           <span>
             {operationalMetrics.failedProcessingJobs > 0
               ? `${operationalMetrics.failedProcessingJobs} failed processing ${operationalMetrics.failedProcessingJobs === 1 ? "job needs" : "jobs need"} review. `
               : ""}
             {publishingServiceHealth.status !== "ONLINE"
-              ? "Automatic publishing is paused until the posting worker sends a fresh heartbeat."
-              : "Review the recovery items below."}
+              ? "Automatic posting is paused. Ask workspace support to restore it before relying on scheduled posts."
+              : "Use the recommended next steps below."}
           </span>
         </div>
       ) : null}
 
       <section className="secondary-command-strip">
         <article>
-          <span className="muted small">Overall workspace</span>
+          <span className="muted small">Church workspace</span>
           <strong>{workspaceNeedsAttention ? "Needs attention" : "Ready"}</strong>
-          <span className="muted small">{okCount}/{checks.length} system checks passing</span>
+          <span className="muted small">{okCount} of {checks.length} checks ready</span>
         </article>
         <article>
           <span className="muted small">New sermons</span>
           <strong>{canProcessSermons ? "Ready" : "Blocked"}</strong>
-          <span className="muted small">{healthBreakdown.environmentBlockers} environment blocker(s)</span>
+          <span className="muted small">{canProcessSermons ? "Your team can add the next message" : "Ask workspace support to restore sermon processing"}</span>
         </article>
         <article>
-          <span className="muted small">Posting recovery</span>
+          <span className="muted small">Posts needing help</span>
           <strong>{postingNeedsRecovery ? healthBreakdown.actionRequired : "Ready"}</strong>
           <span className="muted small">
             {publishingServiceHealth.status === "ONLINE"
-              ? `${operationalMetrics.failedClipAssets} failed media asset(s)`
-              : "Publishing worker offline or stale"}
+              ? `${operationalMetrics.failedClipAssets} clip ${operationalMetrics.failedClipAssets === 1 ? "step needs" : "steps need"} a retry`
+              : "Automatic posting is temporarily unavailable"}
           </span>
         </article>
         <article>
-          <span className="muted small">Failed jobs needing retry</span>
+          <span className="muted small">Background steps to retry</span>
           <strong>{operationalMetrics.failedProcessingJobs + orchestrationHealth.failed + orchestrationHealth.deadLetters}</strong>
-          <span className="muted small">Pipeline, staged, and dead-lettered work</span>
+          <span className="muted small">Sermon or clip steps that did not finish</span>
         </article>
         <article>
           <span className="muted small">Poster cleanup</span>
@@ -430,6 +430,19 @@ export default async function HealthPage() {
           <span className="muted small">{thumbnailReadiness.readyPosterCount}/{thumbnailReadiness.preparedClipCount} ready</span>
         </article>
       </section>
+
+      <HealthRecoveryPanel
+        issueCount={consistency.issueCount}
+        affectedClipCount={consistency.affectedClipIds.length}
+        affectedSermonCount={consistency.affectedSermonIds.length}
+        draftIssueCount={consistency.draftIssueCount}
+        totalIssueCount={consistency.totalIssueCount}
+        missingPosterCount={thumbnailReadiness.missingPosterCount}
+        failedOperationCount={operationalMetrics.failedOperations}
+        failedProcessingJobCount={operationalMetrics.failedProcessingJobs}
+        failedMediaAssetCount={operationalMetrics.failedClipAssets}
+        outdatedAssetCount={operationalMetrics.outdatedAssets}
+      />
 
       <section className="card stack-md" aria-labelledby="cost-safety-title">
         <div className="stack-xs">
@@ -684,19 +697,6 @@ export default async function HealthPage() {
           ))}
         </div>
       </section>
-
-      <HealthRecoveryPanel
-        issueCount={consistency.issueCount}
-        affectedClipCount={consistency.affectedClipIds.length}
-        affectedSermonCount={consistency.affectedSermonIds.length}
-        draftIssueCount={consistency.draftIssueCount}
-        totalIssueCount={consistency.totalIssueCount}
-        missingPosterCount={thumbnailReadiness.missingPosterCount}
-        failedOperationCount={operationalMetrics.failedOperations}
-        failedProcessingJobCount={operationalMetrics.failedProcessingJobs}
-        failedMediaAssetCount={operationalMetrics.failedClipAssets}
-        outdatedAssetCount={operationalMetrics.outdatedAssets}
-      />
 
       <section className="card stack-sm">
         <h2>Sermon Data Readiness</h2>

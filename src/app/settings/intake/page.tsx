@@ -47,8 +47,8 @@ export default async function IntakeSettingsPage() {
           <p className={styles.eyebrow}>YouTube sermon intake</p>
           <h1>Let Sunday arrive on its own.</h1>
           <p>
-            Connect one church channel, define safe defaults, and monitor every
-            scan. SermonClip imports only eligible public videos published after
+            Connect one church channel, define safe defaults, and review every
+            automatic check. Sermon Clip imports only eligible public videos published after
             the church confirms recording rights.
           </p>
         </div>
@@ -63,9 +63,9 @@ export default async function IntakeSettingsPage() {
         <section className={styles.configurationCard} aria-labelledby="intake-config-title">
           <div className={styles.cardHeading}>
             <div>
-              <p className={styles.eyebrow}>Configuration</p>
+              <p className={styles.eyebrow}>Setup</p>
               <h2 id="intake-config-title">Channel and workflow defaults</h2>
-              <p>Every required field is saved to the church workspace and checked again by the intake worker.</p>
+              <p>These details are saved to the church workspace and checked before a new sermon is added.</p>
             </div>
             <span className={styles.scopeBadge}>{activation.organization.name}</span>
           </div>
@@ -83,7 +83,7 @@ export default async function IntakeSettingsPage() {
         <aside className={styles.readinessCard} aria-labelledby="readiness-title">
           <div className={styles.cardHeading}>
             <div>
-              <p className={styles.eyebrow}>Safety gates</p>
+              <p className={styles.eyebrow}>Before automatic intake starts</p>
               <h2 id="readiness-title">What must be true</h2>
             </div>
           </div>
@@ -104,9 +104,9 @@ export default async function IntakeSettingsPage() {
       <section className={styles.activityCard} aria-labelledby="monitoring-activity-title">
         <div className={styles.cardHeading}>
           <div>
-            <p className={styles.eyebrow}>Monitoring evidence</p>
-            <h2 id="monitoring-activity-title">What the worker has actually done</h2>
-            <p>A configured toggle is not treated as proof. Recent scan and import times are shown from persisted worker activity.</p>
+            <p className={styles.eyebrow}>Automatic check history</p>
+            <h2 id="monitoring-activity-title">What Sermon Clip has done</h2>
+            <p>Recent channel checks and imports appear here so your team can confirm the automation is working.</p>
           </div>
           <Link className={styles.secondaryButton} href="/sermons/new">Add a sermon manually</Link>
           <Link className={styles.secondaryButton} href="/settings/live-intake">Set up live intake</Link>
@@ -121,7 +121,7 @@ export default async function IntakeSettingsPage() {
           <div>
             <dt>Last automatic scan</dt>
             <dd>{dateLabel(intake.settings?.lastYoutubeScanAt)}</dd>
-            <small>{intake.readiness.monitoringActive ? "Worker activity is recent" : "No recent worker scan is proven"}</small>
+            <small>{intake.readiness.monitoringActive ? "Automatic checks are running" : "No recent automatic check is available"}</small>
           </div>
           <div>
             <dt>Last automatic import</dt>

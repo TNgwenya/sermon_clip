@@ -41,6 +41,9 @@ import {
   type TranscriptReviewEvidenceView,
 } from "@/lib/transcriptReviewGuidance";
 import {
+  buildPastorFacingClipTitle,
+  buildPastorFacingContext,
+  buildPastorFacingInsight,
   buildQuickReviewDisplay,
   QuickReviewDecisionActions,
 } from "@/app/sermons/[id]/review/clip-review-card";
@@ -179,9 +182,9 @@ function writeReviewSortPreference(sermonId: string, sort: ReviewSort): void {
   }
 }
 
-function toDraft(clip: Pick<ClipReviewItem, "title" | "hook" | "caption" | "hashtags" | "clipNotes">): Draft {
+function toDraft(clip: Pick<ClipReviewItem, "title" | "hook" | "caption" | "hashtags" | "clipNotes" | "transcriptText">): Draft {
   return {
-    title: clip.title,
+    title: buildPastorFacingClipTitle(clip),
     hook: clip.hook,
     caption: clip.caption,
     hashtags: clip.hashtags.join(" "),
@@ -242,19 +245,6 @@ function isDeterministicFallbackClip(clip: Pick<ClipReviewItem, "qualityWarnings
 function isBasicTimeBasedClip(clip: Pick<ClipReviewItem, "qualityWarnings" | "transcriptSafetyReasons">): boolean {
   return clip.qualityWarnings.includes("BASIC_CLIP_NO_TRANSCRIPT_INTELLIGENCE")
     || clip.transcriptSafetyReasons.includes("NO_CONTENT_INTELLIGENCE");
-}
-
-function toPastorFriendlyInsight(value: string): string {
-  const cleaned = value
-    .replace(/\s*Boundary (?:adjusted|kept)[^.]*\.?/gi, "")
-    .replace(/\s*AI timing[^.]*\.?/gi, "")
-    .replace(/\b\d+(?:\.\d+)?-\d+(?:\.\d+)?s\b/g, "")
-    .replace(/\s+to\s*\.\s*$/i, ".")
-    .replace(/\.{2,}$/g, ".")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-
-  return cleaned || "This moment carries a clear, self-contained message for a short clip.";
 }
 
 function toPastorFriendlyCategory(value: string): string {
@@ -534,7 +524,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             <h1>{sermonTitle}</h1>
             <p className="muted premium-review-intro">
               {hasOnlyBasicClips
-                ? "These are time-based cuts, not AI-selected moments. Edit and verify every cut in Clip Studio before approval."
+                ? "These starter cuts need a listen-through before approval. Open each one in Clip Studio to check the wording and timing."
                 : "Watch the moment, verify the message in context, then approve it, edit it, or leave it out."}
             </p>
           </div>
@@ -545,7 +535,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               </Link>
             ) : null}
             {hasOnlyBasicClips ? (
-              <span className="status-pill quality-needs-editing">AI review unavailable</span>
+              <span className="status-pill quality-needs-editing">Listen-through needed</span>
             ) : (
               <details className="review-topbar-more">
                 <summary>Review tools</summary>
@@ -642,7 +632,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               <div><dt>Posted</dt><dd>{postedClipCount}</dd></div>
               <div><dt>Sermon clips</dt><dd>{contentKindCounts.SERMON}</dd></div>
               <div><dt>Worship clips</dt><dd>{contentKindCounts.WORSHIP}</dd></div>
-              {fallbackClipCount > 0 ? <div><dt>Fallback suggestions</dt><dd>{fallbackClipCount}</dd></div> : null}
+              {fallbackClipCount > 0 ? <div><dt>Extra suggestions to check</dt><dd>{fallbackClipCount}</dd></div> : null}
             </dl>
           </details>
         </div>
@@ -651,11 +641,10 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
 
       {basicClipCount > 0 ? (
         <section className="warning-banner stack-sm" role="status" aria-labelledby="basic-clips-warning-title">
-          <strong id="basic-clips-warning-title">Basic clips only — AI could not complete reliable transcript analysis</strong>
+          <strong id="basic-clips-warning-title">Listen through these starter cuts before approving</strong>
           <p>
-            These {basicClipCount} cuts were placed by time only. They were not ranked by message, given AI titles or captions,
-            or checked for complete sentences and context. Sermon Clip cannot guarantee their words, meaning, context, or boundaries.
-            Open every cut in Clip Studio, listen through it, and edit its title, start, end, captions, and framing before approval.
+            Sermon Clip could not confidently check the wording and context for {basicClipCount} {basicClipCount === 1 ? "cut" : "cuts"}.
+            Open each one in Clip Studio, listen to the beginning and ending, and adjust the title, timing, captions, or framing as needed.
           </p>
         </section>
       ) : null}
@@ -866,10 +855,9 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
 
       {reviewMode === "QUICK" && !activeQuickClip && !reviewIsComplete ? (
         <section className="warning-banner stack-sm" role="status" aria-live="polite">
-          <strong>Your suggestions are safe, but a playable review clip is not ready yet.</strong>
+          <strong>No suggestions are waiting for a decision.</strong>
           <p>
-            Preview preparation may still be running or may need media recovery. No moment was approved,
-            exported, or published. Use Manage all moments to see the exact media state.
+            Open all moments to review items that were already approved, left out, or are still being prepared.
           </p>
           <button type="button" className="button secondary" onClick={() => setReviewMode("ADVANCED")}>
             Manage all moments
@@ -903,7 +891,14 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
           <>
           {renderedClips.map((clip, index) => {
             const draft = drafts[clip.id] ?? toDraft(clip);
-            const warnings = buildClipWarnings(clip).filter((warning) => !warning.toLowerCase().includes("invalid option"));
+            const displayTitle = buildPastorFacingClipTitle({
+              title: draft.title,
+              hook: draft.hook,
+              transcriptText: clip.transcriptText,
+            });
+            const warnings = buildClipWarnings(clip).filter((warning) => (
+              !/invalid option|\bAI\b|algorithm|deterministic|fallback|timing window|boundary (?:adjusted|kept)/i.test(warning)
+            ));
             const qualityView = buildClipQualityView(clip, index);
             const qualitySignals = [
               { key: "opening", dimension: "Opening", ...qualityView.openingStrength },
@@ -926,7 +921,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                   : clip.status === "REJECTED"
                     ? "Not selected"
                     : "Awaiting decision";
-            const insight = toPastorFriendlyInsight(
+            const insight = buildPastorFacingInsight(
               clip.reasonSelected ??
               clip.pastorFriendlyReason ??
               clip.qualitySummary ??
@@ -1015,7 +1010,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                           controls
                           playsInline
                           preload={index < 3 ? "metadata" : "none"}
-                          aria-label={`Preview ${clip.title}`}
+                          aria-label={`Preview ${displayTitle}`}
                           poster={`/api/clips/${clip.id}/thumbnail`}
                           src={clip.remotePreviewUrl ?? `/api/clips/${clip.id}/preview?variant=best`}
                           onError={() => {
@@ -1057,7 +1052,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                           : ""}
                         {clipCategory} · {toDurationLabel(clip.durationSeconds)}
                       </p>
-                      <h3 id={`clip-heading-${clip.id}`} tabIndex={-1}>{clip.title}</h3>
+                      <h3 id={`clip-heading-${clip.id}`} tabIndex={-1}>{displayTitle}</h3>
                       {draft.hook.trim() ? <p className="premium-review-hook">&ldquo;{draft.hook}&rdquo;</p> : null}
                     </div>
                     {reviewMode === "QUICK" ? (
@@ -1082,7 +1077,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       {transcriptReviewRequired ? <span className="status-pill quality-needs-editing">Transcript review needed</span> : null}
                     </div>
                     {clip.publishedPosts.some((post) => post.publishedUrl) ? (
-                      <div className="review-published-links" aria-label={`Published posts for ${clip.title}`}>
+                      <div className="review-published-links" aria-label={`Published posts for ${displayTitle}`}>
                         {clip.publishedPosts.flatMap((post) => post.publishedUrl ? [(
                           <a key={post.id} className="text-link small" href={post.publishedUrl} target="_blank" rel="noreferrer">
                             View on {post.platform}
@@ -1097,7 +1092,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                     </div>
 
                     {reviewMode === "QUICK" ? (
-                      <details className={styles.contextDisclosure} open={transcriptReviewRequired}>
+                      <details className={styles.contextDisclosure} open={transcriptReviewRequired || !canPreviewVideo}>
                         <summary>Message context, exact words &amp; provenance · {contextLabel}</summary>
                         <div className={`premium-review-evidence ${transcriptReviewRequired ? "needs-review" : ""}`}>
                           <div className="premium-review-evidence-heading">
@@ -1111,11 +1106,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                           )}
                           <p>
                             <strong>Context:</strong>{" "}
-                            {clip.boundaryAdjustmentReason
-                              ? clip.boundaryAdjustmentReason
-                              : clip.boundaryQuality === "GOOD"
-                                ? "The opening and ending form a complete thought from the sermon."
-                                : "Listen to the opening and ending before approving this excerpt."}
+                            {buildPastorFacingContext(clip.boundaryQuality)}
                           </p>
                           <p className="small muted">This excerpt is linked to the sermon and time window shown above.</p>
                         </div>
@@ -1133,11 +1124,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                         )}
                         <p>
                           <strong>Context:</strong>{" "}
-                          {clip.boundaryAdjustmentReason
-                            ? clip.boundaryAdjustmentReason
-                            : clip.boundaryQuality === "GOOD"
-                              ? "The opening and ending form a complete thought from the sermon."
-                              : "Listen to the opening and ending before approving this excerpt."}
+                          {buildPastorFacingContext(clip.boundaryQuality)}
                         </p>
                       </div>
                     )}
@@ -1183,7 +1170,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       <div className="stack-sm">
                         <div
                           className="review-feed-quality-strip review-feed-quality-strip-compact"
-                          aria-label={`Quality signals for ${clip.title}`}
+                          aria-label={`Quality signals for ${displayTitle}`}
                         >
                           <div className={`review-feed-quality-score quality-action-${actionTone}`}>
                             <span>{qualityView.scoreSourceLabel}</span>
@@ -1192,7 +1179,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                         </div>
                         <div className="premium-review-rationale">
                           <span>{qualityView.freshness.label}</span>
-                          <p>{qualityView.freshness.detail}</p>
+                          <p>{buildPastorFacingInsight(qualityView.freshness.detail)}</p>
                         </div>
                         <div className="review-feed-meta-row small muted">
                           <span>{clipCategory}</span>
@@ -1201,14 +1188,14 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                           <span>{toFriendlyStatus(clip.exportStatus)}</span>
                           <span>{toClipStatusLabel(clip.status)}</span>
                           {transcriptReviewed ? <span>Transcript reviewed</span> : null}
-                          {isFallbackClip ? <span>Fallback suggestion</span> : null}
+                          {isFallbackClip ? <span>Extra suggestion to check</span> : null}
                         </div>
 
                         {isFallbackClip ? (
                           <p className="status-help small">
                             {isBasicClip
-                              ? "No transcript or content intelligence was used. This is a time-based cut that must be titled, timed, captioned, and checked in Clip Studio."
-                              : "Automatic ranking used the sermon transcript when the full AI review was unavailable. Check the message and boundaries before approving."}
+                              ? "This starter cut needs a title, timing, captions, and a listen-through in Clip Studio."
+                              : "Give this extra suggestion a careful context check before approving it."}
                           </p>
                         ) : null}
 
@@ -1224,25 +1211,13 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
 
                         <div className="premium-review-rationale">
                           <span>{qualityView.platformFit.assessed ? `Best channel · ${qualityView.platformFit.label}` : "Channel fit not assessed"}</span>
-                          <p>{qualityView.platformFit.reason}</p>
+                          <p>{buildPastorFacingInsight(qualityView.platformFit.reason)}</p>
                         </div>
-                        <p className="status-help small"><strong>Recommended next check:</strong> {qualityView.nextStep}</p>
-
-                        {clip.boundaryAdjustmentReason ? (
-                          <p className="status-help small"><strong>Boundary guidance:</strong> {clip.boundaryAdjustmentReason}</p>
-                        ) : null}
-                        {typeof clip.suggestedStartTimeSeconds === "number" || typeof clip.suggestedEndTimeSeconds === "number" ? (
-                          <p className="status-help small">
-                            <strong>Suggested timing:</strong>{" "}
-                            {typeof clip.suggestedStartTimeSeconds === "number" ? toDurationLabel(clip.suggestedStartTimeSeconds) : "current start"}
-                            {" – "}
-                            {typeof clip.suggestedEndTimeSeconds === "number" ? toDurationLabel(clip.suggestedEndTimeSeconds) : "current end"}
-                          </p>
-                        ) : null}
+                        <p className="status-help small"><strong>Recommended next check:</strong> {buildPastorFacingInsight(qualityView.nextStep)}</p>
 
                         {clip.postReadyBlockers.length > 0 ? (
                           <p className="status-help small">
-                            Needs a quick check: {clip.postReadyBlockers.slice(0, 2).join(" ")}
+                            This clip still needs a quick check before it is ready to post.
                           </p>
                         ) : null}
 
@@ -1263,7 +1238,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       <QuickReviewDecisionActions
                         sermonId={sermonId}
                         clipId={clip.id}
-                        clipTitle={clip.title}
+                        clipTitle={displayTitle}
                         canApprove={canApprove}
                         canReject={canReject}
                         isPending={isPending}
@@ -1275,7 +1250,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       ) : null}
                     </div>
                   ) : (
-                  <div className="review-feed-action-column" aria-label={`Review actions for ${clip.title}`}>
+                  <div className="review-feed-action-column" aria-label={`Review actions for ${displayTitle}`}>
                     <div className="review-feed-action-stack">
                       {isApprovedState ? (
                         <span className="review-approved-status status-pill status-approved">Approved</span>

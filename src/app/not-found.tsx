@@ -7,14 +7,14 @@ export default function NotFound() {
         <span className="route-state-mark" aria-hidden="true">404</span>
         <div className="route-state-copy">
           <p className="kicker">Page not available</p>
-          <h1>We couldn’t find this sermon page.</h1>
+          <h1>We couldn’t find that page.</h1>
           <p className="muted">
-            The link may be old, the item may belong to another church workspace, or it may no longer be shared. Your saved sermons are available in the sermon library.
+            The link may be old, the page may have moved, or it may belong to another church workspace. Nothing in your workspace was changed.
           </p>
         </div>
         <div className="route-state-actions">
-          <Link className="button primary" href="/sermons">Open sermon library</Link>
-          <Link className="button tertiary" href="/sermons/new">Add a sermon</Link>
+          <Link className="button primary" href="/">Go to Home</Link>
+          <Link className="button tertiary" href="/sermons">Open sermon library</Link>
         </div>
       </section>
     </main>

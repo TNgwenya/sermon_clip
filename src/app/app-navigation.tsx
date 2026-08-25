@@ -324,7 +324,19 @@ export function AppNavigation() {
   const pathname = usePathname();
   const mobileMoreRef = useRef<HTMLDetailsElement>(null);
 
-  if (pathname === "/login" || pathname === "/accept-invitation") {
+  const usesPublicChrome = [
+    "/login",
+    "/forgot-password",
+    "/reset-password",
+    "/accept-invitation",
+    "/privacy",
+    "/terms",
+    "/data-deletion",
+  ].some((route) => pathname === route || pathname.startsWith(`${route}/`))
+    || pathname === "/s"
+    || pathname.startsWith("/s/");
+
+  if (usesPublicChrome) {
     return null;
   }
   const secondaryIsActive = secondaryItems.some((item) => item.isActive(pathname));

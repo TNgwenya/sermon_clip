@@ -1,22 +1,37 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { buildQuickReviewDisplay, QuickReviewDecisionActions } from "./clip-review-card";
+import {
+  buildPastorFacingClipTitle,
+  buildPastorFacingInsight,
+  buildQuickReviewDisplay,
+  QuickReviewDecisionActions,
+} from "./clip-review-card";
 
 describe("QuickReviewDecisionActions", () => {
-  it("shows only the strongest undecided clip in Quick review", () => {
+  it("shows the strongest undecided clip even when its preview is not ready", () => {
     const display = buildQuickReviewDisplay([
       { id: "already-approved", status: "APPROVED" as const, canPreviewVideo: true },
       { id: "not-playable-yet", status: "SUGGESTED" as const, canPreviewVideo: false },
-      { id: "strongest-undecided", status: "SUGGESTED" as const, canPreviewVideo: true },
       { id: "next-undecided", status: "SUGGESTED" as const, canPreviewVideo: true },
     ]);
 
     expect(display).toEqual([{
-      id: "strongest-undecided",
+      id: "not-playable-yet",
       status: "SUGGESTED",
-      canPreviewVideo: true,
+      canPreviewVideo: false,
     }]);
+  });
+
+  it("replaces generated word piles and technical rationale with pastor-facing fallbacks", () => {
+    expect(buildPastorFacingClipTitle({
+      title: "Need Stay Understand Need Obey",
+      hook: "You do not know what God has for you.",
+      transcriptText: "Stay faithful in the waiting.",
+    })).toBe("You do not know what God has for you");
+
+    expect(buildPastorFacingInsight("Deterministic top-up selected candidate. Boundary adjusted 3.0-9.0s."))
+      .toBe("This moment carries a clear message that is ready for your review.");
   });
 
   it("offers exactly three pastor decisions without a publish action", () => {

@@ -2697,16 +2697,22 @@ textarea::placeholder {
   z-index: 1;
 }
 
+.library-featured-copy {
+  min-width: 0;
+}
+
 .library-featured-copy h2 {
   max-width: 42rem;
   font-size: clamp(1.9rem, 3.7vw, 3.35rem);
   line-height: 1;
+  overflow-wrap: anywhere;
 }
 
 .library-featured-side {
   display: grid;
   justify-items: end;
   gap: 1rem;
+  min-width: 0;
 }
 
 .library-project-actions {
@@ -9450,6 +9456,12 @@ textarea::placeholder {
   border-radius: 8px;
 }
 
+@media (max-width: 1400px) {
+  .library-command-panel {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -15848,6 +15860,10 @@ textarea::placeholder {
   .clip-studio-final-summary {
     width: 100%;
   }
+
+  .clip-studio-final-summary summary {
+    min-height: 2.75rem;
+  }
 }
 
 /* Transcript rows are controls, not passive transcript copy. */
@@ -16469,6 +16485,20 @@ textarea::placeholder {
 
   .clip-studio-timeline-tool {
     flex: 0 0 auto;
+  }
+
+  .clip-studio-timeline-play-button,
+  .clip-studio-timeline-tool,
+  .clip-studio-timeline-icon-button,
+  .clip-studio-track-icon-button,
+  .clip-studio-transcript-filters button {
+    min-height: 2.75rem;
+  }
+
+  .clip-studio-timeline-icon-button,
+  .clip-studio-track-icon-button {
+    width: 2.75rem;
+    min-width: 2.75rem;
   }
 
   .clip-studio-unified-timeline {
@@ -17199,6 +17229,7 @@ textarea::placeholder {
   }
 
   .clip-studio-transcript-filters button {
+    min-height: 2.75rem;
     padding-inline: 0.38rem;
   }
 

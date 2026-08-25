@@ -84,6 +84,7 @@ export default async function OnboardingPage() {
             <li
               key={step.id}
               className={step.status === "complete" ? styles.stepComplete : styles.stepAttention}
+              aria-current={snapshot.readiness.nextStep?.id === step.id ? "step" : undefined}
             >
               <div className={styles.stepTopline}>
                 <span className={styles.stepNumber} aria-hidden="true">
@@ -94,7 +95,7 @@ export default async function OnboardingPage() {
                 </span>
               </div>
               <div className={styles.stepCopy}>
-                <h3>{step.title}</h3>
+                <h3><span className={styles.srOnly}>Step {index + 1}: </span>{step.title}</h3>
                 <p>{step.description}</p>
               </div>
               <Link href={step.href}>{step.actionLabel} <span aria-hidden="true">→</span></Link>
@@ -106,7 +107,7 @@ export default async function OnboardingPage() {
       <section id="church-identity" className={styles.identityCard} aria-labelledby="identity-title">
         <div className={styles.identityHeading}>
           <div>
-            <p className={styles.eyebrow}>Step 1</p>
+            <p className={styles.eyebrow}>{snapshot.readiness.steps[0]?.status === "complete" ? "Saved foundation" : "Current setup step"}</p>
             <h2 id="identity-title">Church identity</h2>
             <p>These saved defaults prefill every new sermon and keep calendars in local time.</p>
           </div>
@@ -121,11 +122,11 @@ export default async function OnboardingPage() {
       <section className={styles.identityCard} aria-labelledby="rhythm-title">
         <div className={styles.identityHeading}>
           <div>
-            <p className={styles.eyebrow}>Step 4</p>
+            <p className={styles.eyebrow}>Optional team defaults</p>
             <h2 id="rhythm-title">Weekly rhythm</h2>
             <p>
-              Choose the normal output target and reviewer day. This guides the
-              workflow; it does not impose a fixed clip limit.
+              Save the normal output target and reviewer day now, or return after the launch checklist.
+              These defaults guide the workflow without imposing a fixed clip limit.
             </p>
           </div>
           <span className={styles.workspaceBadge}>Editable anytime</span>

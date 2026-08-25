@@ -834,7 +834,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
   );
   const [followPlayback, setFollowPlayback] = useState(true);
   const [transcriptQuery, setTranscriptQuery] = useState("");
-  const [transcriptFilter, setTranscriptFilter] = useState<TranscriptFilter>("all");
+  const [transcriptFilter, setTranscriptFilter] = useState<TranscriptFilter>("clip");
   const {
     absolutePlayheadSeconds,
     activeClipEndSeconds,
@@ -1357,7 +1357,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
                 className="button tertiary"
                 onClick={() => {
                   setTranscriptQuery("");
-                  setTranscriptFilter("all");
+                  setTranscriptFilter("clip");
                 }}
               >
                 Clear filters

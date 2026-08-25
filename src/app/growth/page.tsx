@@ -562,13 +562,13 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
     <main className="growth-page-shell stack-lg">
       <header className="growth-hero">
         <div className="stack-sm">
-          <p className="kicker">Growth system</p>
+          <p className="kicker">Weekly post guidance</p>
           <h1>Next best post</h1>
           <p className="muted">Choose the next sermon clip to publish, with the reason and confidence up front.</p>
         </div>
         <nav className="topbar-actions" aria-label="Growth actions">
           <Link href="/ready-to-post" className="button primary">Open publishing desk</Link>
-          <Link href="/settings/social" className="button secondary">Connect analytics</Link>
+          <Link href="/settings/social" className="button secondary">Connect church channels</Link>
           <Link href="/opportunities" className="button secondary">Content ideas</Link>
         </nav>
       </header>
@@ -606,12 +606,12 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
           className="growth-recommendations-panel"
         >
           <form action={saveWeeklyGrowthRecommendations} className="growth-save-campaign-form">
-            <button type="submit" className="button secondary">Save weekly recommendations</button>
+            <button type="submit" className="button secondary">Save this week’s ideas</button>
           </form>
           {recommendations.length === 0 ? (
             <EmptyState
-              title="No unscheduled clip recommendations yet"
-              description="Approve or export sermon clips, then the growth system will rank the best next posts."
+              title="No clips are ready to recommend yet"
+              description="Approve and prepare a sermon clip, then Sermon Clip can suggest a strong next post."
               action={{ label: "Review sermons", href: "/sermons", variant: "primary" }}
             />
           ) : (
@@ -682,7 +682,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
                       <p className="muted small">CTA: {recommendation.cta}</p>
                     </div>
                     <div className="growth-copy-box">
-                      <p className="kicker">Forecast</p>
+                      <p className="kicker">What to expect</p>
                       {canShowPreciseForecast ? (
                         <>
                           <p>
@@ -696,9 +696,9 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
                         </>
                       ) : (
                         <>
-                          <p>Directional recommendation only</p>
+                          <p>Early guidance only</p>
                           <p className="muted small">
-                            Exact reach and follower forecasts stay hidden because this directional model is not yet calibrated from matched channel history.
+                            Exact estimates will appear after Sermon Clip learns from more posts on this church’s channels.
                           </p>
                         </>
                       )}
@@ -713,7 +713,7 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
                       </ul>
                     </div>
                     <div>
-                      <p className="kicker">Guardrails</p>
+                      <p className="kicker">Ministry checks</p>
                       <ul className="growth-check-list">
                         {recommendation.guardrails.map((item) => <li key={item}>{item}</li>)}
                       </ul>
@@ -761,9 +761,9 @@ export default async function GrowthPage({ searchParams }: { searchParams: Promi
         </SectionCard>
 
         <aside className="growth-side-stack stack-lg">
-          <SectionCard title="Best sermon assets" description="Evidence behind the next-post choice.">
+          <SectionCard title="Strongest sermon clips" description="The clips behind this week’s recommendation.">
             {bestClips.length === 0 ? (
-              <EmptyState title="No growth-ready assets yet" description="Export approved clips to build your weekly posting plan." />
+              <EmptyState title="No clips are ready here yet" description="Prepare an approved clip to start this week’s posting plan." />
             ) : (
               <div className="growth-asset-list">
                 {bestClips.map((clip) => (

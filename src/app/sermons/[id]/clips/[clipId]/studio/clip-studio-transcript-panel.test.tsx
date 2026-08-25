@@ -187,7 +187,7 @@ describe("Clip Studio transcript and timing controls", () => {
     expect(requestPreviewPlayback).toHaveBeenCalledOnce();
   });
 
-  it("announces clip inclusion and follows the source playhead after cleanup cuts", () => {
+  it("defaults to in-clip context and follows the source playhead after cleanup cuts", () => {
     previewState.previewClock.currentSeconds = 1;
     previewState.previewClock.sourceCurrentSeconds = 5;
     previewState.previewClock.isPlaying = true;
@@ -207,8 +207,9 @@ describe("Clip Studio transcript and timing controls", () => {
     expect(markup).toContain("Partially included in clip");
     expect(markup).toContain('data-clip-status="included"');
     expect(markup).toContain("Included in clip");
-    expect(markup).toContain('data-clip-status="outside"');
-    expect(markup).toContain("Outside clip");
+    expect(markup).not.toContain('data-clip-status="outside"');
+    expect(markup).not.toContain("After the clip");
+    expect(markup).toContain("3 results");
     expect(markup).toMatch(/aria-current="true"[^>]*data-transcript-segment-id="line-2"/);
     expect(markup).toMatch(/aria-pressed="true"[^>]*data-transcript-segment-id="line-2"/);
 

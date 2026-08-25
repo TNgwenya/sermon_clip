@@ -48,27 +48,27 @@ function oauthFailureMessage(provider: string | undefined, reason: string | unde
 
   switch (reason) {
     case "missing_server_oauth_env":
-      return `${label} OAuth reached this app, but this server is missing the provider app credentials. Add them to the environment for the app handling the callback, then restart or redeploy.`;
+      return `${label} connections are not available in this workspace yet. Ask workspace support to finish the setup, then try Connect again.`;
     case "redirect_uri_mismatch":
-      return `${label} rejected the callback URL. Add the exact Redirect URI shown below to the provider app settings, then try again.`;
+      return `${label} is not fully set up for this workspace. Ask workspace support to check the connection address, then try again.`;
     case "invalid_client":
-      return `${label} rejected the app id or secret. Check the provider credentials in this server environment.`;
+      return `${label} connections need attention from workspace support before your team can connect an account.`;
     case "invalid_grant":
-      return `${label} rejected the one-time authorization code. Start Connect again after confirming the callback URL matches exactly.`;
+      return `${label} connection expired before it finished. Start Connect again from this page.`;
     case "missing_or_unapproved_permission":
-      return `${label} connected, but the requested permission is missing or not approved for this account/app. Check provider app review and account roles.`;
+      return `${label} connected without all the access Sermon Clip needs. Ask the channel owner to reconnect and approve the requested access.`;
     case "no_facebook_pages_found":
       return "Meta authorized your login, but did not return any Facebook Pages. Make sure the Facebook user manages the Page and grants Page access during login.";
     case "provider_network_failed":
-      return `${label} could not be reached from this server during token exchange. Try again, or check server network access.`;
+      return `${label} could not be reached. Try Connect again in a few minutes.`;
     case "oauth_exchange_failed":
-      return `${label} OAuth token exchange failed. Check the server log for the provider error, then retry Connect.`;
+      return `${label} did not finish connecting. Try Connect again; if it still fails, ask workspace support for help.`;
     case "invalid_oauth_state":
       return `${label} connection expired or could not be verified. Start Connect again from this page.`;
     case "unauthorized":
       return `Your current role or church workspace no longer permits connecting ${label}. Ask an administrator to restore channel access.`;
     default:
-      return `${label} OAuth failed: ${reason ?? "unknown error"}.`;
+      return `${label} did not finish connecting. No posts were sent. Try again or ask workspace support for help.`;
   }
 }
 
@@ -100,7 +100,7 @@ function platformStatus(input: {
   }
 
   if ((input.missingEnv ?? []).length > 0) {
-    return { label: "App credentials missing", tone: "warning", priority: 2 };
+    return { label: "Workspace setup needed", tone: "warning", priority: 2 };
   }
 
   return { label: "Setup needed", tone: "warning", priority: 2 };
@@ -111,15 +111,15 @@ function oauthBanner(params: SearchParams): { tone: "success" | "warning"; title
     const accountCount = params.accounts ? ` ${params.accounts} account${params.accounts === "1" ? "" : "s"} connected.` : "";
     return {
       tone: "success",
-      title: "Connector authorized",
-      message: `${params.provider ?? "Provider"} OAuth completed successfully.${accountCount}`,
+      title: "Channel connected",
+      message: `${params.provider ?? "Channel"} connected successfully.${accountCount}`,
     };
   }
 
   if (params.oauth === "failed") {
     return {
       tone: "warning",
-      title: "Connector not authorized",
+      title: "Channel not connected",
       message: oauthFailureMessage(params.provider, params.reason),
     };
   }
@@ -245,7 +245,7 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
         </div>
       ) : null}
 
-      <SectionCard title="Publishing health" description="A saved connection is not the same as a verified live publishing path. This status also checks the worker and the latest automatic result for each channel.">
+      <SectionCard title="Automatic posting readiness" description="Check whether each connected channel can receive an approved scheduled post.">
         <div className="growth-connector-row social-readiness-row">
           <div>
             <div className="clip-badge-row">
@@ -261,7 +261,7 @@ export default async function SocialSettingsPage({ searchParams }: { searchParam
             {publishingSnapshot.automaticPublishingAttentionPlatforms.length > 0 ? (
               <p className="muted small">Latest result needs attention: {publishingSnapshot.automaticPublishingAttentionPlatforms.join(" · ")}</p>
             ) : null}
-            <p className="muted small">Worker: {publishingServiceHealth.summary}</p>
+            <p className="muted small">Posting service: {publishingServiceHealth.summary}</p>
           </div>
           <Link className="button secondary" href="/ready-to-post#posting-calendar">Review results</Link>
         </div>

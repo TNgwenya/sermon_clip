@@ -42,26 +42,26 @@ function buildRecoveryMessage(input: {
   draftIssueCount: number;
 }): string {
   if (input.failedProcessingJobCount > 0) {
-    return `${input.failedProcessingJobCount} failed pipeline job(s) can be retried. Start with Retry failed jobs, then rebuild posting clips.`;
+    return `${input.failedProcessingJobCount} sermon processing ${input.failedProcessingJobCount === 1 ? "step can" : "steps can"} be retried. Start with Retry sermon steps, then refresh prepared clips.`;
   }
 
   if (input.failedMediaAssetCount > 0) {
-    return `${input.failedMediaAssetCount} failed clip media asset(s) should be rebuilt before posting.`;
+    return `${input.failedMediaAssetCount} clip ${input.failedMediaAssetCount === 1 ? "file needs" : "files need"} to be refreshed before posting.`;
   }
 
   if (input.issueCount > 0) {
-    return `${input.issueCount} ready-looking media file(s) are missing across ${input.affectedClipCount} clip(s) and ${input.affectedSermonCount} sermon(s).`;
+    return `${input.issueCount} ${input.issueCount === 1 ? "item is" : "items are"} marked ready but missing a usable file across ${input.affectedClipCount} ${input.affectedClipCount === 1 ? "clip" : "clips"}.`;
   }
 
   if (input.outdatedAssetCount > 0) {
-    return `${input.outdatedAssetCount} approved posting asset(s) are stale and should be rebuilt before posting.`;
+    return `${input.outdatedAssetCount} approved ${input.outdatedAssetCount === 1 ? "clip needs" : "clips need"} a fresh final file before posting.`;
   }
 
   if (input.draftIssueCount > 0) {
     return `${input.draftIssueCount} draft reference(s) can be repaired, but no posting-ready clips are blocked.`;
   }
 
-  return "No broken local references were detected.";
+  return "Everything needed for the current sermon and clip files looks ready.";
 }
 
 export function HealthRecoveryPanel({
@@ -91,30 +91,30 @@ export function HealthRecoveryPanel({
 
   const actions: RecoveryAction[] = [
     {
-      label: "Repair and rebuild all",
-      busyLabel: "Repairing and rebuilding...",
-      description: "Fix missing local media references, rebuild approved posting clips, and prepare scan-friendly posters.",
+      label: "Fix everything listed",
+      busyLabel: "Fixing listed items...",
+      description: "Restore missing clip files, refresh approved posts, and create preview images in one step.",
       disabled: totalIssueCount === 0 && missingPosterCount === 0 && failedOperationCount === 0 && outdatedAssetCount === 0,
       action: repairAndRebuildLibraryAction,
     },
     {
       label: "Fix missing files",
       busyLabel: "Repairing library...",
-      description: "Stop clips from appearing ready when the rendered video, captions, branding, or export file is missing.",
+      description: "Correct clips that appear ready even though their final video, captions, branding, or download is missing.",
       disabled: totalIssueCount === 0,
       action: repairLocalLibraryAction,
     },
     {
-      label: "Retry failed jobs",
-      busyLabel: "Retrying failed jobs...",
-      description: "Retry failed sermon pipeline jobs such as download, transcription, and clip discovery.",
+      label: "Retry sermon steps",
+      busyLabel: "Retrying sermon steps...",
+      description: "Try unfinished sermon downloads, transcripts, and clip discovery again.",
       disabled: failedProcessingJobCount === 0,
       action: retryLatestFailedProcessingJobsAction,
     },
     {
-      label: "Rebuild posting clips",
-      busyLabel: "Rebuilding clips...",
-      description: "Regenerate failed or stale render, caption, branding, and export files for approved clips.",
+      label: "Refresh prepared clips",
+      busyLabel: "Refreshing prepared clips...",
+      description: "Create fresh final videos, captions, branding, and downloads for approved clips.",
       disabled: failedMediaAssetCount === 0 && outdatedAssetCount === 0,
       action: rebuildPriorityLibraryAssetsAction,
     },
@@ -141,7 +141,7 @@ export function HealthRecoveryPanel({
     <section className="card stack-sm">
       <div className="health-recovery-row">
         <div>
-          <h2>Recommended Recovery</h2>
+          <h2>Recommended next steps</h2>
           <p className="muted">{recoveryMessage}</p>
         </div>
       </div>

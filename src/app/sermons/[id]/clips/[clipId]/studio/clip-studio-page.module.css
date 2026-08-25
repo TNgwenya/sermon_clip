@@ -361,6 +361,19 @@
   min-height: 100%;
 }
 
+.timelineDisclosure {
+  grid-area: timeline;
+  min-width: 0;
+}
+
+.timelineDisclosure > summary {
+  display: none;
+}
+
+.timelineDisclosure:not([open]) > :not(summary) {
+  display: block;
+}
+
 .inspectorColumn :global(.clip-studio-workbench > header) {
   grid-template-columns: minmax(0, 1fr) !important;
   gap: 0.48rem !important;
@@ -479,6 +492,35 @@
   .inspectorColumn {
     overflow-x: hidden !important;
   }
+
+  .timelineDisclosure {
+    border: 1px solid var(--page-studio-soft-line);
+    border-radius: 0.78rem;
+    background: var(--page-studio-panel);
+  }
+
+  .timelineDisclosure > summary {
+    display: grid;
+    min-height: 3rem;
+    gap: 0.18rem;
+    align-content: center;
+    padding: 0.7rem 0.85rem;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .timelineDisclosure > summary small {
+    color: var(--muted);
+  }
+
+  .timelineDisclosure:not([open]) > :not(summary) {
+    display: none;
+  }
+
+  .timelineDisclosure[open] > :global(.clip-studio-bottom-timeline) {
+    border-top: 1px solid var(--page-studio-soft-line);
+    border-radius: 0 0 0.78rem 0.78rem;
+  }
 }
 
 @media (max-width: 560px) {
@@ -511,6 +553,17 @@
     width: auto !important;
   }
 
+  .projectBreadcrumb a,
+  .qualityDetails > summary,
+  .headerActions :global(.button) {
+    min-height: 2.75rem;
+  }
+
+  .projectBreadcrumb a {
+    display: inline-flex;
+    align-items: center;
+  }
+
   .headerActions :global(.clip-studio-ready-actions) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -519,6 +572,13 @@
 @media (max-width: 640px) {
   .shell .headerActions {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .qualityDetails > summary,
+  .headerActions :global(.clip-studio-context-actions .button),
+  .headerActions :global(.clip-studio-final-summary > summary),
+  .headerActions :global(.clip-studio-ready-actions .button) {
+    min-height: 2.75rem !important;
   }
 
   .headerActions :global(.clip-studio-prepare-control) {
