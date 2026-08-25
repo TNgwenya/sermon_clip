@@ -195,6 +195,32 @@ describe("admin proxy", () => {
     expect(forwardedRequestHeader(response, SERMONCLIP_ACTOR_HEADER)).toBeNull();
   });
 
+  it("lets the signed live-intake callback reach its own HMAC boundary without trusting tenant headers", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("SCHEDULER_ADMIN_PASSWORD", "");
+    vi.stubEnv(
+      "AUTH_SECRET",
+      "test-auth-secret-with-more-than-32-characters",
+    );
+
+    const response = await proxy(new NextRequest(
+      "https://church.example/api/live-intake/cloudflare",
+      {
+        method: "POST",
+        headers: {
+          [SERMONCLIP_ORGANIZATION_HEADER]: "org_attacker",
+          [SERMONCLIP_ACTOR_HEADER]: "user_attacker",
+        },
+      },
+    ));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-middleware-next")).toBe("1");
+    expect(forwardedRequestHeader(response, SERMONCLIP_ORGANIZATION_HEADER)).toBeNull();
+    expect(forwardedRequestHeader(response, SERMONCLIP_ACTOR_HEADER)).toBeNull();
+    expect(forwardedRequestHeader(response, SERMONCLIP_AUTHENTICATION_HEADER)).toBeNull();
+  });
+
   it.each([
     ["/s", "text/html", 307],
     ["/s/sunday-hope/share", "text/html", 307],

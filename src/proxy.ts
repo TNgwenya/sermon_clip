@@ -168,6 +168,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     || pathname === "/api/auth/password-reset/complete"
     || pathname === "/api/auth/invitations/accept"
     || pathname === "/api/auth/logout"
+    || pathname === "/api/live-intake/cloudflare"
     || /^\/s\/[^/]+\/?$/.test(pathname)
     || pathname.startsWith("/api/public/")
     || /^\/tiktok[A-Za-z0-9]+\.txt$/.test(pathname)
