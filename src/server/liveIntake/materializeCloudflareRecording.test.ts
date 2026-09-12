@@ -12,6 +12,7 @@ vi.mock("./service", () => ({ createAndQueueMaterializedLiveRecording: commitMoc
 
 import {
   __cloudflareMaterializationTestUtils,
+  fetchCloudflareRecordingMp4,
   materializeCloudflareRecording,
 } from "./materializeCloudflareRecording";
 
@@ -28,6 +29,27 @@ afterEach(() => {
 });
 
 describe("Cloudflare live recording materialization", () => {
+  it("follows provider redirects without sending credentials to the media endpoint", async () => {
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: "/signed-file.mp4" } }))
+      .mockResolvedValueOnce(new Response("abcd"));
+    expect((await fetchCloudflareRecordingMp4("https://customer.cloudflarestream.com/download.mp4")).status).toBe(200);
+    expect(String(vi.mocked(global.fetch).mock.calls[1][0])).toBe("https://customer.cloudflarestream.com/signed-file.mp4");
+    expect(vi.mocked(global.fetch).mock.calls[1][1]).not.toHaveProperty("headers");
+  });
+
+  it("blocks unsafe redirects before making a second request", async () => {
+    global.fetch = vi.fn().mockResolvedValue(new Response(null, { status: 302, headers: { location: "http://169.254.169.254/latest/meta-data/" } }));
+    await expect(fetchCloudflareRecordingMp4("https://customer.cloudflarestream.com/download.mp4")).rejects.toThrow(/unsafe/i);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds provider redirect loops", async () => {
+    global.fetch = vi.fn().mockImplementation(async () => new Response(null, { status: 302, headers: { location: "/again.mp4" } }));
+    await expect(fetchCloudflareRecordingMp4("https://customer.cloudflarestream.com/download.mp4")).rejects.toThrow(/redirect limit/i);
+    expect(global.fetch).toHaveBeenCalledTimes(4);
+  });
+
   it("does nothing while Cloudflare is still preparing the private MP4", async () => {
     prepareMock.mockResolvedValue({ state: "pending" });
     global.fetch = vi.fn();

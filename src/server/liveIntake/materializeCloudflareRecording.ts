@@ -40,6 +40,21 @@ function requireSafeCloudflareDownloadUrl(value: string): URL {
   return url;
 }
 
+/** Cloudflare's signed MP4 endpoint redirects to its download URL. Validate every hop. */
+export async function fetchCloudflareRecordingMp4(value: string): Promise<Response> {
+  let url = requireSafeCloudflareDownloadUrl(value);
+  const signal = AbortSignal.timeout(25 * 60_000);
+  for (let redirects = 0; redirects <= 3; redirects += 1) {
+    const response = await fetch(url, { cache: "no-store", redirect: "manual", signal });
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    await response.body?.cancel();
+    const location = response.headers.get("location");
+    if (!location || redirects === 3) throw new Error("Cloudflare recording download exceeded its redirect limit.");
+    url = requireSafeCloudflareDownloadUrl(new URL(location, url).toString());
+  }
+  throw new Error("Cloudflare recording download exceeded its redirect limit.");
+}
+
 function requiredContentLength(response: Response): number {
   const value = response.headers.get("content-length")?.trim() ?? "";
   const length = Number.parseInt(value, 10);
@@ -78,7 +93,7 @@ export async function materializeCloudflareRecording(input: RecordingForMaterial
   if (preparation.state === "failed") throw new Error(preparation.reason);
 
   const downloadUrl = requireSafeCloudflareDownloadUrl(preparation.downloadUrl);
-  const response = await fetch(downloadUrl, { cache: "no-store", redirect: "error" });
+  const response = await fetchCloudflareRecordingMp4(downloadUrl.toString());
   if (!response.ok) throw new Error(`Cloudflare recording download failed (HTTP ${response.status}).`);
   const expectedSizeBytes = requiredContentLength(response);
   const contentType = mp4ContentType(response);
