@@ -1,0 +1,41 @@
+.shell { max-width: 1180px; padding-bottom: 96px; }
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, .4fr); gap: 32px; align-items: end; padding: clamp(24px, 4vw, 48px); border: 1px solid #343d44; border-radius: 24px; background: linear-gradient(135deg, #16282b, #14171e 70%); }
+.heroCopy { display: grid; gap: 14px; }
+.heroCopy h1 { font-size: clamp(2rem, 4vw, 3.6rem); line-height: 1.08; margin: 0; letter-spacing: -.045em; }
+.hero p, .sectionHeading p, .step p, .empty p, .trustNote p { margin: 0; color: #bec9cd; line-height: 1.65; }
+.backLink { color: #c4d3d5; font-size: .875rem; }
+.eyebrow { color: #9fe2d7 !important; text-transform: uppercase; letter-spacing: .12em; font-size: .7rem; font-weight: 750; }
+.statusCard { border: 1px solid #45535a; padding: 20px; border-radius: 16px; display: grid; gap: 10px; background: #171e24; }
+.statusCard strong { font-size: 1.2rem; }
+.statusCard p { font-size: .85rem; }
+.sectionHeading { display: grid; gap: 8px; margin-bottom: 24px; }
+.sectionHeading h2 { margin: 0; font-size: clamp(1.35rem, 2.5vw, 1.8rem); }
+.setupSection, .recordings { padding: clamp(20px, 3vw, 32px); border: 1px solid #343d44; border-radius: 22px; background: #13171d; }
+.steps { list-style: none; padding: 0; margin: 0; display: grid; }
+.step { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 18px; padding: 26px 0; border-top: 1px solid #343d44; }
+.step > div { display: grid; gap: 12px; min-width: 0; }
+.step h3, .recording h3 { margin: 0; font-size: 1.1rem; overflow-wrap: anywhere; }
+.stepNumber { color: #9fe2d7; background: #203439; border: 1px solid #3c6464; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; font-size: .8rem; font-weight: 700; }
+.form { display: grid; gap: 16px; justify-items: start; width: 100%; max-width: 720px; margin-top: 4px; }
+.nameField, .credential label { display: grid; gap: 8px; width: 100%; color: #e8eef0; font-weight: 600; }
+.form input { display: block; width: 100%; min-width: 0; max-width: 100%; padding: 12px; border: 1px solid #59636f; border-radius: 9px; background: #0d1117; color: #f4f6f7; font-size: 1rem; }
+.credentials { display: grid; gap: 18px; width: 100%; min-width: 0; }
+.credential { display: grid; gap: 10px; min-width: 0; }
+.credential input { font-family: ui-monospace, monospace; }
+.fieldActions { display: flex; flex-wrap: wrap; gap: 10px; }
+.fieldActions button, .form > button { min-height: 44px; white-space: normal; }
+.helper { color: #bac5cb; font-size: .875rem; line-height: 1.6; margin: 0; overflow-wrap: anywhere; }
+.feedback { min-height: 1.4em; font-size: .875rem; color: #b7e5d8 !important; }
+.notice { padding: 16px; border: 1px solid #546472; border-radius: 12px; background: #1b2530; color: #e5edf2; max-width: 100%; overflow-wrap: anywhere; }
+.notice p { margin-top: 6px; }
+.notice a { color: #b7e5d8; text-decoration: underline; }
+.destinationName { overflow-wrap: anywhere; }
+.recordingList { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.recording { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px; border-top: 1px solid #343d44; padding: 20px 0; }
+.recording > div { min-width: 0; display: grid; gap: 8px; }
+.badge { color: #d2e5e1; border: 1px solid #415a58; background: #1b2b2d; padding: 6px 10px; border-radius: 20px; font-size: .8rem; }
+.empty { display: grid; gap: 8px; padding: 24px; border: 1px dashed #53616a; border-radius: 14px; }
+.trustNote { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; padding: 12px 8px; }
+.trustNote h2 { font-size: 1rem; margin: 0 0 8px; }
+.trustNote p { font-size: .875rem; }
+@media (max-width: 760px) { .hero, .trustNote { grid-template-columns: 1fr; } .hero { gap: 24px; } .step { grid-template-columns: 30px minmax(0, 1fr); gap: 12px; } .stepNumber { width: 28px; height: 28px; font-size: .7rem; } .recording { grid-template-columns: 1fr; justify-items: start; } .form > button { width: 100%; } }

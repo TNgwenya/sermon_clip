@@ -105,24 +105,26 @@ export function createLiveIntakeWorker(dependencies: LiveIntakeWorkerDependencie
       }
     }
 
-    for (const candidate of await dependencies.listCandidates(cycleNow, candidateLimit)) {
+    for (const candidate of await dependencies.listCandidates(now(), candidateLimit)) {
       if (candidate.durationSeconds !== null && candidate.durationSeconds > FOUR_HOURS_SECONDS) {
         await dependencies.markIgnored(candidate.id, "Live recordings longer than four hours are not supported for MP4 transfer.");
         result.ignored += 1;
         continue;
       }
-      const claimed = await dependencies.claim(candidate, cycleNow);
+      // Discovery and prior transfers can take minutes. A new claim must not
+      // inherit an already-stale lease timestamp from the start of the cycle.
+      const claimed = await dependencies.claim(candidate, now());
       if (!claimed) continue;
       try {
         const materialized = await dependencies.materialize(claimed);
         if (materialized.state === "pending") {
-          await dependencies.markPending(claimed.id, new Date(cycleNow.getTime() + pendingRetryMs));
+          await dependencies.markPending(claimed.id, new Date(now().getTime() + pendingRetryMs));
           result.pending += 1;
         } else {
           result.materialized += 1;
         }
       } catch {
-        const nextAttempt = new Date(cycleNow.getTime() + retryDelayMs(claimed.materializationAttemptCount + 1, failureRetryMs, maxFailureRetryMs));
+        const nextAttempt = new Date(now().getTime() + retryDelayMs(claimed.materializationAttemptCount + 1, failureRetryMs, maxFailureRetryMs));
         await dependencies.markFailed(claimed.id, nextAttempt);
         result.failed += 1;
       }

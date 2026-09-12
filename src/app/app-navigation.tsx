@@ -104,6 +104,12 @@ const contentPlanItems: NavigationItem[] = [
 
 const settingsItems: NavigationItem[] = [
   {
+    href: "/settings/intake",
+    label: "Sermon intake",
+    icon: "channels",
+    isActive: (pathname) => pathname.startsWith("/settings/intake") || pathname.startsWith("/settings/live-intake"),
+  },
+  {
     href: "/settings/branding",
     label: "Brand kit",
     icon: "brand",

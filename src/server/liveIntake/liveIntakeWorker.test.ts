@@ -32,6 +32,39 @@ function dependencies(overrides: Partial<LiveIntakeWorkerDependencies> = {}): Li
 }
 
 describe("live intake worker polling", () => {
+  it("timestamps claims and retries when they happen after slow discovery and earlier transfers", async () => {
+    const startedAt = Date.parse("2026-08-23T12:00:00.000Z");
+    let elapsed = 0;
+    const minute = 60_000;
+    const second = { ...candidate, id: "recording-2" };
+    const deps = dependencies({
+      listReadyRecordings: vi.fn(async () => {
+        elapsed += 35 * minute;
+        return [];
+      }),
+      listCandidates: vi.fn().mockResolvedValue([candidate, second]),
+      claim: vi.fn(async (recording) => recording),
+      materialize: vi.fn(async (recording) => {
+        elapsed += 10 * minute;
+        if (recording.id === candidate.id) return { state: "pending" as const };
+        throw new Error("Temporary transfer failure");
+      }),
+    });
+
+    const result = await createLiveIntakeWorker(deps, {
+      now: () => new Date(startedAt + elapsed),
+      pendingRetryMs: minute,
+      failureRetryMs: minute,
+    })();
+
+    expect(result).toEqual(expect.objectContaining({ pending: 1, failed: 1 }));
+    expect(deps.listCandidates).toHaveBeenCalledWith(new Date(startedAt + 35 * minute), 10);
+    expect(deps.claim).toHaveBeenNthCalledWith(1, candidate, new Date(startedAt + 35 * minute));
+    expect(deps.claim).toHaveBeenNthCalledWith(2, second, new Date(startedAt + 45 * minute));
+    expect(deps.markPending).toHaveBeenCalledWith(candidate.id, new Date(startedAt + 46 * minute));
+    expect(deps.markFailed).toHaveBeenCalledWith(second.id, new Date(startedAt + 59 * minute));
+  });
+
   it("discovers authenticated provider recordings, receipts them idempotently, then materializes only a claimed record", async () => {
     const deps = dependencies();
     const cycle = createLiveIntakeWorker(deps, { now: () => new Date("2026-08-23T12:00:00.000Z") });
