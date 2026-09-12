@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createCloudflareLiveInput,
   listReadyCloudflareRecordings,
   prepareCloudflareRecordingMp4,
   verifyLiveWebhook,
@@ -42,6 +43,14 @@ describe("Cloudflare live recording discovery", () => {
     );
   });
 
+  it("requires private playback and provider-enforced recording retention", async () => {
+    configureProvider();
+    global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({success:true,result:{uid:"input-1",rtmps:{url:"rtmps://live.cloudflare.com/live/",streamKey:"fixture-key"}}})));
+    await createCloudflareLiveInput("Sunday");
+    const options = vi.mocked(global.fetch).mock.calls[0][1]!;
+    expect(JSON.parse(options.body as string)).toEqual({meta:{name:"Sunday"},recording:{mode:"automatic",requireSignedURLs:true},deleteRecordingAfterDays:30});
+  });
+
   it("reports a pending MP4 without exposing its eventual URL", async () => {
     configureProvider();
     global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
@@ -54,15 +63,19 @@ describe("Cloudflare live recording discovery", () => {
 
   it("returns a server-only URL only when Cloudflare marks the MP4 ready", async () => {
     configureProvider();
-    global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    global.fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
       success: true,
-      result: { default: { status: "ready", url: "https://stream.example/download.mp4" } },
-    }), { status: 200 }));
+      result: { default: { status: "ready", url: "https://customer.cloudflarestream.com/recording-1/downloads/default.mp4" } },
+    }), { status: 200 })).mockResolvedValueOnce(new Response(JSON.stringify({success: true, result: {token: "signed.download.token"}})));
 
     await expect(prepareCloudflareRecordingMp4("recording-1")).resolves.toEqual({
       state: "ready",
-      downloadUrl: "https://stream.example/download.mp4",
+      downloadUrl: "https://customer.cloudflarestream.com/signed.download.token/downloads/default.mp4",
     });
+    expect(global.fetch).toHaveBeenCalledWith(
+      "https://api.cloudflare.com/client/v4/accounts/account-1/stream/recording-1/token",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"downloadable":true') }),
+    );
     expect(global.fetch).toHaveBeenCalledWith(
       "https://api.cloudflare.com/client/v4/accounts/account-1/stream/recording-1/downloads",
       expect.objectContaining({

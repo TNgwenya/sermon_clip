@@ -210,3 +210,12 @@ export async function queueMaterializedLiveRecording(recordingId: string, sermon
   // Its processing job remains the single durable workflow.
   return { recording, sermonId, created, queued: queued.count === 1, reusedExisting: job.reusedExisting };
 }
+
+/** Resume after a queue outage without downloading or uploading the source again. */
+export async function resumeMaterializedLiveRecording(recordingId: string, organizationId: string): Promise<string | null> {
+  const recording = await prisma.liveRecording.findUnique({ where: { id: recordingId }, select: { organizationId: true, sermonId: true } });
+  if (!recording || recording.organizationId !== organizationId) throw new Error("Live recording is outside the requested church.");
+  if (!recording.sermonId) return null;
+  await queueMaterializedLiveRecording(recordingId, recording.sermonId);
+  return recording.sermonId;
+}

@@ -3,11 +3,12 @@ const prepareMock = vi.hoisted(() => vi.fn());
 const capacityMock = vi.hoisted(() => vi.fn());
 const uploadMock = vi.hoisted(() => vi.fn());
 const commitMock = vi.hoisted(() => vi.fn());
+const resumeMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 
 vi.mock("./cloudflareStream", () => ({ prepareCloudflareRecordingMp4: prepareMock }));
 vi.mock("@/server/media/storageCapacity", () => ({ assertMediaStorageCapacity: capacityMock }));
 vi.mock("@/server/media/s3SourceStorage", () => ({ uploadTrustedSourceStream: uploadMock }));
-vi.mock("./service", () => ({ createAndQueueMaterializedLiveRecording: commitMock }));
+vi.mock("./service", () => ({ createAndQueueMaterializedLiveRecording: commitMock, resumeMaterializedLiveRecording: resumeMock }));
 
 import {
   __cloudflareMaterializationTestUtils,
@@ -22,6 +23,7 @@ afterEach(() => {
   capacityMock.mockReset();
   uploadMock.mockReset();
   commitMock.mockReset();
+  resumeMock.mockReset().mockResolvedValue(null);
   delete process.env.LIVE_INTAKE_MAX_RECORDING_BYTES;
 });
 

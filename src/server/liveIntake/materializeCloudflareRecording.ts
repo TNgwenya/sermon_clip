@@ -5,7 +5,7 @@ import { assertMediaStorageCapacity } from "@/server/media/storageCapacity";
 import { uploadTrustedSourceStream, type ReadyS3SourceAsset, type S3SourceOwner } from "@/server/media/s3SourceStorage";
 
 import { prepareCloudflareRecordingMp4 } from "./cloudflareStream";
-import { createAndQueueMaterializedLiveRecording } from "./service";
+import { createAndQueueMaterializedLiveRecording, resumeMaterializedLiveRecording } from "./service";
 
 const GIBIBYTE = 1024 ** 3;
 const DEFAULT_MAX_RECORDING_BYTES = 50 * GIBIBYTE;
@@ -20,7 +20,7 @@ type RecordingForMaterialization = {
 
 export type CloudflareMaterializationResult =
   | { state: "pending" }
-  | { state: "materialized"; sermonId: string; sourceAsset: ReadyS3SourceAsset };
+  | { state: "materialized"; sermonId: string; sourceAsset?: ReadyS3SourceAsset };
 
 function configuredMaxRecordingBytes(value = process.env.LIVE_INTAKE_MAX_RECORDING_BYTES): number {
   const parsed = Number.parseInt(value ?? "", 10);
@@ -68,6 +68,8 @@ function mp4ContentType(response: Response): string {
  * processing side effect until the private object is byte-verified.
  */
 export async function materializeCloudflareRecording(input: RecordingForMaterialization): Promise<CloudflareMaterializationResult> {
+  const resumed = await resumeMaterializedLiveRecording(input.id, input.organizationId);
+  if (resumed) return { state: "materialized", sermonId: resumed };
   if (input.durationSeconds !== null && (!Number.isSafeInteger(input.durationSeconds) || input.durationSeconds <= 0 || input.durationSeconds > MAX_LIVE_RECORDING_SECONDS)) {
     throw new Error("Live recordings must be a positive duration of four hours or less before MP4 transfer.");
   }

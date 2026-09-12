@@ -71,6 +71,7 @@ export function createLiveIntakeWorker(dependencies: LiveIntakeWorkerDependencie
   const maxFailureRetryMs = positiveInt(options.maxFailureRetryMs, 60 * 60_000);
 
   return async function runCycle(): Promise<{
+    discoveryFailed: number;
     discovered: number;
     received: number;
     materialized: number;
@@ -80,7 +81,7 @@ export function createLiveIntakeWorker(dependencies: LiveIntakeWorkerDependencie
     recovered: number;
   }> {
     const cycleNow = now();
-    const result = { discovered: 0, received: 0, materialized: 0, pending: 0, failed: 0, ignored: 0, recovered: 0 };
+    const result = { discoveryFailed: 0, discovered: 0, received: 0, materialized: 0, pending: 0, failed: 0, ignored: 0, recovered: 0 };
     result.recovered = await dependencies.recoverStalled(new Date(cycleNow.getTime() - staleAfterMs), cycleNow);
 
     for (const intake of await dependencies.listActiveInputs()) {
@@ -99,7 +100,8 @@ export function createLiveIntakeWorker(dependencies: LiveIntakeWorkerDependencie
           if (receipt) result.received += 1;
         }
       } catch {
-        // One provider input must not stop other churches' queued recordings.
+        // Count failed discovery even when other churches can continue.
+        result.discoveryFailed += 1;
       }
     }
 

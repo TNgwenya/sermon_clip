@@ -65,8 +65,9 @@ export async function createCloudflareLiveInput(label: string): Promise<{ provid
   const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs`, {
     method: "POST",
     headers: { ...cloudflareHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ meta: { name: label }, recording: { mode: "automatic" } }),
+    body: JSON.stringify({ meta: { name: label }, recording: { mode: "automatic", requireSignedURLs: true }, deleteRecordingAfterDays: 30 }),
     cache: "no-store",
+    signal: AbortSignal.timeout(30_000),
   });
   const payload = await response.json() as { success?: boolean; errors?: Array<{ message?: string }>; result?: CloudflareLiveInput };
   const input = payload.result;
@@ -75,6 +76,19 @@ export async function createCloudflareLiveInput(label: string): Promise<{ provid
     throw new Error(payload.errors?.[0]?.message || "Cloudflare could not create the private live input.");
   }
   return { providerInputId: input.uid, ingestUrl: endpoint.url, streamKey: endpoint.streamKey };
+}
+
+/** Credentials are requested only by an authenticated church administrator. */
+export async function getCloudflareLiveInputCredentials(inputId: string): Promise<{ ingestUrl: string; streamKey: string }> {
+  const response = await fetch(cloudflareUrl(`live_inputs/${encodeURIComponent(inputId)}`), {
+    headers: cloudflareHeaders(), cache: "no-store", signal: AbortSignal.timeout(30_000),
+  });
+  const payload = await response.json() as CloudflareApiResponse<CloudflareLiveInput>;
+  const endpoint = payload.result?.rtmps;
+  if (!response.ok || !payload.success || !endpoint?.url || !endpoint.streamKey) {
+    throw new Error("The live stream credentials could not be retrieved. Please try again.");
+  }
+  return { ingestUrl: endpoint.url, streamKey: endpoint.streamKey };
 }
 
 /**
@@ -88,6 +102,7 @@ export async function listReadyCloudflareRecordings(providerInputId: string): Pr
   const response = await fetch(cloudflareUrl(`live_inputs/${encodeURIComponent(inputId)}/videos`), {
     headers: cloudflareHeaders(),
     cache: "no-store",
+    signal: AbortSignal.timeout(30_000),
   });
   const payload = await response.json() as CloudflareApiResponse<CloudflareVideo[]>;
   if (!response.ok || !payload.success || !Array.isArray(payload.result)) {
@@ -122,13 +137,37 @@ export async function prepareCloudflareRecordingMp4(providerRecordingId: string)
     method: "POST",
     headers: cloudflareHeaders(),
     cache: "no-store",
+    signal: AbortSignal.timeout(30_000),
   });
   const payload = await response.json() as CloudflareApiResponse<{ default?: CloudflareDownload }>;
   if (!response.ok || !payload.success) {
     throw cloudflareError(response, payload, "Cloudflare could not prepare the recording download");
   }
   const download = payload.result?.default;
-  if (download?.status === "ready" && download.url) return { state: "ready", downloadUrl: download.url };
+  if (download?.status === "ready" && download.url) {
+    const url = new URL(download.url);
+    if (url.protocol !== "https:" || url.username || url.password
+      || !/^(?:[a-z0-9-]+\.)*(?:cloudflarestream\.com|videodelivery\.net)$/i.test(url.hostname)
+      || url.pathname !== `/${recordingId}/downloads/default.mp4`) {
+      throw new Error("Cloudflare returned an unsafe recording download address.");
+    }
+    const tokenResponse = await fetch(cloudflareUrl(`${encodeURIComponent(recordingId)}/token`), {
+      method: "POST",
+      headers: { ...cloudflareHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ downloadable: true, exp: Math.floor(Date.now() / 1000) + 3600 }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(30_000),
+    });
+    const tokenPayload = await tokenResponse.json() as CloudflareApiResponse<{ token?: string }>;
+    const token = tokenPayload.result?.token;
+    if (!tokenResponse.ok || !tokenPayload.success || !token || !/^[A-Za-z0-9_.-]+$/.test(token)) {
+      throw new Error("Cloudflare could not authorize the private recording transfer.");
+    }
+    url.pathname = `/${token}/downloads/default.mp4`;
+    url.search = "";
+    url.hash = "";
+    return { state: "ready", downloadUrl: url.toString() };
+  }
   if (download?.status === "error") return { state: "failed", reason: "Cloudflare could not create an MP4 for this recording." };
   return { state: "pending" };
 }
