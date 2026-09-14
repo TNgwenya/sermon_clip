@@ -29,7 +29,6 @@ export function ClipStudioPrepareButton({
   hasPreparedMedia,
   serverNeedsUpdate,
   serverIsPreparing = false,
-  transcriptReviewRequired = false,
 }: ClipStudioPrepareButtonProps) {
   const router = useRouter();
   const {
@@ -45,11 +44,9 @@ export function ClipStudioPrepareButton({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [activeOperation, setActiveOperation] = useState<"save" | "prepare" | null>(null);
   const canPrepare = editPreview.isTimingValid && editPreview.startSeconds !== null && editPreview.endSeconds !== null;
-  const canPrepareFinal = canPrepare && !transcriptReviewRequired;
+  const canPrepareFinal = canPrepare;
   const finalNeedsUpdate = hasPreparedMedia && (serverNeedsUpdate || isDraftDirty);
-  const stateLabel = transcriptReviewRequired
-    ? "Transcript review required"
-    : !canPrepare
+  const stateLabel = !canPrepare
     ? "Timing needs attention"
     : serverIsPreparing
       ? "Final video is preparing"
@@ -60,18 +57,14 @@ export function ClipStudioPrepareButton({
             ? "Final video needs updating"
             : "Final video ready"
           : "Ready to prepare final video";
-  const stateToneClass = transcriptReviewRequired
-    ? "tone-warning"
-    : serverIsPreparing
+  const stateToneClass = serverIsPreparing
       ? "tone-info"
     : !canPrepare || isDraftDirty || serverNeedsUpdate
       ? "tone-warning"
       : hasPreparedMedia
         ? "tone-success"
         : "tone-info";
-  const actionLabel = transcriptReviewRequired
-    ? "Review transcript before preparing"
-    : serverIsPreparing
+  const actionLabel = serverIsPreparing
     ? "Preparation in progress"
     : hasPreparedMedia
       ? finalNeedsUpdate
@@ -215,7 +208,7 @@ export function ClipStudioPrepareButton({
       return;
     }
 
-    if (operation === "prepare" && (serverIsPreparing || transcriptReviewRequired)) {
+    if (operation === "prepare" && serverIsPreparing) {
       return;
     }
 

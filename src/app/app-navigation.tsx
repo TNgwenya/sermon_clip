@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useRef } from "react";
+import { useRef, useSyncExternalStore } from "react";
+import {
+  getNavigationCollapsed,
+  getServerNavigationCollapsed,
+  setNavigationCollapsed,
+  subscribeNavigationVisibility,
+} from "@/lib/navigationVisibility";
 
 type NavigationIconName =
   | "home"
@@ -329,6 +335,11 @@ function UtilityMenu({ menu, pathname }: { menu: NavigationMenu; pathname: strin
 export function AppNavigation() {
   const pathname = usePathname();
   const mobileMoreRef = useRef<HTMLDetailsElement>(null);
+  const collapsed = useSyncExternalStore(
+    subscribeNavigationVisibility,
+    getNavigationCollapsed,
+    getServerNavigationCollapsed,
+  );
 
   if (pathname === "/login" || pathname === "/accept-invitation") {
     return null;
@@ -340,8 +351,24 @@ export function AppNavigation() {
   }
 
   return (
-    <aside className="app-rail" aria-label="Sermon Clip navigation">
-      <div className="rail-desktop-navigation">
+    <aside className="app-rail" aria-label="Sermon Clip navigation" data-collapsed={collapsed}>
+      <button
+        type="button"
+        className="rail-visibility-toggle"
+        aria-label={collapsed ? "Show main menu" : "Hide main menu"}
+        title={collapsed ? "Show main menu" : "Hide main menu"}
+        aria-expanded={!collapsed}
+        aria-controls="desktop-main-navigation"
+        onClick={() => setNavigationCollapsed(!collapsed)}
+      >
+        <svg className="rail-visibility-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="3" />
+          <path d="M9 4v16" />
+          <path className="rail-visibility-chevron" d="m16 9-3 3 3 3" />
+        </svg>
+        <span className="rail-visibility-label">Hide menu</span>
+      </button>
+      <div className="rail-desktop-navigation" id="desktop-main-navigation">
         <Link href="/" className="rail-brand" aria-label="Sermon Clip church content studio home">
           <LivingFrameMark />
           <span className="rail-brand-copy">

@@ -120,8 +120,9 @@ describe("professional clip quality scoring service", () => {
       transcriptSafetyStatus: "REVIEW_REQUIRED",
     });
 
-    expect(result.qualityLabel).toBe("NEEDS_EDITING");
-    expect(result.postReadyStatus).toBe("NEEDS_EDITING");
+    expect(result.qualityLabel).toBe("GOOD_NEEDS_REVIEW");
+    expect(result.postReadyStatus).toBe("GOOD_NEEDS_REVIEW");
+    expect(result.postReadyBlockers).not.toContain("Review the transcript wording before captions, export, or posting.");
     expect(result.qualityWarnings).toContain("TRANSCRIPT_REVIEW_REQUIRED");
     expect(result.recommendedNextAction).toBe("REVIEW_CLIP");
   });
@@ -168,7 +169,7 @@ describe("professional clip quality scoring service", () => {
       hookScore: 7.2,
     });
 
-    expect(result.qualityLabel).toBe("NEEDS_EDITING");
+    expect(result.qualityLabel).toBe("GOOD_NEEDS_REVIEW");
     expect(result.qualityWarnings).not.toContain("PASTOR_GRADE_NO_SPIRITUAL_ANCHOR");
     expect(result.qualityWarnings).not.toContain("PASTOR_GRADE_NO_CLEAR_TAKEAWAY");
   });

@@ -221,13 +221,19 @@ describe("scheduled content revision queue", () => {
     });
   });
 
+  it("allows an explicitly approved export with an unresolved wording advisory", async () => {
+    mocks.scheduledPostFindMany.mockResolvedValue([{ ...queuedPost(), clipIdsJson: ["clip-1"] }]);
+    mocks.clipCandidateFindMany.mockResolvedValue([readyClip({ transcriptSafetyStatus: "REVIEW_REQUIRED" })]);
+    const posts = await listUpcomingAutomationPosts({ now: new Date("2099-07-22T08:00:00.000Z"), windowMinutes: 2880 });
+    expect(posts).toHaveLength(1);
+  });
+
   it.each([
     ["stale", [readyClip({ exportFreshness: "OUTDATED" })]],
     ["missing", []],
     ["not a completed export", [readyClip({ exportStatus: "EXPORTING" })]],
     ["not approved", [readyClip({ status: "GENERATED" })]],
     ["not the canonical vertical export", [readyClip({ exportFormat: "HORIZONTAL_16_9" })]],
-    ["review blocked", [readyClip({ transcriptSafetyStatus: "REVIEW_REQUIRED" })]],
     ["missing an active edit plan", [readyClip({ editPlans: [] })]],
     ["bound to multiple active edit plans", [readyClip({
       editPlans: [

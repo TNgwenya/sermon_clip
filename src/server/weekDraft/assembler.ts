@@ -294,7 +294,6 @@ async function loadSourceCandidates(
         sermonId: sermon.id,
         sermon: weekDraftTenantWhere(tenant),
         status: { not: "REJECTED" },
-        transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
         riskLevel: { not: "HIGH" },
         duplicateOfClipId: null,
         AND: [

@@ -8,6 +8,7 @@ export type OrchestrationProgressJob = {
 
 export type CustomerValueEvidence = {
   rankedSuggestionCount: number;
+  basicSuggestionCount?: number;
   priorityPreviewReadyCount: number;
   priorityPreviewTargetCount: number;
   firstBrandedPreviewReady: boolean;
@@ -94,6 +95,7 @@ export function buildCustomerValueMilestones(
   const preview = latestForLane(jobs, "PREVIEW");
   const content = latestForLane(jobs, "CONTENT_WEEK");
   const suggestionCount = nonNegativeInteger(evidence?.rankedSuggestionCount ?? 0);
+  const basicCount = nonNegativeInteger(evidence?.basicSuggestionCount ?? 0);
   const priorityTarget = nonNegativeInteger(evidence?.priorityPreviewTargetCount ?? 0);
   const priorityReady = Math.min(
     priorityTarget,
@@ -106,7 +108,7 @@ export function buildCustomerValueMilestones(
     : preview?.status === "SUCCEEDED";
   const hasDurableValueEvidence = Boolean(
     evidence
-    && (suggestionCount > 0 || priorityReady > 0 || firstBrandedReady),
+    && (suggestionCount > 0 || basicCount > 0 || priorityReady > 0 || firstBrandedReady),
   );
 
   const queueState: CustomerValueState = latestEarlyValueJobs.length === 0
@@ -119,12 +121,16 @@ export function buildCustomerValueMilestones(
           ? "not-requested"
           : "ready";
 
-  const suggestionState: CustomerValueState = suggestionsReady
+  const suggestionState: CustomerValueState = basicCount > 0
+    ? "degraded"
+    : suggestionsReady
     ? "ready"
     : jobState(intelligence);
 
   const firstPreviewState: CustomerValueState = firstBrandedReady
     ? "ready"
+    : !preview
+      ? "not-requested"
     : jobState(preview) === "ready"
       ? "degraded"
       : jobState(preview);
@@ -163,9 +169,11 @@ export function buildCustomerValueMilestones(
     },
     {
       key: "suggestions",
-      label: "Ranked suggestions",
+      label: basicCount > 0 ? "Clip suggestions — quality limited" : "Ranked suggestions",
       state: suggestionState,
-      detail: suggestionsReady
+      detail: basicCount > 0
+        ? `${basicCount} basic time-based cuts require manual review; ${suggestionCount} ranked suggestions. Basic cuts were not selected using transcript intelligence.`
+        : suggestionsReady
         ? `${suggestionCount || "Ranked"} ranked clip ${suggestionCount === 1 ? "suggestion is" : "suggestions are"} ready for pastor review`
         : suggestionState === "attention"
           ? failureDetail(intelligence, "Suggestions need attention before automatic review can continue")
@@ -184,7 +192,9 @@ export function buildCustomerValueMilestones(
           : firstPreviewState === "attention"
             ? failureDetail(preview, "The branded preview needs attention; suggestions are preserved")
             : firstPreviewState === "not-requested"
-              ? "Preview preparation was stopped; suggestions remain available"
+              ? preview?.status === "CANCELLED"
+                ? "Preview preparation was stopped; suggestions remain available"
+                : "No staged branded-preview job is recorded; automatic preparation is not confirmed"
               : "Preparing the strongest branded review preview first",
     },
     {
@@ -206,7 +216,7 @@ export function buildCustomerValueMilestones(
       label: "Full content set",
       state: contentState,
       detail: !content
-        ? `${deferredPreviewCount > 0 ? `${deferredPreviewCount} lower-ranked ${deferredPreviewCount === 1 ? "preview" : "previews"} and ` : ""}Content Week stay on demand until your team requests them`
+        ? `${deferredPreviewCount > 0 ? `${deferredPreviewCount} ${basicCount > 0 ? "additional" : "lower-ranked"} ${deferredPreviewCount === 1 ? "preview" : "previews"} and ` : ""}Content Week stay on demand until your team requests them`
         : contentState === "ready"
           ? "The requested Content Week and review previews are ready"
           : contentState === "degraded"

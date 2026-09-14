@@ -122,7 +122,7 @@ describe("clip export service", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("blocks export while transcript review is still required", () => {
+  it("allows an approved export with an advisory about uncertain wording", () => {
     const result = __clipExportTestUtils.validateExportEligibility({
       clip: {
         id: "clip-1",
@@ -149,9 +149,7 @@ describe("clip export service", () => {
       allowReexport: false,
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.reason).toContain("confirm the transcript wording");
-    expect(result.shouldMarkFailed).toBe(false);
+    expect(result.ok).toBe(true);
   });
 
   it("rejects missing rendered clip source", () => {

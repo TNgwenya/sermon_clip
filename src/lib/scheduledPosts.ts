@@ -1147,8 +1147,7 @@ async function buildReadyAutomationPosts(
   });
   const readyClipEntries = clips.map((clip) => {
     if (
-      clip.transcriptSafetyStatus === "REVIEW_REQUIRED"
-      || (clip.status !== "APPROVED" && clip.status !== "EXPORTED")
+      clip.status !== "APPROVED" && clip.status !== "EXPORTED"
     ) {
       return null;
     }

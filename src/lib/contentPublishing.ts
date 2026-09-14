@@ -153,15 +153,13 @@ export function resolveVideoClipOpportunityWorkflow(input: {
     && clip.startTimeSeconds >= 0
     && clip.endTimeSeconds > clip.startTimeSeconds;
 
-  if (!hasValidTimecode || clip.transcriptSafetyStatus === "REVIEW_REQUIRED") {
+  if (!hasValidTimecode) {
     return {
       state: "REVIEW_CLIP",
       href: reviewHref,
       actionLabel: "Review linked sermon clip",
       title: "Verify the linked sermon moment",
-      message: !hasValidTimecode
-        ? "The linked clip needs a valid sermon time range before it can become publishing media."
-        : "The linked clip needs transcript review before it can be approved or prepared for publishing.",
+      message: "The linked clip needs a valid sermon time range before it can become publishing media.",
     };
   }
 

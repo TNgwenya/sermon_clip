@@ -576,7 +576,8 @@ export function ClipStudioEditor({
     () => buildCaptionCueTextEditSeed(initialCaptionCues),
   );
   const [captionCueOverrides, setCaptionCueOverrides] = useState<EditableCaptionCue[] | null>(null);
-  const [captionCueSelection, setCaptionCueSelection] = useState<CaptionCueSelection | null>(null);
+  const [captionCueSelection, setCaptionCueSelection] = useState<CaptionCueSelection | null>({ anchorIndex: 0, focusIndex: 0 });
+  const [captionSection, setCaptionSection] = useState<"words" | "style" | "timing">("words");
   const [captionCorrectionText, setCaptionCorrectionText] = useState<string | null>(null);
   const [confirmCaptionSelectionCut, setConfirmCaptionSelectionCut] = useState(false);
   const [hookOverlay, setHookOverlay] = useState<HookOverlayConfig>(initialHookOverlay);
@@ -782,7 +783,6 @@ export function ClipStudioEditor({
   const captionLineLabel = captionRevealMode === "single-word"
     ? `${captionCues.length} ${captionCues.length === 1 ? "word pop" : "word pops"}`
     : `${captionCues.length} ${captionCues.length === 1 ? "line" : "lines"}`;
-  const captionDropdownPreview = onVideoCaptionText || "No on-video caption text yet.";
 
   const durationLabel =
     timingPreview.durationSeconds !== null
@@ -2054,6 +2054,7 @@ export function ClipStudioEditor({
 
       if (detail.command === "open-caption-editor") {
         setActiveWorkspace("captions");
+        setCaptionSection("words");
         window.requestAnimationFrame(() => {
           const captionLines = document.getElementById("clip-studio-caption-lines");
           if (captionLines instanceof HTMLDetailsElement) {
@@ -3724,24 +3725,11 @@ export function ClipStudioEditor({
       <SectionCard title={activeWorkspace === "captions" ? "On-video captions" : "Hook & emphasis cards"}>
         <div className="stack-md clip-studio-caption-form">
           <div hidden={activeWorkspace !== "captions"} className={`stack-md ${styles.captionWorkflow}`}>
-          <ol className={styles.captionJourney} aria-label="Caption design steps">
-            <li>
-              <span>1</span>
-              <strong>Style</strong>
-            </li>
-            <li>
-              <span>2</span>
-              <strong>Fine-tune</strong>
-            </li>
-            <li>
-              <span>3</span>
-              <strong>Words</strong>
-            </li>
-            <li>
-              <span>4</span>
-              <strong>Preview</strong>
-            </li>
-          </ol>
+          <div className={styles.captionSectionTabs} role="group" aria-label="Caption editing section">
+            {([['words', 'Words'], ['style', 'Style'], ['timing', 'Timing']] as const).map(([section, label]) => (
+              <button type="button" key={section} aria-pressed={captionSection === section} onClick={() => setCaptionSection(section)}>{label}</button>
+            ))}
+          </div>
           <label className={`clip-studio-toggle-row ${styles.captionToggle}`}>
             <input
               type="checkbox"
@@ -3755,7 +3743,8 @@ export function ClipStudioEditor({
             </span>
           </label>
 
-          <section className="clip-studio-caption-timing-panel" aria-labelledby="caption-reveal-heading">
+          <section hidden={captionSection === "words"} className="clip-studio-caption-timing-panel" aria-label={captionSection === "timing" ? "Caption timing" : "Caption appearance"}>
+            <div hidden={captionSection !== "style"}>
             <div className="section-heading-row compact">
               <div>
                 <p className="kicker">Words on screen</p>
@@ -3798,7 +3787,8 @@ export function ClipStudioEditor({
               </button>
             </div>
 
-            <div className="clip-studio-caption-sync-control">
+            </div>
+            <div hidden={captionSection !== "timing"} className="clip-studio-caption-sync-control">
               <div>
                 <strong>Caption sync</strong>
                 <p className="muted small">If every caption feels early or late, move all words together.</p>
@@ -3841,12 +3831,12 @@ export function ClipStudioEditor({
             </div>
           </section>
 
-          <details id="clip-studio-caption-lines" className="clip-studio-caption-dropdown" open>
+          <details id="clip-studio-caption-lines" hidden={captionSection === "style"} className="clip-studio-caption-dropdown" open>
             <summary aria-label={`Caption lines, ${captionLineLabel}, captions ${applyCaptionsToClip ? "on" : "off"}`}>
               <span className="clip-studio-caption-dropdown-copy">
                 <span className="kicker">Caption lines</span>
                 <strong>{captionLineLabel}</strong>
-                <span aria-hidden="true" className="clip-studio-caption-dropdown-preview">{captionDropdownPreview}</span>
+                <span className="muted small">Select a line below to edit it.</span>
               </span>
               <span className="clip-studio-caption-dropdown-meta">
                 <StatusBadge tone={applyCaptionsToClip ? "success" : "neutral"}>
@@ -3915,7 +3905,8 @@ export function ClipStudioEditor({
                 )}
 
                 {selectedCaptionCueRange ? (
-                  <div className={styles.captionSelectionPanel}>
+                  <details className={styles.captionSelectionPanel}>
+                    <summary>More selection actions</summary>
                     <div className={styles.captionSelectionSummary} aria-live="polite">
                       <strong>
                         {selectedCaptionCueRange.cueCount} {selectedCaptionCueRange.cueCount === 1 ? "item" : "items"} selected
@@ -4021,7 +4012,7 @@ export function ClipStudioEditor({
                         </div>
                       </div>
                     ) : null}
-                  </div>
+                  </details>
                 ) : (
                   <p className={styles.captionSelectionEmpty}>
                     Select a caption item to preview it, correct visible wording, set clip boundaries, or make a confirmed video cut.
@@ -4029,22 +4020,15 @@ export function ClipStudioEditor({
                 )}
               </section>
 
-              {captionRevealMode === "single-word" ? (
-                <div className="clip-studio-caption-word-pop-summary">
-                  <strong>{captionCues.length} spoken-word pops</strong>
-                  <p className="muted small">
-                    Each pop follows detected speech timing. Re-sync rebuilds that timing; review or correct wording in Transcript review. Style, size, position, and sync offset remain customizable below.
-                  </p>
-                  <p>{captionCues.slice(0, 12).map((cue) => cue.text).join(" · ")}{captionCues.length > 12 ? " …" : ""}</p>
-                </div>
-              ) : (
+              {(
                 <div className="clip-studio-caption-cue-list">
                 {captionCues.map((cue, index) => {
+                  if (index !== Math.min(captionCueSelection?.focusIndex ?? 0, captionCues.length - 1)) return null;
                   const cueTextEdited = isCaptionCueTextEdited(cue);
 
                   return (
                     <div className="clip-studio-caption-cue" key={`${cue.index}-${index}`}>
-                      <div className="clip-studio-caption-cue-times">
+                      <div hidden={captionSection !== "timing"} className="clip-studio-caption-cue-times">
                         <CaptionCueTimingInput
                           label="Start"
                           ariaLabel={`Caption ${index + 1} start time`}
@@ -4061,7 +4045,7 @@ export function ClipStudioEditor({
                         />
                       </div>
                       <label className="stack-sm clip-studio-caption-cue-text">
-                        Transcript line {index + 1}
+                        Caption line {index + 1}
                         <textarea
                           aria-label={`Edit caption words for transcript line ${index + 1}`}
                           className="clip-studio-caption-textarea"
@@ -4080,6 +4064,8 @@ export function ClipStudioEditor({
                           Reset line
                         </button>
                       ) : null}
+                      <button type="button" className="button secondary" onClick={() => { seekSourcePreviewTo(cue.startSeconds); requestPreviewPlayback(); }}>Replay this line</button>
+                      <details><summary>Split or merge line</summary>
                       <div className={styles.cueActions}>
                         <button
                           type="button"
@@ -4098,6 +4084,7 @@ export function ClipStudioEditor({
                           Merge next
                         </button>
                       </div>
+                      </details>
                     </div>
                   );
                 })}
@@ -4109,7 +4096,7 @@ export function ClipStudioEditor({
             </div>
           </details>
 
-          <section className={`clip-studio-caption-style-panel ${styles.stylePanel}`} aria-labelledby="clip-caption-style-heading">
+          <section hidden={captionSection !== "style"} className={`clip-studio-caption-style-panel ${styles.stylePanel}`} aria-labelledby="clip-caption-style-heading">
             <div className={`section-heading-row compact ${styles.styleHeading}`}>
               <div>
                 <p className="kicker">Caption personality</p>
@@ -4118,7 +4105,8 @@ export function ClipStudioEditor({
               <StatusBadge tone="accent">{resolvedCaptionStyle.name}</StatusBadge>
             </div>
 
-            <section className={styles.presetChooser} aria-labelledby="caption-preset-heading">
+            <details className={styles.presetChooser}>
+              <summary>Change style</summary>
               <div className={styles.presetChooserHeading}>
                 <div>
                   <p className="kicker">Start with a strong design</p>
@@ -4168,7 +4156,7 @@ export function ClipStudioEditor({
               <p className={styles.presetScrollHint}>
                 Scroll sideways to preview every style. Selection updates the canvas immediately.
               </p>
-            </section>
+            </details>
 
             <div className={`clip-studio-selected-style ${styles.selectedStyle}`}>
               <span className={`clip-studio-caption-style-preview ${resolvedCaptionStyle.className}`}>
@@ -5340,6 +5328,7 @@ export function ClipStudioEditor({
         <details className={styles.shortcutHelp}>
           <summary>Shortcuts</summary>
           <div>
+            <span><kbd>Space</kbd> Play / pause (outside text fields)</span>
             <span><kbd>⌘ Z</kbd> Undo</span>
             <span><kbd>⌘ ⇧ Z</kbd> Redo</span>
             <span><kbd>Alt K</kbd> Play or pause</span>

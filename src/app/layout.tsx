@@ -7,6 +7,7 @@ import "./styles/premium-foundation.css";
 import "./styles/premium-workflows.css";
 import "./styles/premium-review-ready.css";
 import "./styles/premium-studio.css";
+import "./styles/navigation-visibility.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000"),

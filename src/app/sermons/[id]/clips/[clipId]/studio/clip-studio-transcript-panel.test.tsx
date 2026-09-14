@@ -93,18 +93,17 @@ describe("Clip Studio transcript and timing controls", () => {
     expect(markup).toContain("Selected line");
     expect(markup.match(/Check wording/g)).toHaveLength(1);
     expect(markup).toContain("Follow playback");
-    expect(markup).toContain("Edit clip range");
-    expect(markup).toContain("Drag the white edges");
-    expect(markup).toContain('aria-label="Clip start. Drag left to start earlier."');
-    expect(markup).toContain('aria-label="Clip end. Drag right to end later."');
-    expect(markup).toContain('min="0"');
-    expect(markup).toContain(">Extend 5s earlier</button>");
-    expect(markup).toContain(">Extend 5s later</button>");
+    expect(markup).not.toContain("Edit clip range");
+    expect(markup).not.toContain("Drag the white edges");
+    expect(markup).not.toContain("Extend 5s");
+    expect(markup).toContain("Hide transcript");
+    expect(markup).toContain('aria-controls="transcript-panel-body"');
+    expect(markup).toContain('aria-label="Transcript panel width"');
     expect(markup).toContain("Caption edits change on-screen text only—not the spoken audio.");
     expect(markup).toContain('type="checkbox" checked=""');
     expect(markup).toContain('aria-label="Play selected transcript line"');
-    expect(markup).toContain('aria-label="Set clip start to 0:10"');
-    expect(markup).toContain('aria-label="Set clip end to 0:12"');
+    expect(markup).toContain('aria-label="Start clip here at 0:10"');
+    expect(markup).toContain('aria-label="End clip here at 0:12"');
     expect(markup).toContain('aria-label="Edit caption words"');
     expect(markup).toContain("Review text");
     expect(markup).toContain('href="/sermons/sermon-1/review#clip-clip-1"');
@@ -112,6 +111,22 @@ describe("Clip Studio transcript and timing controls", () => {
     expect(markup).toContain("↑↓ navigate · Enter plays · / searches");
     expect(markup).toContain("Snap to sentence");
     expect(markup).toContain("Reset AI");
+  });
+
+  it("defaults to in-clip wording and keeps precise trimming in the timeline", () => {
+    const props = { ...panelProps, transcriptSegments: [
+      ...panelProps.transcriptSegments,
+      { id: "outside", startTimeSeconds: 45, endTimeSeconds: 49, text: "Outside context" },
+    ] };
+    const markup = renderToStaticMarkup(<ClipStudioTranscriptPanel {...props} />);
+    expect(markup).toContain('aria-pressed="true">In clip</button>');
+    expect(markup).not.toContain('data-transcript-segment-id="outside"');
+    expect(markup).toContain(">Start clip here</button>");
+    expect(markup).toContain(">End clip here</button>");
+    expect(markup).toContain(">Edit captions</button>");
+    const timeline = renderToStaticMarkup(<ClipStudioTimeline {...props} />);
+    expect(timeline).toContain("Extend 5s earlier");
+    expect(timeline).toContain("Clip start handle");
   });
 
   it("filters transcript lines by spoken words and clip inclusion", () => {
@@ -207,8 +222,7 @@ describe("Clip Studio transcript and timing controls", () => {
     expect(markup).toContain("Partially included in clip");
     expect(markup).toContain('data-clip-status="included"');
     expect(markup).toContain("Included in clip");
-    expect(markup).toContain('data-clip-status="outside"');
-    expect(markup).toContain("Outside clip");
+    expect(markup).not.toContain('data-clip-status="outside"');
     expect(markup).toMatch(/aria-current="true"[^>]*data-transcript-segment-id="line-2"/);
     expect(markup).toMatch(/aria-pressed="true"[^>]*data-transcript-segment-id="line-2"/);
 
@@ -229,8 +243,8 @@ describe("Clip Studio transcript and timing controls", () => {
 
     expect(markup).toContain("Captions are off");
     expect(markup).toContain("Enable captions");
-    expect(markup).toContain("Review required");
-    expect(markup).toContain('aria-label="Review and confirm spoken words before export"');
+    expect(markup).toContain("Review wording");
+    expect(markup).toContain('aria-label="Review wording against audio"');
 
     previewState.editPreview.applyCaptionsToClip = true;
   });
@@ -310,7 +324,7 @@ describe("Clip Studio transcript and timing controls", () => {
     expect(endPercentAfterEarlierStart).toBe(originalEndPercent);
   });
 
-  it("renders the same ruler limits after moving only the draft start", () => {
+  it("keeps the transcript range summary in sync after moving the draft start", () => {
     previewState.editPreview.startSeconds = 115;
     previewState.editPreview.endSeconds = 150;
     previewState.editPreview.durationSeconds = 35;
@@ -326,9 +340,10 @@ describe("Clip Studio transcript and timing controls", () => {
       />,
     );
 
-    expect(markup).toContain('aria-label="Clip start. Drag left to start earlier."');
-    expect(markup).toMatch(/min="30"[^>]*max="240"[^>]*aria-label="Clip start\. Drag left to start earlier\."[^>]*value="115"/);
-    expect(markup).toMatch(/min="30"[^>]*max="240"[^>]*aria-label="Clip end\. Drag right to end later\."[^>]*value="150"/);
+    expect(markup).toContain("1:55");
+    expect(markup).toContain("2:30");
+    expect(markup).toContain("0:35");
+    expect(markup).not.toContain("Quick clip boundary editor");
 
     previewState.editPreview.startSeconds = 10;
     previewState.editPreview.endSeconds = 40;

@@ -101,7 +101,7 @@ describe("caption burn service validation", () => {
     expect(result.reason).toContain("already running");
   });
 
-  it("blocks caption burn while transcript review is still required", () => {
+  it("allows caption burn with a non-blocking wording advisory", () => {
     const result = __captionBurnTestUtils.validateCaptionBurnEligibility({
       status: "APPROVED",
       renderStatus: "COMPLETED",
@@ -113,8 +113,7 @@ describe("caption burn service validation", () => {
       transcriptSafetyStatus: "REVIEW_REQUIRED",
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.reason).toContain("confirm the transcript wording");
+    expect(result.ok).toBe(true);
   });
 
   it("builds caption burn metadata payload", () => {

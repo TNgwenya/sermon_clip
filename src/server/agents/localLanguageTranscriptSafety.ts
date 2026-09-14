@@ -149,7 +149,7 @@ export function decideClipTranscriptSafety(input: {
   return {
     status: reasonList.length > 0 ? "REVIEW_REQUIRED" : "TRUSTED",
     reasons: reasonList,
-    blocker: reasonList.length > 0 ? TRANSCRIPT_SAFETY_REVIEW_BLOCKER : null,
+    blocker: null,
   };
 }
 
@@ -160,10 +160,8 @@ export function isTranscriptReviewRequired(clip: PublishingSafetyInput): boolean
 export function validateTranscriptSafetyForPublishing(
   clip: PublishingSafetyInput,
 ): { ok: true } | { ok: false; reason: string } {
-  if (isTranscriptReviewRequired(clip)) {
-    return { ok: false, reason: TRANSCRIPT_SAFETY_REVIEW_MESSAGE };
-  }
-
+  // Retain confidence metadata for the review marker, without blocking manual work.
+  void clip;
   return { ok: true };
 }
 
@@ -172,7 +170,7 @@ export function mergeTranscriptSafetyBlocker(existing: unknown): string[] {
     ? existing.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
     : [];
 
-  return Array.from(new Set([...blockers, TRANSCRIPT_SAFETY_REVIEW_BLOCKER]));
+  return removeTranscriptSafetyBlocker(blockers);
 }
 
 export function removeTranscriptSafetyBlocker(existing: unknown): string[] {

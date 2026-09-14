@@ -296,7 +296,6 @@ export async function bulkScheduleWeeklyPlanAction(
         id: { in: clipIds },
         sermonId: authorizedSermon.id,
         sermon: scopedOwnership,
-        transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
         OR: [{ exportStatus: "COMPLETED" }, { status: "EXPORTED" }],
       },
       select: {

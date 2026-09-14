@@ -197,7 +197,6 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
   };
   const clipWhere: Prisma.ClipCandidateWhereInput = {
     ...scopeWhere,
-    transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
     OR: [
       { exportStatus: "COMPLETED" },
       { status: "EXPORTED" },
@@ -205,7 +204,6 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
   };
   const preparingWhere: Prisma.ClipCandidateWhereInput = {
     ...scopeWhere,
-    transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
     OR: [
       { renderStatus: { in: ["QUEUED", "RENDERING"] } },
       { captionStatus: "GENERATING" },
@@ -217,7 +215,6 @@ async function ReadyToPostContent({ params }: { params: SearchParams }) {
   const approvedWaitingWhere: Prisma.ClipCandidateWhereInput = {
     ...scopeWhere,
     status: "APPROVED",
-    transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
     exportStatus: { not: "COMPLETED" },
     NOT: {
       OR: [

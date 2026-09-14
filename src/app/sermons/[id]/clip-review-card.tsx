@@ -8,7 +8,6 @@ import {
   burnSubtitlesForClipAction,
   exportVerticalClipAction,
   generateSubtitlesForClipAction,
-  markClipTranscriptReviewedAction,
   reburnSubtitlesForClipAction,
   reexportVerticalClipAction,
   regenerateClipOutdatedAssetsAction,
@@ -332,10 +331,6 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
     runAction(() => rejectClipCandidateAction(clip.id));
   }
 
-  function onMarkTranscriptReviewed() {
-    runAction(() => markClipTranscriptReviewedAction(clip.id));
-  }
-
   function onEditStart() {
     if (isExported) {
       setActionMessage("Ready-to-post clips are locked. Open Clip Studio and prepare a new version if you need changes.");
@@ -470,7 +465,7 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
         <div className="clip-badge-row">
           <span className={statusBadgeClass}>{clip.status}</span>
           <span className={qualityBadgeClass}>{toQualityLabel(qualityLabel)}</span>
-          {transcriptReviewRequired ? <span className="status-pill quality-needs-editing">Transcript review needed</span> : null}
+          {transcriptReviewRequired ? <span className="status-pill">Review wording against audio</span> : null}
           {transcriptReviewed ? <span className="status-pill quality-good-needs-review">Transcript reviewed</span> : null}
           {clip.renderStatus === "COMPLETED" ? <span className="status-pill">Rendered preview available</span> : null}
           <span className={riskBadgeClass}>{clip.riskLevel} RISK</span>
@@ -480,24 +475,6 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
 
       {!isEditing ? (
         <div className="stack-sm">
-          {transcriptReviewRequired ? (
-            <div className="warning-banner stack-sm">
-              <p>
-                <strong>Review the words before approval.</strong> Listen to the moment and confirm any local-language, code-switched, or lower-confidence wording before creating captions or a final post.
-              </p>
-              {clip.transcriptSafetyReasons && clip.transcriptSafetyReasons.length > 0 ? (
-                <p className="muted small">Reason: {clip.transcriptSafetyReasons.map((reason) => reason.replace(/_/g, " ").toLowerCase()).join(", ")}</p>
-              ) : null}
-              <button
-                type="button"
-                className="button secondary"
-                onClick={onMarkTranscriptReviewed}
-                disabled={isPending}
-              >
-                I listened and checked these words
-              </button>
-            </div>
-          ) : null}
           {transcriptReviewed ? (
             <p className="status-help">
               Transcript reviewed{clip.transcriptSafetyReviewedAt ? ` on ${new Date(clip.transcriptSafetyReviewedAt).toLocaleString()}` : ""}.
@@ -983,8 +960,8 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
       )}
 
       <div className="actions-row">
-        <button type="button" className="button primary" onClick={onApprove} disabled={isPending || isExported || transcriptReviewRequired}>
-          {transcriptReviewRequired ? "Check transcript first" : "Approve"}
+        <button type="button" className="button primary" onClick={onApprove} disabled={isPending || isExported}>
+          Approve
         </button>
         <button type="button" className="button danger" onClick={onReject} disabled={isPending || isExported}>
           Reject
@@ -1019,7 +996,6 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
           onClick={onExportVertical}
           disabled={
             isPending ||
-            transcriptReviewRequired ||
             clip.renderStatus !== "COMPLETED" ||
             clip.exportStatus === "EXPORTING" ||
             clip.exportStatus === "COMPLETED"
@@ -1031,7 +1007,7 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
           type="button"
           className="button tertiary"
           onClick={onReexportVertical}
-          disabled={isPending || transcriptReviewRequired || clip.exportStatus !== "COMPLETED"}
+          disabled={isPending || clip.exportStatus !== "COMPLETED"}
         >
           Re-export Vertical
         </button>
@@ -1039,7 +1015,7 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
           type="button"
           className="button tertiary"
           onClick={onRegenerateCaptions}
-          disabled={isPending || transcriptReviewRequired || (clip.status !== "APPROVED" && clip.status !== "EXPORTED")}
+          disabled={isPending || (clip.status !== "APPROVED" && clip.status !== "EXPORTED")}
         >
           Regenerate Captions
         </button>
@@ -1049,7 +1025,6 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
           onClick={onBurnCaptions}
           disabled={
             isPending ||
-            transcriptReviewRequired ||
             clip.status !== "APPROVED" ||
             clip.renderStatus !== "COMPLETED" ||
             captionStatus !== "GENERATED" ||
@@ -1063,7 +1038,7 @@ export function ClipReviewCard({ clip }: ClipReviewCardProps) {
           type="button"
           className="button tertiary"
           onClick={onReburnCaptions}
-          disabled={isPending || transcriptReviewRequired || clip.renderStatus !== "COMPLETED" || captionStatus !== "GENERATED"}
+          disabled={isPending || clip.renderStatus !== "COMPLETED" || captionStatus !== "GENERATED"}
         >
           Re-burn Captions
         </button>

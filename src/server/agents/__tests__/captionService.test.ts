@@ -288,18 +288,14 @@ describe("caption service helpers", () => {
     })).toEqual({ ok: true });
   });
 
-  it("blocks automatic captions when transcript review is still required", () => {
+  it("allows requested captions for an approved clip with uncertain wording", () => {
     const result = __captionServiceTestUtils.validateCaptionGenerationEligibility({
       id: "zulu-review-clip",
       status: "APPROVED",
       transcriptSafetyStatus: "REVIEW_REQUIRED",
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("Expected transcript review to block caption generation.");
-    }
-    expect(result.reason).toContain("confirm the transcript wording");
+    expect(result.ok).toBe(true);
   });
 
   it("does not treat empty subtitle files as reusable caption assets", async () => {

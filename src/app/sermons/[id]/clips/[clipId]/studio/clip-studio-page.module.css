@@ -257,6 +257,47 @@
   gap: clamp(0.65rem, 1.1vw, 1rem);
 }
 
+.workspaceGrid :global(.transcript-panel-body) {
+  display: contents;
+}
+
+.workspaceGrid :global(.transcript-panel-body[hidden]) {
+  display: none;
+}
+
+.workspaceGrid :global(.transcript-panel-toggle) {
+  min-height: 44px;
+  align-self: start;
+  font-size: 0.78rem;
+}
+
+.workspaceGrid :global(.transcript-panel-options) {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.workspaceGrid :global(.transcript-panel-options summary) {
+  cursor: pointer;
+  padding-block: 0.5rem;
+}
+
+.workspaceGrid :global(.transcript-panel-width) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-block: 0.6rem;
+}
+
+.workspaceGrid :global(.clip-studio-transcript-actions) {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 1180px) {
+  .workspaceGrid :global(.transcript-panel-width) {
+    display: none;
+  }
+}
+
 .previewColumn {
   gap: 0.42rem;
   border: 1px solid var(--page-studio-soft-line);
@@ -280,7 +321,7 @@
 }
 
 .viewportChrome {
-  display: flex;
+  display: none;
   min-height: 2.15rem;
   gap: 0.7rem;
   align-items: center;
@@ -386,15 +427,71 @@
 }
 
 @media (min-width: 1181px) {
+  .previewColumn {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    align-self: stretch;
+    position: static;
+    height: 100%;
+  }
+
+  .previewColumn > :global(.clip-studio-preview-card) {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    flex: 1;
+    overflow: auto;
+  }
+
+  .previewColumn :global(.clip-studio-preview-body) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    min-height: 0;
+  }
+
+  .previewColumn :global(.clip-studio-video-shell) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    min-height: 0;
+    width: 100%;
+  }
+
+  .previewColumn :global(.clip-studio-preview-control-stack) {
+    font-size: 0.78rem;
+    max-height: 8rem;
+    overflow: auto;
+  }
+
+  .previewColumn :global(.clip-studio-preview-control-stack summary) {
+    cursor: pointer;
+    padding: 0.4rem;
+    color: var(--text-muted);
+  }
   .shell :global(.clip-studio-mobile-taskbar) {
     display: none !important;
   }
 
   .shell .workspaceGrid {
-    grid-template-columns: minmax(300px, 0.88fr) minmax(460px, 1.5fr) minmax(330px, 0.94fr);
+    grid-template-columns: var(--transcript-panel-width, 300px) minmax(0, 1.5fr) minmax(280px, 0.94fr);
     grid-template-rows: minmax(28rem, 1fr) minmax(9.5rem, auto);
     height: max(36rem, calc(100dvh - 9.5rem));
     max-height: 64rem;
+  }
+
+  .shell .workspaceGrid:has(> [data-transcript-collapsed="true"]) {
+    grid-template-columns: 52px minmax(0, 1.5fr) minmax(280px, 0.94fr);
+  }
+
+  .workspaceGrid > :global([data-transcript-collapsed="true"]) {
+    padding: 0.25rem;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .workspaceGrid :global([data-transcript-collapsed="true"] .transcript-panel-toggle) {
+    writing-mode: vertical-rl;
+    padding: 0.8rem 0.5rem;
+    min-width: 44px;
   }
 }
 

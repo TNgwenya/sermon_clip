@@ -80,6 +80,15 @@ vi.mock("@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context", 
 import { ClipStudioPrepareButton } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-prepare-button";
 
 describe("ClipStudioPrepareButton", () => {
+  it("does not disable preparation or repeat banners for uncertain wording", () => {
+    const markup = renderToStaticMarkup(
+      <ClipStudioPrepareButton clipId="clip-1" clipStatus="APPROVED"
+        hasPreparedMedia={false} serverNeedsUpdate={false} transcriptReviewRequired />,
+    );
+    expect(markup).toContain("Save &amp; prepare final video");
+    expect(markup).not.toContain("Review transcript before preparing");
+    expect(markup).not.toContain("Transcript review required");
+  });
   it("gives the compact checklist one unambiguous accessible name", () => {
     const markup = renderToStaticMarkup(
       <ClipStudioPrepareButton

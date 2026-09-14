@@ -43,6 +43,7 @@ import {
   selectUnresolvedPastorFailedJobs,
 } from "@/lib/pastorWorkflow";
 import { buildCustomerValueMilestones } from "@/lib/orchestrationProgress";
+import { isBasicFallbackClip, transcriptReadinessLabel } from "@/lib/sermonReadiness";
 
 type ClipStatus = "SUGGESTED" | "APPROVED" | "REJECTED" | "EXPORTED";
 type BoundaryQuality = "GOOD" | "NEEDS_REVIEW" | "BAD";
@@ -1034,6 +1035,7 @@ export default async function SermonDetailPage({
   const hasExportedClips = clipCounts.exported > 0;
   const hasTranscriptRecord = Boolean(sermon.transcript);
   const hasTranscriptSegments = sermon._count.transcriptSegments > 0;
+  const basicFallbackCount = orderedClipCandidates.filter((clip) => clip.status !== "REJECTED" && isBasicFallbackClip(clip)).length;
   const clipGenerationComplete = sermon.clipCandidates.length > 0;
   const latestClipCreatedAt = sermon.clipCandidates.reduce<Date | null>(
     (latest, clip) => !latest || clip.createdAt > latest ? clip.createdAt : latest,
@@ -1322,7 +1324,8 @@ export default async function SermonDetailPage({
     && strongestClip.overlayFreshness === "UP_TO_DATE",
   );
   const customerValueMilestones = buildCustomerValueMilestones(sermon.orchestrationJobs, {
-    rankedSuggestionCount: orderedClipCandidates.filter((clip) => clip.status !== "REJECTED").length,
+    rankedSuggestionCount: orderedClipCandidates.filter((clip) => clip.status !== "REJECTED" && !isBasicFallbackClip(clip)).length,
+    basicSuggestionCount: basicFallbackCount,
     priorityPreviewReadyCount,
     priorityPreviewTargetCount,
     firstBrandedPreviewReady,
@@ -1545,7 +1548,7 @@ export default async function SermonDetailPage({
             <span>{workspaceJourney[workspaceStageIndex].label} · {workspaceStageIndex + 1} of 4</span>
           </div>
           <dl>
-            <div><dt>Transcript</dt><dd>{hasTranscriptRecord && hasTranscriptSegments ? "Ready" : "Not ready"}</dd></div>
+            <div><dt>Transcript</dt><dd>{transcriptReadinessLabel(hasTranscriptRecord, hasTranscriptSegments, basicFallbackCount > 0)}</dd></div>
             <div><dt>Moments found</dt><dd>{clipCounts.total}</dd></div>
             <div><dt>Approved</dt><dd>{readyClipCount}</dd></div>
             <div><dt>Ready to publish</dt><dd>{clipCounts.exported}</dd></div>

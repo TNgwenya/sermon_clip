@@ -657,10 +657,8 @@ export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandi
     (postReady.postReadyStatus === "POST_READY" || postReady.postReadyStatus === "GOOD_NEEDS_REVIEW");
   const qualityLabel: ClipQualityLabel = corePastorGradeBlocked
     ? "REJECT"
-    : worshipReviewOnly
+    : worshipReviewOnly || (transcriptReviewRequired && postReady.postReadyStatus === "POST_READY")
       ? "GOOD_NEEDS_REVIEW"
-    : transcriptReviewRequired
-      ? "NEEDS_EDITING"
     : postReady.postReadyStatus;
   const resolvedPostReady: PostReadyReviewResult = worshipReviewOnly
     ? {
@@ -676,21 +674,14 @@ export function scoreProfessionalClipQuality(candidate: ProfessionalQualityCandi
         ])),
         recommendedNextAction: "REVIEW_CLIP",
       }
-    : transcriptReviewRequired && postReady.postReadyStatus !== "REJECT"
-    ? {
-        ...postReady,
-        postReadyStatus: "NEEDS_EDITING",
-        postReadyReasons: Array.from(new Set([
-          ...postReady.postReadyReasons,
-          "Transcript wording needs a human check before this clip is ready.",
-        ])),
-        postReadyBlockers: Array.from(new Set([
-          ...postReady.postReadyBlockers,
-          "Review the transcript wording before captions, export, or posting.",
-        ])),
-        recommendedNextAction: "REVIEW_CLIP",
-      }
-    : postReady;
+    : transcriptReviewRequired && postReady.postReadyStatus === "POST_READY"
+      ? {
+          ...postReady,
+          postReadyStatus: "GOOD_NEEDS_REVIEW",
+          postReadyReasons: [...postReady.postReadyReasons, "Review wording against audio."],
+          recommendedNextAction: "REVIEW_CLIP",
+        }
+      : postReady;
   const qualityReasons = [
     hook.hookReason,
     arc.whyThisClipFeelsComplete,

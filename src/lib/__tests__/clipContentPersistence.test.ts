@@ -206,8 +206,8 @@ describe("clip content persistence", () => {
     });
   });
 
-  it("does not let single or batch decisions bypass transcript review", () => {
-    expect(canChooseClipForProduction("REVIEW_REQUIRED")).toBe(false);
+  it("allows explicit clip decisions while retaining the wording advisory", () => {
+    expect(canChooseClipForProduction("REVIEW_REQUIRED")).toBe(true);
     expect(canChooseClipForProduction("REVIEWED")).toBe(true);
     expect(canChooseClipForProduction("TRUSTED")).toBe(true);
   });

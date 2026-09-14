@@ -7,6 +7,14 @@ vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
 }));
 
+vi.mock("next/headers", () => ({
+  headers: async () => new Headers({
+    "x-sermonclip-organization-id": "org_local_default",
+    "x-sermonclip-campus-id": "campus_local_default",
+    "x-sermonclip-actor-id": "user_local_bootstrap",
+    "x-sermonclip-authentication": "local-development",
+  }),
+}));
 const createdSermonIds: string[] = [];
 
 describe("clip approval transcript safety", () => {
@@ -19,7 +27,7 @@ describe("clip approval transcript safety", () => {
     }
   });
 
-  it("blocks the legacy approval action until transcript wording is explicitly reviewed", async () => {
+  it("allows explicit approval without falsely marking uncertain wording as reviewed", async () => {
     const sermonId = `approval-safety-${Date.now()}`;
     const clipId = `${sermonId}-clip`;
     createdSermonIds.push(sermonId);
@@ -27,6 +35,8 @@ describe("clip approval transcript safety", () => {
     await prisma.sermon.create({
       data: {
         id: sermonId,
+        organizationId: "org_local_default",
+        campusId: "campus_local_default",
         youtubeUrl: `local-approval-test://${sermonId}`,
         title: "Approval Safety Test",
         speakerName: "Pastor Test",
@@ -60,12 +70,11 @@ describe("clip approval transcript safety", () => {
     const result = await approveClipCandidateAction(clipId);
 
     expect(result).toMatchObject({
-      success: false,
-      message: "Listen to the clip and confirm the transcript wording before approval.",
+      success: true,
     });
     await expect(prisma.clipCandidate.findUniqueOrThrow({
       where: { id: clipId },
-      select: { status: true },
-    })).resolves.toEqual({ status: "SUGGESTED" });
+      select: { status: true, transcriptSafetyStatus: true },
+    })).resolves.toEqual({ status: "APPROVED", transcriptSafetyStatus: "REVIEW_REQUIRED" });
   });
 });

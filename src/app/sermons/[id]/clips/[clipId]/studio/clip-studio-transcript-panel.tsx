@@ -825,6 +825,14 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     transcriptReviewRequired = false,
     transcriptSegments,
   } = props;
+  const panelRef = useRef<HTMLElement | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(300);
+  useEffect(() => {
+    const grid = panelRef.current?.parentElement;
+    grid?.style.setProperty("--transcript-panel-width", `${panelWidth}px`);
+    return () => { grid?.style.removeProperty("--transcript-panel-width"); };
+  }, [panelWidth]);
   const focusedLineRef = useRef<HTMLButtonElement | null>(null);
   const transcriptListRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -834,7 +842,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
   );
   const [followPlayback, setFollowPlayback] = useState(true);
   const [transcriptQuery, setTranscriptQuery] = useState("");
-  const [transcriptFilter, setTranscriptFilter] = useState<TranscriptFilter>("all");
+  const [transcriptFilter, setTranscriptFilter] = useState<TranscriptFilter>("clip");
   const {
     absolutePlayheadSeconds,
     activeClipEndSeconds,
@@ -844,12 +852,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     previewClock,
     requestPreviewPlayback,
     seekToAbsolute,
-    selectedEndPercent,
     selectedSegmentIds,
-    selectedStartPercent,
-    selectedWidthPercent,
-    timelineEnd,
-    timelineStart,
   } = useClipStudioTranscriptState(props);
   const currentSegment = useMemo(
     () =>
@@ -995,29 +998,6 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
     );
   }
 
-  function updateVisibleClipBoundary(
-    command: "set-start-seconds" | "set-end-seconds",
-    seconds: number,
-  ) {
-    const nextSeconds = resolveTimelineBoundarySeconds({
-      command,
-      seconds,
-      timelineStart,
-      timelineEnd,
-      activeClipStartSeconds,
-      activeClipEndSeconds,
-    });
-    if (nextSeconds === null) {
-      return;
-    }
-
-    window.dispatchEvent(
-      new CustomEvent(CLIP_STUDIO_TRANSCRIPT_COMMAND_EVENT, {
-        detail: { command, seconds: nextSeconds },
-      }),
-    );
-  }
-
   function openCaptionWordingEditor() {
     if (!editPreview.applyCaptionsToClip) {
       window.dispatchEvent(
@@ -1039,6 +1019,8 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
 
   return (
     <aside
+      ref={panelRef}
+      data-transcript-collapsed={collapsed}
       id="clip-studio-transcript"
       className="card clip-studio-transcript-rail stack-md"
       aria-label="Spoken transcript and clip boundaries"
@@ -1046,6 +1028,10 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
       tabIndex={-1}
       onKeyDown={handleTranscriptPanelKeyDown}
     >
+      <button type="button" className="button tertiary transcript-panel-toggle" aria-expanded={!collapsed} aria-controls="transcript-panel-body" onClick={() => setCollapsed(!collapsed)}>
+        {collapsed ? "Show transcript" : "Hide transcript"}
+      </button>
+      <div id="transcript-panel-body" className="transcript-panel-body" hidden={collapsed}>
       <div className="clip-studio-transcript-head">
         <div>
           <h2>Transcript</h2>
@@ -1114,82 +1100,6 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
         </article>
       </div>
 
-      <section className="clip-studio-visible-range-editor" aria-labelledby="clip-studio-visible-range-heading">
-        <div className="clip-studio-visible-range-heading">
-          <div>
-            <span className="kicker">Edit clip range</span>
-            <strong id="clip-studio-visible-range-heading">Drag the white edges</strong>
-          </div>
-          <span className="status-pill">Draft</span>
-        </div>
-        <p id="clip-studio-visible-range-help" className="muted small">
-          Drag the left edge toward Earlier to include more of the sermon. Drag the right edge for a later ending.
-        </p>
-        <div
-          className="clip-studio-timeline-track clip-studio-timeline-track-interactive clip-studio-visible-range-track"
-          aria-label="Quick clip boundary editor"
-        >
-          <span
-            className="clip-studio-timeline-selection"
-            style={{ left: `${selectedStartPercent}%`, width: `${selectedWidthPercent}%` }}
-          />
-          <span
-            className="clip-studio-timeline-handle is-start"
-            style={{ left: `${selectedStartPercent}%` }}
-            aria-hidden="true"
-          />
-          <span
-            className="clip-studio-timeline-handle is-end"
-            style={{ left: `${selectedEndPercent}%` }}
-            aria-hidden="true"
-          />
-          <input
-            className="clip-studio-timeline-slider clip-studio-timeline-slider-start"
-            type="range"
-            min={timelineStart}
-            max={timelineEnd}
-            step={0.1}
-            value={activeClipStartSeconds}
-            onChange={(event) => updateVisibleClipBoundary("set-start-seconds", event.currentTarget.valueAsNumber)}
-            aria-label="Clip start. Drag left to start earlier."
-            aria-describedby="clip-studio-visible-range-help"
-          />
-          <input
-            className="clip-studio-timeline-slider clip-studio-timeline-slider-end"
-            type="range"
-            min={timelineStart}
-            max={timelineEnd}
-            step={0.1}
-            value={activeClipEndSeconds}
-            onChange={(event) => updateVisibleClipBoundary("set-end-seconds", event.currentTarget.valueAsNumber)}
-            aria-label="Clip end. Drag right to end later."
-            aria-describedby="clip-studio-visible-range-help"
-          />
-        </div>
-        <div className="clip-studio-visible-range-labels muted small" aria-hidden="true">
-          <span>Earlier · {formatSecondsForPastorView(timelineStart)}</span>
-          <span>{formatSecondsForPastorView(timelineEnd)} · Later</span>
-        </div>
-        <div className="clip-studio-visible-range-actions">
-          <button
-            type="button"
-            className="button secondary"
-            disabled={activeClipStartSeconds <= timelineStart}
-            onClick={() => updateVisibleClipBoundary("set-start-seconds", activeClipStartSeconds - 5)}
-          >
-            Extend 5s earlier
-          </button>
-          <button
-            type="button"
-            className="button tertiary"
-            disabled={activeClipEndSeconds >= timelineEnd}
-            onClick={() => updateVisibleClipBoundary("set-end-seconds", activeClipEndSeconds + 5)}
-          >
-            Extend 5s later
-          </button>
-        </div>
-      </section>
-
       {focusedSegment ? (
         <div
           className="clip-studio-transcript-active"
@@ -1237,17 +1147,17 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
               type="button"
               className="button secondary"
               onClick={() => dispatchTranscriptCommand("set-start", focusedSegment)}
-              aria-label={`Set clip start to ${formatSecondsForPastorView(focusedSegment.startTimeSeconds)}`}
+              aria-label={`Start clip here at ${formatSecondsForPastorView(focusedSegment.startTimeSeconds)}`}
             >
-              Set In
+              Start clip here
             </button>
             <button
               type="button"
               className="button secondary"
               onClick={() => dispatchTranscriptCommand("set-end", focusedSegment)}
-              aria-label={`Set clip end to ${formatSecondsForPastorView(focusedSegment.endTimeSeconds)}`}
+              aria-label={`End clip here at ${formatSecondsForPastorView(focusedSegment.endTimeSeconds)}`}
             >
-              Set Out
+              End clip here
             </button>
             <button
               type="button"
@@ -1257,7 +1167,7 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
               aria-describedby={wordingCorrectionLocked ? "clip-studio-wording-requirement" : undefined}
               aria-label={editPreview.applyCaptionsToClip ? "Edit caption words" : "Enable captions to edit"}
             >
-              Captions
+              Edit captions
             </button>
           </div>
           <div className="clip-studio-transcript-active-footer">
@@ -1271,10 +1181,10 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
             <Link
               href={transcriptReviewHref}
               aria-label={transcriptReviewRequired
-                ? "Review and confirm spoken words before export"
+                ? "Review wording against audio"
                 : "Review transcript text"}
             >
-              {transcriptReviewRequired ? "Review required" : "Review text"}
+              {transcriptReviewRequired ? "Review wording" : "Review text"}
             </Link>
           </div>
           {wordingCorrectionLocked ? (
@@ -1369,6 +1279,11 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
         )}
       </div>
 
+      <details className="transcript-panel-options">
+        <summary>Transcript options & help</summary>
+        <label className="transcript-panel-width">Panel width
+          <input type="range" min="260" max="380" step="10" value={panelWidth} onChange={(event) => setPanelWidth(event.currentTarget.valueAsNumber)} aria-label="Transcript panel width" />
+        </label>
       <div className="clip-studio-transcript-utility-row">
         <span>↑↓ navigate · Enter plays · / searches</span>
         <div>
@@ -1387,6 +1302,8 @@ export function ClipStudioTranscriptPanel(props: ClipStudioTranscriptPanelProps)
             Reset AI
           </button>
         </div>
+      </div>
+      </details>
       </div>
     </aside>
   );
@@ -1811,6 +1728,7 @@ export function ClipStudioTimeline(props: ClipStudioTranscriptPanelProps) {
 
     if (event.key === " ") {
       event.preventDefault();
+      if (event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing) return;
       requestPreviewPlayback("toggle");
       return;
     }

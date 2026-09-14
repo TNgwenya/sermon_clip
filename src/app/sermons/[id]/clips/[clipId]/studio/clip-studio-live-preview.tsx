@@ -3,6 +3,9 @@
 import Image from "next/image";
 import { type CSSProperties, type KeyboardEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { ClipStudioCaptionWords } from "./clip-studio-caption-words";
+import { shouldToggleStudioPlayback } from "@/lib/studioPlaybackShortcut";
+
 import { EmptyState, StatusBadge } from "@/components/ui";
 import {
   BRANDING_PRESET_LABELS,
@@ -1288,6 +1291,17 @@ export function ClipStudioLivePreview({
   }, []);
 
   useEffect(() => {
+    function onSpace(event: globalThis.KeyboardEvent) {
+      if (!shouldToggleStudioPlayback(event) || !videoRef.current
+        || document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) return;
+      event.preventDefault();
+      togglePreviewPlayback();
+    }
+    window.addEventListener("keydown", onSpace);
+    return () => window.removeEventListener("keydown", onSpace);
+  }, [togglePreviewPlayback]);
+
+  useEffect(() => {
     if (!isPreviewPlaying) {
       return undefined;
     }
@@ -1346,7 +1360,6 @@ export function ClipStudioLivePreview({
     <section id="clip-studio-preview" className="card clip-studio-preview-card stack-sm" tabIndex={-1}>
       <div className="section-heading-row">
         <div className="stack-sm">
-          <p className="kicker">Preview</p>
           <h2>Live preview</h2>
         </div>
         <div className={styles.previewHeadingActions}>
@@ -1364,6 +1377,7 @@ export function ClipStudioLivePreview({
 
       <div className="clip-studio-preview-body">
         <div className="clip-studio-video-shell">
+          <div className={styles.previewViewport}>
           <div
             ref={frameRef}
             className={`clip-studio-live-frame ${formatClassName[exportSettings.primaryFormat]} ${frameClassName[previewFramingMode]} ${
@@ -1651,20 +1665,8 @@ export function ClipStudioLivePreview({
                 title="Drag captions, or use arrow keys to nudge"
               >
                 <span aria-label={captionDisplayText}>
-                  {captionWords.map((word, index) => (
-                    <span
-                      key={`${word}-${index}`}
-                      aria-hidden="true"
-                      className={[
-                        "clip-studio-live-caption-word",
-                        styles.designWord,
-                        index === activeCaptionWordIndex ? "is-active" : "",
-                        index === activeCaptionWordIndex ? styles.designWordActive : "",
-                      ].filter(Boolean).join(" ")}
-                    >
-                      {word}
-                    </span>
-                  ))}
+                  <ClipStudioCaptionWords words={captionWords} activeIndex={activeCaptionWordIndex}
+                    wordClassName={styles.designWord} activeClassName={styles.designWordActive} />
                 </span>
               </div>
             ) : null}
@@ -1677,10 +1679,12 @@ export function ClipStudioLivePreview({
             ) : null}
           </div>
 
+          </div>
+
           {canPreview && playbackSrc ? (
             <div className="stack-sm">
               <div className="clip-studio-player-controls" aria-label="Live preview playback controls">
-                <button type="button" className="button secondary" onClick={togglePreviewPlayback}>
+                <button type="button" className="button secondary" onClick={togglePreviewPlayback} aria-keyshortcuts="Space" title="Play or pause (Space)">
                   {isPreviewPlaying ? "Pause" : "Play"}
                 </button>
                 <button
@@ -1722,7 +1726,8 @@ export function ClipStudioLivePreview({
           ) : null}
         </div>
 
-        <div className="clip-studio-preview-control-stack">
+        <details className="clip-studio-preview-control-stack" open={!editPreview.isTimingValid || renderTone === "danger"}>
+          <summary>Preview details</summary>
           <div className="clip-studio-preview-spec">
             <div className="clip-studio-preview-state-line">
               <strong>{editPreview.isTimingValid ? "Preview updated" : "Preview needs timing"}</strong>
@@ -1772,15 +1777,14 @@ export function ClipStudioLivePreview({
               </p>
             ) : null}
           </div>
-        </div>
-      </div>
-
       <div className="clip-studio-chip-row">
         <span className="status-pill">{editPreview.durationLabel || durationLabel}</span>
         <span className={`status-pill ${editPreview.isTimingValid ? "" : "risk-high"}`}>
           {editPreview.startLabel && editPreview.endLabel ? `${editPreview.startLabel} - ${editPreview.endLabel}` : timingLabel}
         </span>
         <span className={`status-pill ${riskClassName}`}>{riskLabel}</span>
+      </div>
+        </details>
       </div>
     </section>
   );

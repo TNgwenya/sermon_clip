@@ -273,10 +273,10 @@ function buildClipChecks(input: {
       makeCheck(
         `transcript:${clip.id}`,
         `${clip.title} transcript`,
-        clip.transcriptReviewRequired ? "BLOCKED" : "PASS",
+        clip.transcriptReviewRequired ? "WARNING" : "PASS",
         clip.transcriptReviewRequired
-          ? "Confirm the sermon wording before publishing this clip."
-          : "The transcript review gate is clear.",
+          ? "Review wording against audio."
+          : "No transcript wording advisory.",
         { clipId: clip.id },
       ),
     ];

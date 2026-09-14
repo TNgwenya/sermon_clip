@@ -32,7 +32,7 @@ describe("local-language transcript safety", () => {
     expect(decision.status).toBe("REVIEW_REQUIRED");
     expect(decision.reasons).toContain("LOCAL_LANGUAGE_TRANSCRIPT_UNCERTAIN");
     expect(decision.reasons).toContain("LOW_TRANSCRIPT_TIMED_FALLBACK");
-    expect(decision.blocker).toBe(TRANSCRIPT_SAFETY_REVIEW_BLOCKER);
+    expect(decision.blocker).toBeNull();
   });
 
   it("does not treat a declared local-language transcript as trusted when section evidence is missing", () => {
@@ -78,18 +78,17 @@ describe("local-language transcript safety", () => {
     ]));
   });
 
-  it("blocks publishing until transcript review is cleared", () => {
+  it("keeps uncertain wording advisory without blocking manual production", () => {
     expect(validateTranscriptSafetyForPublishing({ transcriptSafetyStatus: "REVIEW_REQUIRED" })).toMatchObject({
-      ok: false,
+      ok: true,
     });
     expect(validateTranscriptSafetyForPublishing({ transcriptSafetyStatus: "REVIEWED" })).toEqual({ ok: true });
     expect(validateTranscriptSafetyForPublishing({ transcriptSafetyStatus: "TRUSTED" })).toEqual({ ok: true });
   });
 
-  it("merges and removes the pastor-facing blocker without duplicating it", () => {
+  it("removes the legacy transcript blocker while preserving other blockers", () => {
     expect(mergeTranscriptSafetyBlocker(["Fix captions", TRANSCRIPT_SAFETY_REVIEW_BLOCKER])).toEqual([
       "Fix captions",
-      TRANSCRIPT_SAFETY_REVIEW_BLOCKER,
     ]);
     expect(removeTranscriptSafetyBlocker(["Fix captions", TRANSCRIPT_SAFETY_REVIEW_BLOCKER])).toEqual([
       "Fix captions",

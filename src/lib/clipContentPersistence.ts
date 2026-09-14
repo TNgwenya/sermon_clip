@@ -202,7 +202,8 @@ export function resolveClipStudioBoundaryReviewUpdate(input: {
 export function canChooseClipForProduction(
   transcriptSafetyStatus: "TRUSTED" | "REVIEW_REQUIRED" | "REVIEWED",
 ): boolean {
-  return transcriptSafetyStatus !== "REVIEW_REQUIRED";
+  // Confidence is advisory; explicit clip approval remains a separate action.
+  return ["TRUSTED", "REVIEW_REQUIRED", "REVIEWED"].includes(transcriptSafetyStatus);
 }
 
 export function shouldBlockStudioBoundarySaveForMissingTranscript(input: {

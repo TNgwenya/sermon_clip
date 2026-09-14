@@ -9,7 +9,6 @@ import {
   exportVerticalClipAction,
   generateSmartCropDebugSnapshotAction,
   generateSubtitlesForClipAction,
-  markClipTranscriptReviewedAction,
   renderClipCandidateAction,
   renderClipOverlayAction,
   rerenderClipCandidateAction,
@@ -37,7 +36,6 @@ import {
 } from "@/lib/clipReview";
 import { resolveClipPreviewRecovery } from "@/lib/clipPreview";
 import {
-  buildTranscriptReviewGuidance,
   type TranscriptReviewEvidenceView,
 } from "@/lib/transcriptReviewGuidance";
 import {
@@ -933,7 +931,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               clip.recommendationReason ??
               "This moment is ready for a quick pastor review.",
             );
-            const canApprove = clip.status !== "EXPORTED" && clip.transcriptSafetyStatus !== "REVIEW_REQUIRED";
+            const canApprove = clip.status !== "EXPORTED";
             const canReject = clip.status !== "EXPORTED";
             const canSetPending = clip.status !== "EXPORTED";
             const canRender =
@@ -941,11 +939,9 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               clip.renderStatus !== "RENDERING" &&
               clip.renderStatus !== "COMPLETED";
             const canGenerateCaptions =
-              clip.transcriptSafetyStatus !== "REVIEW_REQUIRED" &&
               (clip.status === "APPROVED" || clip.status === "EXPORTED") &&
               clip.captionStatus !== "GENERATING";
             const canBurnCaptions =
-              clip.transcriptSafetyStatus !== "REVIEW_REQUIRED" &&
               clip.renderStatus === "COMPLETED" &&
               clip.captionStatus === "GENERATED" &&
               clip.captionBurnStatus !== "BURNING" &&
@@ -956,7 +952,6 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
               clip.overlayStatus !== "RENDERING" &&
               clip.overlayStatus !== "COMPLETED";
             const canExport =
-              clip.transcriptSafetyStatus !== "REVIEW_REQUIRED" &&
               clip.renderStatus === "COMPLETED" &&
               clip.exportStatus !== "EXPORTING" &&
               clip.exportStatus !== "COMPLETED";
@@ -966,11 +961,6 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
             const isBasicClip = isBasicTimeBasedClip(clip);
             const transcriptReviewRequired = clip.transcriptSafetyStatus === "REVIEW_REQUIRED";
             const transcriptReviewed = clip.transcriptSafetyStatus === "REVIEWED";
-            const transcriptGuidance = buildTranscriptReviewGuidance({
-              transcriptSafetyReasons: clip.transcriptSafetyReasons,
-              evidence: clip.transcriptEvidence,
-              boundaryQuality: clip.boundaryQuality,
-            });
             const previewRequestFailed = failedPreviewClipIds.includes(clip.id);
             const canPreviewVideo = clip.canPreviewVideo && !previewRequestFailed;
             const previewRecovery = resolveClipPreviewRecovery({
@@ -1079,7 +1069,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       ) : (
                         <span className="status-pill">Not yet posted</span>
                       )}
-                      {transcriptReviewRequired ? <span className="status-pill quality-needs-editing">Transcript review needed</span> : null}
+                      {transcriptReviewRequired ? <span className="status-pill">Review wording against audio</span> : null}
                     </div>
                     {clip.publishedPosts.some((post) => post.publishedUrl) ? (
                       <div className="review-published-links" aria-label={`Published posts for ${clip.title}`}>
@@ -1097,7 +1087,7 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                     </div>
 
                     {reviewMode === "QUICK" ? (
-                      <details className={styles.contextDisclosure} open={transcriptReviewRequired}>
+                      <details className={styles.contextDisclosure}>
                         <summary>Message context, exact words &amp; provenance · {contextLabel}</summary>
                         <div className={`premium-review-evidence ${transcriptReviewRequired ? "needs-review" : ""}`}>
                           <div className="premium-review-evidence-heading">
@@ -1142,40 +1132,6 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                       </div>
                     )}
 
-                    {transcriptReviewRequired ? (
-                      <div className="warning-banner stack-sm premium-review-safety-gate">
-                        <strong>{transcriptGuidance.title}</strong>
-                        <p>{transcriptGuidance.summary}</p>
-                        {clip.transcriptEvidence?.uncertainRegions.length ? (
-                          <div className="stack-sm">
-                            <strong className="small">Listen closely here</strong>
-                            <ul className="warning-list">
-                              {clip.transcriptEvidence.uncertainRegions.slice(0, 3).map((region) => (
-                                <li key={`${region.startTimeSeconds}-${region.endTimeSeconds}`}>
-                                  {toDurationLabel(region.startTimeSeconds)}–{toDurationLabel(region.endTimeSeconds)}: {region.text}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        ) : null}
-                        {transcriptGuidance.reasonLabels.length ? (
-                          <details>
-                            <summary>Why this check is required</summary>
-                            <ul className="warning-list">
-                              {transcriptGuidance.reasonLabels.map((reason) => <li key={reason}>{reason}</li>)}
-                            </ul>
-                          </details>
-                        ) : null}
-                        <button
-                          type="button"
-                          className="button secondary"
-                          disabled={isPending}
-                          onClick={() => applySingleAction(() => markClipTranscriptReviewedAction(clip.id))}
-                        >
-                          {transcriptGuidance.actionLabel}
-                        </button>
-                      </div>
-                    ) : null}
 
                     {reviewMode === "ADVANCED" ? (
                     <details className="review-feed-card-details">
@@ -1270,9 +1226,6 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                         onApprove={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "APPROVED"))}
                         onReject={() => applySingleAction(() => setClipReviewStatusAction(clip.id, "REJECTED"))}
                       />
-                      {transcriptReviewRequired ? (
-                        <p className="status-help small">Approve &amp; use unlocks after the required transcript check above.</p>
-                      ) : null}
                     </div>
                   ) : (
                   <div className="review-feed-action-column" aria-label={`Review actions for ${clip.title}`}>
@@ -1318,8 +1271,6 @@ export function ReviewExperience({ sermonId, sermonTitle, clips, localMediaAvail
                     <p className="premium-review-action-note">
                       {clip.status === "REJECTED"
                         ? "This moment is out of the active queue. You can return it to review from More actions."
-                        : transcriptReviewRequired
-                          ? "Check the transcript wording before approving this moment."
                         : isApprovedState
                           ? isPostReady
                             ? "The final video is ready for its posting plan."

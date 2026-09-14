@@ -188,7 +188,7 @@ describe("publishing preflight", () => {
     }));
   });
 
-  it("blocks unavailable media, transcript review, missing connection, and unsupported Instagram duration", () => {
+  it("warns about transcript wording while blocking unavailable media and invalid delivery", () => {
     const packet = buildPublishingPreflight({
       automationMode: "AUTOMATIC",
       platforms: ["Instagram"],
@@ -205,11 +205,11 @@ describe("publishing preflight", () => {
     });
 
     expect(packet.canSchedule).toBe(false);
-    expect(packet.blockerCount).toBeGreaterThanOrEqual(4);
+    expect(packet.blockerCount).toBeGreaterThanOrEqual(3);
     expect(packet.checks).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "connection:Instagram", status: "BLOCKED" }),
       expect.objectContaining({ id: "media:clip-1", status: "BLOCKED" }),
-      expect.objectContaining({ id: "transcript:clip-1", status: "BLOCKED" }),
+      expect.objectContaining({ id: "transcript:clip-1", status: "WARNING" }),
       expect.objectContaining({ id: "duration:clip-1:Instagram", status: "BLOCKED" }),
     ]));
   });

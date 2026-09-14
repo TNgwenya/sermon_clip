@@ -4218,28 +4218,9 @@ export async function prepareApprovedClipsAction(input: {
     };
   }
 
-  const transcriptReviewFailures = clips
-    .filter((clip) => clip.transcriptSafetyStatus === "REVIEW_REQUIRED")
-    .map((clip) => ({
-      clipId: clip.id,
-      reason: "Review the local-language transcript before preparing captions, export, or posting.",
-    }));
-  const clipsEligibleForPreparation = clips.filter(
-    (clip) => clip.transcriptSafetyStatus !== "REVIEW_REQUIRED",
-  );
-  if (clipsEligibleForPreparation.length === 0) {
-    return {
-      success: false,
-      message: "Review the local-language transcript before preparing captions, export, or posting.",
-      processed: 0,
-      prepared: 0,
-      captionsAdded: 0,
-      brandingAdded: 0,
-      readyToPost: 0,
-      failed: transcriptReviewFailures.length,
-      failures: transcriptReviewFailures,
-    };
-  }
+  // Transcript confidence is advisory; this query still requires approved clips.
+  const transcriptReviewFailures: Array<{ clipId: string; reason: string }> = [];
+  const clipsEligibleForPreparation = clips;
 
   const brandingSettings = await getBrandingSettings();
   const preparedCaptionIdentityByClipId = new Map(
@@ -6662,17 +6643,7 @@ export async function prepareClipStudioForPostingAction(
     };
   }
 
-  // A preparation attempt must never mutate a review-blocked clip first and
-  // only report the safety failure afterwards. Draft saving remains available
-  // through saveClipStudioDraftAction without approving or rendering media.
-  if (clip.transcriptSafetyStatus === "REVIEW_REQUIRED") {
-    return {
-      success: false,
-      message: "Review and confirm the local-language transcript before preparing this clip for posting.",
-      results: [],
-    };
-  }
-
+  // Uncertain wording is an advisory, not a preparation gate.
   const { formats: formatsToPrepare } = resolveClipStudioFormats(input);
   if (
     !canRunInlineMediaProcessing()

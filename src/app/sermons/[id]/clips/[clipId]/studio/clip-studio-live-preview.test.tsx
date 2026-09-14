@@ -173,6 +173,9 @@ describe("ClipStudioLivePreview media loading", () => {
     expect(markup).not.toContain("clip-studio-live-backdrop");
     expect(markup).toContain("Framing pending");
     expect(markup).not.toContain("trackedTreatment");
+    expect(markup).toContain('aria-keyshortcuts="Space"');
+    expect(markup).toContain("Preview details");
+    expect(markup).not.toContain('class="clip-studio-preview-control-stack" open');
   });
 
   it("renders a real synchronized duplicate video layer only for matching true blur", () => {

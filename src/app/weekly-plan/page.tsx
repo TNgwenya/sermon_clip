@@ -84,7 +84,6 @@ export default async function WeeklyPlanPage({
           {
             clipCandidates: {
               some: {
-                transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
                 OR: [{ exportStatus: "COMPLETED" }, { status: "EXPORTED" }],
               },
             },
@@ -150,7 +149,6 @@ export default async function WeeklyPlanPage({
         },
         clipCandidates: {
           where: {
-            transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
             OR: [{ exportStatus: "COMPLETED" }, { status: "EXPORTED" }],
           },
           orderBy: [{ finalQualityScore: "desc" }, { score: "desc" }],

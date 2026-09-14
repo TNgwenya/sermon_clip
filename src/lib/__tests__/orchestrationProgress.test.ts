@@ -26,7 +26,21 @@ describe("customer-value orchestration progress", () => {
       state: "ready",
       detail: expect.stringContaining("5 ranked clip suggestions"),
     });
-    expect(milestones.find((milestone) => milestone.key === "first-preview")?.state).toBe("waiting");
+    expect(milestones.find((milestone) => milestone.key === "first-preview")?.state).toBe("not-requested");
+  });
+
+  it("does not present fallback cuts as ranked intelligence or an absent job as preparing", () => {
+    const milestones = buildCustomerValueMilestones([], {
+      ...noMedia, basicSuggestionCount: 12, priorityPreviewTargetCount: 3,
+      priorityPreviewReadyCount: 3,
+    });
+    expect(milestones.find((item) => item.key === "suggestions")).toMatchObject({
+      state: "degraded", detail: expect.stringContaining("12 basic time-based cuts"),
+    });
+    expect(milestones.find((item) => item.key === "first-preview")).toMatchObject({
+      state: "not-requested", detail: expect.stringContaining("not confirmed"),
+    });
+    expect(milestones.find((item) => item.key === "top-three")?.state).toBe("ready");
   });
 
   it("requires current media evidence before claiming a branded preview or top three", () => {
