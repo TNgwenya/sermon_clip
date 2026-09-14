@@ -1533,7 +1533,9 @@ export default async function SermonDetailPage({
             {workspaceAction === "recover" && !latestFailedJob && operationSummary.failed > 0 ? (
               <RepairFailedClipOperationsButton sermonId={sermon.id} disabled={hasLiveProcessingWork} />
             ) : null}
-            {workspaceAction === "analyze" ? <ProcessSermonButton sermonId={sermon.id} /> : null}
+            {workspaceAction === "analyze" ? (sermon.status === "CREATED" && sermon.youtubeUrl.startsWith("local-upload://") && !hasSourceVideo ?
+              <Link className="button primary" href={`/sermons/new?resumeSermonId=${sermon.id}`}>Resume upload</Link>
+              : <ProcessSermonButton sermonId={sermon.id} />) : null}
           </div>
         </div>
 

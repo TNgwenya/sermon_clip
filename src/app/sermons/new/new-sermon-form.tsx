@@ -184,7 +184,9 @@ export function NewSermonForm({
   localUploadFallbackEnabled = true,
   defaults,
   eventContext,
+  resumeUpload,
 }: {
+  resumeUpload?: { sermonId: string; sourceAssetId: string; fileName: string; fileSize: number };
   initialYoutubeUrl?: string;
   canUploadMedia?: boolean;
   directSourceUploadEnabled?: boolean;
@@ -213,7 +215,7 @@ export function NewSermonForm({
   const router = useRouter();
   const [activeFeatureModal, setActiveFeatureModal] = useState<FeatureModalKind | null>(null);
   const [sourceMode, setSourceMode] = useState<SermonSourceMode>(
-    eventContext?.resumeUpload ? "upload" : "youtube",
+    (resumeUpload || eventContext?.resumeUpload) ? "upload" : "youtube",
   );
   const [youtubeUrl, setYoutubeUrl] = useState(initialYoutubeUrl);
   const [uploadState, setUploadState] = useState<CreateSermonFormState | null>(null);
@@ -241,6 +243,13 @@ export function NewSermonForm({
       window.sessionStorage.removeItem(SERMON_UPLOAD_ATTEMPT_STORAGE_KEY);
     }
   }, [state.message, uploadState?.message]);
+
+  useEffect(() => {
+    if (!isUploadSubmitting) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [isUploadSubmitting]);
 
   async function submitRawUpload(event: React.FormEvent<HTMLFormElement>) {
     if (sourceMode !== "upload") {
@@ -275,34 +284,32 @@ export function NewSermonForm({
       && savedUploadSession.fileSize === file.size
       && savedUploadSession.fileLastModified === file.lastModified
       && savedUploadSession.eventSessionId === eventContext?.sessionId;
+    const durableResume = resumeUpload ?? eventContext?.resumeUpload;
     const durableEventUploadMatches = Boolean(
-      eventContext?.resumeUpload?.sourceAssetId
-      && eventContext.resumeUpload.fileName === file.name
-      && eventContext.resumeUpload.fileSize === file.size,
+      durableResume?.sourceAssetId
+      && durableResume.fileName === file.name
+      && durableResume.fileSize === file.size,
     );
-    let uploadSermonId = savedUploadMatches
-      ? savedUploadSession.sermonId
-      : durableEventUploadMatches
-        ? eventContext?.resumeUpload?.sermonId ?? null
-        : null;
+    let uploadSermonId = durableEventUploadMatches ? durableResume?.sermonId ?? null
+      : !durableResume?.sourceAssetId && savedUploadMatches && (!durableResume || durableResume.sermonId === savedUploadSession.sermonId) ? savedUploadSession.sermonId : null;
     let uploadSourceAssetId = uploadSermonId
-      ? savedUploadSession?.sourceAssetId
-        ?? eventContext?.resumeUpload?.sourceAssetId
+      ? durableResume?.sourceAssetId
+        ?? savedUploadSession?.sourceAssetId
         ?? null
       : null;
-    if (eventContext?.resumeUpload && !uploadSermonId) {
-      const expectedFile = eventContext.resumeUpload.fileName;
+    if (durableResume && !uploadSermonId) {
+      const expectedFile = durableResume.fileName;
       setUploadState({
         success: false,
         message: expectedFile
-          ? `Choose the same recording (${expectedFile}) to resume this event upload.`
+          ? `Choose the same recording (${expectedFile}) to resume this upload.`
           : "Resume this upload in the same browser where it started.",
         fieldErrors: {
           mediaFile: expectedFile
-            ? "The selected file does not match the recording already attached to this session."
+            ? "The selected file does not match the recording already attached to this sermon."
             : "This local upload can only resume from the browser that started it.",
         },
-        createdSermonId: eventContext.resumeUpload.sermonId,
+        createdSermonId: durableResume.sermonId,
       });
       return;
     }

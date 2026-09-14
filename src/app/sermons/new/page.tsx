@@ -15,11 +15,24 @@ import styles from "./new-sermon.module.css";
 type NewSermonSearchParams = {
   youtubeUrl?: string;
   eventSessionId?: string;
+  resumeSermonId?: string;
 };
 
 export default async function NewSermonPage({ searchParams }: { searchParams: Promise<NewSermonSearchParams> }) {
   const params = await searchParams;
-  const requestContext = await requireRequestCapability("sermons.create");
+  const requestContext = await requireRequestCapability(params.resumeSermonId ? "sermons.update" : "sermons.create",
+    params.resumeSermonId ? { resource: { kind: "SERMON", id: params.resumeSermonId } } : undefined);
+  const resumeSermon = params.resumeSermonId ? await prisma.sermon.findFirst({
+    where: tenantResourceScope(requestContext, params.resumeSermonId),
+    include: { sourceAsset: true },
+  }) : null;
+  if (params.resumeSermonId && (!resumeSermon || params.eventSessionId
+    || resumeSermon.status !== "CREATED" || !resumeSermon.youtubeUrl.startsWith("local-upload://")
+    || !resumeSermon.sourceAsset || !["INITIATED", "UPLOADING"].includes(resumeSermon.sourceAsset.status))) notFound();
+  const resumeUpload = resumeSermon?.sourceAsset ? {
+    sermonId: resumeSermon.id, sourceAssetId: resumeSermon.sourceAsset.id,
+    fileName: resumeSermon.sourceAsset.originalFileName, fileSize: Number(resumeSermon.sourceAsset.sizeBytes),
+  } : undefined;
   const defaults = await getSermonStartDefaults(
     {
       organizationId: requestContext.organizationId,
@@ -104,7 +117,9 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
         language: eventSession.language || defaults.language,
         sermonDate: dateInputInTimezone(eventSession.scheduledStartAt, eventSession.event.timezone),
       }
-    : defaults;
+    : resumeSermon ? { ...defaults, title: resumeSermon.title, speakerName: resumeSermon.speakerName,
+        churchName: resumeSermon.churchName, language: resumeSermon.language,
+      } : defaults;
   const localUploadFallbackEnabled = canRunLocalMediaProcessing();
   const directSourceUploadEnabled = isS3SourceStorageConfigured();
   const canUploadMedia = localUploadFallbackEnabled || directSourceUploadEnabled;
@@ -117,9 +132,9 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
             {eventContext ? `Back to ${eventContext.eventName}` : "Back to your studio"}
           </Link>
           <p className="kicker">{eventContext ? "Add event recording" : "Add a sermon"}</p>
-          <h1>{eventContext ? "Add the session recording" : "Start with your sermon"}</h1>
+          <h1>{resumeUpload ? "Resume your recording upload" : eventContext ? "Add the session recording" : "Start with your sermon"}</h1>
           <p className="muted">
-            {eventContext
+            {resumeUpload ? `Choose ${resumeUpload.fileName} again. Completed upload sections will be reused.` : eventContext
               ? `${eventContext.eventName} · ${eventContext.sessionTitle}. Its saved event details will stay attached.`
               : "Paste the YouTube link or upload the recording. We’ll show the strongest moments for your team to review first."}
           </p>
@@ -131,6 +146,7 @@ export default async function NewSermonPage({ searchParams }: { searchParams: Pr
 
       <div className="premium-intake-layout">
         <NewSermonForm
+          resumeUpload={resumeUpload}
           initialYoutubeUrl={params.youtubeUrl ?? ""}
           canUploadMedia={canUploadMedia}
           directSourceUploadEnabled={directSourceUploadEnabled}
