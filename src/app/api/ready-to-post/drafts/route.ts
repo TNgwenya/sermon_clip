@@ -76,7 +76,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     where: {
       id: { in: clipIds },
       sermon: tenantScope(requestContext),
-      transcriptSafetyStatus: { not: "REVIEW_REQUIRED" },
       OR: [
         { exportStatus: "COMPLETED" },
         { status: "EXPORTED" },
@@ -85,6 +84,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     select: {
       id: true,
       durationSeconds: true,
+      transcriptSafetyStatus: true,
       exportFormat: true,
       exportStatus: true,
       exportFreshness: true,
@@ -102,6 +102,15 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({
       error: "Some selected clips are not ready to schedule yet.",
       clipIds: clipIds.filter((clipId) => !readyIds.has(clipId)),
+    }, { status: 409 });
+  }
+
+  const reviewRequiredIds = readyClips.filter((clip) => clip.transcriptSafetyStatus === "REVIEW_REQUIRED").map((clip) => clip.id);
+  if (reviewRequiredIds.length > 0) {
+    return NextResponse.json({
+      error: "Review the caption wording against the audio and confirm the transcript review before scheduling.",
+      code: "TRANSCRIPT_REVIEW_REQUIRED",
+      clipIds: reviewRequiredIds,
     }, { status: 409 });
   }
 

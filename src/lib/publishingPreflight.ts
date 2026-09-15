@@ -273,9 +273,9 @@ function buildClipChecks(input: {
       makeCheck(
         `transcript:${clip.id}`,
         `${clip.title} transcript`,
-        clip.transcriptReviewRequired ? "WARNING" : "PASS",
+        clip.transcriptReviewRequired ? "BLOCKED" : "PASS",
         clip.transcriptReviewRequired
-          ? "Review wording against audio."
+          ? "Review the caption wording against the audio and confirm the transcript review before scheduling."
           : "No transcript wording advisory.",
         { clipId: clip.id },
       ),

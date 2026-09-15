@@ -188,7 +188,7 @@ describe("publishing preflight", () => {
     }));
   });
 
-  it("warns about transcript wording while blocking unavailable media and invalid delivery", () => {
+  it("blocks unreviewed transcript wording as well as unavailable media and invalid delivery", () => {
     const packet = buildPublishingPreflight({
       automationMode: "AUTOMATIC",
       platforms: ["Instagram"],
@@ -209,7 +209,7 @@ describe("publishing preflight", () => {
     expect(packet.checks).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "connection:Instagram", status: "BLOCKED" }),
       expect.objectContaining({ id: "media:clip-1", status: "BLOCKED" }),
-      expect.objectContaining({ id: "transcript:clip-1", status: "WARNING" }),
+      expect.objectContaining({ id: "transcript:clip-1", status: "BLOCKED" }),
       expect.objectContaining({ id: "duration:clip-1:Instagram", status: "BLOCKED" }),
     ]));
   });

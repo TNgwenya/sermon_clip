@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { markClipTranscriptReviewedAction } from "@/server/actions/sermons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -229,6 +230,25 @@ export function ScheduleDraftModal({
   const [message, setMessage] = useState("");
   const [preflight, setPreflight] = useState<PublishingPreflightPacket | null>(null);
   const [pending, setPending] = useState(false);
+  const [reviewConfirmedIds, setReviewConfirmedIds] = useState<string[]>([]);
+  const [reviewPending, setReviewPending] = useState(false);
+  const transcriptChecks = preflight?.checks.filter((check) => check.id.startsWith("transcript:") && check.status === "BLOCKED" && check.clipId) ?? [];
+  async function confirmTranscriptReviews() {
+    setReviewPending(true);
+    setMessage("");
+    try {
+      for (const check of transcriptChecks) {
+        if (!check.clipId || !reviewConfirmedIds.includes(check.clipId)) return;
+        const result = await markClipTranscriptReviewedAction(check.clipId);
+        if (!result.success) { setMessage(result.message ?? "Could not confirm transcript review."); return; }
+      }
+      setPreflight(null);
+      setReviewConfirmedIds([]);
+      setMessage("Transcript review confirmed. Check and schedule again to verify the accounts and time.");
+    } catch {
+      setMessage("Could not confirm transcript review. You need permission to approve clips.");
+    } finally { setReviewPending(false); }
+  }
   const [idempotencyKey, setIdempotencyKey] = useState(createScheduleRequestKey);
   const intervalOptions = useMemo(() => {
     const options = [
@@ -434,6 +454,15 @@ export function ScheduleDraftModal({
       });
       const result = await response.json();
       if (!response.ok) {
+        if (result.preflight) setPreflight(result.preflight);
+        if (result.code === "TRANSCRIPT_REVIEW_REQUIRED" && Array.isArray(result.clipIds)) {
+          const checks = preflightResult.preflight.checks.map((check: PublishingPreflightPacket["checks"][number]) =>
+            check.id.startsWith("transcript:") && result.clipIds.includes(check.clipId)
+              ? { ...check, status: "BLOCKED" as const, summary: result.error }
+              : check);
+          setPreflight({ ...preflightResult.preflight, checks, canSchedule: false,
+            blockerCount: checks.filter((check: PublishingPreflightPacket["checks"][number]) => check.status === "BLOCKED").length });
+        }
         setMessage(result.error ?? "Could not create the posting draft.");
         return;
       }
@@ -750,12 +779,30 @@ export function ScheduleDraftModal({
           </div>
         ) : null}
 
+        {transcriptChecks.length > 0 ? (
+          <section className="schedule-mode-guidance needs-attention" aria-label="Confirm transcript review">
+            <strong>Review the words before scheduling</strong>
+            <p>Close this window to listen to the prepared video and check its captions. Correct any mistakes in Studio, then confirm below. Confirming review does not schedule or publish the video.</p>
+            {transcriptChecks.map((check) => (
+              <label key={check.id}>
+                <input type="checkbox" checked={reviewConfirmedIds.includes(check.clipId!)} disabled={reviewPending}
+                  onChange={(event) => setReviewConfirmedIds((ids) => event.target.checked ? [...ids, check.clipId!] : ids.filter((id) => id !== check.clipId))} />
+                I have listened to and checked the caption wording for {clipDetailsById.get(check.clipId!)?.title ?? check.label}.
+              </label>
+            ))}
+            <button type="button" className="button" onClick={confirmTranscriptReviews}
+              disabled={reviewPending || transcriptChecks.some((check) => !reviewConfirmedIds.includes(check.clipId!))}>
+              {reviewPending ? "Confirming review..." : "Confirm transcript review"}
+            </button>
+          </section>
+        ) : null}
+
         {message ? <p className={message.includes("Could not") || message.includes("resolve") ? "error-banner" : "success-banner"}>{message}</p> : null}
         {hasMissingAccountSelection ? <p className="error-banner">Select at least one account for each chosen platform.</p> : null}
         {hasMissingPlatformCopy ? <p className="error-banner">Add a title and caption for every selected platform before scheduling.</p> : null}
 
         <div className="feature-modal-footer">
-          <button type="button" className="button primary" onClick={createDraft} disabled={pending || selectedPlatforms.length === 0 || hasMissingAccountSelection || hasMissingPlatformCopy}>
+          <button type="button" className="button primary" onClick={createDraft} disabled={pending || reviewPending || transcriptChecks.length > 0 || selectedPlatforms.length === 0 || hasMissingAccountSelection || hasMissingPlatformCopy}>
             {pending ? "Checking publishing setup..." : automationMode === "AUTOMATIC" ? "Check & schedule post" : "Check & save posting draft"}
           </button>
         </div>
