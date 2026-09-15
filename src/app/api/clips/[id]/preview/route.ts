@@ -115,6 +115,8 @@ export async function GET(
   }
 
   const pathByVariant: Record<string, string | null | undefined> = {
+    // Editing must never redirect to a finished remote export with burned captions.
+    editing: clip.renderFreshness === "UP_TO_DATE" || !clip.renderFreshness ? clip.renderedFilePath : null,
     rendered: clip.renderedFilePath,
     overlay: clip.overlayVideoPath,
     exported: clip.exportedFilePath,

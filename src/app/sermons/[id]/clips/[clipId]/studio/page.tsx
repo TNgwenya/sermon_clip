@@ -815,6 +815,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
             <ClipStudioLivePreview
               hasPreview={hasPreview}
               previewSrc={previewSrc}
+              editingPreviewSrc={localMediaAvailable && clip.renderedFilePath ? `/api/clips/${clip.id}/preview?variant=editing` : null}
               sourcePreviewSrc={sourceVideoPreviewAvailable ? `/api/sermons/${sermon.id}/source-preview` : null}
               unavailableDescription={
                 localMediaAvailable || hasRemotePreview

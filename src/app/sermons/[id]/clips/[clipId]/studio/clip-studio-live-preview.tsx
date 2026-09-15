@@ -58,6 +58,7 @@ type ClipStudioLivePreviewProps = {
   hasPreview: boolean;
   previewSrc: string | null;
   sourcePreviewSrc: string | null;
+  editingPreviewSrc?: string | null;
   renderLabel: string;
   renderTone: "success" | "danger" | "neutral";
   durationLabel: string;
@@ -443,7 +444,8 @@ function colorWithOpacity(hexColor: string, opacity: number): string {
 
 export function ClipStudioLivePreview({
   hasPreview,
-  previewSrc,
+  previewSrc: savedPreviewSrc,
+  editingPreviewSrc,
   sourcePreviewSrc,
   renderTone,
   durationLabel,
@@ -557,6 +559,9 @@ export function ClipStudioLivePreview({
     "--safe-zone-bottom": `${safeZoneInsets.bottom}%`,
     "--safe-zone-left": `${safeZoneInsets.left}%`,
   } as CSSProperties;
+  // Finished exports contain burned-in text. Only caption-free media may sit
+  // beneath the editable overlays. Saved-output mode deliberately uses the export.
+  const previewSrc = showSavedPreview ? savedPreviewSrc : (editingPreviewSrc ?? null);
   const sourcePrecisionRequired = clipStudioPreviewNeedsSourceMedia({
     initialStartSeconds: initialDraftWindow.startSeconds,
     initialEndSeconds: initialDraftWindow.endSeconds,
@@ -634,7 +639,7 @@ export function ClipStudioLivePreview({
     updatePreviewMediaStatus({ state: mediaStatusState, message: mediaStatusMessage });
   }, [mediaStatusState, mediaStatusMessage, updatePreviewMediaStatus]);
 
-  const canReturnToSavedPreview = Boolean(hasPreview && previewSrc && previewSrc !== unavailablePreparedPreviewSrc && !showSavedPreview && (hasSourcePreview || sourcePrecisionUnavailable));
+  const canReturnToSavedPreview = Boolean(hasPreview && savedPreviewSrc && savedPreviewSrc !== unavailablePreparedPreviewSrc && !showSavedPreview && (hasSourcePreview || sourcePrecisionUnavailable));
   function returnToSavedPreview() {
     playbackIntentRef.current = false;
     setShowSavedPreview(true);

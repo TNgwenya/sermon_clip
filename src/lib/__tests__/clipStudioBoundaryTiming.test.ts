@@ -6,6 +6,7 @@ import {
   remapCaptionCueTextEditsForClipBoundaryChange,
   remapSpeechCleanupEditsForClipBoundaryChange,
   STUDIO_BOUNDARY_CONTEXT_SECONDS,
+  preserveCaptionCuesForClipBoundaryChange,
 } from "@/lib/clipStudioBoundaryTiming";
 
 const extendedEarlierWindow = {
@@ -15,6 +16,54 @@ const extendedEarlierWindow = {
 };
 
 describe("Clip Studio outer-boundary timing", () => {
+  it("preserves edited and hidden cues while adding only newly included speech", () => {
+    const result = preserveCaptionCuesForClipBoundaryChange({
+      previousStartSeconds: 100, previousEndSeconds: 110,
+      nextStartSeconds: 98, nextEndSeconds: 112,
+      cues: [
+        { index: 1, startSeconds: 0, endSeconds: 4, text: "Corrected pastor name" },
+        { index: 2, startSeconds: 4, endSeconds: 10, text: "" },
+      ],
+      words: [
+        { text: "Before", startTimeSeconds: 98, endTimeSeconds: 99 },
+        { text: "Already preserved", startTimeSeconds: 99.5, endTimeSeconds: 100.5 },
+        { text: "Wrong", startTimeSeconds: 100, endTimeSeconds: 104 },
+        { text: "Hidden", startTimeSeconds: 104, endTimeSeconds: 109 },
+        { text: "Also preserved", startTimeSeconds: 109.5, endTimeSeconds: 110.5 },
+        { text: "After", startTimeSeconds: 110, endTimeSeconds: 112 },
+      ],
+      segments: [], singleWord: false,
+    });
+    expect(result.map((cue) => cue.text)).toEqual(["Before", "Corrected pastor name", "", "After"]);
+    expect(result[1]).toMatchObject({ startSeconds: 2, endSeconds: 6 });
+    expect(result[3]).toMatchObject({ startSeconds: 12, endSeconds: 14 });
+  });
+
+  it("keeps corrected wording through repeated trims without matching regenerated timing keys", () => {
+    const initial = { index: 1, startSeconds: 0, endSeconds: 8, text: "My corrected wording" };
+    const result = preserveCaptionCuesForClipBoundaryChange({
+      previousStartSeconds: 100, previousEndSeconds: 110,
+      nextStartSeconds: 102, nextEndSeconds: 109,
+      cues: [initial], words: [], segments: [], singleWord: false,
+    });
+    expect(result).toEqual([{ ...initial, startSeconds: 0, endSeconds: 6 }]);
+  });
+
+  it("fills expanded speech from segment timing when individual source words are unavailable", () => {
+    const result = preserveCaptionCuesForClipBoundaryChange({
+      previousStartSeconds: 100, previousEndSeconds: 110,
+      nextStartSeconds: 98, nextEndSeconds: 112,
+      cues: [{ index: 1, startSeconds: 0, endSeconds: 10, text: "Corrected" }],
+      words: [],
+      segments: [
+        { text: "Before", startTimeSeconds: 98, endTimeSeconds: 100 },
+        { text: "Original", startTimeSeconds: 100, endTimeSeconds: 110 },
+        { text: "After", startTimeSeconds: 110, endTimeSeconds: 112 },
+      ],
+      singleWord: false,
+    });
+    expect(result.map((cue) => cue.text)).toEqual(["Before", "Corrected", "After"]);
+  });
   it("loads enough nearby sermon context to finish an interrupted thought", () => {
     expect(STUDIO_BOUNDARY_CONTEXT_SECONDS).toBe(90);
   });

@@ -143,7 +143,7 @@ const FALLBACK_VIDEO_ENCODER = SOFTWARE_VIDEO_ENCODER;
 const MAX_WORD_HIGHLIGHT_OVERLAY_CUES = 360;
 const MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES = 180;
 const MAX_SEMANTIC_CAPTION_SPLITS_PER_CUE = 120;
-const CAPTION_RENDERER_VERSION = 6;
+const CAPTION_RENDERER_VERSION = 7;
 
 function resolveSafeCaptionOverlayInputLimit(input: {
   durationSeconds: number;
@@ -977,6 +977,7 @@ function buildCaptionOverlaySvg(
   appearance: CaptionAppearanceSettings = DEFAULT_CAPTION_APPEARANCE_SETTINGS,
   presetId?: CaptionStylePresetId,
   captionDesign?: CaptionDesignSettingsV1,
+  measuredLayout?: { contentWidth: number; fontScale: number },
 ): string {
   const design = captionDesign ?? normalizeCaptionDesignSettings(undefined, {
     presetId,
@@ -984,7 +985,7 @@ function buildCaptionOverlaySvg(
   });
   const font = resolveCaptionFontFamily(design.typography.fontFamilyId);
   const width = Math.round(1080 * resolveCaptionSafeWidthPercent(design.layout.safeWidth) / 100);
-  const fontSize = captionOverlayFontSize(appearance, design);
+  const fontSize = captionOverlayFontSize(appearance, design) * (measuredLayout?.fontScale ?? 1);
   const maxLineLength = captionOverlayLineLength(appearance, design);
   const displayText = formatCaptionOverlayText(cue.text, appearance, design.presetId, design);
   const wordLines = cue.activeWordIndex === undefined
@@ -1019,7 +1020,7 @@ function buildCaptionOverlaySvg(
         design,
       ))
     : lines.map((line) => estimateCaptionSvgLineWidth(line, fontSize, design));
-  const contentWidth = Math.max(fontSize, ...renderedLineWidths);
+  const contentWidth = measuredLayout?.contentWidth ?? Math.max(fontSize, ...renderedLineWidths);
   const panelWidth = Number(Math.min(
     width,
     Math.ceil(contentWidth + design.background.paddingX * 2),
@@ -1118,6 +1119,65 @@ function buildCaptionOverlaySvg(
       </g>
     </svg>
   `;
+}
+
+// Measure with the exact SVG rasterizer and installed fallback font used for
+// export. Character-count estimates cannot size a panel reliably (especially
+// for bold, uppercase, multilingual text, and scaled active words).
+async function buildMeasuredCaptionOverlaySvg(
+  cue: CaptionCueOverlay,
+  appearance: CaptionAppearanceSettings = DEFAULT_CAPTION_APPEARANCE_SETTINGS,
+  presetId?: CaptionStylePresetId,
+  captionDesign?: CaptionDesignSettingsV1,
+): Promise<string> {
+  const design = captionDesign ?? normalizeCaptionDesignSettings(undefined, {
+    presetId, legacyAppearance: appearance,
+  });
+  const sharp = await getSharp();
+  const canvasWidth = Math.round(1080 * resolveCaptionSafeWidthPercent(design.layout.safeWidth) / 100);
+  const availableWidth = Math.max(1, canvasWidth - design.background.paddingX * 2 - 4);
+  let fontScale = 1;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const svg = buildCaptionOverlaySvg(cue, appearance, presetId, design, {
+      contentWidth: availableWidth, fontScale,
+    });
+    const elements = svg.match(/<text\b[^>]*>[\s\S]*?<\/text>/g) ?? [];
+    let contentWidth = 0;
+    for (const element of elements) {
+      // Retain alignment: measure the ink on both sides of the actual anchor,
+      // including stroke and italic overhang, on an unclipped transparent canvas.
+      let measuredElement = element.replace(/\bx="[^"]*"/, 'x="4096"')
+        .replace(/\by="[^"]*"/, 'y="128"');
+      if (cue.activeWordIndex !== undefined) {
+        // Reserve the largest emphasis for every word when measuring. The
+        // canvas and font scale must stay fixed as the active word advances.
+        const emphasisSize = Math.round(captionOverlayFontSize(appearance, design)
+          * fontScale * (design.highlighting.reducedMotion ? 1 : design.highlighting.scale));
+        const emphasisWeight = Math.min(900, design.typography.fontWeight + design.highlighting.fontWeightBoost);
+        measuredElement = measuredElement.replace(/<tspan\b[^>]*>/g, (tag) => tag
+          .replace(/font-size="[^"]*"/, `font-size="${emphasisSize}"`)
+          .replace(/font-weight="[^"]*"/, `font-weight="${emphasisWeight}"`));
+      }
+      const { info } = await sharp(Buffer.from(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="8192" height="1024">${measuredElement}</svg>`,
+      )).trim({ threshold: 0 }).png().toBuffer({ resolveWithObject: true });
+      const left = -(info.trimOffsetLeft ?? 0) - 4096;
+      const right = left + info.width;
+      const lineWidth = design.typography.alignment === "center"
+        ? 2 * Math.max(Math.abs(left), Math.abs(right))
+        : Math.max(0, right) + Math.max(0, -left);
+      contentWidth = Math.max(contentWidth, lineWidth + 4);
+    }
+    if (contentWidth <= availableWidth) {
+      return buildCaptionOverlaySvg(cue, appearance, presetId, design, {
+        contentWidth, fontScale,
+      });
+    }
+    // Keep semantic line breaks; shrink only genuinely oversized lines, instead
+    // of clipping them at the safe-width boundary or squeezing glyph spacing.
+    fontScale *= availableWidth / contentWidth * 0.98;
+  }
+  throw new Error("Caption text could not fit inside its safe-width panel.");
 }
 
 function expandCaptionCueWordHighlightOverlays(cues: CaptionCueOverlay[]): CaptionCueOverlay[] {
@@ -1428,7 +1488,7 @@ async function createCaptionOverlayImages(input: {
     const imagePath = input.outputPath.replace(/\.mp4$/i, `.cue-${String(cue.index).padStart(2, "0")}.png`);
     await sharp(
       Buffer.from(
-        buildCaptionOverlaySvg(
+        await buildMeasuredCaptionOverlaySvg(
           cue,
           input.appearance,
           input.captionStylePresetId,
@@ -2257,6 +2317,7 @@ export const __captionBurnTestUtils = {
   buildSrtFromCaptionCueOverlays,
   formatCaptionOverlayText,
   buildCaptionOverlaySvg,
+  buildMeasuredCaptionOverlaySvg,
   buildCaptionOverlayFilterGraph,
   buildCaptionOverlayImageInputArgs,
   splitCaptionCueOverlaysForLayout,

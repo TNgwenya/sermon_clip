@@ -61,6 +61,21 @@ describe("clip preview route", () => {
     ));
   });
 
+  it("serves only the clean rendered asset for editing", async () => {
+    mocks.canRunLocalMediaProcessing.mockReturnValue(true);
+    mocks.findFirst.mockResolvedValue({ ...baseClip, exportedFilePath: "/finished.mp4" });
+    await GET(new Request("http://localhost/api/clips/clip-1/preview?variant=editing"), { params: Promise.resolve({ id: "clip-1" }) });
+    expect(mocks.videoFileResponse).toHaveBeenCalledWith(expect.objectContaining({ filePath: "/tmp/rendered.mp4" }));
+  });
+
+  it("does not replace missing editing media with a burned-in remote preview", async () => {
+    mocks.canRunLocalMediaProcessing.mockReturnValue(true);
+    mocks.stat.mockRejectedValue(new Error("missing"));
+    const response = await GET(new Request("http://localhost/api/clips/clip-1/preview?variant=editing"), { params: Promise.resolve({ id: "clip-1" }) });
+    expect(response.status).toBe(404);
+    expect(response.headers.get("Location")).toBeNull();
+  });
+
   it("redirects remote previews with a short private cache lifetime", async () => {
     const response = await GET(
       new Request("http://localhost/api/clips/clip-1/preview?variant=best"),

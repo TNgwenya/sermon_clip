@@ -1,5 +1,6 @@
 import type { BrollLayerConfig } from "@/lib/clipStudio";
-import type { EditableCaptionCue } from "@/lib/clipStudioEditing";
+import { buildTimedCaptionCuesFromTranscriptSegments, buildTimedCaptionCuesFromTranscriptWords,
+  type CaptionSourceSegment, type CaptionSourceWord, type EditableCaptionCue } from "@/lib/clipStudioEditing";
 import type { SpeechCleanupEdits } from "@/lib/speechCleanupPlan";
 
 export const STUDIO_BOUNDARY_CONTEXT_SECONDS = 90;
@@ -14,6 +15,59 @@ type RemappedRange = {
   startSeconds: number;
   endSeconds: number;
 };
+
+/** Preserve the creator's current wording; generate only newly included speech. */
+export function preserveCaptionCuesForClipBoundaryChange({
+  cues, previousEndSeconds, words, segments, singleWord, ...window
+}: ClipBoundaryWindow & {
+  previousEndSeconds: number;
+  cues: EditableCaptionCue[];
+  words: CaptionSourceWord[];
+  segments: CaptionSourceSegment[];
+  singleWord: boolean;
+}): EditableCaptionCue[] {
+  const preserved = remapCaptionCueOverridesForClipBoundaryChange(cues, window) ?? [];
+  const sourceWords = words.length ? words : buildTimedCaptionCuesFromTranscriptSegments({
+    startTimeSeconds: window.nextStartSeconds,
+    endTimeSeconds: window.nextEndSeconds,
+    segments,
+    maxWordsPerCue: 1,
+  }).flatMap((cue) => (cue.wordTimings ?? []).map((word) => ({
+    text: word.text,
+    startTimeSeconds: word.startSeconds + window.nextStartSeconds,
+    endTimeSeconds: word.endSeconds + window.nextStartSeconds,
+  })));
+  // A word straddling an old boundary already belongs to the preserved cue.
+  const addedWords = sourceWords.filter((word) =>
+    word.endTimeSeconds <= window.previousStartSeconds || word.startTimeSeconds >= previousEndSeconds);
+  const ranges = [
+    [window.nextStartSeconds, Math.min(window.previousStartSeconds, window.nextEndSeconds)],
+    [Math.max(previousEndSeconds, window.nextStartSeconds), window.nextEndSeconds],
+  ];
+  const added = ranges.flatMap(([startTimeSeconds, endTimeSeconds]) => {
+    if (endTimeSeconds <= startTimeSeconds) return [];
+    const options = {
+      startTimeSeconds, endTimeSeconds,
+      maxWordsPerCue: singleWord ? 1 : 5,
+      maxCueDurationSeconds: singleWord ? 1.4 : 2.4,
+      groupingStrategy: singleWord ? "timed" as const : "semantic" as const,
+    };
+    const generated = buildTimedCaptionCuesFromTranscriptWords({ ...options, words: addedWords });
+    const offset = startTimeSeconds - window.nextStartSeconds;
+    return generated.map((cue) => ({
+      ...cue,
+      startSeconds: roundBoundarySeconds(cue.startSeconds + offset),
+      endSeconds: roundBoundarySeconds(cue.endSeconds + offset),
+      ...(cue.wordTimings ? { wordTimings: cue.wordTimings.map((word) => ({
+        ...word,
+        startSeconds: roundBoundarySeconds(word.startSeconds + offset),
+        endSeconds: roundBoundarySeconds(word.endSeconds + offset),
+      })) } : {}),
+    }));
+  });
+  return [...preserved, ...added].sort((a, b) => a.startSeconds - b.startSeconds)
+    .map((cue, index) => ({ ...cue, index: index + 1 }));
+}
 
 function roundBoundarySeconds(value: number): number {
   return Number(value.toFixed(3));

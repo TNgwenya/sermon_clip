@@ -82,8 +82,7 @@ import {
 } from "@/lib/speechCleanupPlan";
 import {
   remapBrollLayerForClipBoundaryChange,
-  remapCaptionCueOverridesForClipBoundaryChange,
-  remapCaptionCueTextEditsForClipBoundaryChange,
+  preserveCaptionCuesForClipBoundaryChange,
   remapSpeechCleanupEditsForClipBoundaryChange,
 } from "@/lib/clipStudioBoundaryTiming";
 import { useStudioMode } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-workbench-tabs";
@@ -1197,10 +1196,15 @@ export function ClipStudioEditor({
         nextStartSeconds,
         nextEndSeconds,
       };
-      setCaptionCueOverrides((current) =>
-        remapCaptionCueOverridesForClipBoundaryChange(current, boundaryWindow));
-      setCaptionCueTextEdits((current) =>
-        remapCaptionCueTextEditsForClipBoundaryChange(current, boundaryWindow));
+      setCaptionCueOverrides(preserveCaptionCuesForClipBoundaryChange({
+        ...boundaryWindow,
+        previousEndSeconds,
+        cues: captionCues,
+        words: transcriptWords,
+        segments: transcriptSegments,
+        singleWord: captionRevealMode === "single-word",
+      }));
+      setCaptionCueTextEdits({});
       setBrollLayer((current) =>
         remapBrollLayerForClipBoundaryChange(current, boundaryWindow));
       setSpeechCleanupEdits((current) =>

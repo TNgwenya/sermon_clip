@@ -139,9 +139,9 @@ describe("caption burn service validation", () => {
           reducedMotion: false,
         },
       },
-      captionRendererVersion: 6,
+      captionRendererVersion: 7,
     });
-    expect(__captionBurnTestUtils.CAPTION_RENDERER_VERSION).toBe(6);
+    expect(__captionBurnTestUtils.CAPTION_RENDERER_VERSION).toBe(7);
   });
 
   it("preserves an explicit per-clip caption style while materializing burn metadata", () => {
@@ -702,6 +702,58 @@ describe("caption burn service validation", () => {
     expect(panelX * 2 + panelWidth).toBeCloseTo(canvasWidth, 1);
     expect(canvasHeight).toBeGreaterThan(70);
     expect(canvasHeight).toBeLessThan(190);
+  });
+
+  it.each(["center", "left", "right"] as const)(
+    "contains actual rendered caption ink within its panel for %s alignment",
+    async (alignment) => {
+      const design = normalizeCaptionDesignSettings({
+        typography: { alignment, textCase: "uppercase", fontWeight: 900, letterSpacingPx: 2 },
+        background: { treatment: "rounded", opacity: 1, paddingX: 24 },
+        highlighting: { scale: 1.3, reducedMotion: false },
+      });
+      const sharp = await getSharp();
+      for (const [text, activeWordIndex] of [
+        ["EACH OTHER'S GIFTS AND MINISTRIES", undefined],
+        ["EACH OTHER'S GIFTS AND MINISTRIES", 0],
+        ["WWWWWWWWWWWWWWWWWWWWWWWW", 0],
+        ["UMOYA ONGCWELE UYASIHOLA", 0],
+      ] as const) {
+        const svg = await __captionBurnTestUtils.buildMeasuredCaptionOverlaySvg({
+          index: 1, startSeconds: 0, endSeconds: 2, text, activeWordIndex,
+        }, undefined, undefined, design);
+        const panel = svg.match(/<rect data-caption-panel="true"[^>]*>/)?.[0] ?? "";
+        const panelX = Number(panel.match(/\bx="([0-9.]+)"/)?.[1]);
+        const panelWidth = Number(panel.match(/\bwidth="([0-9.]+)"/)?.[1]);
+        expect(panelWidth).toBeGreaterThan(0);
+        for (const element of svg.match(/<text\b[^>]*>[\s\S]*?<\/text>/g) ?? []) {
+          const { info } = await sharp(Buffer.from(
+            `<svg xmlns="http://www.w3.org/2000/svg" width="2048" height="1024">${element}</svg>`,
+          )).trim({ threshold: 0 }).png().toBuffer({ resolveWithObject: true });
+          const inkLeft = -(info.trimOffsetLeft ?? 0);
+          expect(inkLeft).toBeGreaterThanOrEqual(panelX);
+          expect(inkLeft + info.width).toBeLessThanOrEqual(panelX + panelWidth);
+        }
+      }
+    },
+  );
+
+  it("keeps panel geometry and text size stable while the active word advances", async () => {
+    const design = normalizeCaptionDesignSettings({
+      highlighting: { scale: 1.3, reducedMotion: false },
+    });
+    const geometry: Array<{ panel: string | undefined; text: string | undefined }> = [];
+    for (const activeWordIndex of [0, 1, 2, 3, 4]) {
+      const svg = await __captionBurnTestUtils.buildMeasuredCaptionOverlaySvg({
+        index: 1, startSeconds: 0, endSeconds: 2,
+        text: "EACH OTHER'S GIFTS AND MINISTRIES", activeWordIndex,
+      }, undefined, undefined, design);
+      geometry.push({
+        panel: svg.match(/<rect data-caption-panel="true"[^>]*>/)?.[0],
+        text: svg.match(/<text\b[^>]*>/)?.[0],
+      });
+    }
+    expect(geometry.every((value) => JSON.stringify(value) === JSON.stringify(geometry[0]))).toBe(true);
   });
 
   it("preserves visible spacing between separately highlighted words", async () => {

@@ -150,11 +150,23 @@ describe("ClipStudioLivePreview media loading", () => {
     };
   });
 
+  it("never paints live captions over the finished export when a clean preview is absent", () => {
+    const markup = renderToStaticMarkup(<ClipStudioLivePreview
+      hasPreview previewSrc="/final-with-burned-captions.mp4" editingPreviewSrc={null}
+      sourcePreviewSrc="/clean-sermon.mp4" renderLabel="Ready" renderTone="success"
+      durationLabel="45 sec" timingLabel="00:00 - 00:45" riskLabel="LOW risk"
+      riskClassName="risk-low" resolvedFramingPlan={null}
+    />);
+    expect(markup).toContain('src="/clean-sermon.mp4"');
+    expect(markup).not.toContain('src="/final-with-burned-captions.mp4"');
+  });
+
   it("uses one eager prepared video even when precise source media is available", () => {
     const markup = renderToStaticMarkup(
       <ClipStudioLivePreview
         hasPreview
         previewSrc="https://media.example.com/clip.mp4?v=2"
+        editingPreviewSrc="https://media.example.com/clip.mp4?v=2"
         sourcePreviewSrc="/api/sermons/sermon-1/source-preview"
         renderLabel="Ready"
         renderTone="success"
@@ -203,6 +215,7 @@ describe("ClipStudioLivePreview media loading", () => {
       <ClipStudioLivePreview
         hasPreview
         previewSrc="https://media.example.com/clip.mp4?v=2"
+        editingPreviewSrc="https://media.example.com/clip.mp4?v=2"
         sourcePreviewSrc="/api/sermons/sermon-1/source-preview"
         renderLabel="Ready"
         renderTone="success"
@@ -239,6 +252,7 @@ describe("ClipStudioLivePreview media loading", () => {
       <ClipStudioLivePreview
         hasPreview
         previewSrc="https://media.example.com/prepared-vertical.mp4"
+        editingPreviewSrc="https://media.example.com/prepared-vertical.mp4"
         sourcePreviewSrc="/api/sermons/sermon-1/source-preview"
         renderLabel="Ready"
         renderTone="success"
@@ -290,6 +304,7 @@ describe("ClipStudioLivePreview media loading", () => {
       <ClipStudioLivePreview
         hasPreview
         previewSrc="https://media.example.com/prepared.mp4"
+        editingPreviewSrc="https://media.example.com/prepared.mp4"
         sourcePreviewSrc="/api/sermons/sermon-1/source-preview"
         renderLabel="Ready"
         renderTone="success"
@@ -420,6 +435,7 @@ describe("ClipStudioLivePreview media loading", () => {
         <ClipStudioLivePreview
           hasPreview
           previewSrc="https://media.example.com/clip.mp4"
+        editingPreviewSrc="https://media.example.com/clip.mp4"
           sourcePreviewSrc="/api/sermons/sermon-1/source-preview"
           renderLabel="Ready"
           renderTone="success"
