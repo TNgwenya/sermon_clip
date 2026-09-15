@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile, readFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { normalizeCaptionDesignSettings } from "@/lib/clipStudio";
@@ -139,9 +142,9 @@ describe("caption burn service validation", () => {
           reducedMotion: false,
         },
       },
-      captionRendererVersion: 7,
+      captionRendererVersion: 8,
     });
-    expect(__captionBurnTestUtils.CAPTION_RENDERER_VERSION).toBe(7);
+    expect(__captionBurnTestUtils.CAPTION_RENDERER_VERSION).toBe(8);
   });
 
   it("preserves an explicit per-clip caption style while materializing burn metadata", () => {
@@ -416,7 +419,7 @@ describe("caption burn service validation", () => {
     ).toBe(true);
   });
 
-  it("bounds static exact-design overlays and gracefully selects ASS above the cap", () => {
+  it("keeps exact-design overlays selected above the per-pass input cap", () => {
     const limit = __captionBurnTestUtils.MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES;
     expect(limit).toBeGreaterThanOrEqual(120);
     expect(limit).toBeLessThan(__captionBurnTestUtils.MAX_WORD_HIGHLIGHT_OVERLAY_CUES);
@@ -425,10 +428,66 @@ describe("caption burn service validation", () => {
     ).toBe(true);
     expect(
       __captionBurnTestUtils.shouldUseStaticCaptionImageOverlay(true, limit + 1),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       __captionBurnTestUtils.shouldUseStaticCaptionImageOverlay(false, 12),
     ).toBe(false);
+  });
+
+  it("renders all 118 one-word cues in bounded lossless passes without losing animation or timing", async () => {
+    const folder = await mkdtemp(path.join(tmpdir(), "caption-passes-"));
+    const source = path.join(folder, "source.mp4");
+    const output = path.join(folder, "output.mp4");
+    const cues = Array.from({ length: 118 }, (_, index) => ({
+      index, text: `WORD${index}`, startSeconds: index * 0.4, endSeconds: (index + 1) * 0.4,
+    }));
+    const calls: Array<{ count: number; lossless: boolean | undefined }> = [];
+    try {
+      await writeFile(source, "original");
+      await __captionBurnTestUtils.runFfmpegCaptionOverlayFallback({
+        sermonId: "fixture", jobId: "fixture", renderedPath: source, outputPath: output,
+        cues, animateWordPop: true,
+      }, async (batch) => {
+        expect(batch.animateWordPop).toBe(true);
+        expect(batch.cues.length).toBeLessThanOrEqual(24);
+        const graph = __captionBurnTestUtils.buildCaptionOverlayFilterGraph(batch.cues, "100", batch.animateWordPop);
+        expect(graph).toContain("fade=t=in");
+        for (const cue of batch.cues) {
+          expect(cue).toEqual(cues[cue.index]);
+          expect(graph).toContain(`between(t,${cue.startSeconds.toFixed(3)},${cue.endSeconds.toFixed(3)})`);
+        }
+        const prior = await readFile(batch.renderedPath, "utf8");
+        await writeFile(batch.outputPath, `${prior}|${batch.cues.map((cue) => cue.index).join(",")}`);
+        calls.push({ count: batch.cues.length, lossless: batch.losslessIntermediate });
+      });
+      expect(calls.map((call) => call.count)).toEqual([24, 24, 24, 24, 22]);
+      expect(calls.map((call) => call.lossless)).toEqual([true, true, true, true, false]);
+      expect((await readFile(output, "utf8")).split("|").slice(1).join(",")).toBe(cues.map((cue) => cue.index).join(","));
+      expect(await readFile(source, "utf8")).toBe("original");
+      expect((await readdir(folder)).sort()).toEqual(["output.mp4", "source.mp4"]);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it.each([2, 3])("cleans partial output and fails visibly if caption pass %s fails", async (failedPass) => {
+    const folder = await mkdtemp(path.join(tmpdir(), "caption-passes-fail-"));
+    let count = 0;
+    try {
+      await expect(__captionBurnTestUtils.runFfmpegCaptionOverlayFallback({
+        sermonId: "fixture", jobId: "fixture", renderedPath: path.join(folder, "source.mp4"),
+        outputPath: path.join(folder, "output.mp4"), animateWordPop: true,
+        cues: Array.from({ length: 60 }, (_, index) => ({ index, text: "word", startSeconds: index, endSeconds: index + 1 })),
+      }, async (batch) => {
+        count += 1;
+        await writeFile(batch.outputPath, "partial");
+        if (count === failedPass) throw new Error("fixture encoder failure");
+      })).rejects.toThrow("fixture encoder failure");
+      expect(count).toBe(failedPass);
+      expect(await readdir(folder)).toEqual([]);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
   });
 
   it("uses a conservative duration-aware image-input budget on long EC2 renders", () => {
@@ -448,8 +507,8 @@ describe("caption burn service validation", () => {
       reducedMotion: true,
     })).toBe(30);
     expect(
-      __captionBurnTestUtils.shouldUseStaticCaptionImageOverlay(true, 31, 30),
-    ).toBe(false);
+      __captionBurnTestUtils.shouldUseStaticCaptionImageOverlay(true, 31),
+    ).toBe(true);
   });
 
   it("uses one-frame-per-second image inputs except for animated one-word pop", () => {

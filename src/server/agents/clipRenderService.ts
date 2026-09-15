@@ -245,7 +245,9 @@ function resolveManualRenderSmartCrop(value: unknown): Pick<
   };
 }
 
-type BatchRenderClip = Pick<ClipCandidate, "renderStatus" | "renderFreshness">;
+type BatchRenderClip = Pick<ClipCandidate, "renderStatus" | "renderFreshness"> & {
+  editPlans: { resolvedFramingPlanHash: string | null }[];
+};
 
 function commandFor(binaryPath?: string): string {
   return binaryPath?.trim() || "ffmpeg";
@@ -256,7 +258,11 @@ function getBatchRenderDecision(clip: BatchRenderClip, force = false): {
   forceRender: boolean;
 } {
   const needsFreshRender = clip.renderFreshness !== "UP_TO_DATE";
-  const forceRender = force || needsFreshRender;
+  // Caption-only saves create a new immutable revision without invalidating
+  // the old base-file status. A queued render must resolve framing for this
+  // revision before caption burn and overlay can safely consume its output.
+  const needsCurrentFraming = !clip.editPlans[0]?.resolvedFramingPlanHash;
+  const forceRender = force || needsFreshRender || needsCurrentFraming;
 
   return {
     shouldRender: clip.renderStatus !== "COMPLETED" || forceRender,
@@ -1420,6 +1426,12 @@ export async function renderApprovedClipsForSermon(
       status: true,
       renderStatus: true,
       renderFreshness: true,
+      editPlans: {
+        where: { status: "ACTIVE" },
+        orderBy: { version: "desc" },
+        take: 1,
+        select: { resolvedFramingPlanHash: true },
+      },
     },
   });
 

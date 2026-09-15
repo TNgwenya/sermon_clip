@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { buildClipStudioPrepareAssetPlan, buildClipStudioQueuedAssets } from "@/lib/clipStudioPrepare";
+import { __clipEditPlanTestUtils } from "../clipEditPlanService";
 
 import {
   __clipRenderTestUtils,
@@ -231,6 +233,7 @@ describe("clip render service validation", () => {
     expect(__clipRenderTestUtils.getBatchRenderDecision({
       renderStatus: "COMPLETED",
       renderFreshness: "OUTDATED",
+      editPlans: [{ resolvedFramingPlanHash: "framing-current" }],
     })).toEqual({
       shouldRender: true,
       forceRender: true,
@@ -241,10 +244,45 @@ describe("clip render service validation", () => {
     expect(__clipRenderTestUtils.getBatchRenderDecision({
       renderStatus: "COMPLETED",
       renderFreshness: "UP_TO_DATE",
+      editPlans: [{ resolvedFramingPlanHash: "framing-current" }],
     })).toEqual({
       shouldRender: false,
       forceRender: false,
     });
+  });
+
+  it.each([
+    { captionRevealMode: "single-word" },
+    { cues: [{ index: 1, startSeconds: 0, endSeconds: 30, text: "Corrected caption" }] },
+  ])("executes the queued base rebuild after a caption-only save creates a new revision: %j", (edit) => {
+    const clip = {
+      id: "clip-1", sermonId: "sermon-1", startTimeSeconds: 10, endTimeSeconds: 40,
+      adjustedStartTimeSeconds: null, adjustedEndTimeSeconds: null, durationSeconds: 30,
+      transcriptText: "Original caption", title: "Sermon", hook: "Hope", caption: "Post copy", hashtags: [],
+      exportFormat: "VERTICAL_9_16" as const, exportLayoutStrategy: "CENTER_CROP" as const,
+      manualCropKeyframes: null,
+      captionData: { captionRevealMode: "phrase", cues: [{ index: 1, startSeconds: 0, endSeconds: 30, text: "Original caption" }] },
+    };
+    const before = __clipEditPlanTestUtils.buildClipEditPlanSnapshot(clip);
+    const after = __clipEditPlanTestUtils.buildClipEditPlanSnapshot({ ...clip, captionData: { ...clip.captionData, ...edit } });
+    expect(after.planHash).not.toBe(before.planHash);
+    const snapshot = {
+      renderStatus: "COMPLETED", renderFreshness: "UP_TO_DATE", renderedFileReady: true,
+      framingPlanReady: false, captionsEnabled: true, captionStatus: "GENERATED",
+      captionFreshness: "UP_TO_DATE", captionBurnStatus: "COMPLETED", captionBurnFreshness: "OUTDATED",
+      captionedFileReady: true, exportStatus: "COMPLETED", exportFreshness: "OUTDATED",
+    } as const;
+    const plan = buildClipStudioPrepareAssetPlan(snapshot);
+    expect(buildClipStudioQueuedAssets(snapshot, plan)).toEqual(["render", "captionBurn", "export"]);
+    // Old base-file state remains fresh, but this new revision has not yet
+    // resolved framing. The worker must execute, not silently skip, the job.
+    expect(__clipRenderTestUtils.getBatchRenderDecision({
+      renderStatus: "COMPLETED", renderFreshness: "UP_TO_DATE",
+      editPlans: [{ resolvedFramingPlanHash: null }],
+    })).toEqual({ shouldRender: true, forceRender: true });
+    expect(__clipRenderTestUtils.getBatchRenderDecision({
+      renderStatus: "COMPLETED", renderFreshness: "UP_TO_DATE", editPlans: [],
+    })).toEqual({ shouldRender: true, forceRender: true });
   });
 
   it("trims clear edge silence while leaving a small speech pad", () => {

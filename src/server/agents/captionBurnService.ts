@@ -143,7 +143,7 @@ const FALLBACK_VIDEO_ENCODER = SOFTWARE_VIDEO_ENCODER;
 const MAX_WORD_HIGHLIGHT_OVERLAY_CUES = 360;
 const MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES = 180;
 const MAX_SEMANTIC_CAPTION_SPLITS_PER_CUE = 120;
-const CAPTION_RENDERER_VERSION = 7;
+const CAPTION_RENDERER_VERSION = 8;
 
 function resolveSafeCaptionOverlayInputLimit(input: {
   durationSeconds: number;
@@ -411,12 +411,10 @@ function requiresCaptionImageOverlayForDesign(
 function shouldUseStaticCaptionImageOverlay(
   requiresImageOverlay: boolean,
   cueCount: number,
-  maxCueCount = MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES,
 ): boolean {
   return (
     requiresImageOverlay
     && cueCount > 0
-    && cueCount <= maxCueCount
   );
 }
 
@@ -1599,7 +1597,7 @@ function buildCaptionOverlayImageInputArgs(
   ]);
 }
 
-async function runFfmpegCaptionOverlayFallback(input: {
+type CaptionOverlayRenderInput = {
   sermonId: string;
   renderedPath: string;
   outputPath: string;
@@ -1612,7 +1610,53 @@ async function runFfmpegCaptionOverlayFallback(input: {
   captionSafeArea?: CaptionSafeArea;
   animateWordPop?: boolean;
   captionDesign?: CaptionDesignSettingsV1;
-}): Promise<void> {
+  losslessIntermediate?: boolean;
+};
+
+function planCaptionOverlayBatches(input: CaptionOverlayRenderInput): CaptionCueOverlay[][] {
+  const limit = resolveSafeCaptionOverlayInputLimit({
+    durationSeconds: input.cues.reduce((duration, cue) => Math.max(duration, cue.endSeconds), 0),
+    animated: Boolean(input.animateWordPop),
+    reducedMotion: input.captionDesign?.highlighting.reducedMotion ?? false,
+  });
+  const batches: CaptionCueOverlay[][] = [];
+  for (let offset = 0; offset < input.cues.length; offset += limit) {
+    batches.push(input.cues.slice(offset, offset + limit));
+  }
+  return batches;
+}
+
+async function runFfmpegCaptionOverlayFallback(
+  input: CaptionOverlayRenderInput,
+  renderBatch: (batch: CaptionOverlayRenderInput) => Promise<void> = runFfmpegCaptionOverlayBatch,
+): Promise<void> {
+  const batches = planCaptionOverlayBatches(input);
+  if (batches.length === 0) throw new Error("Caption overlay could not find any caption cues.");
+  let renderedPath = input.renderedPath;
+  const intermediatePaths: string[] = [];
+  try {
+    for (let index = 0; index < batches.length; index += 1) {
+      const finalBatch = index === batches.length - 1;
+      const outputPath = finalBatch
+        ? input.outputPath
+        : input.outputPath.replace(/\.mp4$/i, `.caption-pass-${index + 1}.mp4`);
+      if (!finalBatch) intermediatePaths.push(outputPath);
+      await renderBatch({ ...input, cues: batches[index], renderedPath, outputPath,
+        losslessIntermediate: !finalBatch });
+      // Preserve the original source; release each completed intermediate as
+      // soon as the following pass has consumed it to bound temporary disk use.
+      if (renderedPath !== input.renderedPath) await unlink(renderedPath).catch(() => undefined);
+      renderedPath = outputPath;
+    }
+  } catch (error) {
+    await unlink(input.outputPath).catch(() => undefined);
+    throw error;
+  } finally {
+    await Promise.all(intermediatePaths.map((path) => unlink(path).catch(() => undefined)));
+  }
+}
+
+async function runFfmpegCaptionOverlayBatch(input: CaptionOverlayRenderInput): Promise<void> {
   if (input.cues.length === 0) {
     throw new Error("Caption overlay fallback could not find any caption cues.");
   }
@@ -1660,7 +1704,9 @@ async function runFfmpegCaptionOverlayFallback(input: {
       "[v]",
       "-map",
       "0:a?",
-      ...buildVideoEncoderArgs(videoEncoder),
+      ...(input.losslessIntermediate
+        ? ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "0"]
+        : buildVideoEncoderArgs(videoEncoder)),
       "-c:a",
       "copy",
       "-movflags",
@@ -1921,10 +1967,6 @@ async function burnCaptionsForClipCore(
   const singleWordCues = captionRevealMode === "single-word"
     ? expandCaptionCueSingleWordOverlays(styledLayoutCaptionCues)
     : [];
-  const captionDurationSeconds = styledLayoutCaptionCues.reduce(
-    (duration, cue) => Math.max(duration, cue.endSeconds),
-    0,
-  );
   const requiresCaptionDesignOverlay = requiresCaptionImageOverlayForDesign(
     clip.captionData,
     captionDesign,
@@ -1935,53 +1977,11 @@ async function burnCaptionsForClipCore(
       captionPosition === "middle"
       && captionDesign.layout.verticalOffset !== 0
     );
-  const useStaticCaptionOverlay =
-    captionRevealMode !== "single-word"
-    && shouldUseStaticCaptionImageOverlay(
-      requiresStaticCaptionOverlay,
-      styledLayoutCaptionCues.length,
-      Math.min(
-        MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES,
-        resolveSafeCaptionOverlayInputLimit({
-          durationSeconds: captionDurationSeconds,
-          animated: false,
-          reducedMotion: true,
-        }),
-      ),
-    );
-  const wordHighlightOverlayLimit = Math.min(
-    MAX_WORD_HIGHLIGHT_OVERLAY_CUES,
-    resolveSafeCaptionOverlayInputLimit({
-      durationSeconds: captionDurationSeconds,
-      animated: false,
-      reducedMotion: true,
-    }),
-  );
-  const singleWordOverlayLimit = Math.min(
-    captionDesign.highlighting.reducedMotion
-      ? MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES
-      : MAX_WORD_HIGHLIGHT_OVERLAY_CUES,
-    resolveSafeCaptionOverlayInputLimit({
-      durationSeconds: captionDurationSeconds,
-      animated: true,
-      reducedMotion: captionDesign.highlighting.reducedMotion,
-    }),
-  );
-  const useSingleWordPopOverlay =
-    singleWordCues.length > 0
-    && singleWordCues.length <= singleWordOverlayLimit;
-  const skippedOversizedWordHighlightOverlay =
-    wordHighlightCues.length > wordHighlightOverlayLimit;
+  const useStaticCaptionOverlay = captionRevealMode !== "single-word"
+    && shouldUseStaticCaptionImageOverlay(requiresStaticCaptionOverlay, styledLayoutCaptionCues.length);
+  const useSingleWordPopOverlay = singleWordCues.length > 0;
 
-  if (skippedOversizedWordHighlightOverlay) {
-    await appendJobLog(
-      jobId,
-      `Caption burn preserved the saved caption style with efficient ASS rendering because ${wordHighlightCues.length} active-word image inputs exceed the safe ${wordHighlightOverlayLimit}-input budget for this ${captionDurationSeconds.toFixed(1)}s clip.`,
-    );
-    await appendPipelineLog(clip.sermonId, "Caption burn reduced active-word animation to keep the final render reliable on the media worker.");
-  }
-
-  if (wordHighlightCues.length > 0 && wordHighlightCues.length <= wordHighlightOverlayLimit) {
+  if (wordHighlightCues.length > 0) {
     usedWordHighlightOverlay = true;
     await appendJobLog(jobId, "Caption burn using active-word image overlays.");
     await appendPipelineLog(clip.sermonId, "Caption burn using active-word image overlays.");
@@ -2022,32 +2022,6 @@ async function burnCaptionsForClipCore(
       captionDesign,
     });
   } else {
-    if (
-      requiresStaticCaptionOverlay
-      && !useStaticCaptionOverlay
-    ) {
-      await appendJobLog(
-        jobId,
-        `Caption design has ${styledLayoutCaptionCues.length} cues, above the safe exact-design image-input budget for this clip. Using the efficient ASS renderer while retaining its saved typography, colours, outline, and placement.`,
-      );
-      await appendPipelineLog(
-        clip.sermonId,
-        "Caption burn using bounded ASS fallback because the exact-design overlay graph is too large.",
-      );
-    }
-    if (
-      captionRevealMode === "single-word"
-      && singleWordCues.length > singleWordOverlayLimit
-    ) {
-      await appendJobLog(
-        jobId,
-        `Caption burn retained single-word timing but reduced pop animation because ${singleWordCues.length} word image inputs exceed the safe ${singleWordOverlayLimit}-input budget for this ${captionDurationSeconds.toFixed(1)}s clip.`,
-      );
-      await appendPipelineLog(
-        clip.sermonId,
-        "Caption burn using bounded ASS fallback because the one-word overlay graph is too large.",
-      );
-    }
     try {
       await runFfmpegCaptionBurn({
         sermonId: clip.sermonId,
@@ -2320,6 +2294,8 @@ export const __captionBurnTestUtils = {
   buildMeasuredCaptionOverlaySvg,
   buildCaptionOverlayFilterGraph,
   buildCaptionOverlayImageInputArgs,
+  planCaptionOverlayBatches,
+  runFfmpegCaptionOverlayFallback,
   splitCaptionCueOverlaysForLayout,
   captionOverlayXExpression,
   captionOverlayYExpression,
