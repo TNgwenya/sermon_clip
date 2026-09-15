@@ -11,26 +11,27 @@
   place-items: center;
   min-width: 0;
   width: 100%;
+  /* A definite canvas budget prevents controls from collapsing the video. */
+  --preview-height: clamp(390px, 50dvh, 560px);
 }
 
-@media (min-width: 1181px) {
-  .previewViewport {
-    container-type: size;
-    height: 100%;
-    min-height: 0;
-  }
-
-  .previewViewport > :global(.clip-studio-live-frame) {
+.previewViewport > :global(.clip-studio-live-frame) {
     --preview-ratio: 0.5625;
-    width: min(100cqw, calc(100cqh * var(--preview-ratio))) !important;
+    container-type: inline-size;
+    width: min(100%, calc(var(--preview-height) * var(--preview-ratio))) !important;
     height: auto !important;
     aspect-ratio: var(--preview-ratio);
-    max-height: 100% !important;
+    max-height: none !important;
     min-height: 0 !important;
-  }
+}
 
-  .previewViewport > :global(.format-horizontal) { --preview-ratio: 1.7777778; }
-  .previewViewport > :global(.format-square) { --preview-ratio: 1; }
+.previewViewport > :global(.format-horizontal) { --preview-ratio: 1.7777778; }
+.previewViewport > :global(.format-square) { --preview-ratio: 1; }
+
+@media (max-width: 560px) {
+  .previewViewport {
+    --preview-height: clamp(320px, 55dvh, 460px);
+  }
 }
 
 .canonicalPlanApplied {
@@ -211,6 +212,9 @@
 }
 
 .designedCaption > span {
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   justify-content: var(--caption-justify) !important;
   border-color: var(--caption-card-border) !important;
   border-style: solid !important;
@@ -234,6 +238,10 @@
 }
 
 .designedCaption .designWord {
+  /* Legacy mobile caption styles target every span, including these words. */
+  font-size: inherit !important;
+  line-height: inherit;
+  padding: 0.02em 0.03em !important;
   -webkit-text-stroke: var(--caption-text-stroke);
   paint-order: stroke fill;
 }

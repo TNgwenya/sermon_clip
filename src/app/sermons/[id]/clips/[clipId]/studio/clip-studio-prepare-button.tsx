@@ -51,7 +51,7 @@ export function ClipStudioPrepareButton({
     : serverIsPreparing
       ? "Final video is preparing"
       : isDraftDirty
-        ? "Unsaved draft"
+        ? "Unsaved changes"
         : hasPreparedMedia
           ? serverNeedsUpdate
             ? "Final video needs updating"

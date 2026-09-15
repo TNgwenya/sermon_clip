@@ -789,7 +789,7 @@ function useClipStudioTranscriptState({
   }, [activeClipEndSeconds, activeClipStartSeconds, transcriptSegments]);
 
   function seekToAbsolute(seconds: number) {
-    seekSourcePreviewTo(Math.max(0, seconds - activeClipStartSeconds));
+    seekSourcePreviewTo(seconds - activeClipStartSeconds);
   }
 
   return {

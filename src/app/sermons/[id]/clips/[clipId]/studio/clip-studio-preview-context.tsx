@@ -75,7 +75,14 @@ export type ClipStudioPreviewPlaybackRequest = {
   requestId: number;
 };
 
+export type ClipStudioPreviewMediaStatus = {
+  state: "loading" | "ready" | "buffering" | "error" | "unavailable";
+  message: string;
+};
+
 type ClipStudioPreviewContextValue = {
+  previewMediaStatus: ClipStudioPreviewMediaStatus;
+  updatePreviewMediaStatus: (status: ClipStudioPreviewMediaStatus) => void;
   exportSettings: ExportSettings;
   brandingConfig: ClipBrandingConfig;
   editPreview: ClipStudioEditPreview;
@@ -302,6 +309,10 @@ export function ClipStudioPreviewProvider({
     durationSeconds: null,
     isPlaying: false,
   });
+  const [previewMediaStatus, setPreviewMediaStatus] = useState<ClipStudioPreviewMediaStatus>({ state: "loading", message: "Preview loading" });
+  const updatePreviewMediaStatus = useCallback((status: ClipStudioPreviewMediaStatus) => {
+    setPreviewMediaStatus((current) => current.state === status.state && current.message === status.message ? current : status);
+  }, []);
   const [seekRequest, setSeekRequest] = useState<ClipStudioPreviewSeekRequest | null>(null);
   const [playbackRequest, setPlaybackRequest] = useState<ClipStudioPreviewPlaybackRequest | null>(null);
   const currentCompositionKey = useMemo(
@@ -387,7 +398,7 @@ export function ClipStudioPreviewProvider({
         return;
       }
 
-      const confirmed = window.confirm("This Clip Studio draft has unsaved changes. Leave without preparing the final video?");
+      const confirmed = window.confirm("This Clip Studio draft has unsaved changes. Leave and discard these changes?");
       if (!confirmed) {
         event.preventDefault();
         event.stopPropagation();
@@ -436,7 +447,7 @@ export function ClipStudioPreviewProvider({
       return;
     }
 
-    const safeSeconds = Math.max(0, seconds);
+    const safeSeconds = seconds;
     setSeekRequest((current) => ({
       seconds: safeSeconds,
       requestId: (current?.requestId ?? 0) + 1,
@@ -462,6 +473,8 @@ export function ClipStudioPreviewProvider({
       brandingConfig,
       editPreview,
       previewClock,
+      previewMediaStatus,
+      updatePreviewMediaStatus,
       seekRequest,
       playbackRequest,
       churchName,
@@ -491,6 +504,8 @@ export function ClipStudioPreviewProvider({
       preacherName,
       logoSrc,
       previewClock,
+      previewMediaStatus,
+      updatePreviewMediaStatus,
       requestPreviewPlayback,
       seekPreviewTo,
       seekSourcePreviewTo,

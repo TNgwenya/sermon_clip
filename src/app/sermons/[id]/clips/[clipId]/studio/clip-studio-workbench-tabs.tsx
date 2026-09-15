@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  createContext,
+  useContext,
   type KeyboardEvent,
   type ReactNode,
   useMemo,
@@ -11,6 +13,8 @@ import {
 import styles from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-workbench-tabs.module.css";
 
 type StudioMode = "quick" | "advanced";
+const StudioModeContext = createContext<StudioMode>("quick");
+export function useStudioMode() { return useContext(StudioModeContext); }
 type StudioTabId = "edit" | "format" | "branding" | "post" | "advanced";
 type MobileStudioTaskId = "preview" | "transcript" | StudioTabId;
 
@@ -107,7 +111,7 @@ function shouldIncludeAdvancedStudioTab({
 }
 
 function getStudioTabPresentation(
-  mode: StudioMode,
+  _mode: StudioMode,
   id: StudioTabId,
 ): Pick<StudioTab, "label" | "description" | "stepLabel"> {
   const quick: Record<Exclude<StudioTabId, "advanced">, Pick<StudioTab, "label" | "description" | "stepLabel">> = {
@@ -132,39 +136,15 @@ function getStudioTabPresentation(
       stepLabel: "Step 4",
     },
   };
-  const advanced: Record<StudioTabId, Pick<StudioTab, "label" | "description" | "stepLabel">> = {
-    edit: {
-      label: "Edit & audio",
-      description: "Caption timing, layers, hooks and pacing",
-      stepLabel: "Creative",
-    },
-    format: {
-      label: "Canvas & crop",
-      description: "Aspect ratio, tracking and exact framing",
-      stepLabel: "Layout",
-    },
-    branding: {
-      label: "Brand & overlays",
-      description: "Identity, cover frame and visual layers",
-      stepLabel: "Design",
-    },
-    post: {
-      label: "Export setup",
-      description: "Output validation and publishing handoff",
-      stepLabel: "Delivery",
-    },
-    advanced: {
-      label: "Diagnostics",
-      description: "Tracking, render and quality evidence",
-      stepLabel: "Inspect",
-    },
-  };
-
-  if (mode === "quick" && id !== "advanced") {
+  if (id !== "advanced") {
     return quick[id];
   }
 
-  return advanced[id];
+  return {
+    label: "Diagnostics",
+    description: "Tracking, render and quality evidence",
+    stepLabel: "Inspect",
+  };
 }
 
 function getStudioGuidance(mode: StudioMode, activeTab: StudioTabId): StudioGuidance {
@@ -433,6 +413,7 @@ export function ClipStudioWorkbenchTabs({
   }
 
   return (
+    <StudioModeContext.Provider value={studioMode}>
     <section id="clip-studio-tools" className={`clip-studio-workbench stack-md ${styles.workbench}`}>
       <nav className="clip-studio-mobile-taskbar" aria-label="Clip Studio workflow">
         {mobileTasks.map((task) => (
@@ -542,11 +523,12 @@ export function ClipStudioWorkbenchTabs({
         </div>
       </div>
 
-      <section
+      <details
         className={`${styles.guidance} ${studioMode === "advanced" ? styles.guidanceAdvanced : ""}`}
         aria-labelledby="clip-studio-guidance-title"
         aria-live="polite"
       >
+        <summary>Help with {tabs.find((tab) => tab.id === activeTab)?.label.toLowerCase()}</summary>
         <div className={styles.guidanceCopy}>
           <p>{guidance.eyebrow}</p>
           <h3 id="clip-studio-guidance-title">{guidance.title}</h3>
@@ -575,7 +557,7 @@ export function ClipStudioWorkbenchTabs({
             </span>
           )}
         </div>
-      </section>
+      </details>
 
       {tabs.map((tab) => (
         <div
@@ -600,6 +582,7 @@ export function ClipStudioWorkbenchTabs({
         </footer>
       </details>
     </section>
+    </StudioModeContext.Provider>
   );
 }
 

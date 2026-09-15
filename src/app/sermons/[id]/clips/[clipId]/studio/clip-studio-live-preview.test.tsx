@@ -9,6 +9,9 @@ vi.mock("@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context", 
 
 import {
   ClipStudioLivePreview,
+  resolveStudioPlaybackFailureMessage,
+  resolveStudioSourceAudition,
+  resolveSavedClipSeekSeconds,
   clipStudioPreviewMediaCoversDraft,
   clipStudioPreviewNeedsSourceMedia,
   resolveCanonicalFramingPreviewFrame,
@@ -182,7 +185,7 @@ describe("ClipStudioLivePreview media loading", () => {
     previewContext.current = {
       ...previewContext.current,
       seekRequest: {
-        seconds: 12,
+        seconds: 60,
         timeDomain: "source",
         nonce: 1,
       },
@@ -403,7 +406,7 @@ describe("ClipStudioLivePreview media loading", () => {
       previewContext.current = {
         ...previewContext.current,
         seekRequest: {
-          seconds: 5,
+          seconds: 60,
           timeDomain: "source",
           nonce: 1,
         },
@@ -549,7 +552,7 @@ describe("ClipStudioLivePreview media loading", () => {
     })).toBe(true);
   });
 
-  it("requires source media for boundary changes and source-domain seeks", () => {
+  it("requires source media only when bounds or seek mapping need the original", () => {
     const initialWindow = {
       initialStartSeconds: 90,
       initialEndSeconds: 135,
@@ -583,4 +586,50 @@ describe("ClipStudioLivePreview media loading", () => {
       seekTimeDomain: "cleaned",
     })).toBe(false);
   });
+  it("keeps an in-range transcript seek on the prepared clip", () => {
+    const window = { initialStartSeconds: 1848.27, initialEndSeconds: 1897.83, currentStartSeconds: 1848.27, currentEndSeconds: 1897.83, seekTimeDomain: "source" as const, seekSeconds: 8.58 };
+    expect(clipStudioPreviewNeedsSourceMedia(window)).toBe(false);
+    expect(clipStudioPreviewNeedsSourceMedia({ ...window, seekSeconds: 60 })).toBe(true);
+    expect(clipStudioPreviewNeedsSourceMedia({ ...window, seekSeconds: -1 })).toBe(true);
+    expect(clipStudioPreviewNeedsSourceMedia({ ...window, preparedTimingIsLinear: false })).toBe(true);
+    expect(clipStudioPreviewNeedsSourceMedia({ ...window, currentStartSeconds: 1850, seekSeconds: 5 })).toBe(false);
+  });
+
+  it("does not call a server-ready video playable before media has loaded", () => {
+    const markup = renderToStaticMarkup(<ClipStudioLivePreview hasPreview previewSrc="/clip.mp4" sourcePreviewSrc="/source.mp4" renderLabel="Video ready" renderTone="success" durationLabel="45 sec" timingLabel="0:00 - 0:45" riskLabel="Low" riskClassName="" resolvedFramingPlan={null} />);
+    expect(markup).toContain("Preview loading");
+    expect(markup).not.toContain("Video ready");
+    expect(markup).not.toContain("Preview updated");
+  });
+
+  it("offers saved-clip recovery while an expanded source preview is unavailable", () => {
+    previewContext.current = { ...previewContext.current, seekRequest: { seconds: 60, timeDomain: "source", requestId: 1 } };
+    const markup = renderToStaticMarkup(<ClipStudioLivePreview hasPreview previewSrc="/clip.mp4" sourcePreviewSrc={null} renderLabel="Video ready" renderTone="success" durationLabel="45 sec" timingLabel="0:00 - 0:45" riskLabel="Low" riskClassName="" resolvedFramingPlan={null} />);
+    expect(markup).toContain("Full sermon source required");
+    expect(markup).toContain("Return to saved clip preview");
+    expect(markup).not.toContain("Video ready");
+  });
+
+  it("only blames browser permission for NotAllowedError", () => {
+    expect(resolveStudioPlaybackFailureMessage({ name: "NotAllowedError" })).toContain("browser blocked");
+    expect(resolveStudioPlaybackFailureMessage({ name: "NotSupportedError" })).toContain("media could not play");
+    expect(resolveStudioPlaybackFailureMessage({ name: "NotSupportedError" })).not.toContain("browser");
+    expect(resolveStudioPlaybackFailureMessage({ name: "AbortError" })).toBeNull();
+  });
+  it("auditions source context on either side without changing the clip range", () => {
+    const source = { hasSourcePreview: true, timeDomain: "source" as const, draftDuration: 45 };
+    expect(resolveStudioSourceAudition({ ...source, seconds: -10 })).toBe(true);
+    expect(resolveStudioSourceAudition({ ...source, seconds: 50 })).toBe(true);
+    expect(resolveStudioSourceAudition({ ...source, seconds: 9 })).toBe(false);
+    expect(resolveStudioSourceAudition({ ...source, seconds: 50, hasSourcePreview: false })).toBe(false);
+    expect(resolveStudioSourceAudition({ ...source, seconds: 50, timeDomain: "cleaned" })).toBe(false);
+  });
+
+  it("scrubs recovered saved media forwards and backwards after its initial zero seek", () => {
+    expect([0, 20, 8, 44].map((seconds) => resolveSavedClipSeekSeconds(seconds, 45))).toEqual([0, 20, 8, 44]);
+    expect(resolveSavedClipSeekSeconds(70, 45)).toBe(45);
+    expect(resolveSavedClipSeekSeconds(-5, 45)).toBe(0);
+    expect(resolveSavedClipSeekSeconds(undefined, 45)).toBe(0);
+  });
+
 });

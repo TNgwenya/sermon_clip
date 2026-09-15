@@ -176,8 +176,18 @@ export function clipStudioPreviewNeedsSourceMedia(input: {
   currentStartSeconds: number | null;
   currentEndSeconds: number | null;
   seekTimeDomain?: "cleaned" | "source" | null;
+  seekSeconds?: number;
+  preparedTimingIsLinear?: boolean;
 }): boolean {
-  if (input.seekTimeDomain === "source") {
+  if (input.seekTimeDomain === "source" && (
+    input.preparedTimingIsLinear === false
+    || input.seekSeconds === undefined
+    || input.currentStartSeconds === null
+    || input.initialStartSeconds === null
+    || input.initialEndSeconds === null
+    || input.currentStartSeconds + input.seekSeconds < input.initialStartSeconds
+    || input.currentStartSeconds + input.seekSeconds > input.initialEndSeconds
+  )) {
     return true;
   }
 
@@ -200,6 +210,24 @@ export function clipStudioPreviewNeedsSourceMedia(input: {
     input.currentStartSeconds < input.initialStartSeconds - 0.01
     || input.currentEndSeconds > input.initialEndSeconds + 0.01
   );
+}
+
+export function resolveStudioPlaybackFailureMessage(error: unknown): string | null {
+  const name = error && typeof error === "object" && "name" in error ? error.name : null;
+  if (name === "AbortError") return null; // A newer media load interrupted this play request.
+  return name === "NotAllowedError"
+    ? "The browser blocked playback. Press Play to try again."
+    : "Preview media could not play. Retry the preview or return to the saved clip. Your draft remains available.";
+}
+
+export function resolveSavedClipSeekSeconds(requestedSeconds: number | undefined, durationSeconds: number | null): number {
+  if (requestedSeconds === undefined || !Number.isFinite(requestedSeconds)) return 0;
+  return Math.max(0, Math.min(requestedSeconds, durationSeconds ?? Number.POSITIVE_INFINITY));
+}
+
+export function resolveStudioSourceAudition(input: { hasSourcePreview: boolean; timeDomain?: "cleaned" | "source"; seconds?: number; draftDuration: number | null }): boolean {
+  return input.hasSourcePreview && input.timeDomain === "source" && input.seconds !== undefined
+    && (input.seconds < 0 || (input.draftDuration !== null && input.seconds > input.draftDuration));
 }
 
 export function clipStudioPreviewMediaCoversDraft(input: {
@@ -417,7 +445,6 @@ export function ClipStudioLivePreview({
   hasPreview,
   previewSrc,
   sourcePreviewSrc,
-  renderLabel,
   renderTone,
   durationLabel,
   timingLabel,
@@ -438,6 +465,7 @@ export function ClipStudioLivePreview({
     preacherName,
     logoSrc,
     updatePreviewClock,
+    updatePreviewMediaStatus,
   } = useClipStudioPreview();
   const frameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -450,6 +478,11 @@ export function ClipStudioLivePreview({
   const [previewDurationSeconds, setPreviewDurationSeconds] = useState<number | null>(null);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const [isPreviewMuted, setIsPreviewMuted] = useState(false);
+  const [showSavedPreview, setShowSavedPreview] = useState(false);
+  const [preparedTimingIsLinear] = useState(() => !(
+    editPreview.speechCleanup.removeDeadAir || editPreview.speechCleanup.tightenLongPauses
+    || editPreview.speechCleanupEdits?.cuts.some((cut) => cut.enabled)
+  ));
   const [previewErrorState, setPreviewErrorState] = useState<{ src: string; message: string } | null>(null);
   const [unavailableSourcePreviewSrc, setUnavailableSourcePreviewSrc] = useState<string | null>(null);
   const [unavailablePreparedPreviewSrc, setUnavailablePreparedPreviewSrc] = useState<string | null>(null);
@@ -530,6 +563,8 @@ export function ClipStudioLivePreview({
     currentStartSeconds: editPreview.startSeconds,
     currentEndSeconds: editPreview.endSeconds,
     seekTimeDomain: seekRequest?.timeDomain,
+    seekSeconds: seekRequest?.seconds,
+    preparedTimingIsLinear,
   });
   const {
     activePreviewSrc,
@@ -539,12 +574,13 @@ export function ClipStudioLivePreview({
     hasPreview,
     previewSrc,
     sourcePreviewSrc,
-    preferSourcePreview: sourcePrecisionRequired,
+    preferSourcePreview: sourcePrecisionRequired && !showSavedPreview,
     unavailableSourcePreviewSrc,
     unavailablePreparedPreviewSrc,
   });
+  const isSourceContextAudition = resolveStudioSourceAudition({ hasSourcePreview, timeDomain: seekRequest?.timeDomain, seconds: seekRequest?.seconds, draftDuration: editPreview.durationSeconds });
   const previewError = previewErrorState?.src === activePreviewSrc ? previewErrorState.message : "";
-  const sourcePrecisionUnavailable = sourcePrecisionRequired && !hasSourcePreview;
+  const sourcePrecisionUnavailable = sourcePrecisionRequired && !hasSourcePreview && !showSavedPreview;
   const playbackSrc = useMemo(() => {
     if (!activePreviewSrc) {
       return null;
@@ -588,7 +624,29 @@ export function ClipStudioLivePreview({
   }, [initialDraftWindow.startSeconds, sourcePreviewSrc]);
   const previewMediaReady = Boolean(playbackSrc && previewReadySrc === playbackSrc && !previewError);
   const previewBuffering = playbackState === "waiting" || playbackState === "stalled";
-  const draftDurationSeconds = editPreview.durationSeconds;
+  const mediaStatusState = !canPreview || sourcePrecisionUnavailable ? "unavailable"
+    : previewError ? "error" : previewBuffering ? "buffering" : previewMediaReady ? "ready" : "loading";
+  const mediaStatusMessage = mediaStatusState === "ready" ? showSavedPreview ? "Saved clip preview · draft changes are not shown" : isSourceContextAudition ? "Source context preview · clip boundaries unchanged" : "Preview ready"
+    : mediaStatusState === "error" ? "Preview unavailable · retry or return to saved clip"
+      : mediaStatusState === "unavailable" ? "Preview media unavailable"
+        : mediaStatusState === "buffering" ? "Preview buffering" : "Preview loading";
+  useEffect(() => {
+    updatePreviewMediaStatus({ state: mediaStatusState, message: mediaStatusMessage });
+  }, [mediaStatusState, mediaStatusMessage, updatePreviewMediaStatus]);
+
+  const canReturnToSavedPreview = Boolean(hasPreview && previewSrc && previewSrc !== unavailablePreparedPreviewSrc && !showSavedPreview && (hasSourcePreview || sourcePrecisionUnavailable));
+  function returnToSavedPreview() {
+    playbackIntentRef.current = false;
+    setShowSavedPreview(true);
+    setPreviewErrorState(null);
+    setPreviewReadySrc(null);
+    setPlaybackState("loading");
+    setPlaybackNotice("Showing the saved clip. Your draft changes are preserved; the expanded range is not shown.");
+    seekPreviewTo(0);
+  }
+
+  const draftDurationSeconds = showSavedPreview && initialDraftWindow.startSeconds !== null && initialDraftWindow.endSeconds !== null
+    ? initialDraftWindow.endSeconds - initialDraftWindow.startSeconds : editPreview.durationSeconds;
   const introDurationSeconds = normalizeBrandingDurationSeconds(
     brandingConfig.introDurationSeconds,
     DEFAULT_INTRO_DURATION_SECONDS,
@@ -597,21 +655,25 @@ export function ClipStudioLivePreview({
     brandingConfig.outroDurationSeconds,
     DEFAULT_OUTRO_DURATION_SECONDS,
   );
-  const draftStartSeconds = hasSourcePreview ? editPreview.startSeconds : 0;
-  const draftEndSeconds = hasSourcePreview ? editPreview.endSeconds : draftDurationSeconds;
+  const draftStartSeconds = hasSourcePreview ? editPreview.startSeconds : showSavedPreview ? 0
+    : Math.max(0, (editPreview.startSeconds ?? 0) - (initialDraftWindow.startSeconds ?? 0));
+  const draftEndSeconds = hasSourcePreview ? editPreview.endSeconds
+    : showSavedPreview ? (initialDraftWindow.endSeconds ?? 0) - (initialDraftWindow.startSeconds ?? 0)
+      : (draftStartSeconds ?? 0) + (draftDurationSeconds ?? 0);
   const isDraftTrimPreview = Boolean(activePreviewSrc && draftDurationSeconds !== null);
   const speechCleanupPreviewPlan = useMemo(
     () =>
       buildSpeechCleanupPreviewPlan({
         captionCues: editPreview.captionCues,
         durationSeconds: draftDurationSeconds,
-        speechCleanup: editPreview.speechCleanup,
+        speechCleanup: showSavedPreview ? { ...editPreview.speechCleanup, removeDeadAir: false, tightenLongPauses: false } : editPreview.speechCleanup,
         audioSilenceEvents: editPreview.audioSilenceEvents,
         audioSilenceAnalysisAvailable: editPreview.audioSilenceAnalyzed,
-        speechCleanupEdits: editPreview.speechCleanupEdits,
+        speechCleanupEdits: showSavedPreview ? null : editPreview.speechCleanupEdits,
       }),
     [
       draftDurationSeconds,
+      showSavedPreview,
       editPreview.audioSilenceAnalyzed,
       editPreview.audioSilenceEvents,
       editPreview.captionCues,
@@ -619,9 +681,6 @@ export function ClipStudioLivePreview({
       editPreview.speechCleanupEdits,
     ],
   );
-  const cleanupWindowKey = `${speechCleanupPreviewPlan.sourceStartSeconds}:${speechCleanupPreviewPlan.sourceEndSeconds}:${speechCleanupPreviewPlan.cuts
-    .map((cut) => `${cut.startSeconds}-${cut.endSeconds}`)
-    .join(",")}`;
   const effectivePreviewDuration = resolveCompositionPreviewDuration({
     draftDurationSeconds,
     mediaDurationSeconds: previewDurationSeconds,
@@ -639,7 +698,6 @@ export function ClipStudioLivePreview({
     previewSeconds < introDurationSeconds &&
     !showTimedOutro,
   );
-  const windowKey = `${hasSourcePreview ? "source" : "rendered"}:${draftStartSeconds ?? "x"}:${draftEndSeconds ?? "x"}:${cleanupWindowKey}`;
   const hookOverlay = useMemo(() => {
     if (!speechCleanupPreviewPlan.enabled) {
       return editPreview.hookOverlay;
@@ -753,6 +811,9 @@ export function ClipStudioLivePreview({
     : captionDesign.layout.horizontalPosition === "right"
       ? "-100%"
       : "-50%";
+  // Caption dimensions are authored in output pixels. Resolve them against the
+  // live frame's width so resizing the workspace preserves the rendered design.
+  const captionPreviewLength = (pixels: number) => `${pixels / renderFrameSize.width * 100}cqw`;
   const captionVisualVariables = {
     "--caption-card-background": backgroundVisible
       ? colorWithOpacity(captionDesign.background.color, captionDesign.background.opacity)
@@ -760,8 +821,8 @@ export function ClipStudioLivePreview({
     "--caption-card-border": backgroundVisible
       ? colorWithOpacity(captionDesign.background.borderColor, captionDesign.background.borderOpacity)
       : "transparent",
-    "--caption-card-border-width": `${backgroundVisible ? captionDesign.background.borderWidthPx : 0}px`,
-    "--caption-card-radius": `${captionDesign.background.treatment === "solid" ? 0 : captionDesign.background.borderRadiusPx}px`,
+    "--caption-card-border-width": captionPreviewLength(backgroundVisible ? captionDesign.background.borderWidthPx : 0),
+    "--caption-card-radius": captionPreviewLength(captionDesign.background.treatment === "solid" ? 0 : captionDesign.background.borderRadiusPx),
     "--caption-text-color": captionDesign.colors.textColor,
     "--caption-active-color": captionDesign.colors.activeTextColor,
     "--caption-active-background": colorWithOpacity(
@@ -773,24 +834,24 @@ export function ClipStudioLivePreview({
       : String(captionDesign.highlighting.scale),
     "--caption-active-weight": String(Math.min(900, captionDesign.typography.fontWeight + captionDesign.highlighting.fontWeightBoost)),
     "--caption-font-family": captionFont.cssStack,
-    "--caption-font-size": `${Math.max(0.72, captionDesign.typography.fontSizePx / 36).toFixed(2)}rem`,
+    "--caption-font-size": captionPreviewLength(captionDesign.typography.fontSizePx),
     "--caption-font-weight": String(captionDesign.typography.fontWeight),
     "--caption-font-style": captionDesign.typography.italic ? "italic" : "normal",
-    "--caption-letter-spacing": `${captionDesign.typography.letterSpacingPx}px`,
+    "--caption-letter-spacing": captionPreviewLength(captionDesign.typography.letterSpacingPx),
     "--caption-line-height": String(captionDesign.typography.lineHeight),
-    "--caption-word-spacing": `${captionDesign.typography.wordSpacingPx}px`,
+    "--caption-word-spacing": captionPreviewLength(captionDesign.typography.wordSpacingPx),
     "--caption-text-align": captionDesign.typography.alignment,
     "--caption-justify": captionDesign.typography.alignment === "left"
       ? "flex-start"
       : captionDesign.typography.alignment === "right"
         ? "flex-end"
         : "center",
-    "--caption-padding-x": `${captionDesign.background.paddingX / 16}rem`,
-    "--caption-padding-y": `${captionDesign.background.paddingY / 16}rem`,
+    "--caption-padding-x": captionPreviewLength(captionDesign.background.paddingX),
+    "--caption-padding-y": captionPreviewLength(captionDesign.background.paddingY),
     "--caption-text-stroke": captionDesign.readability.outlineWidthPx > 0
-      ? `${Math.max(0.25, captionDesign.readability.outlineWidthPx / 6).toFixed(2)}px ${captionDesign.readability.outlineColor}`
+      ? `${captionPreviewLength(captionDesign.readability.outlineWidthPx)} ${captionDesign.readability.outlineColor}`
       : "0 transparent",
-    "--caption-text-shadow": `${captionDesign.readability.shadowOffsetX}px ${captionDesign.readability.shadowOffsetY}px ${captionDesign.readability.shadowBlurPx}px ${colorWithOpacity(
+    "--caption-text-shadow": `${captionPreviewLength(captionDesign.readability.shadowOffsetX)} ${captionPreviewLength(captionDesign.readability.shadowOffsetY)} ${captionPreviewLength(captionDesign.readability.shadowBlurPx)} ${colorWithOpacity(
       captionDesign.readability.shadowColor,
       captionDesign.readability.shadowOpacity,
     )}`,
@@ -1077,8 +1138,8 @@ export function ClipStudioLivePreview({
   const updatePreviewSeconds = useCallback(() => {
     const video = videoRef.current;
     const videoSeconds = video?.currentTime ?? 0;
-    const sourceSeconds = isDraftTrimPreview
-      ? Math.max(0, Math.min(draftDurationSeconds ?? Number.POSITIVE_INFINITY, hasSourcePreview ? videoSeconds - (draftStartSeconds ?? 0) : videoSeconds))
+    const sourceSeconds = isSourceContextAudition ? videoSeconds - (draftStartSeconds ?? 0) : isDraftTrimPreview
+      ? Math.max(0, Math.min(draftDurationSeconds ?? Number.POSITIVE_INFINITY, videoSeconds - (draftStartSeconds ?? 0)))
       : videoSeconds;
     const currentSeconds = speechCleanupPreviewPlan.enabled
       ? mapSourceSecondsToCleanedPreviewSeconds(sourceSeconds, speechCleanupPreviewPlan)
@@ -1106,7 +1167,7 @@ export function ClipStudioLivePreview({
       durationSeconds,
       isPlaying,
     });
-  }, [draftDurationSeconds, draftStartSeconds, hasSourcePreview, isDraftTrimPreview, speechCleanupPreviewPlan, updatePreviewClock]);
+  }, [draftDurationSeconds, draftStartSeconds, hasSourcePreview, isDraftTrimPreview, isSourceContextAudition, speechCleanupPreviewPlan, updatePreviewClock]);
 
   const validatePreviewCoverage = useCallback((): boolean => {
     const video = videoRef.current;
@@ -1114,7 +1175,7 @@ export function ClipStudioLivePreview({
       return false;
     }
 
-    if (!clipStudioPreviewMediaCoversDraft({
+    if (!showSavedPreview && !clipStudioPreviewMediaCoversDraft({
       mediaDurationSeconds: video.duration,
       draftDurationSeconds,
       draftEndSeconds: editPreview.endSeconds,
@@ -1132,11 +1193,11 @@ export function ClipStudioLivePreview({
     }
 
     return true;
-  }, [activePreviewSrc, draftDurationSeconds, editPreview.endSeconds, hasSourcePreview]);
+  }, [activePreviewSrc, draftDurationSeconds, editPreview.endSeconds, hasSourcePreview, showSavedPreview]);
 
   const clampVideoToDraftWindow = useCallback((options?: { restartAtEnd?: boolean }) => {
     const video = videoRef.current;
-    if (!video || !isDraftTrimPreview || draftStartSeconds === null) {
+    if (!video || !isDraftTrimPreview || draftStartSeconds === null || isSourceContextAudition) {
       return;
     }
 
@@ -1175,54 +1236,29 @@ export function ClipStudioLivePreview({
         video.pause();
       }
     }
-  }, [draftEndSeconds, draftStartSeconds, isDraftTrimPreview, speechCleanupPreviewPlan, updatePreviewSeconds]);
+  }, [draftEndSeconds, draftStartSeconds, isDraftTrimPreview, isSourceContextAudition, speechCleanupPreviewPlan, updatePreviewSeconds]);
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !seekRequest) {
-      return;
-    }
-
-    const maxSeconds = Number.isFinite(video.duration) ? video.duration : Number.POSITIVE_INFINITY;
-    const sourceStartSeconds = hasSourcePreview ? draftStartSeconds ?? 0 : 0;
-    const sourceEndSeconds = speechCleanupPreviewPlan.enabled
-      ? sourceStartSeconds + speechCleanupPreviewPlan.sourceEndSeconds
-      : draftEndSeconds ?? maxSeconds;
-    const seekSourceSeconds = resolvePreviewSeekSourceSeconds({
-      requestedSeconds: seekRequest.seconds,
-      timeDomain: seekRequest.timeDomain,
-      plan: speechCleanupPreviewPlan,
-    });
-    const targetSeconds = hasSourcePreview
-      ? sourceStartSeconds + Math.min(seekSourceSeconds, Math.max(0, sourceEndSeconds - sourceStartSeconds))
-      : seekSourceSeconds;
-    video.currentTime = Math.max(0, Math.min(maxSeconds, Math.min(targetSeconds, sourceEndSeconds)));
-    updatePreviewSeconds();
-  }, [draftEndSeconds, draftStartSeconds, hasSourcePreview, seekRequest, speechCleanupPreviewPlan, updatePreviewSeconds]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !isDraftTrimPreview || draftStartSeconds === null) {
-      return;
-    }
-
-    const seekToDraftStart = () => {
-      video.currentTime = Math.max(0, draftStartSeconds + (speechCleanupPreviewPlan.enabled ? speechCleanupPreviewPlan.sourceStartSeconds : 0));
+    if (!video || !isDraftTrimPreview) return;
+    const applyRequestedPosition = () => {
+      const maxSeconds = Number.isFinite(video.duration) ? video.duration : Number.POSITIVE_INFINITY;
+      const start = draftStartSeconds ?? 0;
+      const end = isSourceContextAudition ? maxSeconds : draftEndSeconds ?? maxSeconds;
+      const relative = showSavedPreview ? resolveSavedClipSeekSeconds(seekRequest?.seconds, draftDurationSeconds) : isSourceContextAudition ? seekRequest!.seconds : seekRequest
+        ? resolvePreviewSeekSourceSeconds({ requestedSeconds: seekRequest.seconds, timeDomain: seekRequest.timeDomain, plan: speechCleanupPreviewPlan })
+        : speechCleanupPreviewPlan.enabled ? speechCleanupPreviewPlan.sourceStartSeconds : 0;
+      video.currentTime = Math.max(0, Math.min(maxSeconds, end, start + relative));
       updatePreviewSeconds();
     };
-
-    if (video.readyState >= 1) {
-      seekToDraftStart();
-      return;
-    }
-
-    video.addEventListener("loadedmetadata", seekToDraftStart, { once: true });
-    return () => video.removeEventListener("loadedmetadata", seekToDraftStart);
-  }, [draftStartSeconds, isDraftTrimPreview, speechCleanupPreviewPlan, updatePreviewSeconds, windowKey]);
+    if (video.readyState >= 1) applyRequestedPosition();
+    else video.addEventListener("loadedmetadata", applyRequestedPosition, { once: true });
+    return () => video.removeEventListener("loadedmetadata", applyRequestedPosition);
+  }, [draftDurationSeconds, draftEndSeconds, draftStartSeconds, isDraftTrimPreview, isSourceContextAudition, playbackSrc, seekRequest, showSavedPreview, speechCleanupPreviewPlan, updatePreviewSeconds]);
 
   const startPreviewPlayback = useCallback(async () => {
     const video = videoRef.current;
-    if (!video || !validatePreviewCoverage()) {
+    if (!video || (video.readyState >= 1 && !validatePreviewCoverage())) {
       return;
     }
 
@@ -1240,15 +1276,21 @@ export function ClipStudioLivePreview({
     try {
       await video.play();
       setPlaybackNotice(null);
-    } catch {
-      try {
-        video.muted = true;
-        setIsPreviewMuted(true);
-        await video.play();
-        setPlaybackNotice("Preview started muted because the browser blocked audio playback.");
-      } catch {
+    } catch (error) {
+      const isAudioBlocked = error && typeof error === "object" && "name" in error && error.name === "NotAllowedError";
+      if (isAudioBlocked) {
+        try {
+          video.muted = true;
+          setIsPreviewMuted(true);
+          await video.play();
+          setPlaybackNotice("Preview started muted because the browser blocked audio playback.");
+        } catch (mutedError) {
+          playbackIntentRef.current = false;
+          setPlaybackNotice(resolveStudioPlaybackFailureMessage(mutedError));
+        }
+      } else {
         playbackIntentRef.current = false;
-        setPlaybackNotice("Preview playback is blocked by the browser. Try again or reload the Studio.");
+        setPlaybackNotice(resolveStudioPlaybackFailureMessage(error));
       }
     } finally {
       updatePreviewSeconds();
@@ -1371,7 +1413,7 @@ export function ClipStudioLivePreview({
           >
             {showSafeZoneGuide ? "Hide safe zones" : "Show safe zones"}
           </button>
-          <StatusBadge tone={renderTone}>{renderLabel}</StatusBadge>
+          <StatusBadge tone={previewError || sourcePrecisionUnavailable ? "danger" : previewMediaReady && !previewBuffering ? "success" : "neutral"}>{previewError ? "Preview unavailable" : sourcePrecisionUnavailable ? "Source required" : previewBuffering ? "Preview buffering" : previewMediaReady ? showSavedPreview ? "Saved clip preview" : "Preview ready" : "Preview loading"}</StatusBadge>
         </div>
       </div>
 
@@ -1479,7 +1521,7 @@ export function ClipStudioLivePreview({
                   }}
                   onStalled={() => {
                     setPlaybackState("stalled");
-                    setPlaybackNotice("The preview connection paused. Retrying the video stream…");
+                    setPlaybackNotice("The preview connection paused. Retry the preview if playback does not resume.");
                   }}
                   onPlaying={() => {
                     playbackIntentRef.current = true;
@@ -1545,7 +1587,7 @@ export function ClipStudioLivePreview({
                     <strong>{previewBuffering ? "Buffering preview" : "Loading preview media"}</strong>
                     <span>
                       {playbackState === "stalled"
-                        ? "The connection paused briefly. The Studio is retrying the stream."
+                        ? "The connection paused. Retry the preview or return to the saved clip."
                         : previewBuffering
                           ? "Playback will continue automatically as soon as enough video is ready."
                           : "The Studio is loading enough video to start smoothly."}
@@ -1574,7 +1616,7 @@ export function ClipStudioLivePreview({
               />
             )}
 
-            {previewMediaReady && brandingEnabled && brandingConfig.backgroundStyle !== "NONE" ? (
+            {previewMediaReady && !showSavedPreview && !isSourceContextAudition && brandingEnabled && brandingConfig.backgroundStyle !== "NONE" ? (
               <div className="clip-studio-live-brand-tint" aria-hidden="true" />
             ) : null}
 
@@ -1586,21 +1628,21 @@ export function ClipStudioLivePreview({
               </div>
             ) : null}
 
-            {previewMediaReady && showLogo && logoSrc ? (
+            {previewMediaReady && !showSavedPreview && !isSourceContextAudition && showLogo && logoSrc ? (
               <div className={`clip-studio-live-watermark has-logo logo-placement-${lowerThirdPlacement.toLowerCase()}`}>
                 <Image src={logoSrc} alt={`${churchName || "Church"} logo`} width={68} height={68} unoptimized />
               </div>
-            ) : previewMediaReady && showWatermark ? (
+            ) : previewMediaReady && !showSavedPreview && !isSourceContextAudition && showWatermark ? (
               <div className="clip-studio-live-watermark">{(churchName || "Church").slice(0, 2).toUpperCase()}</div>
             ) : null}
 
-            {previewMediaReady && showTimedIntro ? (
+            {previewMediaReady && !showSavedPreview && !isSourceContextAudition && showTimedIntro ? (
               <div className="clip-studio-live-brand-slate clip-studio-live-brand-slate-intro">
                 {churchName || sermonTitle || "Sermon Clip"}
               </div>
             ) : null}
 
-            {previewMediaReady && showLowerThird ? (
+            {previewMediaReady && !showSavedPreview && !isSourceContextAudition && showLowerThird ? (
               <div className={`clip-studio-live-lower-third brand-placement-${lowerThirdPlacement.toLowerCase()}`}>
                 <strong>{brandingConfig.showSermonTitle ? sermonTitle || "Sermon title" : "Clip"}</strong>
                 <span>
@@ -1613,7 +1655,7 @@ export function ClipStudioLivePreview({
               </div>
             ) : null}
 
-            {previewMediaReady && activeBrollCard ? (
+            {previewMediaReady && !showSavedPreview && !isSourceContextAudition && activeBrollCard ? (
               <div
                 className={`clip-studio-live-broll broll-${activeBrollCard.tone} broll-position-${activeBrollCard.position}`}
                 onPointerDown={(event) => startOverlayDrag(event, "broll", activeBrollCard.id)}
@@ -1627,7 +1669,7 @@ export function ClipStudioLivePreview({
               </div>
             ) : null}
 
-            {previewMediaReady && showTimedHook ? (
+            {previewMediaReady && !showSavedPreview && !isSourceContextAudition && showTimedHook ? (
               <div
                 className={`clip-studio-live-hook hook-${hookOverlay.position} hook-${hookOverlay.animation} hook-${hookOverlay.size} ${
                   hookOverlay.bold ? "is-bold" : ""
@@ -1647,7 +1689,7 @@ export function ClipStudioLivePreview({
               </div>
             ) : null}
 
-            {previewMediaReady && captionPreviewText ? (
+            {previewMediaReady && !showSavedPreview && !isSourceContextAudition && captionPreviewText ? (
               <div
                 key={editPreview.captionRevealMode === "single-word" ? `${activeCaptionCue?.index ?? "cue"}-${captionDisplayText}` : "caption"}
                 className={`clip-studio-live-caption ${styles.designedCaption} ${captionDesign.highlighting.reducedMotion ? styles.reducedMotion : ""} ${captionStyle.className} caption-position-${editPreview.captionPosition} caption-size-${editPreview.captionAppearance.fontScale} caption-reveal-${editPreview.captionRevealMode}`}
@@ -1671,7 +1713,7 @@ export function ClipStudioLivePreview({
               </div>
             ) : null}
 
-            {previewMediaReady && showTimedOutro ? (
+            {previewMediaReady && !showSavedPreview && !isSourceContextAudition && showTimedOutro ? (
               <div className="clip-studio-live-brand-slate clip-studio-live-brand-slate-outro">
                 <strong>{churchName || "Keep the message going"}</strong>
                 <span>Reflect · Share · Invite</span>
@@ -1713,12 +1755,12 @@ export function ClipStudioLivePreview({
                   min="0"
                   max={Math.max(0, previewDurationSeconds ?? 0)}
                   step="0.1"
-                  value={Math.min(previewSeconds, previewDurationSeconds ?? previewSeconds)}
+                  value={Math.max(0, Math.min(previewSeconds, previewDurationSeconds ?? previewSeconds))}
                   onChange={(event) => scrubPreview(Number(event.target.value))}
                   disabled={!previewDurationSeconds || previewDurationSeconds <= 0}
                 />
                 <span>
-                  {formatSecondsForPastorView(previewSeconds)} / {previewDurationSeconds !== null ? formatSecondsForPastorView(previewDurationSeconds) : "--:--"}
+                  {isSourceContextAudition ? `Source ${formatSecondsForPastorView((draftStartSeconds ?? 0) + sourcePreviewSeconds)}` : `${formatSecondsForPastorView(previewSeconds)} / ${previewDurationSeconds !== null ? formatSecondsForPastorView(previewDurationSeconds) : "--:--"}`}
                 </span>
               </div>
               {playbackNotice ? <p className="muted small">{playbackNotice}</p> : null}
@@ -1726,11 +1768,33 @@ export function ClipStudioLivePreview({
           ) : null}
         </div>
 
+        {(previewError || sourcePrecisionUnavailable || !previewMediaReady || previewBuffering) && canReturnToSavedPreview ? (
+          <button type="button" className="button secondary" onClick={returnToSavedPreview}>
+            Return to saved clip preview
+          </button>
+        ) : null}
+        {isSourceContextAudition && !showSavedPreview ? (
+          <p role="status" className="muted small">Auditioning original sermon context outside this clip. Clip boundaries are unchanged. <button type="button" className="button tertiary" onClick={() => seekPreviewTo(0)}>Return to clip</button></p>
+        ) : null}
+        {showSavedPreview ? (
+          <div role="status" className="muted small">
+            <p>Showing the saved clip only. Your draft changes are preserved and are not shown in this preview.</p>
+            <button type="button" className="button secondary" onClick={() => {
+              setShowSavedPreview(false);
+              setUnavailableSourcePreviewSrc(null);
+              setPreviewErrorState(null);
+              setPreviewReadySrc(null);
+              setPlaybackState("loading");
+              setRetryNonce((current) => current + 1);
+            }}>Retry draft preview</button>
+          </div>
+        ) : null}
+
         <details className="clip-studio-preview-control-stack" open={!editPreview.isTimingValid || renderTone === "danger"}>
           <summary>Preview details</summary>
           <div className="clip-studio-preview-spec">
             <div className="clip-studio-preview-state-line">
-              <strong>{editPreview.isTimingValid ? "Preview updated" : "Preview needs timing"}</strong>
+              <strong>{!editPreview.isTimingValid ? "Preview needs timing" : previewError ? "Preview unavailable" : previewBuffering ? "Preview buffering" : previewMediaReady ? "Preview ready" : "Preview loading"}</strong>
               <span>{framingDisplayLabel}</span>
             </div>
             <div className="clip-studio-layer-chips" aria-label="Active preview layers">

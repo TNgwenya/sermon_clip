@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const previewState = vi.hoisted(() => ({
   editPreview: {
@@ -80,6 +80,14 @@ vi.mock("@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context", 
 import { ClipStudioPrepareButton } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-prepare-button";
 
 describe("ClipStudioPrepareButton", () => {
+  beforeEach(() => { previewState.isDraftDirty = false; });
+  it("keeps an unsaved draft separate from a prepared video", () => {
+    previewState.isDraftDirty = true;
+    const markup = renderToStaticMarkup(<ClipStudioPrepareButton clipId="clip-1" clipStatus="APPROVED" hasPreparedMedia serverNeedsUpdate={false} />);
+    expect(markup).toContain("Unsaved changes");
+    expect(markup).toContain("Save &amp; update final video");
+    expect(markup).not.toContain("Continue to Publishing Desk");
+  });
   it("does not disable preparation or repeat banners for uncertain wording", () => {
     const markup = renderToStaticMarkup(
       <ClipStudioPrepareButton clipId="clip-1" clipStatus="APPROVED"

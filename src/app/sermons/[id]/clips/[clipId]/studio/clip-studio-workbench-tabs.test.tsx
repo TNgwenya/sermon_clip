@@ -35,6 +35,7 @@ describe("Clip Studio inspector navigation", () => {
     expect(markup).not.toContain("Production diagnostics</p>");
     expect(markup).toContain('<h2 class="sr-only">Clip inspector</h2>');
     expect(markup).toContain("Quick path · 1 of 4");
+    expect(markup).toContain("<summary>Help with words &amp; sound</summary>");
     expect(markup).toContain('<h3 id="clip-studio-guidance-title">Check the words and sound</h3>');
     expect(markup).toContain(">Start with captions</button>");
     expect(markup).toContain(">Next: fit the frame");
@@ -79,7 +80,7 @@ describe("Clip Studio inspector navigation", () => {
     expect(shouldIncludeAdvanced({ mode: "advanced", hasAdvancedContent: true })).toBe(true);
   });
 
-  it("gives Quick Finish outcome labels while Advanced Studio exposes expert hierarchy", () => {
+  it("keeps task names stable when advanced controls are revealed", () => {
     const presentation = __clipStudioWorkbenchTabsTestUtils.getStudioTabPresentation;
 
     expect(presentation("quick", "edit")).toEqual({
@@ -88,9 +89,9 @@ describe("Clip Studio inspector navigation", () => {
       stepLabel: "Step 1",
     });
     expect(presentation("advanced", "edit")).toEqual({
-      label: "Edit & audio",
-      description: "Caption timing, layers, hooks and pacing",
-      stepLabel: "Creative",
+      label: "Words & sound",
+      description: "Captions, opening and natural pacing",
+      stepLabel: "Step 1",
     });
     expect(presentation("advanced", "advanced")).toEqual({
       label: "Diagnostics",

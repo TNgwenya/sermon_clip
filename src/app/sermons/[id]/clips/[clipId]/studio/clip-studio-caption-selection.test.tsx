@@ -27,7 +27,9 @@ describe("ClipStudioEditor caption selection workflow", () => {
     };
   });
 
-  it("explains the safe distinction between caption, boundary, and spoken-video actions", () => {
+  it.each([false, true])("keeps caption controls clear and reports actual draft state (dirty=%s)", (dirty) => {
+    previewContext.current.isDraftDirty = dirty;
+    previewContext.current.previewMediaStatus = { state: "error", message: "Media could not load" };
     const captionDesign = resolveCaptionStylePreset("clean-lower").design;
     const markup = renderToStaticMarkup(
       <ClipStudioEditor
@@ -98,12 +100,20 @@ describe("ClipStudioEditor caption selection workflow", () => {
       />,
     );
 
+    expect(markup).toContain(dirty ? "Unsaved changes" : "Changes saved");
+    expect(markup).toContain("Preview unavailable");
+    expect(markup).not.toContain("preview is in sync");
+    expect(markup).toContain("More tools: post copy, hooks &amp; checks");
+    expect(markup).not.toContain('aria-label="Hook &amp; cards: Opening and emphasis"');
+    expect(markup).not.toContain('aria-label="Quick Finish readiness"');
     expect(markup).toContain("Select caption words");
     expect(markup).toContain("Click, then Shift-click to select a range. Changes affect captions only.");
     expect(markup).toContain("More selection actions");
     expect(markup).toContain("Cut audio + video");
     expect(markup).toContain('aria-pressed="true">Words</button>');
     expect(markup).toContain("Replay this line");
+    expect(markup.indexOf('aria-label="Edit caption words for transcript line 1"')).toBeLessThan(markup.indexOf('aria-label="Choose caption line,'));
+    expect(markup).toMatch(/<details[^>]*class="clip-studio-caption-dropdown"><summary/);
     expect(markup.match(/aria-label="Edit caption words for transcript line \d+"/g)).toHaveLength(1);
     expect(markup).toContain("Change style");
     expect(markup).toContain('aria-pressed="false"');

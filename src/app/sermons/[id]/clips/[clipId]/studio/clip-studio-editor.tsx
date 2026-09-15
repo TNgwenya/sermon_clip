@@ -86,6 +86,7 @@ import {
   remapCaptionCueTextEditsForClipBoundaryChange,
   remapSpeechCleanupEditsForClipBoundaryChange,
 } from "@/lib/clipStudioBoundaryTiming";
+import { useStudioMode } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-workbench-tabs";
 import { useClipStudioPreview } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context";
 import styles from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-editor.module.css";
 
@@ -161,7 +162,7 @@ const EDITOR_WORKSPACES: Array<{
   { id: "copy", label: "Post copy", description: "Caption and hashtags", icon: "#" },
   { id: "layers", label: "Hook & cards", description: "Opening and emphasis", icon: "✦", shortcut: "H" },
   { id: "audio", label: "Audio", description: "Pacing cleanup", icon: "W", shortcut: "A" },
-  { id: "review", label: "Final check", description: "Readiness before export", icon: "✓" },
+  { id: "review", label: "Editing checks", description: "Review words, timing and optional improvements", icon: "✓" },
 ];
 const BROLL_TONE_OPTIONS: Array<{ value: BrollCardTone; label: string }> = [
   { value: "quote", label: "Quote" },
@@ -525,11 +526,15 @@ export function ClipStudioEditor({
 }: ClipStudioEditorProps) {
   const {
     previewClock,
+    isDraftDirty,
+    previewMediaStatus,
     requestPreviewPlayback,
     seekPreviewTo,
     seekSourcePreviewTo,
     updateEditPreview,
   } = useClipStudioPreview();
+  const studioMode = useStudioMode();
+  const [showMoreTools, setShowMoreTools] = useState(false);
   const isPending = false;
   const historyRestorePendingRef = useRef(false);
   const lastHistorySnapshotRef = useRef<StudioDraftSnapshot | null>(null);
@@ -2057,9 +2062,6 @@ export function ClipStudioEditor({
         setCaptionSection("words");
         window.requestAnimationFrame(() => {
           const captionLines = document.getElementById("clip-studio-caption-lines");
-          if (captionLines instanceof HTMLDetailsElement) {
-            captionLines.open = true;
-          }
           captionLines?.scrollIntoView({
             behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
             block: "start",
@@ -3412,28 +3414,8 @@ export function ClipStudioEditor({
       </SectionCard>
       </div>
 
-      <section className={styles.quickFinishSummary} aria-labelledby="clip-quick-finish-heading">
-        <div>
-          <p className="kicker">Quick Finish</p>
-          <h3 id="clip-quick-finish-heading">{creatorReview.label}</h3>
-          <p className="muted small">
-            Work left to right: polish the spoken words, add only the layers that help, then run the final check.
-          </p>
-        </div>
-        <div className={styles.quickFinishReadiness} aria-label="Quick Finish readiness">
-          <span>
-            <strong>{creatorReview.summary[0]?.ready ?? 0}/{creatorReview.summary[0]?.total ?? 0}</strong>
-            required
-          </span>
-          <span>
-            <strong>{creatorReview.summary[1]?.ready ?? 0}/{creatorReview.summary[1]?.total ?? 0}</strong>
-            recommended
-          </span>
-        </div>
-      </section>
-
       <nav className={styles.workspaceNav} aria-label="Edit tools">
-        {EDITOR_WORKSPACES.map((workspace) => (
+        {EDITOR_WORKSPACES.filter((workspace) => studioMode === "advanced" || showMoreTools || workspace.id === "captions" || workspace.id === "audio" || workspace.id === activeWorkspace).map((workspace) => (
           <button
             key={workspace.id}
             type="button"
@@ -3454,16 +3436,8 @@ export function ClipStudioEditor({
         ))}
       </nav>
 
-      <div className={styles.workspaceHeading}>
-        <div>
-          <p className="kicker">Now editing</p>
-          <h3>{EDITOR_WORKSPACES.find((workspace) => workspace.id === activeWorkspace)?.label}</h3>
-        </div>
-        <span>{EDITOR_WORKSPACES.find((workspace) => workspace.id === activeWorkspace)?.description}</span>
-      </div>
-
       <div hidden={activeWorkspace !== "review"}>
-      <SectionCard title="Final check" className="clip-studio-creator-review">
+      <SectionCard title="Editing checks" className="clip-studio-creator-review">
         <div className="clip-studio-creator-review-hero">
           <div className="clip-studio-review-checklist-summary" aria-label="Preparation checklist summary">
             {creatorReview.summary.map((group) => (
@@ -3722,14 +3696,10 @@ export function ClipStudioEditor({
       </div>
 
       <div hidden={activeWorkspace !== "captions" && activeWorkspace !== "layers"}>
-      <SectionCard title={activeWorkspace === "captions" ? "On-video captions" : "Hook & emphasis cards"}>
-        <div className="stack-md clip-studio-caption-form">
-          <div hidden={activeWorkspace !== "captions"} className={`stack-md ${styles.captionWorkflow}`}>
-          <div className={styles.captionSectionTabs} role="group" aria-label="Caption editing section">
-            {([['words', 'Words'], ['style', 'Style'], ['timing', 'Timing']] as const).map(([section, label]) => (
-              <button type="button" key={section} aria-pressed={captionSection === section} onClick={() => setCaptionSection(section)}>{label}</button>
-            ))}
-          </div>
+      <section className="card section-card stack-md">
+        <div className="section-card-heading-row">
+          <h2>{activeWorkspace === "captions" ? "Captions" : "Hook & emphasis cards"}</h2>
+          {activeWorkspace === "captions" ? (
           <label className={`clip-studio-toggle-row ${styles.captionToggle}`}>
             <input
               type="checkbox"
@@ -3739,9 +3709,19 @@ export function ClipStudioEditor({
               disabled={isPending}
             />
             <span>
-              <strong>Captions</strong>
+              <strong>On</strong>
             </span>
           </label>
+        ) : null}
+        </div>
+        <div className="stack-md clip-studio-caption-form">
+          <div hidden={activeWorkspace !== "captions"} className={`stack-md ${styles.captionWorkflow}`}>
+          <div className={styles.captionSectionTabs} role="group" aria-label="Caption editing section">
+            {([['words', 'Words'], ['style', 'Style'], ['timing', 'Timing']] as const).map(([section, label]) => (
+              <button type="button" key={section} aria-pressed={captionSection === section} onClick={() => setCaptionSection(section)}>{label}</button>
+            ))}
+          </div>
+
 
           <section hidden={captionSection === "words"} className="clip-studio-caption-timing-panel" aria-label={captionSection === "timing" ? "Caption timing" : "Caption appearance"}>
             <div hidden={captionSection !== "style"}>
@@ -3831,19 +3811,82 @@ export function ClipStudioEditor({
             </div>
           </section>
 
-          <details id="clip-studio-caption-lines" hidden={captionSection === "style"} className="clip-studio-caption-dropdown" open>
-            <summary aria-label={`Caption lines, ${captionLineLabel}, captions ${applyCaptionsToClip ? "on" : "off"}`}>
-              <span className="clip-studio-caption-dropdown-copy">
-                <span className="kicker">Caption lines</span>
-                <strong>{captionLineLabel}</strong>
-                <span className="muted small">Select a line below to edit it.</span>
-              </span>
-              <span className="clip-studio-caption-dropdown-meta">
-                <StatusBadge tone={applyCaptionsToClip ? "success" : "neutral"}>
-                  {applyCaptionsToClip ? "On" : "Off"}
-                </StatusBadge>
-                <span aria-hidden="true" className="clip-studio-caption-dropdown-chevron">v</span>
-              </span>
+          <div id="clip-studio-caption-lines" hidden={captionSection === "style"}>
+              {(
+                <div className="clip-studio-caption-cue-list">
+                {captionCues.map((cue, index) => {
+                  if (index !== Math.min(captionCueSelection?.focusIndex ?? 0, captionCues.length - 1)) return null;
+                  const cueTextEdited = isCaptionCueTextEdited(cue);
+
+                  return (
+                    <div className="clip-studio-caption-cue" key={`${cue.index}-${index}`}>
+                      <div hidden={captionSection !== "timing"} className="clip-studio-caption-cue-times">
+                        <CaptionCueTimingInput
+                          label="Start"
+                          ariaLabel={`Caption ${index + 1} start time`}
+                          value={cue.startSeconds}
+                          onCommit={(value) => updateCaptionCueTime(index, "startSeconds", value)}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                        <CaptionCueTimingInput
+                          label="End"
+                          ariaLabel={`Caption ${index + 1} end time`}
+                          value={cue.endSeconds}
+                          onCommit={(value) => updateCaptionCueTime(index, "endSeconds", value)}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                      </div>
+                      <label className="stack-sm clip-studio-caption-cue-text">
+                        Caption line {index + 1}
+                        <textarea
+                          aria-label={`Edit caption words for transcript line ${index + 1}`}
+                          className="clip-studio-caption-textarea"
+                          value={cue.text}
+                          onChange={(event) => updateCaptionCueText(cue, event.target.value)}
+                          disabled={isPending || !applyCaptionsToClip}
+                        />
+                      </label>
+                      {cueTextEdited ? (
+                        <button
+                          type="button"
+                          className="button secondary"
+                          onClick={() => resetCaptionCueText(cue)}
+                          disabled={isPending || !applyCaptionsToClip}
+                        >
+                          Reset line
+                        </button>
+                      ) : null}
+                      <button type="button" className="button secondary" onClick={() => { seekSourcePreviewTo(cue.startSeconds); requestPreviewPlayback(); }}>Replay this line</button>
+                      <details><summary>Split or merge line</summary>
+                      <div className={styles.cueActions}>
+                        <button
+                          type="button"
+                          className="button tertiary"
+                          onClick={() => splitCaptionCue(index)}
+                          disabled={isPending || !applyCaptionsToClip || countWords(cue.text) < 2}
+                        >
+                          Split line
+                        </button>
+                        <button
+                          type="button"
+                          className="button tertiary"
+                          onClick={() => mergeCaptionCueWithNext(index)}
+                          disabled={isPending || !applyCaptionsToClip || index === captionCues.length - 1}
+                        >
+                          Merge next
+                        </button>
+                      </div>
+                      </details>
+                    </div>
+                  );
+                })}
+                </div>
+              )}
+          </div>
+
+          <details hidden={captionSection === "style"} className="clip-studio-caption-dropdown">
+            <summary aria-label={`Choose caption line, ${captionLineLabel}`}>
+              <span>Choose another line · {captionLineLabel}</span>
             </summary>
 
             <div className="clip-studio-caption-dropdown-body">
@@ -4020,76 +4063,6 @@ export function ClipStudioEditor({
                 )}
               </section>
 
-              {(
-                <div className="clip-studio-caption-cue-list">
-                {captionCues.map((cue, index) => {
-                  if (index !== Math.min(captionCueSelection?.focusIndex ?? 0, captionCues.length - 1)) return null;
-                  const cueTextEdited = isCaptionCueTextEdited(cue);
-
-                  return (
-                    <div className="clip-studio-caption-cue" key={`${cue.index}-${index}`}>
-                      <div hidden={captionSection !== "timing"} className="clip-studio-caption-cue-times">
-                        <CaptionCueTimingInput
-                          label="Start"
-                          ariaLabel={`Caption ${index + 1} start time`}
-                          value={cue.startSeconds}
-                          onCommit={(value) => updateCaptionCueTime(index, "startSeconds", value)}
-                          disabled={isPending || !applyCaptionsToClip}
-                        />
-                        <CaptionCueTimingInput
-                          label="End"
-                          ariaLabel={`Caption ${index + 1} end time`}
-                          value={cue.endSeconds}
-                          onCommit={(value) => updateCaptionCueTime(index, "endSeconds", value)}
-                          disabled={isPending || !applyCaptionsToClip}
-                        />
-                      </div>
-                      <label className="stack-sm clip-studio-caption-cue-text">
-                        Caption line {index + 1}
-                        <textarea
-                          aria-label={`Edit caption words for transcript line ${index + 1}`}
-                          className="clip-studio-caption-textarea"
-                          value={cue.text}
-                          onChange={(event) => updateCaptionCueText(cue, event.target.value)}
-                          disabled={isPending || !applyCaptionsToClip}
-                        />
-                      </label>
-                      {cueTextEdited ? (
-                        <button
-                          type="button"
-                          className="button secondary"
-                          onClick={() => resetCaptionCueText(cue)}
-                          disabled={isPending || !applyCaptionsToClip}
-                        >
-                          Reset line
-                        </button>
-                      ) : null}
-                      <button type="button" className="button secondary" onClick={() => { seekSourcePreviewTo(cue.startSeconds); requestPreviewPlayback(); }}>Replay this line</button>
-                      <details><summary>Split or merge line</summary>
-                      <div className={styles.cueActions}>
-                        <button
-                          type="button"
-                          className="button tertiary"
-                          onClick={() => splitCaptionCue(index)}
-                          disabled={isPending || !applyCaptionsToClip || countWords(cue.text) < 2}
-                        >
-                          Split line
-                        </button>
-                        <button
-                          type="button"
-                          className="button tertiary"
-                          onClick={() => mergeCaptionCueWithNext(index)}
-                          disabled={isPending || !applyCaptionsToClip || index === captionCues.length - 1}
-                        >
-                          Merge next
-                        </button>
-                      </div>
-                      </details>
-                    </div>
-                  );
-                })}
-                </div>
-              )}
               {fieldErrors?.captionCues ? (
                 <span className="error-text small">{fieldErrors.captionCues}</span>
               ) : null}
@@ -5247,7 +5220,7 @@ export function ClipStudioEditor({
           </section>
           </div>
         </div>
-      </SectionCard>
+      </section>
       </div>
 
       <div hidden={activeWorkspace !== "captions"}>
@@ -5290,6 +5263,13 @@ export function ClipStudioEditor({
       </details>
       </div>
 
+      {studioMode === "quick" ? (
+        <button type="button" className="button secondary" aria-expanded={showMoreTools} onClick={() => setShowMoreTools((shown) => !shown)}>
+          {showMoreTools ? "Fewer editing tools" : "More tools: post copy, hooks & checks"}
+        </button>
+      ) : null}
+
+
       <div className={`clip-studio-save-strip ${styles.saveStrip}`}>
         <div className="clip-studio-history-actions" aria-label="Draft history controls">
           <button
@@ -5321,7 +5301,7 @@ export function ClipStudioEditor({
         ) : (
           <p className={styles.previewSyncStatus} role="status" aria-live="polite">
             <span aria-hidden="true" />
-            Draft ready · preview is in sync
+            {isDraftDirty ? "Unsaved changes" : "Changes saved"} · {previewMediaStatus?.state === "ready" ? "Preview available" : previewMediaStatus?.state === "error" || previewMediaStatus?.state === "unavailable" ? "Preview unavailable" : "Preview loading"}
           </p>
         )}
 

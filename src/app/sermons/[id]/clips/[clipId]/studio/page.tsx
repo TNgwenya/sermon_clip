@@ -71,6 +71,7 @@ import {
 } from "@/lib/clipBrollSuggestions";
 import { STUDIO_BOUNDARY_CONTEXT_SECONDS } from "@/lib/clipStudioBoundaryTiming";
 import pageStyles from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-page.module.css";
+import { ClipStudioSessionGuard } from "./clip-studio-session-guard";
 
 type ClipStudioPageParams = {
   params: Promise<{ id: string; clipId: string }>;
@@ -705,6 +706,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
       logoSrc={logoSrc}
     >
       <main className={`container clip-studio-shell stack-md ${pageStyles.shell}`}>
+        <ClipStudioSessionGuard actorId={requestContext.actorId} organizationId={requestContext.organizationId} />
         <header className={`clip-studio-topbar ${pageStyles.projectHeader}`} aria-labelledby="clip-studio-title">
           <div className={`clip-studio-topbar-row ${pageStyles.headerRow}`}>
             <div className={`clip-studio-title-block ${pageStyles.titleBlock}`}>
@@ -721,9 +723,9 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                 <div className={pageStyles.projectMeta} aria-label="Project details">
                   <span>{timing.durationLabel}</span>
                   <span>{FORMAT_LABELS[exportSettings.primaryFormat]}</span>
-                  <span className={pageStyles.projectStatus} aria-label="Current clip status">
+                  <span className={pageStyles.projectStatus} aria-label="Saved clip status">
                     <StatusBadge tone={clipStatusTone(clipStatus)}>
-                      {formatClipStatusLabel(clipStatus, {
+                      Saved clip: {formatClipStatusLabel(clipStatus, {
                         isManuallyEdited: clip.isManuallyEdited,
                         renderStatus,
                       })}
@@ -731,7 +733,7 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                   </span>
                   <span className={pageStyles.liveProjectCue}>
                     <span aria-hidden="true" />
-                    Preview updates live
+                    Live editing preview
                   </span>
                   <details className={`clip-studio-status-details ${pageStyles.qualityDetails}`}>
                     <summary>
@@ -955,11 +957,11 @@ export default async function ClipStudioPage({ params }: ClipStudioPageParams) {
                     ? "The media worker is building the selected output formats."
                     : preparedFinalReady
                       ? "Prepared media is ready for the ready-to-post package."
-                      : "Use Prepare for Posting to save this composition, approve the clip, and update the final video."}
+                      : "Use Approve & prepare final video above to save this composition, approve the clip, and create the selected output files."}
                 </p>
                 {!preparationState.preparing && preparationState.missingFormats.length > 0 ? (
                   <p className="muted small">
-                    Still needed: {preparationState.missingFormats.map((format) => FORMAT_LABELS[format]).join(", ")}.
+                    Output files not yet prepared: {preparationState.missingFormats.map((format) => FORMAT_LABELS[format]).join(", ")}.
                   </p>
                 ) : null}
                 {preparedFinalNeedsUpdate && recoveryPlan.hasRecoverableIssue ? (
