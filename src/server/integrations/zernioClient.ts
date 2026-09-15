@@ -46,6 +46,8 @@ export type ZernioCreatePostInput = {
 export type ZernioPostPlatformStatus = {
   platform?: string;
   status?: string;
+  errorMessage?: string;
+  errorCategory?: string;
   platformPostId?: string;
   platformPostUrl?: string;
   accountId?: unknown;
@@ -188,4 +190,21 @@ export function getPublishedPlatformUrl(post: ZernioPost | null | undefined, pla
 export function getPlatformStatus(post: ZernioPost | null | undefined, platform: ZernioPlatform): string | null {
   const platformPost = post?.platforms?.find((item) => item.platform === platform);
   return platformPost?.status ?? post?.status ?? null;
+}
+
+export function resolveZernioOutcome(post: ZernioPost, platform: ZernioPlatform) {
+  const state = (getPlatformStatus(post, platform) ?? "unknown").toLowerCase();
+  const publishedUrl = getPublishedPlatformUrl(post, platform) ?? undefined;
+  const target = post.platforms?.find(item => item.platform === platform);
+  const posted = Boolean(publishedUrl) && ["published", "posted", "completed", "success"].includes(state);
+  const failed = ["failed", "error", "rejected", "cancelled", "canceled"].includes(state);
+  return {
+    status: posted ? "POSTED" as const : failed ? "FAILED" as const : "PRIVATE_ONLY_UNVERIFIED" as const,
+    externalPostId: post._id,
+    publishedUrl,
+    finalPrivacyStatus: state,
+    publishError: posted ? undefined : failed
+      ? target?.errorMessage || `Zernio reported ${state} for ${platform}.`
+      : `Zernio is ${state}; publication is awaiting provider confirmation.`,
+  };
 }

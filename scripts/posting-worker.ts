@@ -1,3 +1,4 @@
+import { reconcilePendingZernioPosts } from "./posting-reconciliation.ts";
 import { stat } from "node:fs/promises";
 import os from "node:os";
 
@@ -123,6 +124,7 @@ async function syncUpcomingPosts(): Promise<void> {
 
   syncing = true;
   try {
+    if (!dryRun) await reconcilePendingZernioPosts();
     const response = await apiFetch(`/api/automation/upcoming?windowMinutes=${upcomingWindowMinutes}`);
     const data = await response.json().catch(() => null);
     if (!response.ok || !Array.isArray(data?.scheduledPosts)) {

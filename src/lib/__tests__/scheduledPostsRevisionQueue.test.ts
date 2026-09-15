@@ -498,8 +498,8 @@ describe("scheduled content revision queue", () => {
     });
     expect(mocks.scheduledPostUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
-        status: "PLANNED",
-        workerStatus: "IDLE",
+        status: "FAILED",
+        workerStatus: "FAILED",
         compositionReceiptJson: expect.anything(),
       }),
     }));

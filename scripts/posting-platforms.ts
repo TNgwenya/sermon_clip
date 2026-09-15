@@ -1,10 +1,12 @@
 import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import crypto from "node:crypto";
+import { encryptToken, decryptToken } from "../src/lib/socialTokenCrypto.ts";
 
 import { PrismaClient, type SocialConnectorProvider } from "@prisma/client";
 import {
   createZernioPost,
+  resolveZernioOutcome,
   getPlatformStatus,
   getPublishedPlatformUrl,
   getZernioPost,
@@ -148,57 +150,13 @@ function getPrismaClient(): PrismaClient {
   return prismaClient;
 }
 
-function encryptionSecret(): string {
-  const secret = process.env.OAUTH_TOKEN_ENCRYPTION_KEY?.trim()
-    || process.env.AUTH_SECRET?.trim()
-    || process.env.NEXTAUTH_SECRET?.trim();
-
-  if (!secret) {
-    throw new Error("Stored social credentials require OAUTH_TOKEN_ENCRYPTION_KEY or AUTH_SECRET in the worker environment.");
-  }
-
-  return secret;
-}
-
-function encryptionKey(): Buffer {
-  return crypto.createHash("sha256").update(encryptionSecret()).digest();
-}
-
-function decryptToken(value: string): string {
-  const [version, iv, tag, encrypted] = value.split(":");
-  if (version !== "v1" || !iv || !tag || !encrypted) {
-    throw new Error("Unsupported encrypted social credential format.");
-  }
-
-  const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(iv, "base64url"));
-  decipher.setAuthTag(Buffer.from(tag, "base64url"));
-
-  return Buffer.concat([
-    decipher.update(Buffer.from(encrypted, "base64url")),
-    decipher.final(),
-  ]).toString("utf8");
-}
-
-function encryptToken(value: string): string {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv);
-  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
-
-  return [
-    "v1",
-    iv.toString("base64url"),
-    tag.toString("base64url"),
-    encrypted.toString("base64url"),
-  ].join(":");
-}
-
 function isExpiringSoon(expiresAt: Date | null, now = new Date()): boolean {
   return Boolean(expiresAt && expiresAt.getTime() <= now.getTime() + 60_000);
 }
 
 type StoredPostingCredential = {
   id: string;
+  organizationId: string;
   provider: SocialConnectorProvider;
   externalAccountId: string;
   accessToken: string;
@@ -224,6 +182,7 @@ async function getStoredPostingCredential(
         id: true,
         provider: true,
         externalAccountId: true,
+        organizationId: true,
         accessTokenCiphertext: true,
         refreshTokenCiphertext: true,
         expiresAt: true,
@@ -242,10 +201,11 @@ async function getStoredPostingCredential(
 
   return {
     id: credential.id,
+    organizationId: credential.organizationId,
     provider: credential.provider,
     externalAccountId: credential.externalAccountId,
-    accessToken: decryptToken(credential.accessTokenCiphertext),
-    refreshToken: credential.refreshTokenCiphertext ? decryptToken(credential.refreshTokenCiphertext) : null,
+    accessToken: decryptToken(credential.accessTokenCiphertext, credential),
+    refreshToken: credential.refreshTokenCiphertext ? decryptToken(credential.refreshTokenCiphertext, credential) : null,
     expiresAt: credential.expiresAt,
   };
 }
@@ -564,19 +524,7 @@ export async function uploadZernioVideo(
     );
   }
 
-  const platformStatus = (getPlatformStatus(resultPost, zernioPlatform) ?? resultPost.status ?? "unknown").toLowerCase();
-  const publishedUrl = getPublishedPlatformUrl(resultPost, zernioPlatform) ?? undefined;
-  const publicationConfirmed = Boolean(publishedUrl) && ["published", "posted", "completed", "success"].includes(platformStatus);
-
-  return {
-    status: publicationConfirmed ? "POSTED" : "PRIVATE_ONLY_UNVERIFIED",
-    externalPostId: zernioPostId(resultPost),
-    publishedUrl,
-    finalPrivacyStatus: platformStatus,
-    publishError: publicationConfirmed
-      ? undefined
-      : `Zernio accepted this post with ${platformStatus} status. Confirm it on ${post.platform} before marking it posted.`,
-  };
+  return resolveZernioOutcome(resultPost, zernioPlatform);
 }
 
 export function buildFacebookText(post: AutomationPost): { title: string; description: string; published: boolean } {
@@ -867,8 +815,8 @@ async function refreshTikTokCredential(
   await getPrismaClient().socialCredential.update({
     where: { id: credential.id },
     data: {
-      accessTokenCiphertext: encryptToken(payload.access_token),
-      refreshTokenCiphertext: refreshToken ? encryptToken(refreshToken) : null,
+      accessTokenCiphertext: encryptToken(payload.access_token, credential),
+      refreshTokenCiphertext: refreshToken ? encryptToken(refreshToken, credential) : null,
       tokenType: typeof payload.token_type === "string" ? payload.token_type : undefined,
       expiresAt,
       status: "CONNECTED",

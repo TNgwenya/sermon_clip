@@ -1765,8 +1765,8 @@ export async function revalidateClaimedScheduledPostComposition(input: {
             claimedAt: { not: null },
           },
           data: {
-            status: "PLANNED",
-            workerStatus: "IDLE",
+            status: "FAILED",
+            workerStatus: "FAILED",
             claimedAt: null,
             workerId: null,
             publishError: "Publishing paused because this approved clip may already be publishing or published to the selected account.",
