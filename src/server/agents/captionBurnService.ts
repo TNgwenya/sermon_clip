@@ -1,3 +1,4 @@
+import { getCaptionFontEnvironment, getCaptionFontsDirectory } from "@/server/media/captionFonts";
 import { access, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 
@@ -143,7 +144,7 @@ const FALLBACK_VIDEO_ENCODER = SOFTWARE_VIDEO_ENCODER;
 const MAX_WORD_HIGHLIGHT_OVERLAY_CUES = 360;
 const MAX_STATIC_CAPTION_IMAGE_OVERLAY_CUES = 180;
 const MAX_SEMANTIC_CAPTION_SPLITS_PER_CUE = 120;
-const CAPTION_RENDERER_VERSION = 8;
+const CAPTION_RENDERER_VERSION = 9;
 
 function resolveSafeCaptionOverlayInputLimit(input: {
   durationSeconds: number;
@@ -1408,7 +1409,7 @@ async function runFfmpegCaptionBurn(input: {
       "-i",
       input.renderedPath,
       "-vf",
-      `subtitles=filename='${escapedSubtitlePath}':force_style='${forceStyle}'`,
+      `subtitles=filename='${escapedSubtitlePath}':fontsdir='${escapeForFfmpegSubtitlesPath(getCaptionFontsDirectory())}':force_style='${forceStyle}'`,
       ...buildVideoEncoderArgs(videoEncoder),
       "-c:a",
       "copy",
@@ -1419,6 +1420,7 @@ async function runFfmpegCaptionBurn(input: {
 
     await new Promise<void>((resolve, reject) => {
       const child = spawn(command, args, {
+        env: { ...process.env, ...getCaptionFontEnvironment() },
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
       });
@@ -1722,6 +1724,7 @@ async function runFfmpegCaptionOverlayBatch(input: CaptionOverlayRenderInput): P
     const args = buildArgs(videoEncoder);
     await new Promise<void>((resolve, reject) => {
       const child = spawn(command, args, {
+        env: { ...process.env, ...getCaptionFontEnvironment() },
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
       });

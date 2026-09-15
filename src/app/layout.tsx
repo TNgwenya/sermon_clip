@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next";
 import { AppNavigation } from "@/app/app-navigation";
 
 import "./globals.css";
+import "./styles/caption-fonts.css";
 import "./styles/premium-foundation.css";
 import "./styles/premium-workflows.css";
 import "./styles/premium-review-ready.css";

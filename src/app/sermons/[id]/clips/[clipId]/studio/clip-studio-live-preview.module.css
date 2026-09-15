@@ -207,12 +207,26 @@
 .designedCaption {
   right: auto !important;
   left: calc(var(--caption-anchor-x) + var(--caption-offset-x)) !important;
-  width: var(--caption-safe-width);
-  translate: var(--caption-translate-x) 0;
+  width: max-content;
+  max-width: var(--caption-safe-width);
+  top: var(--caption-top) !important;
+  bottom: var(--caption-bottom) !important;
+  transform: none !important;
+  translate: clamp(
+    calc(var(--caption-edge) - var(--caption-anchor-x) - var(--caption-offset-x)),
+    var(--caption-translate-x),
+    calc(100cqw - var(--caption-anchor-x) - var(--caption-offset-x) - 100% - var(--caption-edge))
+  ) var(--caption-translate-y);
+  background: none !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  box-shadow: none !important;
 }
 
 .designedCaption > span {
   box-sizing: border-box;
+  width: fit-content;
   max-width: 100%;
   overflow-wrap: anywhere;
   justify-content: var(--caption-justify) !important;
@@ -221,7 +235,7 @@
   border-width: var(--caption-card-border-width) !important;
   border-radius: var(--caption-card-radius) !important;
   background: var(--caption-card-background) !important;
-  box-shadow: var(--caption-text-shadow) !important;
+  box-shadow: none !important;
   color: var(--caption-text-color) !important;
   font-family: var(--caption-font-family) !important;
   font-size: var(--caption-font-size) !important;

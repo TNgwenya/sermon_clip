@@ -142,9 +142,9 @@ describe("caption burn service validation", () => {
           reducedMotion: false,
         },
       },
-      captionRendererVersion: 8,
+      captionRendererVersion: 9,
     });
-    expect(__captionBurnTestUtils.CAPTION_RENDERER_VERSION).toBe(8);
+    expect(__captionBurnTestUtils.CAPTION_RENDERER_VERSION).toBe(9);
   });
 
   it("preserves an explicit per-clip caption style while materializing burn metadata", () => {

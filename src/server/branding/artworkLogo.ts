@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 
-import sharp from "sharp";
+import { getSharp } from "@/server/agents/sharpClient";
 
 import { resolveAvailableBrandingLogoPath } from "@/server/branding/logoStorage";
 
@@ -21,6 +21,7 @@ export async function readBrandingArtworkLogoDataUrl(
     if (!sourceStat.isFile() || sourceStat.size <= 0 || sourceStat.size > MAX_SOURCE_LOGO_BYTES) {
       return null;
     }
+    const sharp = await getSharp();
     const rasterized = await sharp(availablePath, { limitInputPixels: 24_000_000 })
       .rotate()
       .resize({

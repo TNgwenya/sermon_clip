@@ -81,6 +81,21 @@ const captionRenderFrameSize = {
   SQUARE_1_1: { width: 1080, height: 1080 },
 };
 
+export function resolveStudioCaptionVerticalGeometry(
+  position: "top" | "middle" | "lower",
+  offset: number,
+  safeArea: "STANDARD" | "RAISED" | "LOWER_MINIMAL",
+  outputWidth: number,
+) {
+  const length = (pixels: number) => `${pixels / outputWidth * 100}cqw`;
+  const margin = safeArea === "RAISED" ? 220 : safeArea === "LOWER_MINIMAL" ? 96 : 132;
+  return {
+    "--caption-top": position === "top" ? length(Math.max(24, margin - offset)) : position === "middle" ? `calc(50% - ${length(offset)})` : "auto",
+    "--caption-bottom": position === "lower" ? length(Math.max(24, margin + offset)) : "auto",
+    "--caption-translate-y": position === "middle" ? "-50%" : "0%",
+  };
+}
+
 const frameClassName = {
   CENTER_CROP: "frame-center",
   LEFT_FOCUS: "frame-left",
@@ -807,10 +822,10 @@ export function ClipStudioLivePreview({
   const captionWords = useMemo(() => captionDisplayText.split(/\s+/).filter(Boolean), [captionDisplayText]);
   const backgroundVisible = captionDesign.background.treatment !== "none";
   const horizontalAnchor = captionDesign.layout.horizontalPosition === "left"
-    ? "5%"
+    ? "5cqw"
     : captionDesign.layout.horizontalPosition === "right"
-      ? "95%"
-      : "50%";
+      ? "95cqw"
+      : "50cqw";
   const horizontalTranslate = captionDesign.layout.horizontalPosition === "left"
     ? "0%"
     : captionDesign.layout.horizontalPosition === "right"
@@ -862,16 +877,18 @@ export function ClipStudioLivePreview({
     )}`,
     "--caption-safe-width": `${resolveCaptionSafeWidthPercent(captionDesign.layout.safeWidth)}%`,
     "--caption-anchor-x": horizontalAnchor,
+    "--caption-edge": captionPreviewLength(24),
     "--caption-translate-x": horizontalTranslate,
-    "--caption-offset-x": `${captionDesign.layout.horizontalOffset * (
-      previewFrameSize.width > 0 ? previewFrameSize.width / renderFrameSize.width : 0
-    )}px`,
+    "--caption-offset-x": captionPreviewLength(captionDesign.layout.horizontalOffset),
   } as CSSProperties;
   const captionAppearanceStyle = {
     ...captionVisualVariables,
-    "--caption-offset-y": `${captionDesign.layout.verticalOffset * (
-      previewFrameSize.height > 0 ? previewFrameSize.height / renderFrameSize.height : 0
-    )}px`,
+    ...resolveStudioCaptionVerticalGeometry(
+      captionDesign.layout.verticalPosition,
+      captionDesign.layout.verticalOffset,
+      resolvedFramingPlan?.effective.captionSafeArea ?? "STANDARD",
+      renderFrameSize.width,
+    ),
   } as CSSProperties;
   const hookAppearanceStyle = {
     ...captionVisualVariables,
@@ -1697,7 +1714,7 @@ export function ClipStudioLivePreview({
             {previewMediaReady && !showSavedPreview && !isSourceContextAudition && captionPreviewText ? (
               <div
                 key={editPreview.captionRevealMode === "single-word" ? `${activeCaptionCue?.index ?? "cue"}-${captionDisplayText}` : "caption"}
-                className={`clip-studio-live-caption ${styles.designedCaption} ${captionDesign.highlighting.reducedMotion ? styles.reducedMotion : ""} ${captionStyle.className} caption-position-${editPreview.captionPosition} caption-size-${editPreview.captionAppearance.fontScale} caption-reveal-${editPreview.captionRevealMode}`}
+                className={`clip-studio-live-caption ${styles.designedCaption} ${captionDesign.highlighting.reducedMotion ? styles.reducedMotion : ""} caption-position-${editPreview.captionPosition} caption-reveal-${editPreview.captionRevealMode}`}
                 style={captionAppearanceStyle}
                 data-max-lines={editPreview.captionAppearance.maxLines}
                 onPointerDown={(event) => startOverlayDrag(event, "caption")}

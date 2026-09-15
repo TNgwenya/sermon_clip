@@ -9,6 +9,7 @@ vi.mock("@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-preview-context", 
 
 import {
   ClipStudioLivePreview,
+  resolveStudioCaptionVerticalGeometry,
   resolveStudioPlaybackFailureMessage,
   resolveStudioSourceAudition,
   resolveSavedClipSeekSeconds,
@@ -19,6 +20,27 @@ import {
   resolveClipStudioPreviewSource,
 } from "@/app/sermons/[id]/clips/[clipId]/studio/clip-studio-live-preview";
 import { buildResolvedFramingPlanDocument } from "@/lib/resolvedFramingPlan";
+
+describe("caption preview output geometry", () => {
+  it.each([["STANDARD", 132], ["RAISED", 220], ["LOWER_MINIMAL", 96]] as const)(
+    "uses the renderer's %s margin in authored pixels instead of rem", (safeArea, margin) => {
+      const actual = resolveStudioCaptionVerticalGeometry("lower", 30, safeArea, 1080);
+      expect(actual["--caption-bottom"]).toBe(`${(margin + 30) / 1080 * 100}cqw`);
+      expect(actual["--caption-top"]).toBe("auto");
+    },
+  );
+  it("clamps top and lower margins at the same 24 output pixels as export", () => {
+    expect(resolveStudioCaptionVerticalGeometry("top", 300, "STANDARD", 1920)["--caption-top"])
+      .toBe("1.25cqw");
+    expect(resolveStudioCaptionVerticalGeometry("lower", -300, "STANDARD", 1920)["--caption-bottom"])
+      .toBe("1.25cqw");
+  });
+  it("centers the complete caption panel and applies positive offsets upward", () => {
+    expect(resolveStudioCaptionVerticalGeometry("middle", 108, "STANDARD", 1080)).toEqual({
+      "--caption-top": "calc(50% - 10cqw)", "--caption-bottom": "auto", "--caption-translate-y": "-50%",
+    });
+  });
+});
 
 function buildPreviewPlan(input?: {
   requestedLayout?: "SMART_CROP" | "CENTER_CROP" | "FIT_BLURRED_BACKGROUND";
