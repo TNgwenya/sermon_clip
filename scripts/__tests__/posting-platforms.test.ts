@@ -24,6 +24,7 @@ import {
   buildTikTokInitBody,
   buildTikTokTitle,
   buildZernioPostRequest,
+  uploadYouTubeShort,
   buildYouTubeText,
   buildYouTubeUploadResult,
   extractHashtags,
@@ -1063,4 +1064,16 @@ describe("posting platform helpers", () => {
       finalPrivacyStatus: "processing",
     });
   });
+});
+
+it("authenticates the YouTube binary upload with the refreshed token", async () => {
+  vi.stubEnv("YOUTUBE_CLIENT_ID", "client"); vi.stubEnv("YOUTUBE_CLIENT_SECRET", "secret"); vi.stubEnv("YOUTUBE_REFRESH_TOKEN", "refresh");
+  credentialFindFirst.mockResolvedValue(null);
+  const dir = await mkdtemp(join(tmpdir(), "youtube-auth-")); const path = join(dir,"video.mp4"); await writeFile(path,"video");
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({access_token:"fresh"})))
+    .mockResolvedValueOnce(new Response(null,{headers:{location:"https://www.googleapis.com/upload/youtube/v3/videos?upload_id=test"}}))
+    .mockImplementationOnce(async (_url,init)=>{ for await(const _chunk of init!.body as unknown as AsyncIterable<unknown>) {} return new Response(JSON.stringify({id:"video"})); });
+  try { await uploadYouTubeShort({...basePost,platform:"YouTube Shorts",socialAccountId:null},path,5,fetchImpl);
+    expect(fetchImpl.mock.calls[2][1]).toMatchObject({method:"PUT",redirect:"error",headers:expect.objectContaining({authorization:"Bearer fresh"})});
+  } finally {await rm(dir,{recursive:true,force:true});}
 });

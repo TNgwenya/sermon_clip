@@ -662,9 +662,15 @@ export async function uploadYouTubeShort(
     throw new Error(data?.error?.message ?? "Could not start YouTube resumable upload.");
   }
 
+  const sessionUrl = new URL(uploadUrl);
+  if (sessionUrl.protocol !== "https:" || sessionUrl.hostname !== "www.googleapis.com" || sessionUrl.username || sessionUrl.password) {
+    throw new Error("YouTube returned an unexpected upload destination.");
+  }
   const uploadRequest = {
     method: "PUT",
+    redirect: "error",
     headers: {
+      authorization: `Bearer ${token}`,
       "content-length": String(videoSize),
       "content-type": "video/mp4",
     },

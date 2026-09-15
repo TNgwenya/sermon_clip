@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const findMany = vi.hoisted(()=>vi.fn());
 const updateMany = vi.hoisted(()=>vi.fn());
 vi.mock('@prisma/client',()=>({PrismaClient:class {scheduledPost={findMany,updateMany}}}));
-import { reconcilePendingZernioPosts } from '../posting-reconciliation';
+import { reconcilePendingZernioPosts, facebookPublicationConfirmed } from '../posting-reconciliation';
 import { resolveZernioOutcome } from '../../src/server/integrations/zernioClient';
 import { encryptToken, decryptToken } from '../../src/lib/socialTokenCrypto';
 beforeEach(()=>{vi.restoreAllMocks();findMany.mockReset();updateMany.mockReset();vi.stubEnv('ZERNIO_API_KEY','test');vi.stubEnv('OAUTH_TOKEN_ENCRYPTION_KEY','test');});
@@ -32,4 +32,12 @@ describe('publishing recovery',()=>{
  vi.spyOn(globalThis,'fetch').mockResolvedValue(new Response(JSON.stringify({post:{_id:'remote',platforms:[{platform:'instagram',accountId:'other',status:'published',platformPostUrl:'https://www.instagram.com/reel/test/'}]}})));
  await reconcilePendingZernioPosts();expect(updateMany).not.toHaveBeenCalled();
  });
+});
+
+it('requires ready, public and matching-page Facebook evidence',()=>{
+ const r={id:'v',published:true,privacy:{value:'EVERYONE'},status:{video_status:'ready'},from:{id:'page'}};
+ expect(facebookPublicationConfirmed(r,'v','page')).toBe(true);
+ expect(facebookPublicationConfirmed({...r,privacy:{value:'SELF'}},'v','page')).toBe(false);
+ expect(facebookPublicationConfirmed({...r,status:{video_status:'processing'}},'v','page')).toBe(false);
+ expect(facebookPublicationConfirmed(r,'v','another-page')).toBe(false);
 });
